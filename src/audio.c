@@ -32,11 +32,9 @@ static uint32_t frame_counter;
 static const int T1[16] = {1,3,5,7,9,11,13,15,-1,-3,-5,-7,-9,-11,-13,-15};
 static const int T2[8] = {230,230,230,230,307,409,512,614};
 
-static Sfx *load_sfx(int idx)
+static Sfx *load_sfx_entry(const PackEntry *e, Sfx *s)
 {
-    Sfx *s = &sfx_cache[idx];
     if (s->pcm) return s;
-    const PackEntry *e = packs_find(SFX_TABLE[idx]);
     if (!e || e->size < 44) return NULL;
     const uint8_t *d = e->data;
     uint16_t fmt = d[20] | d[21] << 8, ch = d[22] | d[23] << 8;
@@ -69,11 +67,11 @@ static Sfx *load_sfx(int idx)
     return s;
 }
 
-static void play_table(int idx)
+static Sfx *load_sfx(int idx) { return load_sfx_entry(packs_find(SFX_TABLE[idx]), &sfx_cache[idx]); }
+
+static void play_sfx(Sfx *s)
 {
-    if (!dev || idx < 0 || idx >= 32) return;
-    Sfx *s = load_sfx(idx);
-    if (!s || !s->pcm) return;
+    if (!dev || !s || !s->pcm) return;
     SDL_AudioSpec in = { SDL_AUDIO_S16, s->channels, 44100 };
     for (int v = 0; v < MAX_VOICES; v++) {
         if (voices[v] && SDL_GetAudioStreamQueued(voices[v]) > 0) continue;
@@ -85,6 +83,23 @@ static void play_table(int idx)
         SDL_FlushAudioStream(voices[v]);
         return;
     }
+}
+
+#define MAX_EXTRA 16
+static struct { uint32_t id; Sfx s; } extra[MAX_EXTRA]; static int nextra;
+void sfx_play_id(uint32_t id)
+{
+    for (int i = 0; i < nextra; i++) if (extra[i].id == id) { play_sfx(&extra[i].s); return; }
+    if (nextra == MAX_EXTRA) return;
+    extra[nextra].id = id; memset(&extra[nextra].s, 0, sizeof(Sfx));
+    if (load_sfx_entry(packs_find(id), &extra[nextra].s)) play_sfx(&extra[nextra].s);
+    nextra++;
+}
+
+static void play_table(int idx)
+{
+    if (idx < 0 || idx >= 32) return;
+    play_sfx(load_sfx(idx));
 }
 
 static int rnd(int n) { return rand() % (n + 1); }   /* FUN_0040cf30(0, n) inclusive per the switch usage */

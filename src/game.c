@@ -64,9 +64,20 @@ void game_update(Game *g, float dt)
 {
     input_update(&g->in);
     Player *p = &g->player; Character *c = &p->ch;
-    if (g->state == 0xd) {          /* dialog / cutscene: world frozen; advance with shoot/jump/pause */
-        g->dialog_t += dt;
-        if (g->dialog_t > 0.3f && (btn_pressed(&g->in, BTN_SHOOT) || btn_pressed(&g->in, BTN_JUMP) || btn_pressed(&g->in, BTN_PAUSE))) g->state = 10;
+    if (g->state == 0xd) {          /* dialog / cutscene (game state 0xd) */
+        float half = g->sw * 0.5f;
+        float target = g->dlg_phase == 2 ? g->dlg_cam_return : (g->dlg_focus_x > 0 ? g->dlg_focus_x - half : g->dlg_cam_return);
+        float maxx = g->level.width - g->sw; if (target < 0) target = 0; if (target > maxx) target = maxx;
+        if (g->dlg_phase == 0 || g->dlg_phase == 2) {     /* pan camera to focus / back to the player */
+            float d = target - g->cam_x;
+            if (fabsf(d) <= 8.0f) { g->cam_x = target; if (g->dlg_phase == 0) { g->dlg_phase = 1; g->dlg_wait = 0; } else { g->state = 10; p->locked = false; } }
+            else g->cam_x += d > 0 ? 8.0f : -8.0f;
+        } else if (g->dlg_phase == 1) {
+            dialog_update(&g->dialog, &g->in, dt);
+            if (!g->dialog.active) g->dlg_phase = 2;
+        }
+        character_animate(c, dt); effects_update(&g->effects, dt);
+        for (int i = 0; i < MAX_ENEMIES; i++) if (g->enemies.e[i].cls) character_animate(&g->enemies.e[i].ch, dt);
         return;
     }
     if (g->state == 0xe || g->state == 0xb) { g->state_t += dt; }
@@ -88,7 +99,11 @@ void game_update(Game *g, float dt)
             bool started = false;
             for (int k = 0; k < 4 && !started; k++) {
                 if (g->dialogs[k].text && !g->dialogs[k].done && IN_ZONE(g->dialogs[k])) {
-                    g->dialogs[k].done = true; g->state = 0xd; g->dialog_text = g->dialogs[k].text; g->dialog_t = 0; started = true;
+                    g->dialogs[k].done = true; started = true;
+                    if (dialog_open(&g->dialog, g->dialogs[k].text)) {
+                        g->state = 0xd; g->dlg_phase = 0; g->dlg_focus_x = g->dialogs[k].focus_x; g->dlg_cam_return = g->cam_x;
+                        c->body.vx = 0;
+                    }
                 }
             }
             if (!started) for (int k = 0; k < g->nstops; k++) {
@@ -167,7 +182,7 @@ void game_draw(Game *g)
 {
     Level *L = &g->level;
     float shake = g->enemies.cam_shake ? (float)(rand() % 4) : 0.0f;
-    float saved = g->cam_x; g->cam_x += shake;
+    float saved = g->cam_y; g->cam_y += shake;
     for (int i = 0; i < L->nlayers; i++) {
         if (L->layers[i].is_tilemap) level_draw_layer(L, i, g->cam_x, g->cam_y, g->sw, g->sh);
         else {
@@ -178,7 +193,8 @@ void game_draw(Game *g)
             effects_draw(&g->effects, i, g->cam_x, g->cam_y);
         }
     }
-    g->cam_x = saved;
+    g->cam_y = saved;
     hud_draw(g->ren, 0, 1, g->player.lives, g->player.hp, 0);
+    if (g->state == 0xd) dialog_draw(&g->dialog, g->ren, g->sw, g->sh);
     if (g->debug_collision) draw_collision(g);
 }

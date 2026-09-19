@@ -14,7 +14,7 @@ typedef struct {
     int sheet_cols;
 } CBlock;
 
-typedef struct {
+typedef struct Sprite {
     uint32_t id;
     int w, h, frames;
     SDL_Texture *tex;           /* frames laid out horizontally, each POT-padded frame cropped to w×h */
@@ -23,6 +23,7 @@ typedef struct {
 bool  gfx_init(SDL_Renderer *r);
 CBlock *cblock_get(uint32_t id);          /* cached */
 Sprite *sprite_get(uint32_t id);          /* cached */
+Sprite *sprite_from_blob(uint32_t id, const uint8_t *blob, uint32_t size);   /* decode a sprite blob not in a pack (fonts) */
 int   cblock_ncells(const CBlock *c);
 /* draw tile t at x,y (screen space, integer) */
 void  cblock_draw_tile(const CBlock *c, int t, float x, float y, bool flip);

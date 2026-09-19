@@ -1,0 +1,9 @@
+#pragma once
+/* E2DM bitmap fonts: header {FF 80 00 FF, u32 count, u16 width[count]} + sprite blob; glyph = char - 0x21. */
+#include <SDL3/SDL.h>
+#include <stdint.h>
+typedef struct { uint32_t id; int count; const uint8_t *widths; struct Sprite *spr; int h; } Font;
+Font *font_get(uint32_t id);
+int   font_text_width(const Font *f, const char *s);
+void  font_draw(const Font *f, const char *s, float x, float y, uint8_t r, uint8_t g, uint8_t b);
+void  font_draw_n(const Font *f, const char *s, int n, float x, float y, uint8_t r, uint8_t g, uint8_t b);

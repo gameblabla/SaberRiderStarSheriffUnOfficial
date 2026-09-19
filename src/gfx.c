@@ -105,18 +105,17 @@ void cblock_draw_frame(const CBlock *c, int frame, float x, float y, bool flip)
 static Sprite g_spr[MAX_SPR]; static int g_nspr;
 static int pot(int n) { int p = 1; while (p < n) p <<= 1; return p; }
 
-Sprite *sprite_get(uint32_t id)
+Sprite *sprite_from_blob(uint32_t id, const uint8_t *d, uint32_t size)
 {
-    for (int i = 0; i < g_nspr; i++) if (g_spr[i].id == id) return &g_spr[i];
-    const PackEntry *e = packs_find_type(id, RES_SPRITE);
-    if (!e || g_nspr == MAX_SPR) { fprintf(stderr, "sprite %08X not found\n", id); return NULL; }
-    const uint8_t *d = e->data;
+    if (g_nspr == MAX_SPR) return NULL;
     Sprite *s = &g_spr[g_nspr]; memset(s, 0, sizeof *s);
+    struct { const uint8_t *data; uint32_t size; } ev = { d, size }; const void *e = &ev;
+    (void)e;
     s->id = id; s->w = rd16(d); s->h = rd16(d + 2); s->frames = rd16(d + 6);
     uint32_t dsz = rd32(d + 12);
     int pw = pot(s->w), ph = pot(s->h);
     uint8_t *raw = malloc(dsz + 16);
-    uint32_t csz = e->size - 16;
+    uint32_t csz = size - 16;
     if (csz == dsz) memcpy(raw, d + 16, dsz);
     else if (lzo1z_decompress(d + 16, csz, raw, dsz + 16) < 0) { fprintf(stderr, "sprite %08X: bad lzo\n", id); free(raw); return NULL; }
     if (s->frames < 1) s->frames = 1;
@@ -132,6 +131,14 @@ Sprite *sprite_get(uint32_t id)
     free(px); free(fr); free(raw);
     g_nspr++;
     return s;
+}
+
+Sprite *sprite_get(uint32_t id)
+{
+    for (int i = 0; i < g_nspr; i++) if (g_spr[i].id == id) return &g_spr[i];
+    const PackEntry *e = packs_find_type(id, RES_SPRITE);
+    if (!e) { fprintf(stderr, "sprite %08X not found\n", id); return NULL; }
+    return sprite_from_blob(id, e->data, e->size);
 }
 
 void sprite_draw(const Sprite *s, int frame, float x, float y, bool flip)

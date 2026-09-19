@@ -4,6 +4,7 @@
 #include "player.h"
 #include "input.h"
 #include "enemies.h"
+#include "dialog.h"
 
 typedef struct {
     SDL_Renderer *ren;
@@ -26,6 +27,7 @@ typedef struct {
     int state;              /* 10 playing, 0xd dialog, 0xe level clear, 0xb game over */
     float state_t;
     uint32_t dialog_text; float dialog_t;
+    Dialog dialog; int dlg_phase; float dlg_focus_x, dlg_cam_return, dlg_wait;
     bool debug_collision, free_cam;
     bool key[SDL_SCANCODE_COUNT];
 } Game;
