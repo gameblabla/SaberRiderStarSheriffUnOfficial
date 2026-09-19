@@ -31,12 +31,15 @@ typedef struct {
     float cx, cy, hx, hy;
     int type, layer;
     uint16_t interval_ms; uint8_t rand_n;
-    float timer; int remaining, spawned;
+    float timer; int remaining, remaining_init, spawned;
     float wp[8][2]; int nwp;
 } Trigger;
 
 typedef struct {
     Enemy e[MAX_ENEMIES]; int count;
+    bool spawner_enabled;
+    bool cam_locked, cam_shake;      /* camera flags driven by the horse convoy (FUN_00414eb0) */
+    bool release_request;            /* set when the last convoy horse is gone */
     Trigger tr[MAX_TRIGGERS]; int ntr;
     /* per-frame cache (FUN_0041f240 preamble) */
     float px, py, phx, phy, phcx, phcy, death_floor, dt;
@@ -49,4 +52,4 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
 void enemies_draw(const Enemies *E, int layer, float cam_x, float cam_y);
 bool player_damage(Player *pl, int hit_dir, int dmg);
 void player_check_enemy_bullets(Player *pl, Bullets *eb, Effects *fx, float cam_x, int sw, int sh);
-Enemy *enemy_spawn(Enemies *E, int type, int layer, float x, float y, const Level *L, const PhysicsWorld *W, float cam_x, int sw, int sh);
+Enemy *enemy_spawn(Enemies *E, const Trigger *t, float x, float y, const Level *L, const PhysicsWorld *W, float cam_x, int sw, int sh);

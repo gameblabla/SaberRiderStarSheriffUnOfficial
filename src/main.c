@@ -9,6 +9,7 @@
 #include "gfx.h"
 #include "level.h"
 #include "game.h"
+#include "audio.h"
 
 #define SCREEN_W 426
 #define SCREEN_H 240
@@ -28,6 +29,7 @@ int main(int argc, char **argv)
     static const char *const base[] = { "pack.pck", "common.pck", "levels.pck", "menu.pck", "level1.pck" };
     if (!packs_open(data_dir, base, 5)) return 1;
 
+    audio_init();
     Game g;
     if (!game_init(&g, ren, SCREEN_W, SCREEN_H)) return 1;
 
@@ -65,7 +67,7 @@ int main(int argc, char **argv)
                         case 'A': g.in.raw[BTN_AIM] = true; break;   case 'P': g.in.raw[BTN_PAUSE] = true; break; }
                 }
             }
-            game_update(&g, (float)step); acc -= step;
+            game_update(&g, (float)step); audio_update(); acc -= step;
         }
         SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
         SDL_RenderClear(ren);
@@ -75,7 +77,7 @@ int main(int argc, char **argv)
         if (shot_frames < 0) {
             const char *s = SDL_getenv("SABER_SHOT");
             shot_frames = 0;
-            if (s) { float cx = 0; int n = 1; sscanf(s, "%255[^,],%f,%d", shot_path, &cx, &n); g.cam_x = cx; shot_frames = n; }
+            if (s) { float cx = -1; int n = 1; sscanf(s, "%255[^,],%f,%d", shot_path, &cx, &n); if (cx >= 0) g.cam_x = cx; shot_frames = n; }
         }
         if (shot_frames > 0 && --shot_frames == 0) {
             SDL_Surface *sf = SDL_RenderReadPixels(ren, NULL);
@@ -84,6 +86,7 @@ int main(int argc, char **argv)
         }
         SDL_RenderPresent(ren);
     }
+    audio_shutdown();
     packs_close();
     SDL_DestroyRenderer(ren); SDL_DestroyWindow(win); SDL_Quit();
     return 0;

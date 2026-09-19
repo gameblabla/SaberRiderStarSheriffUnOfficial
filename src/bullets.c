@@ -1,4 +1,5 @@
 #include "bullets.h"
+#include "audio.h"
 #include <math.h>
 #include <string.h>
 
@@ -66,6 +67,7 @@ void bullets_update(Bullets *bs, const Level *L, Effects *fx, float dt, float ca
                     if (level_cell(L, cx, cy) == 15) {
                         hit = true;
                         if (b->kind == BK_GRENADE) {
+                            sfx_play(14, 0);
                             AnimDef a = { 0, 0, 12, 12, 0.0666667f, 0 };
                             effects_spawn(fx, 0x5B5EBBA3, b->layer, &a, px, py, 20, 32, 0);
                         }

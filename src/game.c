@@ -1,7 +1,9 @@
 #include "game.h"
 #include "pack.h"
 #include "hud.h"
+#include "audio.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <math.h>
 
 /* player CRHC per selected hero (DAT_007c5250): Fireball, Saber Rider, Colt; default 8403195A */
@@ -19,12 +21,29 @@ bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh)
     g->world.world_min_x = 0; g->world.world_max_x = g->level.width;
     float px = 100, py = 155;
     for (int i = 0; i < g->level.nobjs; i++) if (g->level.objs[i].type == 0) { px = g->level.objs[i].x; py = g->level.objs[i].y; }
+    if (SDL_getenv("SABER_START")) px = (float)atof(SDL_getenv("SABER_START"));   /* debug */
     player_spawn(&g->player, HERO_CRHC[0], px, py);
     enemies_reset(&g->enemies);
+    static const uint32_t DIALOG_TEXT[4] = { 0xC3B6D081, 0xC4B0D1BA, 0xC5AAD2B7, 0xC6A4D3AC };
     for (int i = 0; i < g->level.nobjs; i++) {
         LevelObject *o = &g->level.objs[i];
+        float hx = o->wp[0][0] * 0.5f, hy = o->wp[0][1] * 0.5f;   /* +0x0c/+0x10 = zone size for flow objects */
         if (o->type >= 1 && o->type <= 29 && o->type != 3 && o->type != 4) enemies_add_trigger(&g->enemies, o);
+        else if (o->type == 3 && g->ndeath < 8) { g->deathzones[g->ndeath].cx = o->x + hx; g->deathzones[g->ndeath].cy = o->y + hy; g->deathzones[g->ndeath].hx = hx; g->deathzones[g->ndeath].hy = hy; g->deathzones[g->ndeath].rx = o->spawn_x; g->deathzones[g->ndeath].ry = o->spawn_y; g->ndeath++; }
+        else if (o->type == 4) { g->exit_zone.cx = o->x + hx; g->exit_zone.cy = o->y + hy; g->exit_zone.hx = hx; g->exit_zone.hy = hy; g->exit_zone.set = true; }
+        else if ((o->type == 998 || o->type == 999) && g->nstops < 4) {
+            int k = g->nstops++;
+            g->stops[k].cx = o->x + hx; g->stops[k].cy = o->y + hy; g->stops[k].armed = true;
+            g->stops[k].hx = o->type == 999 ? -hx : hx; g->stops[k].hy = o->type == 999 ? -hy : hy;
+        } else if (o->type >= 1000 && o->type <= 1003) {
+            int k = o->type - 1000;
+            g->dialogs[k].cx = o->x + hx; g->dialogs[k].cy = o->y + hy; g->dialogs[k].hx = hx; g->dialogs[k].hy = hy;
+            g->dialogs[k].text = DIALOG_TEXT[k]; g->dialogs[k].focus_x = o->wp[1][0]; g->dialogs[k].focus_y = o->wp[1][1];
+            g->dialogs[k].t_in = o->wp[2][0] * 0.001f; g->dialogs[k].t_out = o->wp[2][1] * 0.001f;
+        }
     }
+    g->state = 10;
+    music_play(5, true);
     g->player_layer = 11;
     for (int i = 0; i < g->level.nlayers; i++) if (!strcmp(g->level.layers[i].name, "PlayerSprites")) g->player_layer = i;
     g->cam_x = px - sw / 2; if (g->cam_x < 0) g->cam_x = 0;
@@ -45,6 +64,12 @@ void game_update(Game *g, float dt)
 {
     input_update(&g->in);
     Player *p = &g->player; Character *c = &p->ch;
+    if (g->state == 0xd) {          /* dialog / cutscene: world frozen; advance with shoot/jump/pause */
+        g->dialog_t += dt;
+        if (g->dialog_t > 0.3f && (btn_pressed(&g->in, BTN_SHOOT) || btn_pressed(&g->in, BTN_JUMP) || btn_pressed(&g->in, BTN_PAUSE))) g->state = 10;
+        return;
+    }
+    if (g->state == 0xe || g->state == 0xb) { g->state_t += dt; }
     /* order as in GameLevel::update: controls -> (spawner, enemies) -> physics -> bullets -> camera */
     if (c->state == CS_DEAD) { c->coll = c->body.coll; player_death_update(p, dt, g->level.height, &g->cam_x, g->sw); }
     else { character_sync_ground(c); player_death_update(p, dt, g->level.height, &g->cam_x, g->sw); player_control(p, &g->in, dt); }
@@ -52,21 +77,51 @@ void game_update(Game *g, float dt)
     player_check_enemy_bullets(p, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh);
     g->world.world_min_x = g->cam_x;   /* GameLevel::update: physics world min = camera left edge */
     enemies_update(&g->enemies, p, &g->level, &g->world, &g->player_bullets, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh, dt);
+    /* level-flow zones (FUN_00422d10 tail): exit, dialogs, camera stops, death zones */
+    if (c->state != CS_DEAD && !p->locked) {
+        float bx = c->body.x, by = c->body.y;
+        const HurtBox *h = &c->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0];
+        float hw = h->hw, hh = h->hh;
+        #define IN_ZONE(z) (fabsf(bx - (z).cx) <= hw + fabsf((z).hx) && fabsf(by - (z).cy) <= hh + fabsf((z).hy))
+        if (g->exit_zone.set && IN_ZONE(g->exit_zone)) { p->locked = true; c->flags |= CF_HIT | CF_DEAD; g->state = 0xe; g->state_t = 0; }
+        else {
+            bool started = false;
+            for (int k = 0; k < 4 && !started; k++) {
+                if (g->dialogs[k].text && !g->dialogs[k].done && IN_ZONE(g->dialogs[k])) {
+                    g->dialogs[k].done = true; g->state = 0xd; g->dialog_text = g->dialogs[k].text; g->dialog_t = 0; started = true;
+                }
+            }
+            if (!started) for (int k = 0; k < g->nstops; k++) {
+                if (!g->stops[k].armed) continue;
+                if (IN_ZONE(g->stops[k])) { g->cam_locked = true; g->stops[k].armed = false; }
+            }
+        }
+        for (int k = 0; k < g->ndeath; k++) if (IN_ZONE(g->deathzones[k])) { p->respawn_x = g->deathzones[k].rx; p->respawn_y = g->deathzones[k].ry; c->state = CS_DEAD; }
+        #undef IN_ZONE
+    }
+    if (g->enemies.release_request) {
+        g->enemies.release_request = false; g->cam_locked = false;
+        for (int k = 0; k < g->nstops; k++) if (g->stops[k].armed && g->stops[k].cx + g->stops[k].hx > g->cam_x && g->stops[k].cx + g->stops[k].hx < g->cam_x + g->sw) g->stops[k].armed = false;
+    }
+    if (g->enemies.cam_locked) g->cam_locked = true;
     player_resolve(c, dt);
+    if (g->cam_locked && c->body.vx > 0 && g->cam_x + g->sw - c->body.hx < c->body.x) c->body.vx = 0;
     physics_step(&g->world, &g->level, &c->body, dt);
     bullets_update(&g->player_bullets, &g->level, &g->effects, dt, g->cam_x, g->cam_y, g->sw, g->sh);
     bullets_update(&g->enemy_bullets, &g->level, &g->effects, dt, g->cam_x, g->cam_y, g->sw, g->sh);
     character_animate(c, dt);
     effects_update(&g->effects, dt);
     player_frame_end(p, dt);
-    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "st=%d aim=%d face=%d anim=%d frame=%d flags=%x coll=%x pos=%.1f,%.1f v=%.1f,%.1f in=%d%d%d%d%d%d%d\n",
-        c->state, c->aim, c->facing, c->anim, c->frame, c->flags, c->coll, c->body.x, c->body.y, c->body.vx, c->body.vy,
+    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "cam=%.0f lock=%d st=%d aim=%d face=%d anim=%d frame=%d flags=%x coll=%x pos=%.1f,%.1f v=%.1f,%.1f in=%d%d%d%d%d%d%d\n",
+        g->cam_x, g->cam_locked, c->state, c->aim, c->facing, c->anim, c->frame, c->flags, c->coll, c->body.x, c->body.y, c->body.vx, c->body.vy,
         g->in.state[0], g->in.state[1], g->in.state[2], g->in.state[3], g->in.state[4], g->in.state[5], g->in.state[6]);
 
     if (g->free_cam) {
         float sp = (g->key[SDL_SCANCODE_LSHIFT] ? 600.f : 200.f) * dt;
         if (g->key[SDL_SCANCODE_RIGHT]) g->cam_x += sp;
         if (g->key[SDL_SCANCODE_LEFT]) g->cam_x -= sp;
+    } else if (g->cam_locked) {
+        /* camera frozen during a stop */
     } else {
         /* camera follows the player horizontally (FUN_0040c460), max 4 px/frame catch-up */
         float target = c->body.x;
@@ -111,6 +166,8 @@ static void draw_collision(Game *g)
 void game_draw(Game *g)
 {
     Level *L = &g->level;
+    float shake = g->enemies.cam_shake ? (float)(rand() % 4) : 0.0f;
+    float saved = g->cam_x; g->cam_x += shake;
     for (int i = 0; i < L->nlayers; i++) {
         if (L->layers[i].is_tilemap) level_draw_layer(L, i, g->cam_x, g->cam_y, g->sw, g->sh);
         else {
@@ -121,6 +178,7 @@ void game_draw(Game *g)
             effects_draw(&g->effects, i, g->cam_x, g->cam_y);
         }
     }
+    g->cam_x = saved;
     hud_draw(g->ren, 0, 1, g->player.lives, g->player.hp, 0);
     if (g->debug_collision) draw_collision(g);
 }

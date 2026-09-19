@@ -1,5 +1,6 @@
 #include "enemies.h"
 #include "pack.h"
+#include "audio.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -15,7 +16,7 @@ static const uint32_t TYPE_CRHC[28] = {
 static uint32_t crhc_for_type(int t) { return (t >= 2 && t <= 29) ? TYPE_CRHC[t - 2] : 0x02A38AFB; }
 static int rnd(int n) { return n > 0 ? rand() % n : 0; }   /* FUN_0040cf30(0, n) -> [0,n) */
 
-void enemies_reset(Enemies *E) { memset(E, 0, sizeof *E); }
+void enemies_reset(Enemies *E) { memset(E, 0, sizeof *E); E->spawner_enabled = true; }
 
 void enemies_add_trigger(Enemies *E, const LevelObject *o)   /* FUN_00421070 + FUN_004211b0 */
 {
@@ -27,7 +28,7 @@ void enemies_add_trigger(Enemies *E, const LevelObject *o)   /* FUN_00421070 + F
     t->type = o->type; t->layer = o->layer;
     t->interval_ms = o->a; t->rand_n = o->c;
     t->timer = o->b * 0.001f + (o->d ? rnd(o->d + 1) * 0.02f : 0);
-    t->remaining = o->loops;
+    t->remaining = o->loops; t->remaining_init = o->loops;
     for (int i = 0; i < o->n_wp && i < 8; i++) { t->wp[i][0] = o->wp[i][0]; t->wp[i][1] = o->wp[i][1]; t->nwp++; }
     if (t->nwp == 0) { t->wp[0][0] = o->x; t->wp[0][1] = o->y; t->nwp = 1; }
 }
@@ -79,8 +80,46 @@ static void face_and_probe(Enemy *e, bool right, const Level *L, const PhysicsWo
     if (jump) b->vy -= 250.0f;
 }
 
-Enemy *enemy_spawn(Enemies *E, int type, int layer, float x, float y, const Level *L, const PhysicsWorld *W, float cam_x, int sw, int sh)
+static int count_class(const Enemies *E, int cls) { int n = 0; for (int i = 0; i < MAX_ENEMIES; i++) if (E->e[i].cls == cls) n++; return n; }
+
+/* FUN_00414eb0: called when a convoy horse is spawned or removed */
+static void convoy_check(Enemies *E)
 {
+    if (count_class(E, EC_BUGGY) == 0) { E->cam_shake = false; E->cam_locked = false; E->spawner_enabled = true; E->release_request = true; }
+    else { E->cam_shake = true; E->spawner_enabled = false; }
+}
+
+/* FUN_00415550: the robot-horse convoy (type 11) */
+static Enemy *spawn_convoy(Enemies *E, const Trigger *t, float x, float y, const Level *L, const PhysicsWorld *W)
+{
+    (void)L; (void)W;
+    Character tmp; character_init(&tmp, 0xFBFAF817, false);
+    float hx = tmp.box_hx, hy = tmp.box_hy;
+    bool right = E->px <= x;         /* horses run toward the player */
+    float px0 = right ? x + hx + t->interval_ms * 0.15f : x - hx - t->interval_ms * 0.15f;
+    float py0 = right ? y + hy : y - hy;
+    float step = t->rand_n * 3.2f + 16.0f;
+    int extra = t->remaining_init < 0x39 ? t->remaining_init : 0x38;
+    Enemy *head = NULL;
+    for (int i = 0; i <= extra; i++) {
+        Enemy *e = alloc_slot(E, EC_BUGGY);
+        if (!e) break;
+        e->type = 11; e->layer = t->layer;
+        character_init(&e->ch, 0xFBFAF817, false);
+        e->ch.body.x = px0; e->ch.body.y = py0; e->ch.body.flags = 0x1f;
+        if (E->px <= px0) character_move_left(&e->ch, 0); else character_move_right(&e->ch, 4);
+        e->dir = e->ch.facing;
+        if (!head) head = e;
+        px0 += right ? -step : step;
+    }
+    convoy_check(E);
+    return head;
+}
+
+Enemy *enemy_spawn(Enemies *E, const Trigger *t, float x, float y, const Level *L, const PhysicsWorld *W, float cam_x, int sw, int sh)
+{
+    int type = t->type, layer = t->layer;
+    if (type == 11) return spawn_convoy(E, t, x, y, L, W);
     int cls;
     switch (type) {
     case 2: case 5: cls = type == 2 ? EC_GRUNT : EC_GRUNT_B; break;
@@ -129,6 +168,7 @@ static void spawner_update(Enemies *E, Player *pl, const Level *L, const Physics
 {
     Body *pb = &pl->ch.body;
     float pcx = pb->x + pb->ox, pcy = pb->y + pb->oy;
+    if (!E->spawner_enabled) return;
     for (int i = 0; i < E->ntr; i++) {
         Trigger *t = &E->tr[i];
         if (fabsf(pcx - t->cx) > t->hx + pb->hx || fabsf(pcy - t->cy) > t->hy + pb->hy) continue;
@@ -143,7 +183,7 @@ static void spawner_update(Enemies *E, Player *pl, const Level *L, const Physics
             float ox = 32, oy = 32;
             if (wx > 99999.0f) wx = (cam_x + sw) + ox; else if (wx < -99999.0f) wx = cam_x - ox;
             if (wy > 99999.0f) wy = oy + sh; else if (wy < -99999.0f) wy = -oy;
-            Enemy *e = enemy_spawn(E, t->type, t->layer, wx, wy, L, W, cam_x, sw, sh);
+            Enemy *e = enemy_spawn(E, t, wx, wy, L, W, cam_x, sw, sh);
             if (t->type == 11) t->cy = -10000.0f;    /* buggy triggers fire once */
             if (!e) break;
         }
@@ -162,12 +202,13 @@ bool player_damage(Player *pl, int hit_dir, int dmg)   /* FUN_00422a10 */
 {
     Character *c = &pl->ch;
     if (dmg < 1) return false;
-    if (dmg <= pl->hp) { pl->hp -= dmg; c->flags |= CF_HIT; c->hit_t = 170.0f; return true; }
+    if (dmg <= pl->hp) { pl->hp -= dmg; c->flags |= CF_HIT; c->hit_t = 170.0f; sfx_play(3, 0); return true; }
     if ((hit_dir & 0xfb) != 2) {
         if (hit_dir < 8 && ((1u << hit_dir) & 0x83u)) { c->facing = 1; c->body.vx -= 300.0f; }
         else { c->facing = 0; c->body.vx += 300.0f; }
     }
     c->state = CS_DEAD;
+    sfx_play(4, 0);
     return true;
 }
 
@@ -211,6 +252,7 @@ resolve:
     character_resolve(c, dt);
     if (e->gun_alive) { e->gun_cd -= dt; if (e->gun_cd <= 0) { if (e->gun_cd < 0) e->gun_cd = 0; c->flags &= ~CF_SHOOT; } }
     if (knock) b->vx += knock * 102.0f;
+    if (die && c->state == CS_DEAD && !e->dying) { sfx_play(5, 0); sfx_play(6, 3); }
     if (die) kill(E, e, 0x19f);
 }
 
@@ -253,6 +295,7 @@ static void update_grunt(Enemies *E, Enemy *e, Player *pl, const Level *L, const
                     if (ef) { ef->follow_x = &b->x; ef->follow_y = &b->y; ef->fx0 = b->x; ef->fy0 = b->y; }
                     bullets_spawn(eb, BK_ENEMY, e->layer, x, y, c->aim & 7, 166.0f);
                     e->gun_cd = 0.2f;
+                    sfx_play(7, 0);
                 }
             } else if (c->speed > 0.00024f) {
                 c->speed = 120.0f; e->gun_alive = false;
@@ -293,6 +336,7 @@ static bool enemy_fire(Enemy *e, Bullets *eb, Effects *fx, float mx, float my)
     if (ef) { ef->follow_x = &b->x; ef->follow_y = &b->y; ef->fx0 = b->x; ef->fy0 = b->y; }
     bullets_spawn(eb, BK_ENEMY, e->layer, x, y, c->aim & 7, 166.0f);
     e->gun_cd = 0.2f;
+    sfx_play(7, 0);
     return true;
 }
 
@@ -375,6 +419,7 @@ static void update_kneeler(Enemies *E, Enemy *e, Player *pl, const Level *L, con
                     float x = b->x + c->muzzle_x, y = b->y + c->muzzle_y;
                     bullets_spawn(eb, BK_GRENADE, e->layer, x, y, c->aim & 7, spd);
                     e->gun_cd = 0.2f;
+                    sfx_play(13, 0);
                 }
                 c->speed += 0.235f;
             }
@@ -405,6 +450,42 @@ static void update_stampede(Enemies *E, Enemy *e, float cam_x, int sw)
     else { c->body.x -= sp; if (c->body.x + 2 * c->origin_x < cam_x) kill(E, e, 0x19f); }
 }
 
+/* FUN_00415c10: convoy horse. Forced walk state, no gravity/collision, tramples the player and humanoid enemies. */
+static void update_horse(Enemies *E, Enemy *e, Player *pl, float cam_x, int sw, float dt)
+{
+    Character *c = &e->ch; Body *b = &c->body;
+    b->flags = 0x1f; b->coll = COLL_DOWN;
+    c->state = CS_WALK;
+    character_sync_ground(c);
+    c->state = CS_WALK;
+    bool offscreen = false;
+    if (e->dir == 1) { character_move_right(c, 4); offscreen = b->x - b->hx > cam_x + sw; }
+    else { character_move_left(c, 0); offscreen = b->x + b->hx < cam_x; }
+    c->state = CS_WALK;
+    /* player */
+    if (hurt_overlap(c, b->x, b->y, E)) {
+        Character *p = &pl->ch;
+        if (!(p->flags & CF_HIT) && p->state != CS_DEAD) player_damage(pl, e->dir == 0 ? 0 : 4, 1);
+    }
+    /* humanoid enemies */
+    const HurtBox *h = &c->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0];
+    float cx = b->x + h->ox, cy = b->y + h->oy;
+    for (int i = 0; i < MAX_ENEMIES; i++) {
+        Enemy *o = &E->e[i];
+        if (!o->cls || o->dying || o->cls >= 8 || o == e) { if (!(o->cls == EC_END && !o->dying)) continue; }
+        const HurtBox *oh = &o->ch.hurt[o->ch.anim < CHAR_MAX_ANIMS ? o->ch.anim : 0];
+        float ox = o->ch.body.x + oh->ox, oy = o->ch.body.y + oh->oy;
+        if (fabsf(ox - cx) > oh->hw + h->hw || fabsf(oy - cy) > oh->hh + h->hh) continue;
+        o->ch.facing = e->dir == 0 ? 1 : 0;
+        o->ch.state = CS_DEAD; sfx_play(5, 0); sfx_play(6, 3);
+        character_resolve(&o->ch, dt);
+        o->ch.body.vx += e->dir == 0 ? -102.0f : 102.0f;
+        kill(E, o, 0x19f);
+    }
+    character_resolve(c, dt);
+    if (offscreen) kill(E, e, 0x19f); else sfx_play(20, 0);
+}
+
 static void update_generic(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, float cam_x, int sw, float dt)
 {
     /* placeholder for classes not yet ported: stand, take hits like a walker */
@@ -431,13 +512,14 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
             e->death_t -= dt;
             character_sync_ground(&e->ch);
             character_resolve(&e->ch, dt);
-            if (e->death_t <= 0) { e->cls = 0; E->count--; continue; }
+            if (e->death_t <= 0) { int was = e->cls; e->cls = 0; E->count--; if (was == EC_BUGGY) convoy_check(E); continue; }
         } else {
             switch (e->cls) {
             case EC_WALKER: update_walker(E, e, pl, L, W, pb, cam_x, sw, dt); break;
             case EC_GRUNT: case EC_GRUNT_B: update_grunt(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt); break;
             case EC_SNIPER: case EC_SNIPER_B: update_sniper(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt); break;
             case EC_KNEELER: case EC_KNEELER_B: case EC_END: update_kneeler(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt); break;
+            case EC_BUGGY: update_horse(E, e, pl, cam_x, sw, dt); break;
             case EC_STAMPEDE: case EC_STAMPEDE + 1: case EC_STAMPEDE + 2: case EC_STAMPEDE + 3: update_stampede(E, e, cam_x, sw); break;
             case EC_PROP: case EC_PROP + 1: case EC_PROP + 2: case EC_PROP + 3: case EC_PROP + 4: case EC_PROP + 5:
             case EC_PROP + 6: case EC_PROP + 7: case EC_PROP + 8: case EC_PROP + 9: case EC_PROP + 10: case EC_PROP + 11:
