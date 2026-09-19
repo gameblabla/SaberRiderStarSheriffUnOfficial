@@ -56,6 +56,12 @@ bool level_load(Level *L, uint32_t id)
         m->cells = (const uint32_t *)(p + 12);
         p += 12 + (size_t)m->w * m->h * 4;
         m->cb = cblock_get(m->cblock_id);
+        m->used_w = m->w;
+        if (L->layers[i].extra == 1) {
+            int used = 0;
+            for (int r = 0; r < m->h; r++) for (int c = m->w - 1; c >= used; c--) if (m->cells[r * m->w + c]) { used = c + 1; break; }
+            if (used > 0) m->used_w = used;
+        }
         L->layers[i].map = m;
         mi++;
     }
@@ -78,10 +84,11 @@ void level_draw_layer(const Level *L, int li, float cam_x, float cam_y, int sw, 
     if (!m || !m->cb) return;
     const CBlock *cb = m->cb;
     int tw = cb->tw, th = cb->th;
-    float ox = cam_x * ly->parallax, oy = cam_y * ly->parallax;
     bool wrap = ly->extra == 1;
+    /* repeating layers auto-scroll by frame_count * parallax (TileMapRenderer::render, repeat mode); others by camera * parallax */
+    float ox = wrap ? (float)(SDL_GetTicks() * 60 / 1000) * ly->parallax : cam_x * ly->parallax, oy = wrap ? 0 : cam_y * ly->parallax;
     int ncells = cblock_ncells(cb);
-    int mapw_px = m->w * tw;
+    int mapw_px = m->used_w * tw;
     if (wrap && mapw_px > 0) ox = fmodf(ox, (float)mapw_px), oy = 0;
     if (ox < 0 && !wrap) ox = 0;
     if (oy < 0) oy = 0;
@@ -91,7 +98,7 @@ void level_draw_layer(const Level *L, int li, float cam_x, float cam_y, int sw, 
         if (cy < 0 || cy >= m->h) continue;
         for (int cx = cx0; cx < cx0 + ncx; cx++) {
             int mx = cx;
-            if (wrap) { mx = ((cx % m->w) + m->w) % m->w; }
+            if (wrap) { mx = ((cx % m->used_w) + m->used_w) % m->used_w; }
             else if (cx < 0 || cx >= m->w) continue;
             uint32_t v = m->cells[cy * m->w + mx];
             if (!v) continue;

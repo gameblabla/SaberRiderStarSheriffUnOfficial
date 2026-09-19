@@ -23,6 +23,7 @@ typedef struct {
 
 typedef struct {
     int w, h;
+    int used_w;              /* wrap layers repeat every used_w columns (FUN_0040dce0 trims to the last non-empty column) */
     uint32_t cblock_id;
     const uint32_t *cells;   /* w*h, cell-1 = cblock cell index, 0 = empty */
     CBlock *cb;
