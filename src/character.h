@@ -46,6 +46,8 @@ typedef struct {
     float muzzle_x, muzzle_y; /* +0x24/+0x28 */
     /* animation playback */
     int frame; float anim_t;
+    /* torso overlay (second sprite entity, player only) */
+    uint8_t overlay; int ov_frame; float ov_t;
     Body body;
     CBlock *cb;
 } Character;
@@ -55,6 +57,8 @@ void character_reset(Character *c, bool enemy);
 void character_sync_ground(Character *c);                 /* FUN_0041ba90 */
 void character_resolve(Character *c, float dt);           /* FUN_0041bc40: state -> anim + vx */
 void character_set_anim(Character *c, int anim);          /* FUN_0041b710 */
+void character_set_overlay(Character *c, int anim);       /* FUN_0041b570 */
+void player_resolve(Character *c, float dt);              /* FUN_0041c530 */
 void character_animate(Character *c, float dt);           /* SpriteAnimation update */
 void character_draw(const Character *c, float cam_x, float cam_y);
 /* input helpers (FUN_0041d740..) */

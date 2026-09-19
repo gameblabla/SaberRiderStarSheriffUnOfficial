@@ -52,7 +52,7 @@ void game_update(Game *g, float dt)
     player_check_enemy_bullets(p, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh);
     g->world.world_min_x = g->cam_x;   /* GameLevel::update: physics world min = camera left edge */
     enemies_update(&g->enemies, p, &g->level, &g->world, &g->player_bullets, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh, dt);
-    character_resolve(c, dt);
+    player_resolve(c, dt);
     physics_step(&g->world, &g->level, &c->body, dt);
     bullets_update(&g->player_bullets, &g->level, &g->effects, dt, g->cam_x, g->cam_y, g->sw, g->sh);
     bullets_update(&g->enemy_bullets, &g->level, &g->effects, dt, g->cam_x, g->cam_y, g->sw, g->sh);
