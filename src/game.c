@@ -50,6 +50,7 @@ void game_update(Game *g, float dt)
     else { character_sync_ground(c); player_death_update(p, dt, g->level.height, &g->cam_x, g->sw); player_control(p, &g->in, dt); }
     player_try_fire(p, &g->player_bullets, &g->effects, g->player_layer);
     player_check_enemy_bullets(p, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh);
+    g->world.world_min_x = g->cam_x;   /* GameLevel::update: physics world min = camera left edge */
     enemies_update(&g->enemies, p, &g->level, &g->world, &g->player_bullets, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh, dt);
     character_resolve(c, dt);
     physics_step(&g->world, &g->level, &c->body, dt);

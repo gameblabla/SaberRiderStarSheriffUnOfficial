@@ -113,6 +113,10 @@ Enemy *enemy_spawn(Enemies *E, int type, int layer, float x, float y, const Leve
         face_and_probe(e, e->dir == 1, L, W, cam_x, sw);
         snap_to_ground(e, L, W);
         if (e->ch.flags & CF_SPAWN_FALL) e->spawn_t = 0.6666667f;
+    } else if (cls >= EC_PROP && cls <= EC_STAMPEDE + 3) {
+        b->x = x; b->y = y; b->vx = b->vy = 0; b->flags = 0x1f;
+        e->ch.state = CS_IDLE;
+        if (cls >= EC_STAMPEDE) { if (E->px <= b->x) character_move_left(&e->ch, 0); else character_move_right(&e->ch, 4); }
     } else {
         e->dir = 2;
         e->ch.facing = E->px <= b->x ? 0 : 1;
@@ -379,6 +383,28 @@ static void update_kneeler(Enemies *E, Enemy *e, Player *pl, const Level *L, con
     humanoid_tail(E, e, pl, pb, cam_x, sw, dt, false);
 }
 
+/* FUN_00411aa0: decorative props (types 12..23): static, loop anim entry 1, despawn a screen behind the camera */
+static void update_prop(Enemies *E, Enemy *e, float cam_x, int sw)
+{
+    Character *c = &e->ch;
+    c->body.flags = 0x1f;
+    character_set_anim(c, 1);
+    if (c->body.x < cam_x - sw) kill(E, e, 0x19f);
+}
+
+/* FUN_004121a0: stampede horses (types 24..27): run across the screen at a fixed pixel speed per frame */
+static void update_stampede(Enemies *E, Enemy *e, float cam_x, int sw)
+{
+    static const float SPEED[4] = { 7.875f, 4.4625f, 9.1875f, 5.25f };   /* 0x7c4194 (22), 0x7c4198 (23), 0x7c419c (24), 0x7c4190 (25) px/frame */
+    Character *c = &e->ch;
+    c->body.flags = 0x1f;
+    float sp = SPEED[e->cls - EC_STAMPEDE];
+    bool right = c->aim == AIM_R;
+    character_set_anim(c, right ? 2 : 1);
+    if (right) { c->body.x += sp; if (c->body.x - 2 * c->origin_x > cam_x + sw) kill(E, e, 0x19f); }
+    else { c->body.x -= sp; if (c->body.x + 2 * c->origin_x < cam_x) kill(E, e, 0x19f); }
+}
+
 static void update_generic(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, float cam_x, int sw, float dt)
 {
     /* placeholder for classes not yet ported: stand, take hits like a walker */
@@ -412,6 +438,10 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
             case EC_GRUNT: case EC_GRUNT_B: update_grunt(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt); break;
             case EC_SNIPER: case EC_SNIPER_B: update_sniper(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt); break;
             case EC_KNEELER: case EC_KNEELER_B: case EC_END: update_kneeler(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt); break;
+            case EC_STAMPEDE: case EC_STAMPEDE + 1: case EC_STAMPEDE + 2: case EC_STAMPEDE + 3: update_stampede(E, e, cam_x, sw); break;
+            case EC_PROP: case EC_PROP + 1: case EC_PROP + 2: case EC_PROP + 3: case EC_PROP + 4: case EC_PROP + 5:
+            case EC_PROP + 6: case EC_PROP + 7: case EC_PROP + 8: case EC_PROP + 9: case EC_PROP + 10: case EC_PROP + 11:
+                update_prop(E, e, cam_x, sw); break;
             default: update_generic(E, e, pl, L, W, pb, cam_x, sw, dt); break;
             }
         }
