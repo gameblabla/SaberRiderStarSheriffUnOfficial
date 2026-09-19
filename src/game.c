@@ -144,6 +144,7 @@ void game_update(Game *g, float dt)
             }
         }
         for (int k = 0; k < g->ndeath; k++) if (IN_ZONE(g->deathzones[k])) { p->respawn_x = g->deathzones[k].rx; p->respawn_y = g->deathzones[k].ry; c->state = CS_DEAD; }
+        if (by - hh > g->level.height) { p->respawn_x = p->safe_x; p->respawn_y = p->safe_y; c->state = CS_DEAD; sfx_play(15, 0); }   /* fell out of the level */
         #undef IN_ZONE
     }
     if (g->enemies.release_request) {

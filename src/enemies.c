@@ -555,11 +555,11 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
         character_set_anim(c, c->facing ? 0x33 : 0x32);
         return;
     }
-    if (E->boss_phase == 0) { E->boss_phase = 1; music_play(8, true); sfx_play(0x13, 0); }
+    if (E->boss_phase == 0) { E->boss_phase = 1; E->cam_locked = true; music_play(8, true); sfx_play(0x13, 0); }
 
     switch (c->state) {
-    case CS_FALL:      /* fly-in from the right in the far layer, heading left */
-        b->vx = -140.0f;
+    case CS_FALL:      /* fly-in from the right in the far layer, accelerating left (0x7c4200) */
+        b->vx += dt * -18666.0f;
         c->facing = 0; c->aim = AIM_L;
         if (b->x + 350.0f < cam_x) {
             int nl = next_sprite_layer(L, e->layer);
@@ -568,12 +568,12 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
             b->x = cam_x - 230.0f;
         }
         break;
-    case CS_SLIDE:     /* mid layer, crossing to the right */
-        b->vx += dt * 23332.75f * 0.02f; if (b->vx > 140.0f) b->vx = 140.0f;
+    case CS_SLIDE:     /* mid layer, accelerating right (0x7c4208) */
+        b->vx += dt * 23332.75f;
         c->facing = 1; c->aim = AIM_R;
         if (b->x - 230.0f > cam_x + sw) {
             int nl = next_sprite_layer(L, e->layer);
-            if (nl >= 0) { e->layer = nl; b->x = cam_x + sw + 230.0f; c->state = CS_SLIDE; b->vx = -140.0f; c->facing = 0; }
+            if (nl >= 0) { e->layer = nl; b->x = cam_x - 230.0f; b->vx = 0; }
             if (nl < 0 || next_sprite_layer(L, nl) < 0) {
                 /* reached the play layer: enter the fight, with the rider */
                 e->layer = nl >= 0 ? nl : e->layer;
