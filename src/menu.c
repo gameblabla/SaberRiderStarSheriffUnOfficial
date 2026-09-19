@@ -7,6 +7,7 @@
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 static void fill(SDL_Renderer *r, int sw, int sh, uint8_t R, uint8_t G, uint8_t B, uint8_t A)
 {
@@ -19,15 +20,18 @@ static bool confirm(const Input *in) { return btn_pressed(in, BTN_PAUSE) || btn_
 void menu_enter(Menu *m, int state)
 {
     if (m->video) { video_close(m->video); m->video = NULL; }
+    int prev = m->state;
     m->state = state; m->t = 0; m->text_chars = 0;
     switch (state) {
     case MS_SPLASH0: case MS_SPLASH1: case MS_SPLASH2: case MS_SPLASH3: m->dur = 3.0f; break;
     case MS_INTRO: m->dur = 0; break;
-    case MS_MAIN: m->dur = 3.0f; m->sel = 0; music_play(0, true); break;
+    case MS_MAIN: m->dur = prev == MS_OPTIONS ? 0.0f : 3.0f; m->sel = 0; if (prev != MS_OPTIONS) music_play(0, true); break;
     case MS_CHARSEL: m->dur = 1.0f; m->character = 1; music_play(1, true); break;
     case MS_BRIEFING: m->dur = 1.0f; music_stop(); break;
     case MS_GAMEOVER: m->dur = 6.0f; music_play(7, false); break;
     case MS_ACCOMPLISHED: m->dur = 6.0f; music_play(6, false); break;
+    case MS_CREDITS: m->dur = 3.5f; m->credits_page = 0; music_play(3, true); break;
+    case MS_OPTIONS: m->dur = 0.0f; m->opt_sel = 0; break;
     default: m->dur = 1.0f; break;
     }
 }
@@ -49,9 +53,26 @@ void menu_update(Menu *m, const Input *in, float dt, int sw, SDL_Renderer *r)
         if (btn_pressed(in, BTN_UP) || btn_pressed(in, BTN_DOWN)) { m->sel ^= 1; sfx_play(8, 0); }
         if (confirm(in)) { sfx_play(9, 0); menu_enter(m, m->sel == 0 ? MS_CHARSEL : MS_OPTIONS); }
         break;
-    case MS_OPTIONS:
-        if (confirm(in)) menu_enter(m, MS_MAIN);
-        break;
+    case MS_OPTIONS: {
+        enum { O_SCREEN, O_SCAN, O_MUSIC, O_CREDITS, O_BACK, O_COUNT };
+        if (btn_pressed(in, BTN_UP)) { m->opt_sel = (m->opt_sel + O_COUNT - 1) % O_COUNT; sfx_play(8, 0); }
+        if (btn_pressed(in, BTN_DOWN)) { m->opt_sel = (m->opt_sel + 1) % O_COUNT; sfx_play(8, 0); }
+        int dir = btn_pressed(in, BTN_RIGHT) ? 1 : btn_pressed(in, BTN_LEFT) ? -1 : 0;
+        if (m->opt_sel == O_MUSIC && dir) { m->music_track = (m->music_track + 18 + dir) % 18; sfx_play(8, 0); }
+        if (m->opt_sel == O_SCREEN && (dir || confirm(in))) { m->mode43 = !m->mode43; m->apply_screen_mode = true; sfx_play(8, 0); }
+        if (m->opt_sel == O_SCAN && (dir || confirm(in))) { m->scanlines = !m->scanlines; sfx_play(8, 0); }
+        if (confirm(in)) {
+            if (m->opt_sel == O_MUSIC) music_play(m->music_track, true);
+            else if (m->opt_sel == O_CREDITS) menu_enter(m, MS_CREDITS);
+            else if (m->opt_sel == O_BACK) { sfx_play(9, 0); menu_enter(m, MS_MAIN); }
+        }
+        break; }
+    case MS_CREDITS: {
+        const PackEntry *e = packs_find(0x7E11BC19);
+        int pages = 1; if (e) for (uint32_t i = 0; i + 6 <= e->size; i++) if (!memcmp(e->data + i, "[fade]", 6)) pages++;
+        if (m->t >= 3.5f) { m->t = 0; m->credits_page++; }
+        if (m->credits_page >= pages || confirm(in)) menu_enter(m, MS_OPTIONS);
+        break; }
     case MS_CHARSEL:
         if (btn_pressed(in, BTN_LEFT)) { m->character = (m->character + 2) % 3; sfx_play(8, 0); }
         if (btn_pressed(in, BTN_RIGHT)) { m->character = (m->character + 1) % 3; sfx_play(8, 0); }
@@ -94,7 +115,7 @@ void menu_draw(Menu *m, SDL_Renderer *r, int sw, int sh)
     case MS_MAIN: case MS_OPTIONS: {
         Sprite *bg = sprite_get(0xD7DEBAC0), *logo = sprite_get(0xB04BAC5F), *shadow = sprite_get(0x989121EC);
         Sprite *start = sprite_get(0x01E9B701), *opt = sprite_get(0x8FF0AB30);
-        float open = m->t < m->dur ? m->t / m->dur : 1.0f;
+        float open = m->dur > 0 && m->t < m->dur ? m->t / m->dur : 1.0f;
         if (bg) { sprite_draw(bg, 0, 0, 0, false); sprite_draw(bg, 0, (float)(sw - bg->w), 0, true); }
         if (logo) {
             int lx = (sw - logo->w) / 2, ly = 0x20 - (int)((1 - open) * 120);
@@ -105,7 +126,26 @@ void menu_draw(Menu *m, SDL_Renderer *r, int sw, int sh)
             bool blink = ((SDL_GetTicks() / 16) & 0x1f) < 8;
             if (start) { if (m->sel == 0 && !blink) SDL_SetTextureColorMod(start->tex, 255, 255, 0); draw_centered(start, sw, 0xc0); SDL_SetTextureColorMod(start->tex, 255, 255, 255); }
             if (opt) { if (m->sel == 1 && !blink) SDL_SetTextureColorMod(opt->tex, 255, 255, 0); draw_centered(opt, sw, 0xd0); SDL_SetTextureColorMod(opt->tex, 255, 255, 255); }
-            if (m->state == MS_OPTIONS) { Font *f = font_get(0x12072E60); fill(r, sw, sh, 0, 0, 0, 160); if (f) font_draw(f, "OPTIONS NOT IMPLEMENTED YET", 100, 110, 255, 255, 255); }
+            if (m->state == MS_OPTIONS) {
+                Font *f = font_get(0x12072E60); Sprite *hdr = sprite_get(0xF8F9017C /* placeholder */);
+                fill(r, sw, sh, 0, 0, 0, 215);
+                Sprite *om = sprite_get(0x8FF0AB30); (void)hdr;
+                draw_centered(om, sw, 0x28);
+                if (f) {
+                    char line[64]; const char *items[5];
+                    static const char *TRACKS[18] = { "MENU", "SELECT", "CREDITS", "OPTIONS", "BRIEFING", "LEVEL 1", "CLEAR", "GAME OVER", "BOSS", "TRACK 10", "TRACK 11", "TRACK 12", "TRACK 13", "TRACK 14", "TRACK 15", "TRACK 16", "TRACK 17", "TRACK 18" };
+                    char a[48], b[48], c[48];
+                    snprintf(a, sizeof a, "SCREEN      %s", m->mode43 ? "< 4:3 >" : "< 16:9 >");
+                    snprintf(b, sizeof b, "SCANLINES   %s", m->scanlines ? "< ON >" : "< OFF >");
+                    snprintf(c, sizeof c, "MUSIC TEST  < %02d %s >", m->music_track + 1, TRACKS[m->music_track]);
+                    items[0] = a; items[1] = b; items[2] = c; items[3] = "BAKER CREDITS"; items[4] = "BACK";
+                    for (int i = 0; i < 5; i++) {
+                        bool on = i == m->opt_sel;
+                        snprintf(line, sizeof line, "%s", items[i]);
+                        font_draw(f, line, (float)((sw - font_text_width(f, line)) / 2), (float)(0x60 + i * 16), on ? 255 : 170, on ? 255 : 170, on ? 80 : 170);
+                    }
+                }
+            }
         } else fade = open;
         break; }
     case MS_CHARSEL: {
@@ -153,6 +193,28 @@ void menu_draw(Menu *m, SDL_Renderer *r, int sw, int sh)
             int shown = (int)m->text_chars, y = 196;
             char *line = strtok(text, "\n");
             while (line && shown > 0) { int l = (int)strlen(line); font_draw_n(f, line, shown < l ? shown : l, (float)((sw - font_text_width(f, line)) / 2), (float)y, 255, 230, 120); shown -= l; y += 12; line = strtok(NULL, "\n"); }
+        }
+        break; }
+    case MS_CREDITS: {
+        fill(r, sw, sh, 0, 0, 0, 255);
+        const PackEntry *e = packs_find(0x7E11BC19); Font *f = font_get(0x12072E60);
+        if (e && f) {
+            /* page = block between [fade] markers; lines centred; <cRRGGBB> colours a line */
+            char buf[12000]; size_t n = e->size < sizeof buf - 1 ? e->size : sizeof buf - 1; memcpy(buf, e->data, n); buf[n] = 0;
+            int page = 0; char *lines[24]; int nl = 0;
+            for (char *line = strtok(buf, "\n"); line; line = strtok(NULL, "\n")) {
+                if (!strncmp(line, "[fade]", 6)) { if (page == m->credits_page) break; page++; nl = 0; continue; }
+                if (page == m->credits_page && nl < 24) lines[nl++] = line;
+            }
+            while (nl > 0 && lines[nl-1][0] == 0) nl--;
+            int first = 0; while (first < nl && lines[first][0] == 0) first++;
+            float a = sinf(3.1415927f * m->t / m->dur) * 2.5f; if (a > 1) a = 1;
+            int y = sh / 2 - (nl - first) * 6;
+            for (int i = first; i < nl; i++, y += 12) {
+                char *t = lines[i]; uint8_t R = 255, G = 255, B = 255;
+                if (!strncmp(t, "<c", 2) && strlen(t) >= 9 && t[8] == '>') { unsigned v = (unsigned)strtoul(t + 2, NULL, 16); R = v >> 16; G = (v >> 8) & 255; B = v & 255; t += 9; }
+                font_draw(f, t, (float)((sw - font_text_width(f, t)) / 2), (float)y, (uint8_t)(R * a), (uint8_t)(G * a), (uint8_t)(B * a));
+            }
         }
         break; }
     case MS_GAMEOVER: { fill(r, sw, sh, 0, 0, 0, 255); Sprite *s = sprite_get(0xF629241D); draw_centered(s, sw, s ? (sh - s->h) / 2 : 0); break; }

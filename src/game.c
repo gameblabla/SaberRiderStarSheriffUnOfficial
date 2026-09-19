@@ -213,9 +213,21 @@ static void draw_collision(Game *g)
     }
 }
 
+static void draw_scanlines(Game *g)
+{
+    if (!g->menu.scanlines) return;
+    SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(g->ren, 0, 0, 0, 70);
+    for (int y = 1; y < g->sh; y += 2) { SDL_FRect q = { 0, (float)y, (float)g->sw, 1 }; SDL_RenderFillRect(g->ren, &q); }
+}
+
 void game_draw(Game *g)
 {
-    if (!g->in_level) { menu_draw(&g->menu, g->ren, g->sw, g->sh); return; }
+    if (g->menu.apply_screen_mode) {
+        g->menu.apply_screen_mode = false;
+        g->sw = g->menu.mode43 ? 320 : 426;
+        SDL_SetRenderLogicalPresentation(g->ren, g->sw, g->sh, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+    }
+    if (!g->in_level) { menu_draw(&g->menu, g->ren, g->sw, g->sh); draw_scanlines(g); return; }
     Level *L = &g->level;
     float shake = g->enemies.cam_shake ? (float)(rand() % 4) : 0.0f;
     float saved = g->cam_y; g->cam_y += shake;
@@ -238,6 +250,7 @@ void game_draw(Game *g)
         Sprite *ps = sprite_get(0xB2143E42);
         if (ps && ((SDL_GetTicks() / 16) & 0x7f) > 0x30) sprite_draw(ps, 0, (float)((g->sw - ps->w) / 2), (float)((g->sh - ps->h) / 2), false);
     }
+    draw_scanlines(g);
     if (g->state == 0xe || g->state == 0xb) {   /* fade out */
         float a = g->state_t / (g->state == 0xe ? 4.0f : 2.0f); if (a > 1) a = 1;
         SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(g->ren, g->state == 0xe ? 255 : 0, g->state == 0xe ? 255 : 0, g->state == 0xe ? 255 : 0, (uint8_t)(a * 255));
