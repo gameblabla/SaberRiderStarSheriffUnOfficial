@@ -173,6 +173,31 @@ void music_stop(void)
     free(ogg_buf); ogg_buf = NULL;
 }
 
+void music_play_blob(const uint8_t *mups, uint32_t size, bool loop)
+{
+    music_stop();
+    if (!dev) return;
+    ogg_buf = mups_to_ogg(mups, size, &ogg_len); ogg_pos = 0;
+    if (!ogg_buf) return;
+    ov_callbacks cb = { cb_read, cb_seek, NULL, cb_tell };
+    int rc = ov_open_callbacks(&ogg_pos, &vf, NULL, 0, cb);
+    if (rc < 0) { fprintf(stderr, "music blob: ov_open failed rc=%d\n", rc); return; }
+    music_open = true; music_loop = loop;
+    vorbis_info *vi = ov_info(&vf, -1);
+    SDL_AudioSpec in = { SDL_AUDIO_S16, vi->channels, (int)vi->rate };
+    music_stream = SDL_CreateAudioStream(&in, &spec);
+    SDL_BindAudioStream(dev, music_stream);
+    audio_update();
+}
+
+static Sfx blob_sfx;
+void sfx_play_blob(const uint8_t *riff, uint32_t size)
+{
+    PackEntry tmp = { 0, RES_SFX, riff, size, false };
+    if (blob_sfx.pcm) { free(blob_sfx.pcm); memset(&blob_sfx, 0, sizeof blob_sfx); }
+    if (load_sfx_entry(&tmp, &blob_sfx)) play_sfx(&blob_sfx);
+}
+
 void music_play(int index, bool loop)
 {
     music_stop();

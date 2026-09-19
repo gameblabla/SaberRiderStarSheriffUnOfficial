@@ -9,10 +9,23 @@
 /* player CRHC per selected hero (DAT_007c5250): Fireball, Saber Rider, Colt; default 8403195A */
 static const uint32_t HERO_CRHC[3] = { 0x9C8F9A9E, 0x79260A58, 0x26818B85 };
 
+static bool level_start(Game *g);
+
 bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh)
 {
     memset(g, 0, sizeof *g);
     g->ren = ren; g->sw = sw; g->sh = sh;
+    if (!SDL_getenv("SABER_MENU") && (SDL_getenv("SABER_START") || SDL_getenv("SABER_SCRIPT"))) return level_start(g);   /* debug: straight into the level */
+    menu_enter(&g->menu, SDL_getenv("SABER_MENU") ? atoi(SDL_getenv("SABER_MENU")) : MS_SPLASH0);
+    return true;
+}
+
+static bool level_start(Game *g)
+{
+    SDL_Renderer *ren = g->ren; int sw = g->sw, sh = g->sh;
+    Menu menu = g->menu;
+    memset(g, 0, sizeof *g);
+    g->ren = ren; g->sw = sw; g->sh = sh; g->menu = menu; g->in_level = true;
     const PackEntry *t = packs_find(0x119090BF);
     uint32_t lvl = 0x12DAD1A7;
     if (t && !memcmp(t->data, "TLVL", 4)) lvl = t->data[8] | t->data[9] << 8 | t->data[10] << 16 | (uint32_t)t->data[11] << 24;
@@ -63,7 +76,20 @@ void game_event(Game *g, const SDL_Event *ev)
 void game_update(Game *g, float dt)
 {
     input_update(&g->in);
+    if (!g->in_level) {
+        menu_update(&g->menu, &g->in, dt, g->sw, g->ren);
+        if (g->menu.start_level) { g->menu.start_level = false; level_start(g); }
+        return;
+    }
     Player *p = &g->player; Character *c = &p->ch;
+    if (g->state == 0xc) {            /* pause */
+        if (btn_pressed(&g->in, BTN_PAUSE)) { g->state = 10; sfx_play(10, 0); }
+        return;
+    }
+    if (g->state == 10 && btn_pressed(&g->in, BTN_PAUSE)) { g->state = 0xc; sfx_play(10, 0); return; }
+    if (p->game_over && g->state == 10) { g->state = 0xb; g->state_t = 0; music_stop(); }
+    if (g->state == 0xb) { g->state_t += dt; if (g->state_t > 2.0f) { g->in_level = false; menu_enter(&g->menu, MS_GAMEOVER); return; } }
+    if (g->state == 0xe) { g->state_t += dt; if (g->state_t > 4.0f) { g->in_level = false; menu_enter(&g->menu, MS_ACCOMPLISHED); return; } }
     if (g->state == 0xd) {          /* dialog / cutscene (game state 0xd) */
         float half = g->sw * 0.5f;
         float target = g->dlg_phase == 2 ? g->dlg_cam_return : (g->dlg_focus_x > 0 ? g->dlg_focus_x - half : g->dlg_cam_return);
@@ -86,7 +112,7 @@ void game_update(Game *g, float dt)
         for (int i = 0; i < MAX_ENEMIES; i++) if (g->enemies.e[i].cls) character_animate(&g->enemies.e[i].ch, dt);
         return;
     }
-    if (g->state == 0xe || g->state == 0xb) { g->state_t += dt; }
+
     /* order as in GameLevel::update: controls -> (spawner, enemies) -> physics -> bullets -> camera */
     if (c->state == CS_DEAD) { c->coll = c->body.coll; player_death_update(p, dt, g->level.height, &g->cam_x, g->sw); }
     else { character_sync_ground(c); player_death_update(p, dt, g->level.height, &g->cam_x, g->sw); player_control(p, &g->in, dt); }
@@ -187,6 +213,7 @@ static void draw_collision(Game *g)
 
 void game_draw(Game *g)
 {
+    if (!g->in_level) { menu_draw(&g->menu, g->ren, g->sw, g->sh); return; }
     Level *L = &g->level;
     float shake = g->enemies.cam_shake ? (float)(rand() % 4) : 0.0f;
     float saved = g->cam_y; g->cam_y += shake;
@@ -203,5 +230,16 @@ void game_draw(Game *g)
     g->cam_y = saved;
     hud_draw(g->ren, 0, 1, g->player.lives, g->player.hp, 0);
     if (g->state == 0xd) dialog_draw(&g->dialog, g->ren, g->sw, g->sh);
+    if (g->state == 0xc) {   /* pause: dim + blinking PAUSE sprite (B2143E42) */
+        SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(g->ren, 0, 0, 0, 64);
+        SDL_FRect q = { 0, 0, (float)g->sw, (float)g->sh }; SDL_RenderFillRect(g->ren, &q);
+        Sprite *ps = sprite_get(0xB2143E42);
+        if (ps && ((SDL_GetTicks() / 16) & 0x7f) > 0x30) sprite_draw(ps, 0, (float)((g->sw - ps->w) / 2), (float)((g->sh - ps->h) / 2), false);
+    }
+    if (g->state == 0xe || g->state == 0xb) {   /* fade out */
+        float a = g->state_t / (g->state == 0xe ? 4.0f : 2.0f); if (a > 1) a = 1;
+        SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(g->ren, g->state == 0xe ? 255 : 0, g->state == 0xe ? 255 : 0, g->state == 0xe ? 255 : 0, (uint8_t)(a * 255));
+        SDL_FRect q = { 0, 0, (float)g->sw, (float)g->sh }; SDL_RenderFillRect(g->ren, &q);
+    }
     if (g->debug_collision) draw_collision(g);
 }

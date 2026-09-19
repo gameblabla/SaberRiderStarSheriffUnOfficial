@@ -26,8 +26,8 @@ int main(int argc, char **argv)
     SDL_SetRenderVSync(ren, 1);
     gfx_init(ren);
 
-    static const char *const base[] = { "pack.pck", "common.pck", "levels.pck", "menu.pck", "level1.pck" };
-    if (!packs_open(data_dir, base, 5)) return 1;
+    static const char *const base[] = { "pack.pck", "common.pck", "levels.pck", "menu.pck", "level1.pck", "video.pck" };
+    if (!packs_open(data_dir, base, 6)) return 1;
 
     audio_init();
     Game g;
@@ -66,6 +66,13 @@ int main(int argc, char **argv)
                         case 'J': g.in.raw[BTN_JUMP] = true; break;  case 'S': g.in.raw[BTN_SHOOT] = true; break;
                         case 'A': g.in.raw[BTN_AIM] = true; break;   case 'P': g.in.raw[BTN_PAUSE] = true; break; }
                 }
+            }
+            if (SDL_getenv("SABER_FUZZ")) {   /* debug: random inputs, hold each for a few frames */
+                static int hold; static unsigned mask;
+                if (hold-- <= 0) { hold = rand() % 20; mask = (unsigned)rand(); }
+                for (int b = 0; b < BTN_COUNT; b++) g.in.raw[b] = (mask >> b) & 1;
+                if (g.in.raw[BTN_LEFT] && g.in.raw[BTN_RIGHT]) g.in.raw[BTN_LEFT] = false;
+                g.in.raw[BTN_PAUSE] = false;
             }
             game_update(&g, (float)step); audio_update(); acc -= step;
         }
