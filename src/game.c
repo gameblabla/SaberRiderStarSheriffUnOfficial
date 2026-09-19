@@ -1,5 +1,6 @@
 #include "game.h"
 #include "pack.h"
+#include "hud.h"
 #include <stdio.h>
 #include <math.h>
 
@@ -45,9 +46,10 @@ void game_update(Game *g, float dt)
     input_update(&g->in);
     Player *p = &g->player; Character *c = &p->ch;
     /* order as in GameLevel::update: controls -> (spawner, enemies) -> physics -> bullets -> camera */
-    character_sync_ground(c);
-    player_control(p, &g->in, dt);
+    if (c->state == CS_DEAD) { c->coll = c->body.coll; player_death_update(p, dt, g->level.height, &g->cam_x, g->sw); }
+    else { character_sync_ground(c); player_death_update(p, dt, g->level.height, &g->cam_x, g->sw); player_control(p, &g->in, dt); }
     player_try_fire(p, &g->player_bullets, &g->effects, g->player_layer);
+    player_check_enemy_bullets(p, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh);
     enemies_update(&g->enemies, p, &g->level, &g->world, &g->player_bullets, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh, dt);
     character_resolve(c, dt);
     physics_step(&g->world, &g->level, &c->body, dt);
@@ -118,5 +120,6 @@ void game_draw(Game *g)
             effects_draw(&g->effects, i, g->cam_x, g->cam_y);
         }
     }
+    hud_draw(g->ren, 0, 1, g->player.lives, g->player.hp, 0);
     if (g->debug_collision) draw_collision(g);
 }

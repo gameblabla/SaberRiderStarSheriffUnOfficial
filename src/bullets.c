@@ -26,7 +26,7 @@ void bullets_update(Bullets *bs, const Level *L, Effects *fx, float dt, float ca
         float s = b->speed;
         bool ballistic = false;
         if (b->kind == BK_GRENADE) b->angle += 0.1f;
-        switch (b->dir) {
+        switch (b->kind == BK_GRENADE ? b->dir + 8 : b->dir) {
         case 0: nx = x0 - s * dt; ny = y0; break;
         case 1: nx = x0 - s * d7; ny = y0 - s * d7; break;
         case 2: nx = x0; ny = y0 - s * dt; break;
@@ -38,13 +38,13 @@ void bullets_update(Bullets *bs, const Level *L, Effects *fx, float dt, float ca
         default: {   /* ballistic: dirs 8..15 give the horizontal component; vertical is a parabola */
             float tc = b->t < 1.0f ? b->t : 1.0f;
             float hx;
-            switch (b->dir) {
-            case 8:  hx = -s * dt; break;
-            case 9:  hx = -s * d7; break;
-            case 11: hx = s * d7; break;
-            case 12: hx = s * dt; break;
-            case 13: hx = s * d7; break;
-            case 15: hx = -s * d7; break;
+            switch (b->dir & 7) {
+            case 0:  hx = -s * dt; break;
+            case 1:  hx = -s * d7; break;
+            case 3:  hx = s * d7; break;
+            case 4:  hx = s * dt; break;
+            case 5:  hx = s * d7; break;
+            case 7:  hx = -s * d7; break;
             default: hx = 0; break;
             }
             nx = x0 + hx;

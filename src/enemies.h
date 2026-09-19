@@ -24,6 +24,7 @@ typedef struct {
     float spawn_t;        /* invulnerable drop-in timer (+0x1284c) */
     float t0, t1; int st; /* class-specific */
     float knock;          /* pending vx knockback */
+    bool gun_alive; float gun_cd;   /* emitter (+0xb20) */
 } Enemy;
 
 typedef struct {
@@ -46,4 +47,6 @@ void enemies_add_trigger(Enemies *E, const LevelObject *o);
 void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, Bullets *eb, Effects *fx,
                     float cam_x, int sw, int sh, float dt);
 void enemies_draw(const Enemies *E, int layer, float cam_x, float cam_y);
+bool player_damage(Player *pl, int hit_dir, int dmg);
+void player_check_enemy_bullets(Player *pl, Bullets *eb, Effects *fx, float cam_x, int sw, int sh);
 Enemy *enemy_spawn(Enemies *E, int type, int layer, float x, float y, const Level *L, const PhysicsWorld *W, float cam_x, int sw, int sh);
