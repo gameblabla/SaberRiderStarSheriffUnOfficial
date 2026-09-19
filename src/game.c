@@ -96,8 +96,8 @@ void game_update(Game *g, float dt)
         float maxx = g->level.width - g->sw; if (target < 0) target = 0; if (target > maxx) target = maxx;
         if (g->dlg_phase == 0 || g->dlg_phase == 2) {     /* pan camera to focus / back to the player */
             float d = target - g->cam_x;
-            if (fabsf(d) <= 8.0f) { g->cam_x = target; if (g->dlg_phase == 0) { g->dlg_phase = 1; g->dlg_wait = 0; } else { g->state = 10; p->locked = false; } }
-            else g->cam_x += d > 0 ? 8.0f : -8.0f;
+            if (fabsf(d) <= 4.0f) { g->cam_x = target; if (g->dlg_phase == 0) { g->dlg_phase = 1; g->dlg_wait = 0; } else { g->state = 10; p->locked = false; } }
+            else g->cam_x += d > 0 ? 4.0f : -4.0f;
         } else if (g->dlg_phase == 1) {
             dialog_update(&g->dialog, &g->in, dt);
             if (!g->dialog.active) g->dlg_phase = 2;
@@ -175,8 +175,9 @@ void game_update(Game *g, float dt)
         float target = c->body.x;
         float half = g->sw * 0.5f;
         float camc = g->cam_x + half;
+        float maxc = g->level.width - half; if (target > maxc) target = maxc;
         float d = target - camc;
-        if (fabsf(d) > 4.0f * 2) camc += (d > 0 ? 1 : -1) * 4.0f * 2; else camc = target;
+        if (fabsf(d) > 4.0f) camc += (d > 0 ? 1 : -1) * 4.0f; else camc = target;   /* speed 1.0 * 4 (FUN_0040c460) */
         if (camc < half) camc = half;
         g->cam_x = camc - half;
     }

@@ -227,10 +227,9 @@ void character_draw(const Character *c, float cam_x, float cam_y)
 {
     if (c->anim >= CHAR_MAX_ANIMS) return;
     float x = floorf(c->body.x - c->origin_x - cam_x), y = floorf(c->body.y - c->origin_y - cam_y);
-    if (c->flags & CF_HIT) { if (((int)c->hit_t & 2) == 0 && c->cb) SDL_SetTextureColorMod(c->cb->tex, 255, 128, 128); }
+    if ((c->flags & CF_HIT) && c->hit_t > 0.01f && (SDL_GetTicks() / 16 & 2)) return;   /* invulnerability blink (effect flag 0x10 every other 2 frames) */
     draw_cell(c, c->frame, (int)(c->anims[c->anim].flags & 0xff), x, y);
     if (c->overlay) draw_cell(c, c->ov_frame, (int)(c->anims[c->overlay].flags & 0xff), x, y);
-    if (c->cb) SDL_SetTextureColorMod(c->cb->tex, 255, 255, 255);
 }
 
 /* FUN_0041c530: player state -> legs anim, torso overlay anim, muzzle base offset, horizontal velocity */

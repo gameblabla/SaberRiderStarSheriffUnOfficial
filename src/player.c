@@ -63,8 +63,9 @@ bool player_try_fire(Player *p, Bullets *bs, Effects *fx, int layer)
 
 void player_frame_end(Player *p, float dt)
 {
-    p->fire_cooldown -= dt; if (p->fire_cooldown < 0) p->fire_cooldown = 0;
-    p->ch.flags &= ~CF_SHOOT;
+    /* FUN_0041ef20 + FUN_0041d8f0: the shoot flag (and pose) clears when the emitter cooldown runs out */
+    if (p->fire_cooldown > 0) { p->fire_cooldown -= dt; if (p->fire_cooldown <= 0) { p->fire_cooldown = 0; p->ch.flags &= ~CF_SHOOT; } }
+    else p->ch.flags &= ~CF_SHOOT;
 }
 
 bool player_death_update(Player *p, float dt, float level_h, float *cam_x, int sw)
