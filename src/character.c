@@ -1,5 +1,6 @@
 #include "character.h"
 #include "pack.h"
+#include <SDL3/SDL.h>
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
@@ -28,7 +29,7 @@ bool character_init(Character *c, uint32_t crhc_id, bool enemy)
         c->anim_flags[i] = rd32(d + 0xa24 + i * 4);
     }
     c->hp_max = rd32(d + 0xadc);
-    c->cb = cblock_get(c->sprite_id);
+    { const PackEntry *se = packs_find(c->sprite_id); if (se && se->type == RES_SPRITE) c->spr = sprite_get(c->sprite_id); else c->cb = cblock_get(c->sprite_id); }
     c->body.ox = c->box_ox; c->body.oy = c->box_oy; c->body.hx = c->box_hx; c->body.hy = c->box_hy;
     character_reset(c, enemy);
     c->anim = 0xff; c->overlay = 0;
@@ -209,19 +210,27 @@ keep_vx:
     c->drop_target_y = -10000.0f;
 }
 
+/* anim flags low byte = sprite draw flags: 1 mirror X, 2 mirror Y, 8 draw whole cblock frame (else one cell) */
+static void draw_cell(const Character *c, int idx, int aflags, float x, float y)
+{
+    bool flip = (aflags & 1) != 0;
+    if (c->spr) { sprite_draw(c->spr, idx, x, y, flip); return; }
+    if (!c->cb) return;
+    if (aflags & 8) { if (idx >= 0 && idx < c->cb->frames) cblock_draw_frame(c->cb, idx, x, y, flip); return; }
+    if (idx < 0 || idx >= cblock_ncells(c->cb)) return;
+    uint16_t t = c->cb->cells[idx];
+    if (t == 0xFFFF) return;
+    cblock_draw_tile(c->cb, t, x, y, flip);
+}
+
 void character_draw(const Character *c, float cam_x, float cam_y)
 {
-    if (!c->cb || c->anim >= CHAR_MAX_ANIMS) return;
-    int ci = c->frame;
-    if (ci < 0 || ci >= cblock_ncells(c->cb)) return;
-    uint16_t t = c->cb->cells[ci];
-    if (t == 0xFFFF) return;
+    if (c->anim >= CHAR_MAX_ANIMS) return;
     float x = floorf(c->body.x - c->origin_x - cam_x), y = floorf(c->body.y - c->origin_y - cam_y);
-    cblock_draw_tile(c->cb, t, x, y, false);
-    if (c->overlay) {
-        int oi = c->ov_frame;
-        if (oi >= 0 && oi < cblock_ncells(c->cb) && c->cb->cells[oi] != 0xFFFF) cblock_draw_tile(c->cb, c->cb->cells[oi], x, y, false);
-    }
+    if (c->flags & CF_HIT) { if (((int)c->hit_t & 2) == 0 && c->cb) SDL_SetTextureColorMod(c->cb->tex, 255, 128, 128); }
+    draw_cell(c, c->frame, (int)(c->anims[c->anim].flags & 0xff), x, y);
+    if (c->overlay) draw_cell(c, c->ov_frame, (int)(c->anims[c->overlay].flags & 0xff), x, y);
+    if (c->cb) SDL_SetTextureColorMod(c->cb->tex, 255, 255, 255);
 }
 
 /* FUN_0041c530: player state -> legs anim, torso overlay anim, muzzle base offset, horizontal velocity */

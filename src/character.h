@@ -50,6 +50,7 @@ typedef struct {
     uint8_t overlay; int ov_frame; float ov_t;
     Body body;
     CBlock *cb;
+    Sprite *spr;          /* when the character's graphic is a .spr strip instead of a cblock */
 } Character;
 
 bool character_init(Character *c, uint32_t crhc_id, bool enemy);

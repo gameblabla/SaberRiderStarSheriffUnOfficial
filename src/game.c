@@ -75,6 +75,12 @@ void game_update(Game *g, float dt)
         } else if (g->dlg_phase == 1) {
             dialog_update(&g->dialog, &g->in, dt);
             if (!g->dialog.active) g->dlg_phase = 2;
+            /* physics + bullets keep running while the text plays (enemy AI and the spawner do not) */
+            g->world.world_min_x = g->cam_x;
+            physics_step(&g->world, &g->level, &c->body, dt);
+            for (int i = 0; i < MAX_ENEMIES; i++) if (g->enemies.e[i].cls) physics_step(&g->world, &g->level, &g->enemies.e[i].ch.body, dt);
+            bullets_update(&g->player_bullets, &g->level, &g->effects, dt, g->cam_x, g->cam_y, g->sw, g->sh);
+            bullets_update(&g->enemy_bullets, &g->level, &g->effects, dt, g->cam_x, g->cam_y, g->sw, g->sh);
         }
         character_animate(c, dt); effects_update(&g->effects, dt);
         for (int i = 0; i < MAX_ENEMIES; i++) if (g->enemies.e[i].cls) character_animate(&g->enemies.e[i].ch, dt);

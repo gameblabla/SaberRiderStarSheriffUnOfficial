@@ -156,6 +156,9 @@ Enemy *enemy_spawn(Enemies *E, const Trigger *t, float x, float y, const Level *
         b->x = x; b->y = y; b->vx = b->vy = 0; b->flags = 0x1f;
         e->ch.state = CS_IDLE;
         if (cls >= EC_STAMPEDE) { if (E->px <= b->x) character_move_left(&e->ch, 0); else character_move_right(&e->ch, 4); }
+    } else if (cls == EC_CUTSCENE) {
+        snap_to_ground(e, L, W);
+        e->dir = 0; e->ch.state = CS_IDLE; e->ch.aim = AIM_L; e->ch.facing = 0;
     } else {
         e->dir = 2;
         e->ch.facing = E->px <= b->x ? 0 : 1;
@@ -486,6 +489,24 @@ static void update_horse(Enemies *E, Enemy *e, Player *pl, float cam_x, int sw, 
     if (offscreen) kill(E, e, 0x19f); else sfx_play(20, 0);
 }
 
+/* FUN_00417b60: the cutscene Outrider on the Ramrod's roof (type 28). Alarm pose when seen, then runs off. */
+static void update_cutscene_outrider(Enemies *E, Enemy *e, float cam_x, int sw, float dt)
+{
+    Character *c = &e->ch; Body *b = &c->body;
+    float camc = cam_x + sw * 0.5f;
+    if ((int)fabsf(camc - b->x) < sw / 2) {
+        if (c->state == CS_IDLE) { c->state = CS_SLIDE; c->slide_t = 2.0f; sfx_play(22, 0); }
+        else if (c->state == CS_SLIDE && c->slide_t < 1.0f) { c->state = CS_WALK; e->dir = 1; c->aim = AIM_R; c->slide_t = 0; c->alert_time = 50.0f; c->alert_t = 50.0f; }
+        else if (c->state != CS_SLIDE) {
+            if (c->alert_t >= 40.0f) kill(E, e, 0x19f);
+            else { c->alert_t = 0; b->vx = b->vy = 0; }
+        }
+    }
+    character_sync_ground(c);
+    if (c->alert_t > 40.0f) { character_move_right(c, 4); c->alert_t = 50.0f; }
+    character_resolve(c, dt);
+}
+
 static void update_generic(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, float cam_x, int sw, float dt)
 {
     /* placeholder for classes not yet ported: stand, take hits like a walker */
@@ -520,6 +541,7 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
             case EC_SNIPER: case EC_SNIPER_B: update_sniper(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt); break;
             case EC_KNEELER: case EC_KNEELER_B: case EC_END: update_kneeler(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt); break;
             case EC_BUGGY: update_horse(E, e, pl, cam_x, sw, dt); break;
+            case EC_CUTSCENE: update_cutscene_outrider(E, e, cam_x, sw, dt); break;
             case EC_STAMPEDE: case EC_STAMPEDE + 1: case EC_STAMPEDE + 2: case EC_STAMPEDE + 3: update_stampede(E, e, cam_x, sw); break;
             case EC_PROP: case EC_PROP + 1: case EC_PROP + 2: case EC_PROP + 3: case EC_PROP + 4: case EC_PROP + 5:
             case EC_PROP + 6: case EC_PROP + 7: case EC_PROP + 8: case EC_PROP + 9: case EC_PROP + 10: case EC_PROP + 11:
