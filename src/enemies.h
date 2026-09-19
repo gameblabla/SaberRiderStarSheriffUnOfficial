@@ -25,6 +25,9 @@ typedef struct {
     float t0, t1; int st; /* class-specific */
     float knock;          /* pending vx knockback */
     bool gun_alive; float gun_cd;   /* emitter (+0xb20) */
+    int hp;                         /* slot+2 */
+    int link;                       /* companion slot index or -1 */
+    float ft;                       /* misc timer (+0x12840) */
 } Enemy;
 
 typedef struct {
@@ -40,6 +43,9 @@ typedef struct {
     bool spawner_enabled;
     bool cam_locked, cam_shake;      /* camera flags driven by the horse convoy (FUN_00414eb0) */
     bool release_request;            /* set when the last convoy horse is gone */
+    int boss_phase;                  /* +0x40028 */
+    bool boss_done;                  /* boss slot expired -> level complete (state 0xe) */
+    int frame;
     Trigger tr[MAX_TRIGGERS]; int ntr;
     /* per-frame cache (FUN_0041f240 preamble) */
     float px, py, phx, phy, phcx, phcy, death_floor, dt;

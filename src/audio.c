@@ -144,7 +144,15 @@ static uint8_t *mups_to_ogg(const uint8_t *d, size_t n, size_t *out_len)
         memcpy(out + o, d + i, page);
         memcpy(out + o, "OggS", 4);
         uint8_t *pay = out + o + 27 + nseg;
-        if (plen >= 7 && (pay[0] == 1 || pay[0] == 3 || pay[0] == 5) && !memcmp(pay + 1, "2Dream", 6)) memcpy(pay + 1, "vorbis", 6);
+        /* rename the codec id at every packet start within the page */
+        for (size_t st = 0, k = 0; k <= (size_t)nseg; k++) {
+            if (st + 7 <= plen && (pay[st] == 1 || pay[st] == 3 || pay[st] == 5) && !memcmp(pay + st + 1, "2Dream", 6)) memcpy(pay + st + 1, "vorbis", 6);
+            if (k == (size_t)nseg) break;
+            st += d[i + 27 + k];
+            if (d[i + 27 + k] == 255) { /* continue within the same packet: skip until a short lacing value */
+                while (k + 1 < (size_t)nseg && d[i + 27 + k] == 255) { k++; st += d[i + 27 + k]; }
+            }
+        }
         memset(out + o + 22, 0, 4);
         uint32_t c = ogg_crc(out + o, page);
         out[o + 22] = c & 0xff; out[o + 23] = (c >> 8) & 0xff; out[o + 24] = (c >> 16) & 0xff; out[o + 25] = c >> 24;
@@ -174,7 +182,8 @@ void music_play(int index, bool loop)
     ogg_buf = mups_to_ogg(e->data, e->size, &ogg_len); ogg_pos = 0;
     if (!ogg_buf) return;
     ov_callbacks cb = { cb_read, cb_seek, NULL, cb_tell };
-    if (ov_open_callbacks(NULL, &vf, NULL, 0, cb) < 0) { fprintf(stderr, "music %d: ov_open failed\n", index); return; }
+    int rc = ov_open_callbacks(&ogg_pos, &vf, NULL, 0, cb);   /* datasource must be non-NULL */
+    if (rc < 0) { fprintf(stderr, "music %d: ov_open failed rc=%d len=%zu head=%02x%02x%02x%02x\n", index, rc, ogg_len, ogg_buf[0], ogg_buf[1], ogg_buf[2], ogg_buf[3]); return; }
     music_open = true; music_loop = loop;
     vorbis_info *vi = ov_info(&vf, -1);
     SDL_AudioSpec in = { SDL_AUDIO_S16, vi->channels, (int)vi->rate };

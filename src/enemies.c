@@ -35,7 +35,7 @@ void enemies_add_trigger(Enemies *E, const LevelObject *o)   /* FUN_00421070 + F
 
 static Enemy *alloc_slot(Enemies *E, int cls)   /* FUN_0041f980 */
 {
-    for (int i = 0; i < MAX_ENEMIES; i++) if (!E->e[i].cls) { memset(&E->e[i], 0, sizeof(Enemy)); E->e[i].cls = (uint16_t)cls; E->count++; return &E->e[i]; }
+    for (int i = 0; i < MAX_ENEMIES; i++) if (!E->e[i].cls) { memset(&E->e[i], 0, sizeof(Enemy)); E->e[i].cls = (uint16_t)cls; E->e[i].hp = 1; E->e[i].link = -1; E->count++; return &E->e[i]; }
     return NULL;
 }
 
@@ -156,6 +156,10 @@ Enemy *enemy_spawn(Enemies *E, const Trigger *t, float x, float y, const Level *
         b->x = x; b->y = y; b->vx = b->vy = 0; b->flags = 0x1f;
         e->ch.state = CS_IDLE;
         if (cls >= EC_STAMPEDE) { if (E->px <= b->x) character_move_left(&e->ch, 0); else character_move_right(&e->ch, 4); }
+    } else if (cls == EC_HORSEBOSS) {
+        b->x = x; b->y = y; b->flags = 0x0f | PHYS_NO_GRAVITY;
+        e->hp = 0x42; e->link = -1; e->ch.state = CS_FALL; e->ch.facing = 0; e->ch.aim = AIM_L;
+        E->boss_phase = 0;
     } else if (cls == EC_CUTSCENE) {
         snap_to_ground(e, L, W);
         e->dir = 0; e->ch.state = CS_IDLE; e->ch.aim = AIM_L; e->ch.facing = 0;
@@ -507,6 +511,163 @@ static void update_cutscene_outrider(Enemies *E, Enemy *e, float cam_x, int sw, 
     character_resolve(c, dt);
 }
 
+/* ---- Ramrod horse mini-boss (FUN_00412510 / FUN_00412750). Structure ported, timings approximated. ---- */
+static int next_sprite_layer(const Level *L, int layer)
+{
+    for (int i = layer + 1; i < L->nlayers; i++) if (!L->layers[i].is_tilemap) return i;
+    return -1;
+}
+
+static void boss_fire(Enemies *E, Enemy *e, Bullets *eb, int sound)
+{
+    Character *c = &e->ch;
+    if (e->gun_cd > 0.0f) return;
+    bullets_spawn(eb, BK_LASER, e->layer, c->body.x + c->muzzle_x, c->body.y + c->muzzle_y, c->aim & 7, 333.3333f);
+    e->gun_cd = 0.2f; c->flags |= CF_SHOOT;
+    sfx_play(sound, 0);
+    (void)E;
+}
+
+static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, Bullets *eb, Effects *fx, float cam_x, int sw, float dt)
+{
+    Character *c = &e->ch; Body *b = &c->body;
+    (void)W;
+    float px = E->phcx;
+    E->frame++;
+    /* hover: vertical sine, gravity cancelled */
+    float amp = c->state == CS_FALL ? 10.0f : c->state == CS_SLIDE ? 13.0f : 16.0f;
+    b->vy = sinf((float)(E->frame % 66) * 0.0952f) * amp - 480.0f * dt;
+    b->flags = 0x0f | PHYS_NO_GRAVITY;
+    b->vy += 0;   /* (gravity disabled, so no compensation needed) */
+    b->vy = sinf((float)(E->frame % 66) * 0.0952f) * amp;
+
+    if (e->dying) {
+        c->state = CS_DEAD;
+        b->vx += (float)(rnd(180) - 153) * 0.0f;   /* jitter is applied as a position nudge below */
+        b->x += (float)(rnd(180)) / 60.0f - 153.0f / 60.0f;
+        if (rnd(10) >= 9) {
+            AnimDef a = { 0, 0, 11, 11, 0.025f, 0 };
+            effects_spawn(fx, 0x9C861FF3, e->layer, &a, b->x + rnd(18), b->y + rnd(80), 32, 32, 0);
+            if (E->boss_phase < 0x40 && (E->boss_phase & 1)) sfx_play(0x11, 0);
+        }
+        if (E->boss_phase == 8) sfx_play(0x15, 0);
+        E->boss_phase++;
+        character_set_anim(c, c->facing ? 0x33 : 0x32);
+        return;
+    }
+    if (E->boss_phase == 0) { E->boss_phase = 1; music_play(8, true); sfx_play(0x13, 0); }
+
+    switch (c->state) {
+    case CS_FALL:      /* fly-in from the right in the far layer, heading left */
+        b->vx = -140.0f;
+        c->facing = 0; c->aim = AIM_L;
+        if (b->x + 350.0f < cam_x) {
+            int nl = next_sprite_layer(L, e->layer);
+            if (nl >= 0) e->layer = nl;
+            c->state = CS_SLIDE; e->dir = 1; e->ft = 400.0f; c->speed = 140.0f; E->boss_phase = 0; sfx_play(0x13, 0);
+            b->x = cam_x - 230.0f;
+        }
+        break;
+    case CS_SLIDE:     /* mid layer, crossing to the right */
+        b->vx += dt * 23332.75f * 0.02f; if (b->vx > 140.0f) b->vx = 140.0f;
+        c->facing = 1; c->aim = AIM_R;
+        if (b->x - 230.0f > cam_x + sw) {
+            int nl = next_sprite_layer(L, e->layer);
+            if (nl >= 0) { e->layer = nl; b->x = cam_x + sw + 230.0f; c->state = CS_SLIDE; b->vx = -140.0f; c->facing = 0; }
+            if (nl < 0 || next_sprite_layer(L, nl) < 0) {
+                /* reached the play layer: enter the fight, with the rider */
+                e->layer = nl >= 0 ? nl : e->layer;
+                c->state = CS_AIM; c->aim = AIM_DR; e->dir = 0; b->x = cam_x + sw + 100.0f; b->vx = 0;
+                Enemy *r = alloc_slot(E, EC_HORSEBOSS);
+                if (r) { character_init(&r->ch, 0x2A02BD4F, false); r->type = 10; r->layer = e->layer; r->link = (int)(e - E->e); r->hp = 1; r->variant = 99; r->ch.state = CS_AIM; r->ch.aim = AIM_DR; r->ch.body = *b; e->link = (int)(r - E->e); }
+                E->boss_phase = 1;
+            }
+        }
+        break;
+    case CS_AIM:       /* hover-and-shoot */
+        b->flags = PHYS_IGNORE_LEFT | PHYS_IGNORE_RIGHT | PHYS_NO_GRAVITY;
+        b->vx = 0;
+        if (!((unsigned)(E->boss_phase - 0xa0) < 0x19) && b->x > cam_x - 64.0f && b->x < cam_x + sw) {
+            float dx = fabsf(px - b->x);
+            c->aim = e->dir == 1 ? (dx >= 60.0f ? AIM_DL : AIM_L) : (dx >= 60.0f ? AIM_DR : AIM_R);
+            boss_fire(E, e, eb, 0x12);
+        }
+        E->boss_phase++;
+        if (E->boss_phase > 0xb9) { c->state = CS_WALK; E->boss_phase = 1; c->speed = 140.0f; }
+        break;
+    case CS_WALK: {    /* sweep across the screen, pause near the middle to shoot */
+        float camc = cam_x + sw * 0.5f;
+        bool can_shoot = false;
+        if (e->dir == 0) {
+            if (E->boss_phase > 0x50) {
+                c->speed = 140.0f; b->vx = -140.0f; E->boss_phase++;
+                if (b->x + 180.0f < cam_x) { e->dir = 1; c->aim = AIM_DR; E->boss_phase = 1; }
+            } else if (E->boss_phase < 2 && b->x >= camc) {
+                if (b->x > camc + 128.0f) { b->vx = -140.0f; can_shoot = true; } else { E->boss_phase++; b->vx = 0; }
+            } else { E->boss_phase++; b->vx = 0; can_shoot = true; }
+        } else {
+            if (E->boss_phase > 0x50) {
+                b->vx = 140.0f; E->boss_phase++;
+                if (b->x - 280.0f > cam_x + sw) { e->dir = 0; c->aim = AIM_DL; E->boss_phase = 1; }
+            } else if (E->boss_phase < 2 && b->x <= camc) {
+                if (b->x < camc - 160.0f) { b->vx = 140.0f; can_shoot = true; } else { E->boss_phase++; b->vx = 0; }
+            } else { E->boss_phase++; b->vx = 0; can_shoot = true; }
+        }
+        c->facing = e->dir;
+        if (can_shoot && b->x > cam_x - 64.0f && b->x < cam_x + sw) {
+            float dx = fabsf(px - b->x);
+            c->aim = e->dir == 1 ? (dx >= 60.0f ? AIM_DR : AIM_R) : (dx >= 60.0f ? AIM_DL : AIM_L);
+            boss_fire(E, e, eb, 0x10);
+        }
+        break; }
+    default:
+        c->state = CS_FALL;
+        break;
+    }
+    /* player bullets */
+    {
+        const HurtBox *h = &c->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0];
+        float cx = b->x + h->ox, cy = b->y + h->oy;
+        float hw = h->hw > 0 ? h->hw : 48, hh = h->hh > 0 ? h->hh : 32;
+        for (int i = 0; i < pb->n; i++) {
+            Bullet *bl = &pb->b[i];
+            float r = bl->kind == BK_GRENADE ? 8.0f : 5.0f;
+            if (fabsf(cx - bl->x) > r + hw || fabsf(cy - bl->y) > r + hh) continue;
+            float sx = bl->x - cam_x; if (sx <= 8.0f || sx >= sw) continue;
+            pb->b[i] = pb->b[--pb->n];
+            if (c->flags & (CF_HIT | CF_HIT_ALT)) break;
+            if (--e->hp <= 0) {
+                kill(E, e, 0xed8); c->state = CS_DEAD; E->boss_phase = 1; c->flags &= ~CF_SHOOT;
+                if (e->link >= 0 && E->e[e->link].cls) { E->e[e->link].cls = 0; E->count--; e->link = -1; }
+            } else {
+                c->flags |= CF_HIT; c->hit_t = 4.0f;
+                if (e->link >= 0 && E->e[e->link].cls) { E->e[e->link].ch.flags |= CF_HIT; E->e[e->link].ch.hit_t = 4.0f; }
+            }
+            break;
+        }
+    }
+    e->gun_cd -= dt; if (e->gun_cd < 0) e->gun_cd = 0;
+    if (e->gun_cd < 0.1f) c->flags &= ~CF_SHOOT;
+    /* animation from the enemy resolver (CRHC anims 28-35 = laser charge, etc.) */
+    uint8_t st = c->state;
+    if (st == CS_FALL || st == CS_SLIDE || st == CS_WALK) { c->state = CS_WALK; character_resolve(c, dt); c->state = st; b->vx = b->vx; }
+    else character_resolve(c, dt);
+    (void)pl;
+}
+
+/* the rider follows the horse and mirrors its facing */
+static void update_boss_rider(Enemies *E, Enemy *e, float dt)
+{
+    Character *c = &e->ch;
+    if (e->link < 0 || !E->e[e->link].cls) { e->cls = 0; E->count--; return; }
+    Enemy *h = &E->e[e->link];
+    c->body = h->ch.body; c->body.flags = 0x1f;
+    e->layer = h->layer;
+    c->facing = h->ch.facing; c->aim = h->ch.facing ? AIM_DR : AIM_DL; c->state = CS_AIM;
+    c->flags = (c->flags & ~CF_SHOOT) | (h->ch.flags & CF_SHOOT);
+    character_resolve(c, dt);
+}
+
 static void update_generic(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, float cam_x, int sw, float dt)
 {
     /* placeholder for classes not yet ported: stand, take hits like a walker */
@@ -531,9 +692,9 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
         if (!e->cls) continue;
         if (e->dying) {
             e->death_t -= dt;
-            character_sync_ground(&e->ch);
-            character_resolve(&e->ch, dt);
-            if (e->death_t <= 0) { int was = e->cls; e->cls = 0; E->count--; if (was == EC_BUGGY) convoy_check(E); continue; }
+            if (e->cls == EC_HORSEBOSS) update_boss(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt);
+            else { character_sync_ground(&e->ch); character_resolve(&e->ch, dt); }
+            if (e->death_t <= 0) { int was = e->cls; e->cls = 0; E->count--; if (was == EC_BUGGY) convoy_check(E); if (was == EC_HORSEBOSS) E->boss_done = true; continue; }
         } else {
             switch (e->cls) {
             case EC_WALKER: update_walker(E, e, pl, L, W, pb, cam_x, sw, dt); break;
@@ -542,6 +703,7 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
             case EC_KNEELER: case EC_KNEELER_B: case EC_END: update_kneeler(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt); break;
             case EC_BUGGY: update_horse(E, e, pl, cam_x, sw, dt); break;
             case EC_CUTSCENE: update_cutscene_outrider(E, e, cam_x, sw, dt); break;
+            case EC_HORSEBOSS: if (e->variant == 99) update_boss_rider(E, e, dt); else update_boss(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt); break;
             case EC_STAMPEDE: case EC_STAMPEDE + 1: case EC_STAMPEDE + 2: case EC_STAMPEDE + 3: update_stampede(E, e, cam_x, sw); break;
             case EC_PROP: case EC_PROP + 1: case EC_PROP + 2: case EC_PROP + 3: case EC_PROP + 4: case EC_PROP + 5:
             case EC_PROP + 6: case EC_PROP + 7: case EC_PROP + 8: case EC_PROP + 9: case EC_PROP + 10: case EC_PROP + 11:

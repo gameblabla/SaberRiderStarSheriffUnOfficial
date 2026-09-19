@@ -125,6 +125,7 @@ void game_update(Game *g, float dt)
         for (int k = 0; k < g->nstops; k++) if (g->stops[k].armed && g->stops[k].cx + g->stops[k].hx > g->cam_x && g->stops[k].cx + g->stops[k].hx < g->cam_x + g->sw) g->stops[k].armed = false;
     }
     if (g->enemies.cam_locked) g->cam_locked = true;
+    if (g->enemies.boss_done && g->state == 10) { g->enemies.boss_done = false; g->state = 0xe; g->state_t = 0; p->locked = true; music_play(6, false); }
     player_resolve(c, dt);
     if (g->cam_locked && c->body.vx > 0 && g->cam_x + g->sw - c->body.hx < c->body.x) c->body.vx = 0;
     physics_step(&g->world, &g->level, &c->body, dt);
