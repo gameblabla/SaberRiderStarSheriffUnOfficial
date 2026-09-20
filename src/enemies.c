@@ -693,8 +693,9 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
         if (!e->cls) continue;
         if (e->dying) {
             e->death_t -= dt;
+            /* FUN_0041f240: a dying entity gets no class update at all (its death pose was set on the kill frame),
+             * only the timer, physics and animation; syncing the ground would reset the state to idle */
             if (e->cls == EC_HORSEBOSS) update_boss(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt);
-            else { character_sync_ground(&e->ch); character_resolve(&e->ch, dt); }
             if (e->death_t <= 0) { int was = e->cls; e->cls = 0; E->count--; if (was == EC_BUGGY) convoy_check(E); if (was == EC_HORSEBOSS) E->boss_done = true; continue; }
         } else {
             switch (e->cls) {
