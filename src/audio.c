@@ -9,7 +9,39 @@
 
 static SDL_AudioDeviceID dev;
 static SDL_AudioStream *music_stream;
-static SDL_AudioSpec spec = { SDL_AUDIO_S16, 2, 44100 };
+static SDL_AudioSpec spec = { SDL_AUDIO_F32, 2, 44100 };
+
+/* ---- mix bus ----
+ * The original (FUN_00563900 / FUN_00563780) sums the music at vol/256 and every sfx voice at unity into 16-bit
+ * and hard-clips at +-0x7fbc. The material is mastered hot (most sfx peak at 0 dBFS, the music tracks at
+ * 0..+1 dB), so a voice line over a gunshot over the level track clips audibly. Instead of reproducing that,
+ * each bus gets some headroom and the device's post-mix pass runs a peak limiter, so the sum never clips. */
+#define GAIN_SFX   0.60f   /* game sfx: -4.4 dB */
+#define GAIN_VOICE 0.80f   /* dialog / video speech: -1.9 dB */
+#define GAIN_MUSIC 0.90f   /* on top of the music table's per-track volume and the fade */
+#define LIMIT_CEIL 0.89f   /* limiter ceiling (-1 dBFS) */
+#define LIMIT_RELEASE_S 0.12f
+
+static struct { float env, release; } lim;
+
+static void SDLCALL postmix(void *ud, const SDL_AudioSpec *sp, float *buf, int buflen)
+{
+    (void)ud;
+    int ch = sp->channels > 0 ? sp->channels : 1, n = buflen / (int)sizeof(float) / ch;
+    if (lim.release == 0) lim.release = SDL_expf(-1.0f / (LIMIT_RELEASE_S * (float)sp->freq));
+    float env = lim.env, rel = lim.release;
+    for (int i = 0; i < n; i++) {
+        float *f = buf + i * ch, peak = 0;
+        for (int c = 0; c < ch; c++) { float a = SDL_fabsf(f[c]); if (a > peak) peak = a; }
+        env = peak > env ? peak : env * rel;          /* instant attack, exponential release */
+        float g = env > LIMIT_CEIL ? LIMIT_CEIL / env : 1.0f;
+        for (int c = 0; c < ch; c++) {
+            float v = f[c] * g;
+            f[c] = v > 1.0f ? 1.0f : v < -1.0f ? -1.0f : v;   /* safety only: g keeps |v| <= ceiling */
+        }
+    }
+    lim.env = env;
+}
 
 /* ---- sfx ---- */
 static const uint32_t SFX_TABLE[32] = {   /* 0x7c5480 */
@@ -69,7 +101,7 @@ static Sfx *load_sfx_entry(const PackEntry *e, Sfx *s)
 
 static Sfx *load_sfx(int idx) { return load_sfx_entry(packs_find(SFX_TABLE[idx]), &sfx_cache[idx]); }
 
-static SDL_AudioStream *play_sfx(Sfx *s)
+static SDL_AudioStream *play_sfx(Sfx *s, float gain)
 {
     if (!dev || !s || !s->pcm) return NULL;
     SDL_AudioSpec in = { SDL_AUDIO_S16, s->channels, 44100 };
@@ -78,6 +110,7 @@ static SDL_AudioStream *play_sfx(Sfx *s)
         if (voices[v]) SDL_DestroyAudioStream(voices[v]);
         voices[v] = SDL_CreateAudioStream(&in, &spec);
         if (!voices[v]) return NULL;
+        SDL_SetAudioStreamGain(voices[v], gain);
         SDL_BindAudioStream(dev, voices[v]);
         SDL_PutAudioStreamData(voices[v], s->pcm, s->frames * s->channels * 2);
         SDL_FlushAudioStream(voices[v]);
@@ -90,10 +123,10 @@ static SDL_AudioStream *play_sfx(Sfx *s)
 static struct { uint32_t id; Sfx s; } extra[MAX_EXTRA]; static int nextra;
 void sfx_play_id(uint32_t id)
 {
-    for (int i = 0; i < nextra; i++) if (extra[i].id == id) { play_sfx(&extra[i].s); return; }
+    for (int i = 0; i < nextra; i++) if (extra[i].id == id) { play_sfx(&extra[i].s, GAIN_VOICE); return; }
     if (nextra == MAX_EXTRA) return;
     extra[nextra].id = id; memset(&extra[nextra].s, 0, sizeof(Sfx));
-    if (load_sfx_entry(packs_find(id), &extra[nextra].s)) play_sfx(&extra[nextra].s);
+    if (load_sfx_entry(packs_find(id), &extra[nextra].s)) play_sfx(&extra[nextra].s, GAIN_VOICE);
     nextra++;
 }
 
@@ -111,7 +144,7 @@ static void service_slots(void)
     for (int i = 0; i < 32; i++) {
         if (!slot[i].end) continue;
         if ((int32_t)(now - slot[i].end) >= 0) { slot[i].end = 0; continue; }
-        if ((int32_t)(now - slot[i].next) >= 0) { play_sfx(load_sfx(i)); slot[i].next = now + SFX_LEN[i] * 6; }
+        if ((int32_t)(now - slot[i].next) >= 0) { play_sfx(load_sfx(i), GAIN_SFX); slot[i].next = now + SFX_LEN[i] * 6; }
     }
 }
 
@@ -157,7 +190,7 @@ static void apply_music_gain(void)
     /* the mixer's 0..255 stream volume is not linear: a 1 s fade in the original is inaudible after ~0.7 s,
      * which a squared curve reproduces (measured on a pulse capture of the original's character select) */
     float v = music_fade < 0.001f ? 0 : music_fade > 0.999f ? 1.0f : music_fade;
-    if (music_stream) SDL_SetAudioStreamGain(music_stream, v * v * music_track_vol);
+    if (music_stream) SDL_SetAudioStreamGain(music_stream, v * v * music_track_vol * GAIN_MUSIC);
 }
 
 void music_set_volume(float v) { music_fade = v < 0 ? 0 : v > 1 ? 1 : v; apply_music_gain(); }
@@ -223,7 +256,7 @@ bool music_play_blob(const uint8_t *mups, uint32_t size, bool loop)
     if (rc < 0) { fprintf(stderr, "music blob: ov_open failed rc=%d\n", rc); return false; }
     music_open = true; music_loop = loop;
     vorbis_info *vi = ov_info(&vf, -1);
-    SDL_AudioSpec in = { SDL_AUDIO_S16, vi->channels, (int)vi->rate };
+    SDL_AudioSpec in = { SDL_AUDIO_F32, vi->channels, (int)vi->rate };
     music_stream = SDL_CreateAudioStream(&in, &spec);
     SDL_BindAudioStream(dev, music_stream);
     music_track_vol = 1.0f; music_fade = 1.0f; apply_music_gain();
@@ -237,7 +270,7 @@ void sfx_play_blob(const uint8_t *riff, uint32_t size)
     PackEntry tmp = { 0, RES_SFX, riff, size, false };
     sfx_stop_blob();
     if (blob_sfx.pcm) { free(blob_sfx.pcm); memset(&blob_sfx, 0, sizeof blob_sfx); }
-    if (load_sfx_entry(&tmp, &blob_sfx)) blob_voice = play_sfx(&blob_sfx);
+    if (load_sfx_entry(&tmp, &blob_sfx)) blob_voice = play_sfx(&blob_sfx, GAIN_VOICE);
 }
 void sfx_stop_blob(void)
 {
@@ -257,7 +290,7 @@ void music_play(int index, bool loop)
     if (rc < 0) { fprintf(stderr, "music %d: ov_open failed rc=%d len=%zu head=%02x%02x%02x%02x\n", index, rc, ogg_len, ogg_buf[0], ogg_buf[1], ogg_buf[2], ogg_buf[3]); return; }
     music_open = true; music_loop = loop;
     vorbis_info *vi = ov_info(&vf, -1);
-    SDL_AudioSpec in = { SDL_AUDIO_S16, vi->channels, (int)vi->rate };
+    SDL_AudioSpec in = { SDL_AUDIO_F32, vi->channels, (int)vi->rate };
     music_stream = SDL_CreateAudioStream(&in, &spec);
     SDL_BindAudioStream(dev, music_stream);
     music_track_vol = MUSIC_VOL[index]; music_fade = 1.0f; apply_music_gain();
@@ -273,11 +306,12 @@ void audio_update(void)
     }
     service_slots();
     if (music_open && music_stream) {
-        char buf[8192]; int sec;
-        while (SDL_GetAudioStreamQueued(music_stream) < 44100 * 4 / 2) {   /* keep ~0.5 s queued */
-            long n = ov_read(&vf, buf, sizeof buf, 0, 2, 1, &sec);
+        float buf[4096]; float **pcm; int sec, ch = ov_info(&vf, -1)->channels;
+        while (SDL_GetAudioStreamQueued(music_stream) < 44100 * 8 / 2) {   /* keep ~0.5 s queued (f32 stereo) */
+            long n = ov_read_float(&vf, &pcm, (int)(sizeof buf / sizeof *buf) / ch, &sec);   /* unclipped: tracks peak > 0 dBFS */
             if (n <= 0) { if (n == 0 && music_loop) { ov_raw_seek(&vf, 0); continue; } break; }
-            SDL_PutAudioStreamData(music_stream, buf, (int)n);
+            for (long i = 0; i < n; i++) for (int c = 0; c < ch; c++) buf[i * ch + c] = pcm[c][i];
+            SDL_PutAudioStreamData(music_stream, buf, (int)(n * ch * sizeof(float)));
         }
     }
 }
@@ -287,6 +321,7 @@ bool audio_init(void)
     crc_init();
     dev = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec);
     if (!dev) { fprintf(stderr, "audio: %s\n", SDL_GetError()); return false; }
+    SDL_SetAudioPostmixCallback(dev, postmix, NULL);
     return true;
 }
 

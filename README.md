@@ -44,6 +44,10 @@ Original keys: arrows, A jump, S shoot, Return start/confirm, Escape quits.
 - `src/pack.c`, `src/gfx.c`, `src/level.c`, `src/font.c` — HEADLIST packs, cblock/sprite decoding, LEVL levels, fonts
 - `src/physics.c`, `src/character.c`, `src/player.c`, `src/enemies.c`, `src/bullets.c`, `src/effects.c` — gameplay (ports of `saber_game::*`)
 - `src/dialog.c`, `src/hud.c`, `src/menu.c`, `src/video.c`, `src/audio.c` — presentation
+- `src/audio.c` mixes deliberately *unlike* the original: the demo's mixer (`FUN_00563900`) sums the music at vol/256
+  and every sfx voice at unity into 16-bit and hard-clips at ±0x7fbc, and the material is mastered hot (most sfx and
+  the music tracks peak at 0 dBFS or above), so a voice line over a gunshot clips. The port decodes the music in float,
+  gives the sfx / voice / music buses headroom (`GAIN_*`) and runs a peak limiter in SDL3's post-mix callback.
 - `../docs/FORMATS.md` — file format notes; `../re/` — Ghidra decompilation used for the port
 
 The IP belongs to Studio Pierrot / World Events Productions; this is a non-commercial preservation effort.
