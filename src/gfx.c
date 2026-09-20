@@ -169,6 +169,14 @@ void sprite_draw_scaled(const Sprite *s, int frame, float x, float y, float w, f
     SDL_RenderTexture(R, s->tex, &src, &dst);
 }
 
+void sprite_draw_scaled_mod(const Sprite *s, int frame, float x, float y, float w, float h, uint8_t r, uint8_t g, uint8_t b, uint8_t alpha)
+{
+    if (!s) return;
+    SDL_SetTextureColorMod(s->tex, r, g, b); SDL_SetTextureAlphaMod(s->tex, alpha);
+    sprite_draw_scaled(s, frame, x, y, w, h);
+    SDL_SetTextureColorMod(s->tex, 255, 255, 255); SDL_SetTextureAlphaMod(s->tex, 255);
+}
+
 void sprite_draw_rotated(const Sprite *s, int frame, float cx, float cy, float scale, float angle, uint8_t bright, uint8_t alpha)
 {
     if (!s) return;

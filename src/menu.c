@@ -404,16 +404,19 @@ void menu_draw(Menu *m, SDL_Renderer *r, int sw, int sh)
         if (f < 1.0f) fill(r, sw, sh, 0, 0, 0, clamp255((1 - f) * 255));
         if (m->t > 2.0f) fill(r, sw, sh, 0, 0, 0, clamp255((m->t - 2.0f) / 0.9f * 255));   /* out with the music fade */
         break; }
-    case MS_ACCOMPLISHED: {   /* FUN_00429d80: Fireball art + pulsing MISSION / ACCOMPLISHED */
+    case MS_ACCOMPLISHED: {   /* FUN_00429e70: Fireball art + pulsing MISSION / ACCOMPLISHED zoom in from 32x over
+                               * v = min(2.1 sin(pi|t|/2), 2)/2 under a black veil; t runs 0..4, then -1..0 zooms
+                               * back out under a white veil (FUN_00429de0) */
         fill(r, sw, sh, 0, 0, 0, 255);
         Sprite *bg = sprite_get(0xE963788C), *a = sprite_get(0xF6172502), *b = sprite_get(0xF629241D);
-        if (bg) sprite_draw(bg, 0, (float)((sw - bg->w) / 2), (float)((sh - bg->h) / 2), false);
+        float t = m->t <= 4.0f ? m->t : m->t - 5.0f, v = 1.0f;
+        if (t < 1.0f) { v = 2.1f * sinf(fabsf(t) * 1.5707964f); if (v > 2.0f) v = 2.0f; v *= 0.5f; }
+        float sc = zoom_scale(v);
+        if (bg) sprite_draw_scaled(bg, 0, (sw - bg->w * sc) * 0.5f, (sh - bg->h * sc) * 0.5f, bg->w * sc, bg->h * sc);
         uint8_t al = pulse_alpha();
-        if (a) sprite_draw_mod(a, 0, (float)((sw - a->w) / 2), (float)((sh + 0x60 - a->h) / 2), 255, 255, 255, al);
-        if (b) sprite_draw_mod(b, 0, (float)((sw - b->w) / 2), (float)((sh + 0x90 - b->h) / 2), 255, 255, 255, al);
-        float f = ease(m->t, m->dur);
-        if (f < 1.0f) fill(r, sw, sh, 0, 0, 0, clamp255((1 - f) * 255));
-        if (m->t > 4.0f) fill(r, sw, sh, 0, 0, 0, clamp255((m->t - 4.0f) * 255));
+        if (a) sprite_draw_scaled_mod(a, 0, (sw - a->w * sc) * 0.5f, (sh + 0x60 - a->h * sc) * 0.5f, a->w * sc, a->h * sc, 255, 255, 255, al);
+        if (b) sprite_draw_scaled_mod(b, 0, (sw - b->w * sc) * 0.5f, (sh + 0x90 - b->h * sc) * 0.5f, b->w * sc, b->h * sc, 255, 255, 255, al);
+        if (v < 1.0f) { uint8_t w = t < 0 ? 255 : 0; fill(r, sw, sh, w, w, w, clamp255((1 - v) * 255)); }
         break; }
     default: break;
     }
