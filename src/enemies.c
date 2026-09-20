@@ -108,7 +108,6 @@ static Enemy *spawn_convoy(Enemies *E, const Trigger *t, float x, float y, const
         character_init(&e->ch, 0xFBFAF817, false);
         e->ch.body.x = px0; e->ch.body.y = py0; e->ch.body.flags = 0x1f;
         if (E->px <= px0) character_move_left(&e->ch, 0); else character_move_right(&e->ch, 4);
-        e->dir = e->ch.facing;
         if (!head) head = e;
         px0 += right ? step : -step;   /* the column extends away from the player (FUN_00415550) */
     }
@@ -149,8 +148,8 @@ Enemy *enemy_spawn(Enemies *E, const Trigger *t, float x, float y, const Level *
     e->variant = (type == 5 || type == 7 || type == 9 || type == 29);
     if (cls == EC_GRUNT || cls == EC_GRUNT_B || cls == EC_SNIPER || cls == EC_SNIPER_B || cls == EC_KNEELER || cls == EC_KNEELER_B || cls == EC_END) e->gun_alive = true;
     if (cls == EC_WALKER || cls == EC_GRUNT || cls == EC_GRUNT_B) {
-        e->dir = E->px <= b->x ? 0 : 1;
-        face_and_probe(e, e->dir == 1, L, W, cam_x, sw);
+        e->ch.facing = E->px <= b->x ? 0 : 1;
+        face_and_probe(e, e->ch.facing == 1, L, W, cam_x, sw);
         snap_to_ground(e, L, W);
         if (e->ch.flags & CF_SPAWN_FALL) e->spawn_t = 0.6666667f;
     } else if (cls >= EC_PROP && cls <= EC_STAMPEDE + 3) {
@@ -163,9 +162,8 @@ Enemy *enemy_spawn(Enemies *E, const Trigger *t, float x, float y, const Level *
         E->boss_phase = 0;
     } else if (cls == EC_CUTSCENE) {
         snap_to_ground(e, L, W);
-        e->dir = 0; e->ch.state = CS_IDLE; e->ch.aim = AIM_L; e->ch.facing = 0;
+        e->ch.facing = 0; e->ch.state = CS_IDLE; e->ch.aim = AIM_L;
     } else {
-        e->dir = 2;
         e->ch.facing = E->px <= b->x ? 0 : 1;
         snap_to_ground(e, L, W);
     }
@@ -232,10 +230,10 @@ static void humanoid_tail(Enemies *E, Enemy *e, Player *pl, Bullets *pb, float c
     if (hurt_overlap(c, b->x, b->y, E)) {
         Character *p = &pl->ch;
         if (p->state == CS_SLIDE) {
-            if (c->state != CS_DEAD) { if (p->facing == 0) { e->dir = 1; knock = -1; } else { e->dir = 0; knock = 1; } }
+            if (c->state != CS_DEAD) { if (p->facing == 0) { e->ch.facing = 1; knock = -1; } else { e->ch.facing = 0; knock = 1; } }
             die = true; c->state = CS_DEAD;
         } else if (!(p->flags & CF_HIT) && p->state != CS_DEAD) {
-            player_damage(pl, e->dir == 0 ? 0 : 4, 1);
+            player_damage(pl, e->ch.facing == 0 ? 0 : 4, 1);
         }
     }
     {
@@ -249,7 +247,7 @@ static void humanoid_tail(Enemies *E, Enemy *e, Player *pl, Bullets *pb, float c
             int d = bl->dir;
             pb->b[i] = pb->b[--pb->n];
             if (c->state != CS_DEAD && (d & 0xfb) != 2) {
-                if (d < 8 && ((1u << d) & 0x83u)) { e->dir = 1; knock = -1; } else { e->dir = 0; knock = 1; }
+                if (d < 8 && ((1u << d) & 0x83u)) { e->ch.facing = 1; knock = -1; } else { e->ch.facing = 0; knock = 1; }
             }
             die = true; c->state = CS_DEAD;
             break;
@@ -270,10 +268,10 @@ static void update_walker(Enemies *E, Enemy *e, Player *pl, const Level *L, cons
     (void)L;
     character_sync_ground(c);
     bool offscreen = false;
-    if (e->dir == 1) {
+    if (e->ch.facing == 1) {
         if (!(c->coll & COLL_RIGHT)) { character_move_right(c, 4); offscreen = b->x - b->hx > cam_x + sw; }
         else character_move_left(c, 0);
-    } else if (e->dir == 0) {
+    } else if (e->ch.facing == 0) {
         if (c->coll & COLL_LEFT) {
             if (W->world_min_x <= b->x - b->hx - 1.0f) character_move_right(c, 4);
             else { b->flags = PHYS_IGNORE_LEFT; character_move_left(c, 0); }
@@ -295,7 +293,7 @@ static void update_grunt(Enemies *E, Enemy *e, Player *pl, const Level *L, const
         c->speed += 1e-5f;
         if (c->speed > 0.00016f) {
             if (c->speed < 0.00017f) {
-                float mx = e->dir == 0 ? (e->variant ? -29.0f : -26.0f) : (e->variant ? 29.0f : 26.0f);
+                float mx = e->ch.facing == 0 ? (e->variant ? -29.0f : -26.0f) : (e->variant ? 29.0f : 26.0f);
                 if (e->gun_alive && e->gun_cd <= 0.0f) {
                     float x = b->x + mx, y = b->y + c->muzzle_y;
                     AnimDef fl = { 0, 0, 3, 0, 0.05f, 0 };
@@ -307,10 +305,10 @@ static void update_grunt(Enemies *E, Enemy *e, Player *pl, const Level *L, const
                 }
             } else if (c->speed > 0.00024f) {
                 c->speed = 120.0f; e->gun_alive = false;
-                if (e->dir == 0) character_move_right(c, 4); else character_move_left(c, 0);
+                if (e->ch.facing == 0) character_move_right(c, 4); else character_move_left(c, 0);
             }
         }
-    } else if (e->dir == 0) {
+    } else if (e->ch.facing == 0) {
         if (c->coll & COLL_LEFT) {
             if (W->world_min_x <= b->x - b->hx - 1.0f) { e->gun_alive = false; character_move_right(c, 4); }
             else { b->flags = PHYS_IGNORE_LEFT; character_move_left(c, 0); }
@@ -320,7 +318,7 @@ static void update_grunt(Enemies *E, Enemy *e, Player *pl, const Level *L, const
             else if (c->state != CS_AIR && E->px + quarter < b->x && b->x < cam_x + sw - quarter && rnd(100) >= 0x60 && e->gun_alive
                      && character_request_shoot(c)) c->speed = 0;
         }
-    } else if (e->dir == 1) {
+    } else if (e->ch.facing == 1) {
         if (c->coll & COLL_RIGHT) { e->gun_alive = false; character_move_left(c, 0); }
         else {
             character_move_right(c, 4);
@@ -403,8 +401,7 @@ static void update_kneeler(Enemies *E, Enemy *e, Player *pl, const Level *L, con
     if (c->state == CS_IDLE) character_down(c);
     if (c->state == CS_CROUCH) {
         character_aim(c, b->x <= px ? AIM_R : AIM_L);
-        e->dir = (c->aim < 8 && ((1u << c->aim) & 0x83u)) ? 0 : 1;
-        c->facing = e->dir;
+        e->ch.facing = (c->aim < 8 && ((1u << c->aim) & 0x83u)) ? 0 : 1;
         if (c->speed > 1.0f) {
             if (c->state != CS_AIR && cam_x < b->x && b->x < cam_x + sw && rnd(100) >= 0x5d && character_request_shoot(c))
                 c->speed = 0;
@@ -467,13 +464,13 @@ static void update_horse(Enemies *E, Enemy *e, Player *pl, float cam_x, int sw, 
     character_sync_ground(c);
     c->state = CS_WALK;
     bool offscreen = false;
-    if (e->dir == 1) { character_move_right(c, 4); offscreen = b->x - b->hx > cam_x + sw; }
+    if (e->ch.facing == 1) { character_move_right(c, 4); offscreen = b->x - b->hx > cam_x + sw; }
     else { character_move_left(c, 0); offscreen = b->x + b->hx < cam_x; }
     c->state = CS_WALK;
     /* player */
     if (hurt_overlap(c, b->x, b->y, E)) {
         Character *p = &pl->ch;
-        if (!(p->flags & CF_HIT) && p->state != CS_DEAD) player_damage(pl, e->dir == 0 ? 0 : 4, 1);
+        if (!(p->flags & CF_HIT) && p->state != CS_DEAD) player_damage(pl, e->ch.facing == 0 ? 0 : 4, 1);
     }
     /* humanoid enemies */
     const HurtBox *h = &c->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0];
@@ -484,10 +481,10 @@ static void update_horse(Enemies *E, Enemy *e, Player *pl, float cam_x, int sw, 
         const HurtBox *oh = &o->ch.hurt[o->ch.anim < CHAR_MAX_ANIMS ? o->ch.anim : 0];
         float ox = o->ch.body.x + oh->ox, oy = o->ch.body.y + oh->oy;
         if (fabsf(ox - cx) > oh->hw + h->hw || fabsf(oy - cy) > oh->hh + h->hh) continue;
-        o->ch.facing = e->dir == 0 ? 1 : 0;
+        o->ch.facing = e->ch.facing == 0 ? 1 : 0;
         o->ch.state = CS_DEAD; sfx_play(5, 0); sfx_play(6, 3);
         character_resolve(&o->ch, dt);
-        o->ch.body.vx += e->dir == 0 ? -102.0f : 102.0f;
+        o->ch.body.vx += e->ch.facing == 0 ? -102.0f : 102.0f;
         kill(E, o, 0x19f);
     }
     character_resolve(c, dt);
@@ -502,7 +499,7 @@ static void update_cutscene_outrider(Enemies *E, Enemy *e, float cam_x, int sw, 
     float camc = cam_x + sw * 0.5f;
     if ((int)fabsf(camc - b->x) < sw / 2) {
         if (c->state == CS_IDLE) { c->state = CS_SLIDE; c->slide_t = 2.0f; sfx_play(22, 0); }
-        else if (c->state == CS_SLIDE && c->slide_t < 1.0f) { c->state = CS_WALK; e->dir = 1; c->aim = AIM_R; c->slide_t = 0; c->alert_time = 50.0f; e->ft = 50.0f; }
+        else if (c->state == CS_SLIDE && c->slide_t < 1.0f) { c->state = CS_WALK; e->ch.facing = 1; c->aim = AIM_R; c->slide_t = 0; c->alert_time = 50.0f; e->ft = 50.0f; }
     } else {
         if (e->ft >= 40.0f) kill(E, e, 0x19f);      /* ran off the screen */
         else { e->ft = 0; b->vx = b->vy = 0; }

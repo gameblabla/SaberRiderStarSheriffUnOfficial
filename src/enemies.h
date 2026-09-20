@@ -20,7 +20,8 @@ typedef struct {
     bool dying; float death_t;
     Character ch;
     int type, layer, variant;
-    uint8_t dir;          /* 0 left, 1 right, 2 stand (slot+0x15) */
+    uint8_t dir;          /* boss sweep direction; for humanoids the walk direction is ch.facing itself (slot+0x1283d = character+9),
+                             so walking into a wall turns them around */
     float spawn_t;        /* invulnerable drop-in timer (+0x1284c) */
     float t0, t1; int st; /* class-specific */
     float knock;          /* pending vx knockback */

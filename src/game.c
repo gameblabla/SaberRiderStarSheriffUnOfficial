@@ -76,14 +76,16 @@ void game_event(Game *g, const SDL_Event *ev)
     }
 }
 
-/* camera follows the player horizontally (FUN_0040c460), max 4 px/frame catch-up */
-static void camera_follow(Game *g)
+/* camera follows the player horizontally (FUN_0040c460), max 4 px/frame catch-up. The target is clamped to
+ * [current centre, level end], so the camera never scrolls back left (flag +0x1c lifts that during a cutscene return). */
+static void camera_follow(Game *g, bool allow_left)
 {
     const Character *c = &g->player.ch;
     float target = c->body.x;
     float half = g->sw * 0.5f;
     float camc = g->cam_x + half;
     float maxc = g->level.width - half; if (target > maxc) target = maxc;
+    if (!allow_left && target < camc) target = camc;
     float d = target - camc;
     if (fabsf(d) > 4.0f) camc += (d > 0 ? 1 : -1) * 4.0f; else camc = target;   /* speed 1.0 * 4 (FUN_0040c460) */
     if (camc < half) camc = half;
@@ -117,7 +119,7 @@ void game_update(Game *g, float dt)
             if (g->dlg_phase == 2) {                          /* camera returning to the player (camera flag +0x1b) */
                 if (g->cam_x == g->dlg_last_cam) { g->state = 10; p->locked = false; }
                 g->dlg_last_cam = g->cam_x;
-                camera_follow(g);
+                camera_follow(g, true);
             } else if ((int)g->cam_x == (int)target) {
                 if (g->dialog.active) dialog_update(&g->dialog, &g->in, dt);
                 else if ((g->dlg_t_after -= dt * 1000.0f) > 0) cutscene_world = true;   /* the scene plays on after the text */
@@ -197,7 +199,7 @@ void game_update(Game *g, float dt)
         if (g->key[SDL_SCANCODE_LEFT]) g->cam_x -= sp;
     } else if (g->cam_locked || g->state == 0xd) {
         /* camera frozen during a stop / driven by the cutscene */
-    } else camera_follow(g);
+    } else camera_follow(g, false);
     float maxx = g->level.width - g->sw; if (maxx < 0) maxx = 0;
     if (g->cam_x < 0) g->cam_x = 0;
     if (g->cam_x > maxx) g->cam_x = maxx;
