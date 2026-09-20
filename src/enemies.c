@@ -494,21 +494,21 @@ static void update_horse(Enemies *E, Enemy *e, Player *pl, float cam_x, int sw, 
     if (offscreen) kill(E, e, 0x19f); else sfx_play(20, 0);
 }
 
-/* FUN_00417b60: the cutscene Outrider on the Ramrod's roof (type 28). Alarm pose when seen, then runs off. */
+/* FUN_00417b60: the cutscene Outrider on the Ramrod's roof (type 28). Alarm pose when seen, then runs off; despawns
+ * once it has left the screen. ft = run flag (50 while running, +0x12848). */
 static void update_cutscene_outrider(Enemies *E, Enemy *e, float cam_x, int sw, float dt)
 {
     Character *c = &e->ch; Body *b = &c->body;
     float camc = cam_x + sw * 0.5f;
     if ((int)fabsf(camc - b->x) < sw / 2) {
         if (c->state == CS_IDLE) { c->state = CS_SLIDE; c->slide_t = 2.0f; sfx_play(22, 0); }
-        else if (c->state == CS_SLIDE && c->slide_t < 1.0f) { c->state = CS_WALK; e->dir = 1; c->aim = AIM_R; c->slide_t = 0; c->alert_time = 50.0f; c->alert_t = 50.0f; }
-        else if (c->state != CS_SLIDE) {
-            if (c->alert_t >= 40.0f) kill(E, e, 0x19f);
-            else { c->alert_t = 0; b->vx = b->vy = 0; }
-        }
+        else if (c->state == CS_SLIDE && c->slide_t < 1.0f) { c->state = CS_WALK; e->dir = 1; c->aim = AIM_R; c->slide_t = 0; c->alert_time = 50.0f; e->ft = 50.0f; }
+    } else {
+        if (e->ft >= 40.0f) kill(E, e, 0x19f);      /* ran off the screen */
+        else { e->ft = 0; b->vx = b->vy = 0; }
     }
     character_sync_ground(c);
-    if (c->alert_t > 40.0f) { character_move_right(c, 4); c->alert_t = 50.0f; }
+    if (e->ft > 40.0f) { character_move_right(c, 4); e->ft = 50.0f; }
     character_resolve(c, dt);
 }
 

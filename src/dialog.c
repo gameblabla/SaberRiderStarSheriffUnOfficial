@@ -76,27 +76,38 @@ bool dialog_open_text(Dialog *d, const char *text, int color)
     return d->active;
 }
 
-void dialog_close(Dialog *d) { if (d->active && !d->closing) { d->closing = true; d->frame = 21; } }
+#define DLG_OPEN_FRAMES 12      /* box grow/shrink (FUN_00475480 arg 0xc) */
+#define DLG_CLOSE_FRAMES 22     /* FUN_0042bc60: DAT_00ac9bd8 = -22 */
+#define DLG_CHARS_PER_FRAME (50.0f / DLG_OPEN_FRAMES)   /* FUN_00475610: 0x7ca0f4 / open frames */
 
-bool dialog_text_done(const Dialog *d)
-{
-    return d->active && d->page == d->npages - 1 && d->chars >= (float)strlen(d->pages[d->page].text);
-}
+void dialog_close(Dialog *d) { if (d->active && d->t > 0) { d->t = -DLG_CLOSE_FRAMES; d->box = -DLG_OPEN_FRAMES; d->closing = true; d->frame = DLG_CLOSE_FRAMES; } }
 
+bool dialog_text_done(const Dialog *d) { return d->active && d->page == d->npages - 1 && d->done; }
+
+/* FUN_0042d690 (state 0xd) + FUN_0042b250 + FUN_00476de0: START closes the page at once, an action button once the
+ * text is complete; a held action button types 3x faster. Pages close over 22 frames and the next one opens. */
 void dialog_update(Dialog *d, const Input *in, float dt)
 {
+    (void)dt;
     if (!d->active) return;
-    if (d->closing) { if (--d->frame <= 0) d->active = false; return; }   /* close animation (22 frames, FUN_0042bc60) */
-    if (d->frame < 21) { d->frame++; return; }
-    const DialogPage *pg = &d->pages[d->page];
-    size_t total = strlen(pg->text);
-    d->chars += dt * 40.0f;   /* ~40 chars/s typewriter */
-    bool press = btn_pressed(in, BTN_SHOOT) || btn_pressed(in, BTN_JUMP) || btn_pressed(in, BTN_PAUSE);
-    if (press) {
-        if (d->chars < (float)total) d->chars = (float)total;
-        else if (++d->page >= d->npages) { d->page = d->npages - 1; d->closing = true; d->frame = 21; }
-        else d->chars = 0;
+    if (d->t < 0) {
+        d->t++; d->frame = -d->t;
+        if (d->box < 0) d->box++;
+        if (d->t == 0) {
+            if (++d->page >= d->npages) { d->active = false; d->page = d->npages - 1; return; }
+            d->t = 1; d->box = 0; d->chars = 0; d->done = false; d->closing = false; d->frame = 1;
+        }
+        return;
     }
+    if (d->t == 0) { d->t = 1; d->frame = 1; }
+    bool act = btn_pressed(in, BTN_SHOOT) || btn_pressed(in, BTN_JUMP);
+    if (btn_pressed(in, BTN_PAUSE) || (d->done && act)) { dialog_close(d); sfx_play(0, 0); return; }
+    d->t++; d->frame = d->t;
+    if (d->box < DLG_OPEN_FRAMES) { d->box++; return; }
+    if (d->done) return;
+    bool held = btn_down(in, BTN_SHOOT) || btn_down(in, BTN_JUMP);
+    d->chars += DLG_CHARS_PER_FRAME * (held ? 3 : 1);
+    if (d->chars >= (float)strlen(d->pages[d->page].text)) { d->chars = (float)strlen(d->pages[d->page].text); d->done = true; }
 }
 
 /* word-wrapped text into lines of at most `maxw` pixels */
@@ -106,10 +117,11 @@ static int wrap(const Font *f, const char *text, int maxw, char lines[8][80])
     const char *s = text;
     while (*s && n < 8) {
         if (*s == '\n') { lines[n][len] = 0; n++; len = 0; if (n < 8) lines[n][0] = 0; s++; continue; }
+        if (*s == ' ' && len == 0) { while (*s == ' ' && len < 78) lines[n][len++] = *s++; lines[n][len] = 0; continue; }   /* leading spaces are kept (scripts indent with them) */
         const char *w = s; while (*w && *w != ' ' && *w != '\n') w++;
         int wl = (int)(w - s);
         char word[80]; int wn = wl < 79 ? wl : 79; memcpy(word, s, wn); word[wn] = 0;
-        char cand[80]; snprintf(cand, sizeof cand, "%s%s%s", lines[n], len ? " " : "", word);
+        char cand[80]; snprintf(cand, sizeof cand, "%s%s%s", lines[n], (len && lines[n][len - 1] != ' ') ? " " : "", word);
         if (len && font_text_width(f, cand) > maxw) { lines[n][len] = 0; n++; len = 0; if (n >= 8) break; lines[n][0] = 0; continue; }
         strcpy(lines[n], cand); len = (int)strlen(cand);
         s = w; while (*s == ' ') s++;
@@ -118,41 +130,54 @@ static int wrap(const Font *f, const char *text, int maxw, char lines[8][80])
     return n;
 }
 
-static void draw_box(SDL_Renderer *r, Sprite *ts, int x, int y, int w, int h)
+/* FUN_00474610: 16 px corner tiles, edges and centre stretched; corners shrink when the box is smaller than two tiles */
+static void draw_box(Sprite *ts, float x0, float y0, float x1, float y1)
 {
-    (void)r;
     if (!ts || ts->frames < 9) return;
-    int t = ts->w;
-    for (int yy = 0; yy < h; yy += t)
-        for (int xx = 0; xx < w; xx += t) {
-            int col = xx == 0 ? 0 : (xx + t >= w ? 2 : 1), row = yy == 0 ? 0 : (yy + t >= h ? 2 : 1);
-            sprite_draw(ts, row * 3 + col, (float)(x + xx), (float)(y + yy), false);
-        }
+    float w = x1 - x0, h = y1 - y0;
+    if (w <= 0 || h <= 0) return;
+    float cw = (float)ts->w, ch = (float)ts->h;
+    if (cw * 2 > w) cw = w * 0.5f;
+    if (ch * 2 > h) ch = h * 0.5f;
+    float mx = w - 2 * cw, my = h - 2 * ch;
+    sprite_draw_scaled(ts, 0, x0, y0, cw, ch);
+    if (mx > 0) sprite_draw_scaled(ts, 1, x0 + cw, y0, mx, ch);
+    sprite_draw_scaled(ts, 2, x1 - cw, y0, cw, ch);
+    if (my > 0) {
+        sprite_draw_scaled(ts, 3, x0, y0 + ch, cw, my);
+        if (mx > 0) sprite_draw_scaled(ts, 4, x0 + cw, y0 + ch, mx, my);
+        sprite_draw_scaled(ts, 5, x1 - cw, y0 + ch, cw, my);
+    }
+    sprite_draw_scaled(ts, 6, x0, y1 - ch, cw, ch);
+    if (mx > 0) sprite_draw_scaled(ts, 7, x0 + cw, y1 - ch, mx, ch);
+    sprite_draw_scaled(ts, 8, x1 - cw, y1 - ch, cw, ch);
 }
 
+/* FUN_0042a5e0 / FUN_0042b250 geometry: box x (SW-226)/2..SW-(SW-274)/2 with an avatar, (SW-274)/2.. without,
+ * y SH-64..SH-16; text at (+8,+4), 10 px lines; avatar 32x32 at (x0-32+6, y0-8); page marker = glyph 0x7f at
+ * (x1-20, y1-10), blinking on bit 4 of the frame counter. */
 void dialog_draw(const Dialog *d, SDL_Renderer *r, int sw, int sh)
 {
-    if (!d->active) return;
+    (void)r;
+    if (!d->active || d->box == 0) return;
     const DialogPage *pg = &d->pages[d->page];
     Font *f = font_get(0x12072E60);
-    float open = d->frame < 21 ? d->frame / 21.0f : 1.0f;
-    if (d->closing) { /* text disappears at once, the box shrinks back */ }
-    /* box x 76..350 (avatar) / text rect 100..350 x 176..224, avatar label at 1/3 scale top-left (offset 6,-8) */
     Sprite *av = pg->avatar_id ? sprite_get(pg->avatar_id) : NULL;
-    int bx = av ? 72 : 72, by = 168, bw = 350 - bx + 6, bh = sh - 8 - by;
-    int shown = (int)(bh * open);
-    draw_box(r, sprite_get(TILESET[pg->color]), bx, by + (bh - shown), bw, shown);
-    if (open < 1.0f || !f || d->closing) return;
-    if (av) sprite_draw(av, 0, (float)(bx + 6), (float)(by - 8), false);
-    (void)sw;
-    char lines[8][80]; int n = wrap(f, pg->text, av ? 228 : 260, lines);
-    int remaining = (int)d->chars;
+    int x0 = av ? (sw - 226) / 2 : (sw - 274) / 2, x1 = sw - (sw - 274) / 2;
+    int y0 = sh - 64, y1 = sh - 16;
+    int k = d->box > 0 ? (d->box < DLG_OPEN_FRAMES ? d->box : DLG_OPEN_FRAMES) : -d->box;
+    float s = (float)k / DLG_OPEN_FRAMES;
+    float cx = (x0 + x1) * 0.5f, cy = (y0 + y1) * 0.5f;
+    float hw = (x1 - x0) * 0.5f * s, hh = (y1 - y0) * 0.5f * s;
+    draw_box(sprite_get(TILESET[pg->color]), floorf(cx - hw), floorf(cy - hh), floorf(cx + hw), floorf(cy + hh));
+    if (av) sprite_draw(av, 0, (float)(x0 - av->w + 6), (float)(y0 - 8), false);
+    if (d->box < DLG_OPEN_FRAMES || !f) return;
+    char lines[8][80]; int n = wrap(f, pg->text, x1 - x0 - 16, lines);
+    int remaining = (int)d->chars, ly = y0 + 4;
     for (int i = 0; i < n && remaining > 0; i++) {
         int l = (int)strlen(lines[i]);
-        font_draw_n(f, lines[i], remaining < l ? remaining : l, (float)(av ? 116 : 84), (float)(176 + i * 10), TEXTRGB[pg->color][0], TEXTRGB[pg->color][1], TEXTRGB[pg->color][2]);
+        font_draw_n(f, lines[i], remaining < l ? remaining : l, (float)(x0 + 8), (float)(ly + i * 10), TEXTRGB[pg->color][0], TEXTRGB[pg->color][1], TEXTRGB[pg->color][2]);
         remaining -= l + 1;
     }
-    /* page indicator */
-    Sprite *arrow = sprite_get(0x99993BFE);
-    if (arrow && d->chars >= (float)strlen(pg->text)) sprite_draw(arrow, (SDL_GetTicks() / 200) % arrow->frames, (float)(bx + bw - 16), (float)(sh - 20), false);
+    if (d->done && (d->t & 16)) { char m[2] = { 0x7f, 0 }; font_draw(f, m, (float)(x1 - 20), (float)(y1 - 10), TEXTRGB[pg->color][0], TEXTRGB[pg->color][1], TEXTRGB[pg->color][2]); }
 }

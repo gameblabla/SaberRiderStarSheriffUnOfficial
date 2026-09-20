@@ -29,7 +29,7 @@ typedef struct {
     Menu menu; bool in_level;
     float state_t;
     uint32_t dialog_text; float dialog_t;
-    Dialog dialog; int dlg_phase; float dlg_focus_x, dlg_cam_return, dlg_wait;
+    Dialog dialog; int dlg_phase; float dlg_focus_x, dlg_focus_y, dlg_t_before, dlg_t_after, dlg_last_cam;   /* state 0xd (FUN_0042d690) */
     bool debug_collision, free_cam;
     bool key[SDL_SCANCODE_COUNT];
 } Game;

@@ -15,9 +15,12 @@ typedef struct {
 typedef struct {
     bool active;
     DialogPage pages[DLG_MAX_PAGES]; int npages, page;
-    float t, chars;       /* typewriter */
-    int frame;            /* open animation frames */
-    bool closing;
+    int t;                /* page timer (DAT_00ac9bd8): >0 frames since the page opened, <0 closing countdown (-22..-1) */
+    int box;              /* box frame (+0x50): 0 hidden, 1..11 growing, >=12 open with text; -12..-1 shrinking */
+    float chars;          /* typewriter progress in characters (50/12 per frame, x3 while a button is held) */
+    bool done;            /* all text shown, waiting for the player */
+    int frame;            /* |t|, kept for the briefing video unfold (FUN_0042ba20 uses the same counter) */
+    bool closing;         /* t < 0 */
 } Dialog;
 
 enum { DLG_GREEN, DLG_PURPLE, DLG_RED, DLG_BLUE };

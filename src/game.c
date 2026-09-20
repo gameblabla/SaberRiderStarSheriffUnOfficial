@@ -76,6 +76,20 @@ void game_event(Game *g, const SDL_Event *ev)
     }
 }
 
+/* camera follows the player horizontally (FUN_0040c460), max 4 px/frame catch-up */
+static void camera_follow(Game *g)
+{
+    const Character *c = &g->player.ch;
+    float target = c->body.x;
+    float half = g->sw * 0.5f;
+    float camc = g->cam_x + half;
+    float maxc = g->level.width - half; if (target > maxc) target = maxc;
+    float d = target - camc;
+    if (fabsf(d) > 4.0f) camc += (d > 0 ? 1 : -1) * 4.0f; else camc = target;   /* speed 1.0 * 4 (FUN_0040c460) */
+    if (camc < half) camc = half;
+    g->cam_x = camc - half;
+}
+
 void game_update(Game *g, float dt)
 {
     input_update(&g->in);
@@ -93,28 +107,35 @@ void game_update(Game *g, float dt)
     if (p->game_over && g->state == 10) { g->state = 0xb; g->state_t = 0; music_stop(); }
     if (g->state == 0xb) { g->state_t += dt; if (g->state_t > 2.0f) { g->in_level = false; menu_enter(&g->menu, MS_GAMEOVER); return; } }
     if (g->state == 0xe) { g->state_t += dt; if (g->state_t > 4.0f) { g->in_level = false; menu_enter(&g->menu, MS_ACCOMPLISHED); return; } }
-    if (g->state == 0xd) {          /* dialog / cutscene (game state 0xd) */
-        float half = g->sw * 0.5f;
-        float target = g->dlg_phase == 2 ? g->dlg_cam_return : (g->dlg_focus_x > 0 ? g->dlg_focus_x - half : g->dlg_cam_return);
-        float maxx = g->level.width - g->sw; if (target < 0) target = 0; if (target > maxx) target = maxx;
-        if (g->dlg_phase == 0 || g->dlg_phase == 2) {     /* pan camera to focus / back to the player */
-            float d = target - g->cam_x;
-            if (fabsf(d) <= 4.0f) { g->cam_x = target; if (g->dlg_phase == 0) { g->dlg_phase = 1; g->dlg_wait = 0; } else { g->state = 10; p->locked = false; } }
-            else g->cam_x += d > 0 ? 4.0f : -4.0f;
-        } else if (g->dlg_phase == 1) {
-            dialog_update(&g->dialog, &g->in, dt);
-            if (!g->dialog.active) g->dlg_phase = 2;
-            /* physics + bullets keep running while the text plays (enemy AI and the spawner do not) */
-            g->world.world_min_x = g->cam_x;
-            physics_step(&g->world, &g->level, &c->body, dt);
-            for (int i = 0; i < MAX_ENEMIES; i++)   /* scripted movers (flags 0x1f: horses, stampede) only move from their AI, which is paused */
-                if (g->enemies.e[i].cls && g->enemies.e[i].ch.body.flags != 0x1f) physics_step(&g->world, &g->level, &g->enemies.e[i].ch.body, dt);
-            bullets_update(&g->player_bullets, &g->level, &g->effects, dt, g->cam_x, g->cam_y, g->sw, g->sh);
-            bullets_update(&g->enemy_bullets, &g->level, &g->effects, dt, g->cam_x, g->cam_y, g->sw, g->sh);
+    bool cutscene_world = false;    /* state 0xd branches that still run the world (player not idle yet, timed holds) */
+    if (g->state == 0xd) {          /* dialog / cutscene (FUN_0042d690, state 0xd) */
+        float half = g->sw * 0.5f, maxx = g->level.width - g->sw;
+        bool focus = g->dlg_focus_x > 0 || g->dlg_focus_y > 0;
+        float target = g->dlg_focus_x - half; if (target < 0) target = 0; if (target > maxx) target = maxx;
+        if (c->state != CS_IDLE) cutscene_world = true;      /* the player first comes to a stop (FUN_00422d00) */
+        else if (focus) {
+            if (g->dlg_phase == 2) {                          /* camera returning to the player (camera flag +0x1b) */
+                if (g->cam_x == g->dlg_last_cam) { g->state = 10; p->locked = false; }
+                g->dlg_last_cam = g->cam_x;
+                camera_follow(g);
+            } else if ((int)g->cam_x == (int)target) {
+                if (g->dialog.active) dialog_update(&g->dialog, &g->in, dt);
+                else if ((g->dlg_t_after -= dt * 1000.0f) > 0) cutscene_world = true;   /* the scene plays on after the text */
+                else { g->dlg_phase = 2; g->dlg_last_cam = -1; }
+            } else {                                          /* pan to the focus point, hold just short of it for t_before */
+                float prev = g->cam_x, d = target - g->cam_x;
+                if (fabsf(d) <= 4.0f) g->cam_x = target; else g->cam_x += d > 0 ? 4.0f : -4.0f;
+                if ((int)g->cam_x == (int)target && (g->dlg_t_before -= dt * 1000.0f) > 0) { cutscene_world = true; g->cam_x = prev; }
+            }
+        } else {
+            if (g->dialog.active) dialog_update(&g->dialog, &g->in, dt);
+            else { g->state = 10; p->locked = false; }
         }
-        character_animate(c, dt); effects_update(&g->effects, dt);
-        for (int i = 0; i < MAX_ENEMIES; i++) if (g->enemies.e[i].cls) character_animate(&g->enemies.e[i].ch, dt);
-        return;
+        if (!cutscene_world) {
+            character_animate(c, dt); effects_update(&g->effects, dt);
+            for (int i = 0; i < MAX_ENEMIES; i++) if (g->enemies.e[i].cls) character_animate(&g->enemies.e[i].ch, dt);
+            return;
+        }
     }
 
     /* order as in GameLevel::update: controls -> (spawner, enemies) -> physics -> bullets -> camera */
@@ -137,8 +158,9 @@ void game_update(Game *g, float dt)
                 if (g->dialogs[k].text && !g->dialogs[k].done && IN_ZONE(g->dialogs[k])) {
                     g->dialogs[k].done = true; started = true;
                     if (dialog_open(&g->dialog, g->dialogs[k].text)) {
-                        g->state = 0xd; g->dlg_phase = 0; g->dlg_focus_x = g->dialogs[k].focus_x; g->dlg_cam_return = g->cam_x;
-                        c->body.vx = 0;
+                        g->state = 0xd; g->dlg_phase = 0; p->locked = true;
+                        g->dlg_focus_x = g->dialogs[k].focus_x; g->dlg_focus_y = g->dialogs[k].focus_y;
+                        g->dlg_t_before = g->dialogs[k].t_in * 1000.0f; g->dlg_t_after = g->dialogs[k].t_out * 1000.0f;
                     }
                 }
             }
@@ -173,19 +195,9 @@ void game_update(Game *g, float dt)
         float sp = (g->key[SDL_SCANCODE_LSHIFT] ? 600.f : 200.f) * dt;
         if (g->key[SDL_SCANCODE_RIGHT]) g->cam_x += sp;
         if (g->key[SDL_SCANCODE_LEFT]) g->cam_x -= sp;
-    } else if (g->cam_locked) {
-        /* camera frozen during a stop */
-    } else {
-        /* camera follows the player horizontally (FUN_0040c460), max 4 px/frame catch-up */
-        float target = c->body.x;
-        float half = g->sw * 0.5f;
-        float camc = g->cam_x + half;
-        float maxc = g->level.width - half; if (target > maxc) target = maxc;
-        float d = target - camc;
-        if (fabsf(d) > 4.0f) camc += (d > 0 ? 1 : -1) * 4.0f; else camc = target;   /* speed 1.0 * 4 (FUN_0040c460) */
-        if (camc < half) camc = half;
-        g->cam_x = camc - half;
-    }
+    } else if (g->cam_locked || g->state == 0xd) {
+        /* camera frozen during a stop / driven by the cutscene */
+    } else camera_follow(g);
     float maxx = g->level.width - g->sw; if (maxx < 0) maxx = 0;
     if (g->cam_x < 0) g->cam_x = 0;
     if (g->cam_x > maxx) g->cam_x = maxx;

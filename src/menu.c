@@ -149,10 +149,7 @@ void menu_update(Menu *m, const Input *in, float dt, int sw, SDL_Renderer *r)
          * four hero pieces slide in (t 0..0.25), hold, fade to black (1.75..2) and character select follows */
         if (m->video && !video_update(m->video, dt)) { /* keep the last frame on the screen */ }
         if (m->t == 0.0f) {
-            if (m->dlg.active && !m->dlg.closing) {
-                if (btn_pressed(in, BTN_PAUSE) || (dialog_text_done(&m->dlg) && action(in))) { dialog_close(&m->dlg); sfx_play(0, 0); }
-                else dialog_update(&m->dlg, in, dt);
-            } else if (m->dlg.active) dialog_update(&m->dlg, in, dt);
+            if (m->dlg.active) dialog_update(&m->dlg, in, dt);
             else { if (m->video) { video_close(m->video); m->video = NULL; } m->t = 0.0001f; sfx_play(8, 0); }
         } else {
             m->t += dt;
