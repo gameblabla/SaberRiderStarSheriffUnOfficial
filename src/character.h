@@ -42,6 +42,7 @@ typedef struct {
     float drop_target_y;
     float alert_t;
     float hit_t;
+    bool walk_bob;              /* player walk cycle: torso follows the legs' 1 px bob (FUN_0041c530) */
     float base_ox, base_oy;   /* +0x1c/+0x20 */
     float muzzle_x, muzzle_y; /* +0x24/+0x28 */
     /* animation playback */

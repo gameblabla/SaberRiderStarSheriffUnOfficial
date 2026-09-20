@@ -229,7 +229,10 @@ void character_draw(const Character *c, float cam_x, float cam_y)
     float x = floorf(c->body.x - c->origin_x - cam_x), y = floorf(c->body.y - c->origin_y - cam_y);
     if ((c->flags & CF_HIT) && c->hit_t > 0.01f && (SDL_GetTicks() / 16 & 2)) return;   /* invulnerability blink (effect flag 0x10 every other 2 frames) */
     draw_cell(c, c->frame, (int)(c->anims[c->anim].flags & 0xff), x, y);
-    if (c->overlay) draw_cell(c, c->ov_frame, (int)(c->anims[c->overlay].flags & 0xff), x, y);
+    /* the torso is its own sprite object placed at the base offset (up/down aims, 1 px walk bob) */
+    float oy = c->base_oy;
+    if (c->walk_bob && ((c->frame + 1 - (int)c->anims[c->anim].first) % 3) == 0) oy += 1.0f;   /* legs cells 2 and 5 sit 1 px lower */
+    if (c->overlay) draw_cell(c, c->ov_frame, (int)(c->anims[c->overlay].flags & 0xff), x + c->base_ox, y + oy);
 }
 
 /* FUN_0041c530: player state -> legs anim, torso overlay anim, muzzle base offset, horizontal velocity */
@@ -297,6 +300,8 @@ void player_resolve(Character *c, float dt)
     }
     if (body >= 0) character_set_anim(c, body);
     character_set_overlay(c, ov);
+    /* walk cycle: legs cells 2 and 5 sit 1 px lower, the torso follows (set after the muzzle, so it only moves the art) */
+    c->walk_bob = c->state == CS_WALK;
     b->vx = vx;
 keep_vx:
     if (b->y < c->drop_target_y) { b->flags |= PHYS_IGNORE_DOWN; return; }
