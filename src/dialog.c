@@ -41,8 +41,9 @@ bool dialog_open(Dialog *d, uint32_t text_id)
         size_t l = strlen(line); while (l && line[l-1] == '\r') line[--l] = 0;
         if (!strncmp(line, "<<>>", 4)) { pg = NULL; }
         else if (!strncmp(line, "<|", 2)) {
-            if (strstr(line, "PU")) color = COL_PURPLE; else if (strstr(line, "RE")) color = COL_RED;
-            else if (strstr(line, "BL")) color = COL_BLUE; else color = COL_GREEN;
+            const char *tag = line + 2;   /* the original compares the first two letters only: PU / RE / BL, anything else = green */
+            if (!strncmp(tag, "PU", 2)) color = COL_PURPLE; else if (!strncmp(tag, "RE", 2)) color = COL_RED;
+            else if (!strncmp(tag, "BL", 2)) color = COL_BLUE; else color = COL_GREEN;
         } else if (!strncmp(line, "</", 2)) {
             char name[64] = {0}; sscanf(line, "</%63[^/]/>", name); avatar = namehash(name);
         } else if (l) {

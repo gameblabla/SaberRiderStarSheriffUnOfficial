@@ -106,7 +106,8 @@ void game_update(Game *g, float dt)
             /* physics + bullets keep running while the text plays (enemy AI and the spawner do not) */
             g->world.world_min_x = g->cam_x;
             physics_step(&g->world, &g->level, &c->body, dt);
-            for (int i = 0; i < MAX_ENEMIES; i++) if (g->enemies.e[i].cls) physics_step(&g->world, &g->level, &g->enemies.e[i].ch.body, dt);
+            for (int i = 0; i < MAX_ENEMIES; i++)   /* scripted movers (flags 0x1f: horses, stampede) only move from their AI, which is paused */
+                if (g->enemies.e[i].cls && g->enemies.e[i].ch.body.flags != 0x1f) physics_step(&g->world, &g->level, &g->enemies.e[i].ch.body, dt);
             bullets_update(&g->player_bullets, &g->level, &g->effects, dt, g->cam_x, g->cam_y, g->sw, g->sh);
             bullets_update(&g->enemy_bullets, &g->level, &g->effects, dt, g->cam_x, g->cam_y, g->sw, g->sh);
         }

@@ -110,9 +110,10 @@ static Enemy *spawn_convoy(Enemies *E, const Trigger *t, float x, float y, const
         if (E->px <= px0) character_move_left(&e->ch, 0); else character_move_right(&e->ch, 4);
         e->dir = e->ch.facing;
         if (!head) head = e;
-        px0 += right ? -step : step;
+        px0 += right ? step : -step;   /* the column extends away from the player (FUN_00415550) */
     }
     convoy_check(E);
+    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "convoy spawn: trigger x=%.0f player %.0f first horse %.0f step %.0f speed %.0f\n", x, E->px, head ? head->ch.body.x : -1, step, tmp.speed);
     return head;
 }
 
