@@ -256,7 +256,11 @@ static void humanoid_tail(Enemies *E, Enemy *e, Player *pl, Bullets *pb, float c
 resolve:
     if (b->y - b->hy > E->death_floor) { die = true; c->state = CS_DEAD; }
     character_resolve(c, dt);
-    if (e->gun_alive) { e->gun_cd -= dt; if (e->gun_cd <= 0) { if (e->gun_cd < 0) e->gun_cd = 0; c->flags &= ~CF_SHOOT; } }
+    if (e->gun_alive) {   /* FUN_0041ef20: the shoot pose is dropped only on the frame the cooldown runs out
+                           * (an armed request keeps CF_SHOOT while cd == 0, e.g. the kneeler's 0.235 s wind-up) */
+        float was = e->gun_cd; e->gun_cd -= dt; if (e->gun_cd < 0) e->gun_cd = 0;
+        if (was > 0 && e->gun_cd <= 0) c->flags &= ~CF_SHOOT;
+    }
     if (knock) b->vx += knock * 102.0f;
     if (die && c->state == CS_DEAD && !e->dying) { sfx_play(5, 0); sfx_play(6, 3); }
     if (die) kill(E, e, 0x19f);
