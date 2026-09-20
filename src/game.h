@@ -28,6 +28,7 @@ typedef struct {
     int state;              /* 10 playing, 0xd dialog, 0xe level clear, 0xb game over, 0xc pause */
     Menu menu; bool in_level;
     float state_t;
+    float level_t;               /* +0x64 in state 10: music fade-in timer */
     uint32_t dialog_text; float dialog_t;
     Dialog dialog; int dlg_phase; float dlg_focus_x, dlg_focus_y, dlg_t_before, dlg_t_after, dlg_last_cam;   /* state 0xd (FUN_0042d690) */
     bool debug_collision, free_cam;

@@ -57,7 +57,8 @@ void menu_enter(Menu *m, int state)
     int prev = m->state;
     m->state = state; m->t = 0; m->dur = MENU_PERIOD; m->idle_frames = 0;
     switch (state) {
-    case MS_INTRO: m->dur = 0; break;
+    case MS_SPLASH0: case MS_SPLASH1: case MS_SPLASH2: case MS_SPLASH3: case MS_INTRO:
+        music_stop(); if (state == MS_INTRO) m->dur = 0; break;   /* FUN_00411480 when a result screen / the title hands over */
     case MS_MAIN:
         if (prev == MS_OPTIONS || prev == MS_CREDITS) m->t = m->dur * 0.5f;   /* no zoom-in when coming back from a sub menu */
         m->sel = 0; music_play(0, true); break;
@@ -167,11 +168,13 @@ void menu_update(Menu *m, const Input *in, float dt, int sw, SDL_Renderer *r)
             }
         } else {
             m->t += dt;
+            music_set_volume(1.0f - m->t);   /* FUN_00429510: the select music fades out over the 1 s LOADING */
             if (m->t >= 1.0f) { m->start_level = true; m->t = 1.0f; }
         }
         break;
     case MS_GAMEOVER:   /* FUN_0042a210: zoom/fade in for 1 s, hold for START or an action button, then ~1.9 s out */
         if (m->t < 1.0f || m->t > 1.0166667f || confirm(in)) m->t += dt;
+        if (m->t > 2.0f) music_set_volume(3.0f - m->t);   /* FUN_00425e70(3 - t) while fading out */
         if (m->t > 2.9f) menu_enter(m, MS_SPLASH1);
         break;
     case MS_ACCOMPLISHED:   /* FUN_00429de0: 4 s, then a 1 s countdown to the splash */

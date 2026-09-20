@@ -256,8 +256,10 @@ static void humanoid_tail(Enemies *E, Enemy *e, Player *pl, Bullets *pb, float c
 resolve:
     if (b->y - b->hy > E->death_floor) { die = true; c->state = CS_DEAD; }
     character_resolve(c, dt);
-    if (e->gun_alive) {   /* FUN_0041ef20: the shoot pose is dropped only on the frame the cooldown runs out
-                           * (an armed request keeps CF_SHOOT while cd == 0, e.g. the kneeler's 0.235 s wind-up) */
+    {   /* FUN_0041ef20 (unconditional in the original): the shoot pose is dropped only on the frame the cooldown
+         * runs out (an armed request keeps CF_SHOOT while cd == 0, e.g. the kneeler's 0.235 s wind-up). Gating this
+         * on gun_alive left a grunt that had finished its burst (gun_alive = false) in the shooting pose for good:
+         * it walked off with the standing-shoot cell, legs frozen. */
         float was = e->gun_cd; e->gun_cd -= dt; if (e->gun_cd < 0) e->gun_cd = 0;
         if (was > 0 && e->gun_cd <= 0) c->flags &= ~CF_SHOOT;
     }

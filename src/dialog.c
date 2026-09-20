@@ -28,8 +28,9 @@ bool dialog_open(Dialog *d, uint32_t text_id)
         char *q = p; while (*q == ' ' || *q == '\r') q++;
         if (*q && strncmp(q, "<<", 2) != 0 && strncmp(q, "<|", 2) != 0 && strncmp(q, "</", 2) != 0) {
             size_t l = strlen(q); while (l && (q[l-1] == '\r' || q[l-1] == ' ')) q[--l] = 0;
-            uint32_t sid = namehash(q);
-            (void)sid; sfx_play_id(sid);
+            /* FUN_0042a5e0 only resolves the sample (DAT_00ac9aa0); FUN_0042b250 plays it on the first update, i.e. once
+             * the camera has reached the focus point and the box opens, not when the trigger zone is entered */
+            d->pending_sfx = namehash(q);
             p = nl + 1;
         } else { *nl = '\n'; }
     }
@@ -100,6 +101,7 @@ void dialog_update(Dialog *d, const Input *in, float dt)
         return;
     }
     if (d->t == 0) { d->t = 1; d->frame = 1; }
+    if (d->pending_sfx) { sfx_play_id(d->pending_sfx); d->pending_sfx = 0; }
     bool act = btn_pressed(in, BTN_SHOOT) || btn_pressed(in, BTN_JUMP);
     if (btn_pressed(in, BTN_PAUSE) || (d->done && act)) { dialog_close(d); sfx_play(0, 0); return; }
     d->t++; d->frame = d->t;

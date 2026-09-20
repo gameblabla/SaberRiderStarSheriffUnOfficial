@@ -15,6 +15,7 @@ struct Video {
     SDL_Texture *tex; int w, h;
     float t, fps;
     bool finished, have_frame;
+    bool owns_music, owns_sfx;   /* which audio the video started (stopped with it) */
 };
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
@@ -40,8 +41,8 @@ Video *video_open(SDL_Renderer *r, uint32_t id)
     /* audio */
     if (audio_off + audio_size <= e->size && audio_size > 12) {
         const uint8_t *a = e->data + audio_off;
-        if (!memcmp(a, "MUPS", 4)) music_play_blob(a, audio_size, false);
-        else if (!memcmp(a, "RIFF", 4)) sfx_play_blob(a, audio_size);
+        if (!memcmp(a, "MUPS", 4)) v->owns_music = music_play_blob(a, audio_size, false);
+        else if (!memcmp(a, "RIFF", 4)) { sfx_play_blob(a, audio_size); v->owns_sfx = true; }
     }
     return v;
 }
@@ -104,7 +105,10 @@ void video_size(const Video *v, int *w, int *h) { *w = v ? v->w : 0; *h = v ? v-
 void video_close(Video *v)
 {
     if (!v) return;
-    music_stop();
+    /* FUN_0042d0a0(video layer) -> FUN_00411480: the video's own audio stops with it; a RIFF-voiced video (the
+     * briefing) leaves the menu music alone */
+    if (v->owns_music) music_stop();
+    if (v->owns_sfx) sfx_stop_blob();
     if (v->sws) sws_freeContext(v->sws);
     av_frame_free(&v->fr); av_packet_free(&v->pkt); avcodec_free_context(&v->ctx);
     if (v->tex) SDL_DestroyTexture(v->tex);

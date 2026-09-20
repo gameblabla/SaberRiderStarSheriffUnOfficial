@@ -32,6 +32,9 @@ screenshot after N steps and quit · `SABER_SCRIPT="60:R,3:RJ,40:"` scripted inp
 The Linux demo runs under Xvfb (software GL). `tools/xvfb_record.py out.mp4 seconds "t:key,..."` starts an Xvfb display,
 records it with ffmpeg and feeds X keysyms at the given times (`Right+` press, `Right-` release). The same script records
 this port with `RUN_CMD="./build/saber_rider ../SaberRider/data" RUN_CWD=$PWD SABER_WINDOW=852x480 SABER_SCRIPT=...`.
+`AUDIO=1` adds the game's sound to the mp4 (played into a PulseAudio/PipeWire null sink; the original's static SDL2
+honours `PULSE_SINK`, the port's stream is moved there with `pactl`), which is how music fades, stops and sample timing
+were compared (RMS envelope per 50 ms, or cross-correlation against a decoded sfx).
 Tile a recording with `ffmpeg -i out.mp4 -vf "fps=2,scale=213:-1,tile=6x10" -frames:v 1 tiles.png` to eyeball timing.
 Original keys: arrows, A jump, S shoot, Return start/confirm, Escape quits.
 

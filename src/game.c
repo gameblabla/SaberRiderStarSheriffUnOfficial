@@ -103,16 +103,25 @@ void game_update(Game *g, float dt)
         return;
     }
     Player *p = &g->player; Character *c = &p->ch;
-    if (g->state == 0xc) {            /* pause */
-        if (btn_pressed(&g->in, BTN_PAUSE)) { g->state = 10; sfx_play(10, 0); }
+    if (g->state == 0xc) {            /* pause: FUN_0042cfc0(0xc) -> FUN_00411300 pauses the music, FUN_004113b0 resumes it */
+        if (btn_pressed(&g->in, BTN_PAUSE)) { g->state = 10; sfx_play(10, 0); music_pause(false); }
         return;
     }
-    if (g->state == 10 && btn_pressed(&g->in, BTN_PAUSE)) { g->state = 0xc; sfx_play(10, 0); return; }
+    if (g->state == 10 && btn_pressed(&g->in, BTN_PAUSE)) { g->state = 0xc; sfx_play(10, 0); music_pause(true); return; }
+    if (g->state == 10 && g->level_t < 0.25f) { g->level_t += dt; music_set_volume(4.0f * g->level_t); }   /* level music fades in (~0.25 s on a capture of the original) */
     /* FUN_0042d690: 0xb (last life lost) runs the level on with the player standing locked until 2*sin(pi*t/3) reaches 2
      * (1.5 s, the screen fades over the last 0.5 s); 0xe (mission done) plays the jingle for 5.5 s, then fades ~0.8 s */
     if (p->game_over && g->state == 10) { g->state = 0xb; g->state_t = 0; p->locked = true; }
-    if (g->state == 0xb) { g->state_t += dt; if (2.0f * sinf(3.1415927f * g->state_t / 3.0f) >= 2.0f || g->state_t >= 1.5f) { g->in_level = false; menu_enter(&g->menu, MS_GAMEOVER); return; } }
-    if (g->state == 0xe) { g->state_t += dt; if (g->state_t > 5.5f && 2.1f * sinf((g->state_t - 5.5f) * 1.5707964f) >= 2.0f) { g->in_level = false; menu_enter(&g->menu, MS_ACCOMPLISHED); return; } }
+    if (g->state == 0xb) {
+        g->state_t += dt; float f = 2.0f * sinf(3.1415927f * g->state_t / 3.0f);
+        if (f >= 2.0f || g->state_t >= 1.5f) { g->in_level = false; menu_enter(&g->menu, MS_GAMEOVER); return; }
+        music_set_volume(2.0f - f);   /* the music fades with the screen (FUN_00425e70 every frame of the ramp) */
+    }
+    if (g->state == 0xe) {
+        g->state_t += dt; float f = g->state_t > 5.5f ? 2.1f * sinf((g->state_t - 5.5f) * 1.5707964f) : 0.0f;
+        if (f >= 2.0f) { g->in_level = false; menu_enter(&g->menu, MS_ACCOMPLISHED); return; }
+        music_set_volume(2.0f - f);
+    }
     bool cutscene_world = false;    /* state 0xd branches that still run the world (player not idle yet, timed holds) */
     if (g->state == 0xd) {          /* dialog / cutscene (FUN_0042d690, state 0xd) */
         float half = g->sw * 0.5f, maxx = g->level.width - g->sw;

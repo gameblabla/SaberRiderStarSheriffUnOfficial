@@ -69,20 +69,21 @@ static Sfx *load_sfx_entry(const PackEntry *e, Sfx *s)
 
 static Sfx *load_sfx(int idx) { return load_sfx_entry(packs_find(SFX_TABLE[idx]), &sfx_cache[idx]); }
 
-static void play_sfx(Sfx *s)
+static SDL_AudioStream *play_sfx(Sfx *s)
 {
-    if (!dev || !s || !s->pcm) return;
+    if (!dev || !s || !s->pcm) return NULL;
     SDL_AudioSpec in = { SDL_AUDIO_S16, s->channels, 44100 };
     for (int v = 0; v < MAX_VOICES; v++) {
         if (voices[v] && SDL_GetAudioStreamQueued(voices[v]) > 0) continue;
         if (voices[v]) SDL_DestroyAudioStream(voices[v]);
         voices[v] = SDL_CreateAudioStream(&in, &spec);
-        if (!voices[v]) return;
+        if (!voices[v]) return NULL;
         SDL_BindAudioStream(dev, voices[v]);
         SDL_PutAudioStreamData(voices[v], s->pcm, s->frames * s->channels * 2);
         SDL_FlushAudioStream(voices[v]);
-        return;
+        return voices[v];
     }
+    return NULL;
 }
 
 #define MAX_EXTRA 16
@@ -148,6 +149,23 @@ void sfx_play(int id, int delay)
 /* ---- music (MUPS -> Ogg in memory, streamed with vorbisfile) ---- */
 static uint8_t *ogg_buf; static size_t ogg_len, ogg_pos;
 static OggVorbis_File vf; static bool music_open, music_loop;
+static float music_track_vol = 1.0f, music_fade = 1.0f;   /* 0x7c53a8 per-track volume x FUN_00425e70 fade */
+static const float MUSIC_VOL[18] = { 1, 1, 1, 1, 1, 0.85f, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+
+static void apply_music_gain(void)
+{
+    /* the mixer's 0..255 stream volume is not linear: a 1 s fade in the original is inaudible after ~0.7 s,
+     * which a squared curve reproduces (measured on a pulse capture of the original's character select) */
+    float v = music_fade < 0.001f ? 0 : music_fade > 0.999f ? 1.0f : music_fade;
+    if (music_stream) SDL_SetAudioStreamGain(music_stream, v * v * music_track_vol);
+}
+
+void music_set_volume(float v) { music_fade = v < 0 ? 0 : v > 1 ? 1 : v; apply_music_gain(); }
+void music_pause(bool pause)
+{
+    if (!music_stream) return;
+    if (pause) SDL_PauseAudioStreamDevice(music_stream); else SDL_ResumeAudioStreamDevice(music_stream);
+}
 
 static uint32_t ogg_crc_table[256];
 static void crc_init(void) { for (uint32_t i = 0; i < 256; i++) { uint32_t r = i << 24; for (int k = 0; k < 8; k++) r = (r & 0x80000000) ? (r << 1) ^ 0x04C11DB7 : r << 1; ogg_crc_table[i] = r; } }
@@ -194,29 +212,36 @@ void music_stop(void)
     free(ogg_buf); ogg_buf = NULL;
 }
 
-void music_play_blob(const uint8_t *mups, uint32_t size, bool loop)
+bool music_play_blob(const uint8_t *mups, uint32_t size, bool loop)
 {
     music_stop();
-    if (!dev) return;
+    if (!dev) return false;
     ogg_buf = mups_to_ogg(mups, size, &ogg_len); ogg_pos = 0;
-    if (!ogg_buf) return;
+    if (!ogg_buf) return false;
     ov_callbacks cb = { cb_read, cb_seek, NULL, cb_tell };
     int rc = ov_open_callbacks(&ogg_pos, &vf, NULL, 0, cb);
-    if (rc < 0) { fprintf(stderr, "music blob: ov_open failed rc=%d\n", rc); return; }
+    if (rc < 0) { fprintf(stderr, "music blob: ov_open failed rc=%d\n", rc); return false; }
     music_open = true; music_loop = loop;
     vorbis_info *vi = ov_info(&vf, -1);
     SDL_AudioSpec in = { SDL_AUDIO_S16, vi->channels, (int)vi->rate };
     music_stream = SDL_CreateAudioStream(&in, &spec);
     SDL_BindAudioStream(dev, music_stream);
+    music_track_vol = 1.0f; music_fade = 1.0f; apply_music_gain();
     audio_update();
+    return true;
 }
 
-static Sfx blob_sfx;
+static Sfx blob_sfx; static SDL_AudioStream *blob_voice;
 void sfx_play_blob(const uint8_t *riff, uint32_t size)
 {
     PackEntry tmp = { 0, RES_SFX, riff, size, false };
+    sfx_stop_blob();
     if (blob_sfx.pcm) { free(blob_sfx.pcm); memset(&blob_sfx, 0, sizeof blob_sfx); }
-    if (load_sfx_entry(&tmp, &blob_sfx)) play_sfx(&blob_sfx);
+    if (load_sfx_entry(&tmp, &blob_sfx)) blob_voice = play_sfx(&blob_sfx);
+}
+void sfx_stop_blob(void)
+{
+    if (blob_voice) { SDL_ClearAudioStream(blob_voice); blob_voice = NULL; }
 }
 
 void music_play(int index, bool loop)
@@ -235,6 +260,7 @@ void music_play(int index, bool loop)
     SDL_AudioSpec in = { SDL_AUDIO_S16, vi->channels, (int)vi->rate };
     music_stream = SDL_CreateAudioStream(&in, &spec);
     SDL_BindAudioStream(dev, music_stream);
+    music_track_vol = MUSIC_VOL[index]; music_fade = 1.0f; apply_music_gain();
     audio_update();
 }
 

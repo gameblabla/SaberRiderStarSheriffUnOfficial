@@ -21,6 +21,7 @@ typedef struct {
     bool done;            /* all text shown, waiting for the player */
     int frame;            /* |t|, kept for the briefing video unfold (FUN_0042ba20 uses the same counter) */
     bool closing;         /* t < 0 */
+    uint32_t pending_sfx; /* DAT_00ac9aa0: the script's voice sample, played by the first update (FUN_0042b250), not on open */
 } Dialog;
 
 enum { DLG_GREEN, DLG_PURPLE, DLG_RED, DLG_BLUE };
