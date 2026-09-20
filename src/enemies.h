@@ -28,6 +28,7 @@ typedef struct {
     int hp;                         /* slot+2 */
     int link;                       /* companion slot index or -1 */
     float ft;                       /* misc timer (+0x12840) */
+    float dbg_x; int dbg_still;   /* debug: stuck detection */
 } Enemy;
 
 typedef struct {

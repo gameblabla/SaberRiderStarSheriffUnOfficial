@@ -58,6 +58,7 @@ static bool level_start(Game *g)
         }
     }
     g->state = 10;
+    if (SDL_getenv("SABER_DEBUG")) g->debug_collision = true;   /* debug: collision overlay from the start */
     music_play(5, true);
     g->player_layer = 11;
     for (int i = 0; i < g->level.nlayers; i++) if (!strcmp(g->level.layers[i].name, "PlayerSprites")) g->player_layer = i;

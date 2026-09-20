@@ -24,7 +24,16 @@ East/West shoot, shoulders aim, Start pause.
 
 `SABER_START=x` spawn at level x · `SABER_MENU=n` start in front-end state n · `SABER_SHOT=file.bmp,camx,frames`
 screenshot after N steps and quit · `SABER_SCRIPT="60:R,3:RJ,40:"` scripted input (L R U D J S A P) ·
-`SABER_TRACE=1` per-frame player trace · `SABER_FUZZ=1` random input · **F1** collision overlay · **F2** free camera.
+`SABER_TRACE=1` per-frame player trace (+ convoy spawn / dying / stuck-enemy diagnostics) · `SABER_FUZZ=1` random input ·
+`SABER_DEBUG=1` collision overlay from the start · `SABER_WINDOW=852x480` initial window size · **F1** collision overlay · **F2** free camera.
+
+## Comparing against the original
+
+The Linux demo runs under Xvfb (software GL). `tools/xvfb_record.py out.mp4 seconds "t:key,..."` starts an Xvfb display,
+records it with ffmpeg and feeds X keysyms at the given times (`Right+` press, `Right-` release). The same script records
+this port with `RUN_CMD="./build/saber_rider ../SaberRider/data" RUN_CWD=$PWD SABER_WINDOW=852x480 SABER_SCRIPT=...`.
+Tile a recording with `ffmpeg -i out.mp4 -vf "fps=2,scale=213:-1,tile=6x10" -frames:v 1 tiles.png` to eyeball timing.
+Original keys: arrows, A jump, S shoot, Return start/confirm, Escape quits.
 
 ## Layout
 
