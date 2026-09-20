@@ -11,3 +11,4 @@ bool hero_available(int character);          /* selectable on the character sele
 /* after character_init parsed the CRHC: swap in the recreated sheet + animation table changes; false = keep Fireball's */
 bool hero_apply(Character *c);
 const char *hero_name(int character);
+void hero_select_sfx(int character);         /* the hero's "OK!" on the character select screen (game sfx 11 is Fireball's) */

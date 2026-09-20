@@ -1,0 +1,1748 @@
+ ▐▛███▛█   Claude Code v2.1.278
+▝▜██████▀  Opus 5 · Claude Pro
+  ▝▝ ▝▝    ~/Documents/DEV/Saber_Rider/game
+
+
+❯ See                                                                           
+  codex-session-01a0bff7-5a71-7ff2-81bd-76478c4bcd16.md                         
+  . April reconstruction got further, but i want you to improve it and then     
+  actually include her in the game itself, allow her to be selectable, see if   
+  you can find voice samples for her too (if not, then silent placeholderi with 
+  suggestions. You may also attempt to generate the voice with                  
+  /home/anonymous/Documents/DEV/VOICE/                                          
+  instead.                                                                      
+
+● I'll start by reading the Codex session notes and getting oriented in the
+  project.
+
+  Searched for 1 pattern, read 1 file, listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+● The Codex session ended right after its crouch/slide rebuild. Let me look at
+  what's actually on disk now: the heroes output, the game's character/sprite
+  pipeline, and the plan docs.
+
+  Listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+● Now the game itself: how the player sprite and character select are wired.
+
+  Read 3 files, ran 1 shell command (ctrl+o to expand)
+
+● I'll look into the menu's character select, how the level spawns the player,
+  and what Fireball's anim table maps to. · summarized
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● The game already has April's CRHC id (0x79260A58). If that blob shipped in the
+  packs, it gives me April's exact anim table, hurtboxes and muzzle offsets —
+  let me check.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● April's CRHC matches Fireball's cell indices, so a sheet built on Fireball's
+  grid should plug right into the existing engine. I'll now check which cblock
+  the hero CRHCs reference and review Fireball's sheet layout. · summarized
+
+  Read 1 file, listed 1 directory, ran 2 shell commands (ctrl+o to expand)
+
+● Fireball's engine sheet is 8×19 cells of 64×64. Now let me see April's current
+  reconstructed master (16×26) and the original reference sheet to figure out
+  the mapping.
+
+  Read 2 files, ran 1 shell command (ctrl+o to expand)
+
+● Now Fireball's labelled reference (lossless), which tells me what each engine
+  row is:
+
+  Read 1 file (ctrl+o to expand)
+
+● April's CRHC matches Fireball's layout aside from a couple hurtboxes, so I'll
+  build April's engine sheet on that same 8×19 grid using the best reconstructed
+  cells and load it via PNG. First, let me take a closer look at the
+  reconstruction quality. · summarized
+
+  Read 6 files, ran 3 shell commands (ctrl+o to expand)
+
+● The correct-pose version has noisy pixels while Codex's clean version has
+  wrong poses swapped in, so I'll denoise the correct-pose frames using patches
+  from April's 40 native clean frames to get accurate art. Checking the
+  available tooling and player voice line usage next. · summarized
+
+  Ran 5 shell commands (ctrl+o to expand)
+
+● There's no April voice in the demo, and Fireball has none at all. I'll check
+  the reference videos for cloneable April dialogue and see what avatar sprites
+  are available. · summarized
+
+  Read 1 file, ran 5 shell commands (ctrl+o to expand)
+
+● Both avatars are 32×32 in the same style, so they're swappable. Now let me
+  study April's native pixel style up close (outline convention, shading), since
+  the cleanup should reproduce it.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● I'll clean up the degraded cells by replacing each pixel with the
+  best-matching 7×7 patch from April's native frames via GPU brute force,
+  transferring her crisp outline/shading style while preserving the recovered
+  pose. First I'll check the metadata for where those native frames are stored,
+  then implement it. · summarized
+
+  Read 1 file, ran 3 shell commands (ctrl+o to expand)
+
+● The other 4× clip is Fireball, so April's clean bank is the 26 idle + 14 run
+  frames (plus mirrors). Writing the refinement script now.
+
+● Write(~/Documents/DEV/Saber_Rider/heroes/refine_april.py)
+  ⎿  Wrote 147 lines to ../heroes/refine_april.py
+       1 """Exemplar-based cleanup of the recovered April cells.
+       3 The inverse-resampled master (`output/april_master_recovered.png
+       4 pose in every cell but its pixels are smeared: each output pixel
+          was solved
+         ative video
+         t in April's
+         same palette.
+       8 
+         ighbourhood in
+         re pixel.  The
+     … +173 lines (ctrl+o to expand)
+
+  Read 2 files, ran 3 shell commands (ctrl+o to expand)
+
+● The refined output is sharper but still loses fine details like the gold gun
+  and muddy death frames. I'll boost center-pixel weighting for local color
+  fidelity and alternate the cleanup with the back-projection solver to stay
+  consistent with the AVIF observation—starting by examining the solver. 
+  · summarized
+
+  Read 2 files (ctrl+o to expand)
+
+● I'll add the exemplar result as a prior inside the ICM solver, then alternate
+  GPU-based NN-cleanup with CPU-based data-consistent ICM to preserve
+  AVIF-accurate details (like the gold gun) while pulling other regions toward
+  April's real pixel style. · summarized
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now the v2 refinement script with the alternating scheme and a test mode on a
+  handful of cells to tune the weight.
+
+● Write(~/Documents/DEV/Saber_Rider/heroes/refine_april.py)
+  ⎿  Added 124 lines, removed 61 lines
+      1 -"""Exemplar-based cleanup of the recovered April cells.         
+      1 +"""Exemplar-guided reconstruction of the degraded April cells.  
+      2  
+      3  The inverse-resampled master (`output/april_master_recovered.png
+         `) has the right
+      4  pose in every cell but its pixels are smeared: each output pixel
+          was solved
+     ...
+       6  frames (idle salute + running with gun) are clean 64x64 pixel a
+          rt in April's
+       7  real style: one-pixel dark outlines, flat two-tone shading, the
+           same palette.
+       8  
+       9 -For every pixel of a degraded cell we look up the closest 7x7 n
+         -eighbourhood in                                                
+      10 -the native frames (and their mirrors) and copy that patch's cen
+         -tre pixel.  The                                                
+      11 -geometry (pose) comes from the recovered cell, the texture (out
+         -line, shading,                                                 
+      12 -exact colours) from April's own art.  A second pass over the re
+         -sult snaps the                                                 
+      13 -remaining incoherent pixels to the exemplar statistics.  A fina
+         -l pass removes                                                 
+      14 -isolated specks and closes 1-pixel holes in the outline.       
+       9 +Per round:                                                     
+      10 +  1. exemplar pass (GPU): every pixel of the cell is replaced b
+         +y the centre of                                                
+      11 +     the closest 7x7 neighbourhood found in the native frames a
+         +nd their                                                       
+      12 +     mirrors.  Geometry comes from the cell, texture from April
+         +'s own art.                                                    
+      13 +  2. data pass (CPU): the palette ICM solver of recover.py re-f
+         +its the cell to                                                
+      14 +     the AVIF observation with the exemplar image as a prior, s
+         +o details the                                                  
+      15 +     source really shows (gun colour, cape edge) survive and th
+         +e rest follows                                                 
+      16 +     the exemplar.                                             
+      17 +Three rounds converge.  A last exemplar pass with a strong cent
+         +re weight snaps                                                
+      18 +the result to clean pixel art, and specks not attached to anyth
+         +ing are removed.                                               
+      19  
+      16 -Output: `output/april_master_refined.png` (same 16x26 layout) p
+         -lus a side by                                                  
+      17 -side check sheet in `_check/`.                                 
+      20 +Output: `output/april_master_refined.png` (16x26 layout) and a 
+         +comparison sheet                                               
+      21 +in `_check/`.  `--cells r,c ...` refines only those cells (tuni
+         +ng).                                                           
+      22  """
+      19 -import os, sys, numpy as np, torch                             
+      23 +import os, sys, argparse, numpy as np, torch                   
+      24 +from multiprocessing import Pool                               
+      25  from PIL import Image
+      26  sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+      22 -import gifsrc                                                  
+      23 -from reconstruct_sheets import native_cells                    
+      27 +import gifsrc, recover, sheet                                  
+      28 +from reconstruct_sheets import native_cells, rgb555            
+      29  
+      30  HERE = os.path.dirname(os.path.abspath(__file__))
+      31  OUT = os.path.join(HERE, 'output')
+     ...
+      41      return cells + [c[:, ::-1].copy() for c in cells]
+      42  
+      43  
+      44 +def palette():                                                 
+      45 +    p, _ = gifsrc.character_frames('april')                    
+      46 +    p = np.unique(rgb555(p), axis=0)                           
+      47 +    return np.asarray([c for c in p if not gifsrc.is_green_spil
+         +l(c)], np.uint8)                                               
+      48 +                                                               
+      49 +                                                               
+      50  def features(cells, weight):
+      40 -    """cells: N x 64 x 64 x 4 uint8 -> per-pixel patch features
+         - (N,64,64,P*P*4) and centre alpha."""                          
+      41 -    x = torch.tensor(np.stack(cells), dtype=torch.float32, devi
+         -ce=DEV) / 255.0   # N,64,64,4                                  
+      51 +    """cells: list of 64x64x4 uint8 -> per-pixel patch features
+         + (N,64,64,F)."""                                               
+      52 +    x = torch.tensor(np.stack(cells), dtype=torch.float32, devi
+         +ce=DEV) / 255.0                                                
+      53      a = x[..., 3:4]
+      43 -    x = torch.cat([x[..., :3] * a, a], -1)                     
+         -# premultiplied RGB + alpha                                    
+      44 -    x = x.permute(0, 3, 1, 2)                                  
+         -# N,4,64,64                                                    
+      54 +    x = torch.cat([x[..., :3] * a, a], -1).permute(0, 3, 1, 2) 
+         +         # premultiplied RGB + alpha                           
+      55      x = torch.nn.functional.pad(x, (R, R, R, R))
+      46 -    u = torch.nn.functional.unfold(x, P)                       
+         -# N, 4*P*P, 64*64                                              
+      56 +    u = torch.nn.functional.unfold(x, P)                       
+         +        # N, 4*P*P, 64*64                                      
+      57      u = u.transpose(1, 2).reshape(len(cells), 64, 64, 4, P * P)
+           * weight
+      58      return u.reshape(len(cells), 64, 64, -1)
+      59  
+      60  
+      51 -def gauss_weight():                                            
+      61 +def gauss_weight(centre=1.0):                                  
+      62      yy, xx = np.mgrid[-R:R + 1, -R:R + 1]
+      63      w = np.exp(-(xx ** 2 + yy ** 2) / (2 * 2.2 ** 2))
+      64      w = w / w.sum() * (P * P)
+      65 +    w[R, R] *= centre                                          
+      66      return torch.tensor(w.reshape(1, -1), dtype=torch.float32, 
+          device=DEV)
+      67  
+      68  
+     ...
+       75      return m
+       76  
+       77  
+       67 -def refine_cells(queries, bank, passes=2):                    
+       68 -    w = gauss_weight()                                        
+       69 -    bf = features(bank, w)                                    
+          - # B,64,64,F                                                  
+       70 -    bank_np = np.stack(bank)                                  
+       71 -    valid = dilate(bank_np[..., 3] > 0, 1)                    
+       72 -    # keep exemplar patches whose centre is on/next to the cha
+          -racter; add some pure background patches too                  
+       73 -    bidx = np.argwhere(valid)                                 
+       74 -    bfeat = bf[bidx[:, 0], bidx[:, 1], bidx[:, 2]]            
+          - # M,F                                                        
+       75 -    bpix = torch.tensor(bank_np[bidx[:, 0], bidx[:, 1], bidx[:
+          -, 2]], device=DEV)   # M,4                                    
+       76 -    bnorm = (bfeat ** 2).sum(1)                               
+       77 -    out = []                                                  
+       78 -    cur = [q.copy() for q in queries]                         
+       79 -    for _ in range(passes):                                   
+       80 -        qf = features(cur, w)                                 
+       81 -        res = []                                              
+       82 -        for i, q in enumerate(cur):                           
+       83 -            m = dilate(queries[i][..., 3] > 0, 1)             
+       84 -            qi = np.argwhere(m)                               
+       85 -            if len(qi) == 0: res.append(np.zeros_like(q)); con
+          -tinue                                                         
+       86 -            f = qf[i, qi[:, 0], qi[:, 1]]                     
+       87 -            d = (f ** 2).sum(1, keepdim=True) + bnorm[None] - 
+          -2 * f @ bfeat.T                                               
+       88 -            nn = d.argmin(1)                                  
+       89 -            pix = bpix[nn].cpu().numpy()                      
+       78 +class Exemplars:                                              
+       79 +    def __init__(self, bank):                                 
+       80 +        self.bank = bank                                      
+       81 +        bank_np = np.stack(bank)                              
+       82 +        self.valid_idx = np.argwhere(dilate(bank_np[..., 3] > 
+          +0, 1))                                                        
+       83 +        self.bpix = torch.tensor(bank_np[self.valid_idx[:, 0],
+          + self.valid_idx[:, 1], self.valid_idx[:, 2]], device=DEV)     
+       84 +        self.cache = {}                                       
+       85 +                                                              
+       86 +    def feats(self, centre):                                  
+       87 +        if centre not in self.cache:                          
+       88 +            w = gauss_weight(centre)                          
+       89 +            bf = features(self.bank, w)[self.valid_idx[:, 0], 
+          +self.valid_idx[:, 1], self.valid_idx[:, 2]]                   
+       90 +            self.cache[centre] = (w, bf, (bf ** 2).sum(1))    
+       91 +        return self.cache[centre]                             
+       92 +                                                              
+       93 +    def apply(self, cells, masks, centre=1.0):                
+       94 +        """cells: current estimates; masks: where to synthesis
+          +e (dilated support of the recovered cell)."""                 
+       95 +        w, bfeat, bnorm = self.feats(centre)                  
+       96 +        qf = features(cells, w)                               
+       97 +        out = []                                              
+       98 +        for i, q in enumerate(cells):                         
+       99 +            qi = np.argwhere(masks[i])                        
+      100              o = np.zeros_like(q)
+       91 -            o[qi[:, 0], qi[:, 1]] = pix                       
+       92 -            res.append(o)                                     
+       93 -        cur = res                                             
+       94 -    return [cleanup(c) for c in cur]                          
+      101 +            if len(qi):                                       
+      102 +                f = qf[i, qi[:, 0], qi[:, 1]]                 
+      103 +                d = (f ** 2).sum(1, keepdim=True) + bnorm[None
+          +] - 2 * f @ bfeat.T                                           
+      104 +                o[qi[:, 0], qi[:, 1]] = self.bpix[d.argmin(1)]
+          +.cpu().numpy()                                                
+      105 +            out.append(o)                                     
+      106 +        return out                                            
+      107  
+      108  
+       97 -def cleanup(c):                                               
+       98 -    """Drop specks not 4-connected to the main body, keep ever
+          -ything else."""                                               
+      109 +def cleanup(c, min_size=6):                                   
+      110 +    """Drop 4-connected specks smaller than min_size pixels (t
+          +hrown guns are larger)."""                                    
+      111      a = c[..., 3] > 0
+      112      lab = np.zeros((64, 64), int); n = 0; sizes = []
+      113      for y, x in np.argwhere(a):
+     ...
+      120                      lab[ny, nx] = n; stack.append((ny, nx))
+      121          sizes.append(s)
+      122      if not sizes: return c
+      111 -    keep = np.zeros(n + 1, bool)                              
+      112 -    for i, s in enumerate(sizes, 1):                          
+      113 -        if s >= 6: keep[i] = True      # detached guns / throw
+          -n weapons are larger than specks                              
+      123 +    keep = np.array([True] + [s >= min_size for s in sizes])  
+      124      o = c.copy(); o[~keep[lab]] = 0
+      125      return o
+      126  
+      127  
+      128 +_G = {}                                                       
+      129 +def _init_worker(pal, prior_weight, sparsity):                
+      130 +    _G['pal'] = pal; _G['sheet'] = sheet.Sheet('april'); _G['p
+          +w'] = prior_weight; _G['sp'] = sparsity                       
+      131 +    lm = Image.fromarray((_G['sheet'].label_mask * 255).astype
+          +(np.uint8)).resize((1024, 1664), Image.Resampling.NEAREST)    
+      132 +    _G['lm'] = np.asarray(lm) > 0                             
+      133 +                                                              
+      134 +                                                              
+      135 +def _labels(rgba, pal):                                       
+      136 +    K = len(pal)                                              
+      137 +    L = np.full((64, 64), K, int)                             
+      138 +    m = rgba[..., 3] > 0                                      
+      139 +    if m.any():                                               
+      140 +        d = ((rgba[m, :3].astype(float)[:, None] - pal[None].a
+          +stype(float)) ** 2).sum(-1)                                   
+      141 +        L[m] = d.argmin(1)                                    
+      142 +    return L                                                  
+      143 +                                                              
+      144 +                                                              
+      145 +def _data_pass(args):                                         
+      146 +    (row, col), cur, prior = args                             
+      147 +    pal, s = _G['pal'], _G['sheet']                           
+      148 +    obs = s.observation(col, row)                             
+      149 +    init = _labels(cur, pal)                                  
+      150 +    init[_G['lm'][row * 64:(row + 1) * 64, col * 64:(col + 1) 
+          +* 64]] = len(pal)                                             
+      151 +    pr = prior.astype(float); pr = np.concatenate([pr[..., :3]
+          + * pr[..., 3:4] / 255.0, pr[..., 3:4]], -1)                   
+      152 +    L = recover.solve(pal, [obs], init, passes=4, sparsity=_G[
+          +'sp'], prior=pr, prior_weight=_G['pw'])                       
+      153 +    return recover.to_rgba(L, pal)                            
+      154 +                                                              
+      155 +                                                              
+      156 +def refine(todo, cells, ex, pal, rounds=3, prior_weight=0.6, s
+          +parsity=150.0, procs=None):                                   
+      157 +    masks = [dilate(c[..., 3] > 0, 2) for c in cells]         
+      158 +    cur = [c.copy() for c in cells]                           
+      159 +    with Pool(procs or os.cpu_count(), _init_worker, (pal, pri
+          +or_weight, sparsity)) as pool:                                
+      160 +        for r in range(rounds):                               
+      161 +            prior = ex.apply(cur, masks, centre=1.0)          
+      162 +            cur = pool.map(_data_pass, list(zip(todo, cur, pri
+          +or)))                                                         
+      163 +            print(f'round {r + 1}/{rounds} done', flush=True) 
+      164 +    final = ex.apply(cur, [dilate(c[..., 3] > 0, 1) for c in c
+          +ur], centre=3.0)                                              
+      165 +    return [cleanup(c) for c in final]                        
+      166 +                                                              
+      167 +                                                              
+      168  def main():
+      119 -    bank = native_bank()                                      
+      169 +    ap = argparse.ArgumentParser()                            
+      170 +    ap.add_argument('--cells', nargs='*', help='row,col pairs 
+          +to refine (tuning)')                                          
+      171 +    ap.add_argument('--rounds', type=int, default=3)          
+      172 +    ap.add_argument('--prior', type=float, default=0.6)       
+      173 +    ap.add_argument('--out', default='april_master_refined.png
+          +')                                                            
+      174 +    a = ap.parse_args()                                       
+      175 +    bank = native_bank(); pal = palette(); ex = Exemplars(bank
+          +)                                                             
+      176      rec = np.array(Image.open(os.path.join(OUT, 'april_master_
+           recovered.png')).convert('RGBA'))
+      177      fin = np.array(Image.open(os.path.join(OUT, 'april_master.
+           png')).convert('RGBA'))
+      178      rows, cols = rec.shape[0] // 64, rec.shape[1] // 64
+      179      nat = {c.tobytes() for c in bank}
+      180 +    wanted = {tuple(int(v) for v in c.split(',')) for c in a.c
+          +ells} if a.cells else None                                    
+      181      todo, cells = [], []
+      182      for r in range(rows):
+      183          for cc in range(cols):
+      184 +            if wanted is not None and (r, cc) not in wanted: c
+          +ontinue                                                       
+      185              f = fin[r * 64:(r + 1) * 64, cc * 64:(cc + 1) * 64
+           ]
+      186              q = rec[r * 64:(r + 1) * 64, cc * 64:(cc + 1) * 64
+           ]
+      129 -            if f.tobytes() in nat: continue               # na
+          -tive frame already injected there                             
+      130 -            if not q[..., 3].any(): continue                  
+      187 +            if f.tobytes() in nat or not q[..., 3].any(): cont
+          +inue   # native frame already there / empty                   
+      188              todo.append((r, cc)); cells.append(q.copy())
+      132 -    print(f'refining {len(cells)} cells on {DEV} with {len(ban
+          -k)} exemplars')                                               
+      133 -    refined = refine_cells(cells, bank)                       
+      189 +    print(f'refining {len(cells)} cells on {DEV} with {len(ban
+          +k)} exemplars, prior {a.prior}', flush=True)                  
+      190 +    refined = refine(todo, cells, ex, pal, rounds=a.rounds, pr
+          +ior_weight=a.prior)                                           
+      191      out = fin.copy()
+      192      for (r, cc), c in zip(todo, refined):
+      193          out[r * 64:(r + 1) * 64, cc * 64:(cc + 1) * 64] = c
+      137 -    Image.fromarray(out).save(os.path.join(OUT, 'april_master_
+          -refined.png'))                                                
+      138 -    # check sheet: recovered | refined, 3x                    
+      139 -    chk = Image.new('RGBA', (cols * 64 * 2 + 8, rows * 64), (4
+          -0, 40, 60, 255))                                              
+      140 -    chk.alpha_composite(Image.fromarray(rec), (0, 0)); chk.alp
+          -ha_composite(Image.fromarray(out), (cols * 64 + 8, 0))        
+      194 +    Image.fromarray(out).save(os.path.join(OUT, a.out))       
+      195      os.makedirs(os.path.join(HERE, '_check'), exist_ok=True)
+      142 -    chk.save(os.path.join(HERE, '_check', 'april_refined_vs_re
+          -covered.png'))                                                
+      143 -    print('wrote', os.path.join(OUT, 'april_master_refined.png
+          -'))                                                           
+      196 +    if wanted:                                                
+      197 +        chk = Image.new('RGBA', (64 * len(todo), 64 * 2), (40,
+          + 40, 60, 255))                                                
+      198 +        for i, ((r, cc), c) in enumerate(zip(todo, refined)): 
+      199 +            chk.alpha_composite(Image.fromarray(rec[r * 64:(r 
+          ++ 1) * 64, cc * 64:(cc + 1) * 64]), (i * 64, 0))              
+      200 +            chk.alpha_composite(Image.fromarray(c), (i * 64, 6
+          +4))                                                           
+      201 +        chk.resize((chk.width * 4, chk.height * 4), Image.NEAR
+          +EST).save(os.path.join(HERE, '_check', 'april_refine_tuning.pn
+          +g'))                                                          
+      202 +    else:                                                     
+      203 +        chk = Image.new('RGBA', (cols * 64 * 2 + 8, rows * 64)
+          +, (40, 40, 60, 255))                                          
+      204 +        chk.alpha_composite(Image.fromarray(rec), (0, 0)); chk
+          +.alpha_composite(Image.fromarray(out), (cols * 64 + 8, 0))    
+      205 +        chk.save(os.path.join(HERE, '_check', 'april_refined_v
+          +s_recovered.png'))                                            
+      206 +    print('wrote', os.path.join(OUT, a.out))                  
+      207  
+      208  
+      209  if __name__ == '__main__':
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● The gold gun now survives cleanup, but falling/lying death frames are still
+  weak since the exemplar bank only has upright bodies. I'll fix this by
+  enriching the bank with RotSprite-rotated copies of native frames using the
+  existing _rotsprite function, giving horizontal/diagonal bodies proper
+  exemplars. · summarized
+
+  Searched for 1 pattern, read 2 files, ran 2 shell commands (ctrl+o to expand)
+
+● Prior weight has little effect beyond 2—muddled cells stem from scrambled
+  input structure, not palette snapping. I'll add a coarse-to-fine step: an
+  initial 11×11 exemplar pass for coherent limb/outline structure, followed by
+  the 7×7 rounds. · summarized
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● I'll stick with 7×7 for all rounds since the coarse stage made cell 2's legs
+  worse. Before running the full sheet, I'll pin down which April cells the
+  engine needs and check the gun-sling family on the right side of the master. 
+  · summarized
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● Gun-sling frames (rows 18–20 / 22–24, cols 8–15) are already in good shape.
+  Now the full refinement run in the background while I build the engine-sheet
+  packer.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● I'll check Fireball's cell dimensions to confirm the correct split convention
+  for the legs/torso composition. · summarized
+
+  Read 1 file, ran 3 shell commands (ctrl+o to expand)
+
+● I've confirmed the master layer offset mapping (feet at y≈63, with native
+  clips 9px higher and already corrected). Now checking the game's third_party
+  directory for a PNG loader before writing the packer. · summarized
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● third_party/ is empty, so I'll use the already-linked libavcodec to decode the
+  PNG sheet instead of adding a new dependency. Next I'll check the audio
+  loader for voice WAVs and the HUD icon ids per character. · summarized
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Still on the first GPU pass. Meanwhile, the engine-sheet packer (works on
+  april_master.png now, will use the refined master once it exists):
+
+● Write(~/Documents/DEV/Saber_Rider/heroes/build_april_engine_sheet.py)
+  ⎿  Wrote 123 lines to ../heroes/build_april_engine_sheet.py
+       1 #!/usr/bin/env python3
+       3 
+       4 The demo ships April's CRHC (79260A58) with Fireball's animation
+       5 intended April cblock has Fireball's 8x19 cell layout (cell = ro
+       6 64x64 cells, feet on the bottom row of the cell).  Every cell th
+         e table
+         sheet; extra
+       8 rows at the bottom hold the families April has more frames for (
+       9 8-frame deaths, the 23-frame gun sling that plays as the "alert"
+      10 `game/src/heroes.c` re-points those animations.
+     … +156 lines (ctrl+o to expand)
+
+● Bash(cd /home/anonymous/Documents/DEV/Saber_Rider/heroes && python3
+      build_april_engine_sheet.py output/april_master.png && python3 -c "
+      from PIL import Image…)
+  ⎿  wrote /home/anonymous/Documents/DEV/Saber_Rider/game/assets/april.png
+     from april_master.png (158 cells, 29 rows)
+     (512, 1856)
+  ⎿  1 file changed (binary, mode only or too large to show)
+
+  Read 1 file (ctrl+o to expand)
+
+● Layout matches the engine. Now the C side: a PNG loader (libavcodec),
+  PNG→CBlock, an April hero override with the anim re-pointing, selectable April
+  in the menu, and dialog adaptation.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now writing the new source files.
+
+● Write(src/assets.h)
+  ⎿  Wrote 12 lines to src/assets.h
+       1 #pragma once
+       2 /* Our own (non-demo) assets: recreated sprite sheets, voice lin
+         es. Looked up in $SABER_ASSETS, ./assets and
+       4 #include <stdint.h>
+       5 #include <stdbool.h>
+       6 
+       7 /* full path of an asset file or NULL if it exists nowhere (stat
+       8 const char *asset_path(const char *name);
+       9 /* decode a PNG (via libavcodec) to RGBA8888; caller frees */
+      10 uint32_t *png_load_rgba(const char *path, int *w, int *h);
+     … +4 lines (ctrl+o to expand)
+
+● Write(src/assets.c)
+  ⎿  Wrote 61 lines to src/assets.c
+       1 #include "assets.h"
+       2 #include <SDL3/SDL.h>
+       3 #include <libavcodec/avcodec.h>
+       4 #include <libswscale/swscale.h>
+       5 #include <libavutil/imgutils.h>
+       7 #include <stdlib.h>
+       8 #include <string.h>
+       9 
+      10 static bool exists(const char *p) { FILE *f = fopen(p, "rb"); if
+          (!f) return false; fclose(f); return true; }
+     … +64 lines (ctrl+o to expand)
+
+● Background command "Run full April refinement in the background" completed
+(exit code 0)
+  ⎿  Found 1 new diagnostic issue in 1 file (ctrl+o to expand)
+
+● Bash(sed -i 's/#include <stdint.h>\n#include <stdbool.h>/&/; s/^#include
+      <stdbool.h>$/#include <stdbool.h>\n#include <stddef.h>/' src/assets.h &&
+      cat /tmp/claude-100…)
+  ⎿  [exited with code 0]
+  ⎿  Updated src/assets.h (+1 -0)
+      3   * <exe dir>/assets, <exe dir>/../assets. */
+      4  #include <stdint.h>
+      5  #include <stdbool.h>
+      6 +#include <stddef.h>                                             
+      7  
+      8  /* full path of an asset file or NULL if it exists nowhere (stat
+         ic buffer) */
+      9  const char *asset_path(const char *name);
+  ⎿  Found 1 new diagnostic issue in 1 file (ctrl+o to expand)
+
+  Read 1 file (ctrl+o to expand)
+
+● The refined crouch and slide rows now show the real poses with clean edges.
+  Continuing with the C side.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Write(src/heroes.h)
+  ⎿  Wrote 13 lines to src/heroes.h
+       1 #pragma once
+         9C8F9A9E, April 79260A58, Colt 26818B85) but only
+       3  * Fireball's cblock; April's sheet is our reconstruction (../he
+       4  * assets/april.png on Fireball's cell layout plus extra rows fo
+         r the families she has more frames for). */
+       6 #include "character.h"
+       7 
+         OLT = 3 };
+       9 
+         e character select screen */
+     … +9 lines (ctrl+o to expand)
+
+● Write(src/heroes.c)
+  ⎿  Wrote 60 lines to src/heroes.c
+       1 #include "heroes.h"
+       2 #include "assets.h"
+       3 #include "gfx.h"
+       4 #include <SDL3/SDL.h>
+       5 #include <stdio.h>
+       6 #include <stdlib.h>
+       7 
+       8 #define CRHC_APRIL 0x79260A58
+       9 
+      10 static CBlock *april_sheet(void)
+     … +61 lines (ctrl+o to expand)
+● Bash(python3 - <<'PY'
+      p='src/character.h'; s=open(p).read()…)
+  ⎿  1:#include "menu.h"
+     2:#include "heroes.h"
+     3:#include "gfx.h"
+     … +9 lines (ctrl+o to expand)
+  ⎿  Updated src/character.h (+1 -0)
+      43      float alert_t;
+      44      float hit_t;
+      45      bool walk_bob;              /* player walk cycle: torso fol
+          lows the legs' 1 px bob (FUN_0041c530) */
+      46 +    bool torso_bob;             /* the sheet's run legs sit 1 p
+         +x lower on cells 2 and 5 (Fireball's art) */                   
+      47      float base_ox, base_oy;   /* +0x1c/+0x20 */
+      48      float muzzle_x, muzzle_y; /* +0x24/+0x28 */
+      49      /* animation playback */
+  ⎿  Updated src/character.c (+4 -1)
+      1  #include "character.h"
+      2  #include "pack.h"
+      3 +#include "heroes.h"                                             
+      4  #include <SDL3/SDL.h>
+      5  #include <string.h>
+      6  #include <stdio.h>
+     ...
+      31      }
+      32      c->hp_max = rd32(d + 0xadc);
+      33      { const PackEntry *se = packs_find(c->sprite_id); if (se &&
+           se->type == RES_SPRITE) c->spr = sprite_get(c->sprite_id); els
+          e c->cb = cblock_get(c->sprite_id); }
+      34 +    c->torso_bob = true;                                       
+      35 +    if (!enemy) hero_apply(c);     /* recreated hero sheets (Ap
+         +ril) replace the pack's cblock + patch the table */            
+      36      c->body.ox = c->box_ox; c->body.oy = c->box_oy; c->body.hx 
+          = c->box_hx; c->body.hy = c->box_hy;
+      37      character_reset(c, enemy);
+      38      c->anim = 0xff; c->overlay = 0;
+     ...
+      234      draw_cell(c, c->frame, (int)(c->anims[c->anim].flags & 0xf
+           f), x, y);
+      235      /* the torso is its own sprite object placed at the base o
+           ffset (up/down aims, 1 px walk bob) */
+      236      float oy = c->base_oy;
+      234 -    if (c->walk_bob && ((c->frame + 1 - (int)c->anims[c->anim]
+          -.first) % 3) == 0) oy += 1.0f;   /* legs cells 2 and 5 sit 1 p
+          -x lower */                                                    
+      237 +    if (c->walk_bob && c->torso_bob && ((c->frame + 1 - (int)c
+          +->anims[c->anim].first) % 3) == 0) oy += 1.0f;   /* legs cells
+          + 2 and 5 sit 1 px lower */                                    
+      238      if (c->overlay) draw_cell(c, c->ov_frame, (int)(c->anims[c
+           ->overlay].flags & 0xff), x + c->base_ox, y + oy);
+      239  }
+      240  
+  ⎿  Updated src/menu.c (+3 -2)
+      1  #include "menu.h"
+      2 +#include "heroes.h"                                             
+      3  #include "gfx.h"
+      4  #include "pack.h"
+      5  #include "audio.h"
+     ...
+      164              if (btn_pressed(in, BTN_LEFT) && m->character > 0)
+            { m->character--; sfx_play(0, 0); }
+      165              if (btn_pressed(in, BTN_RIGHT) && m->character < 3
+           ) { m->character++; sfx_play(0, 0); }
+      166              if (confirm(in)) {
+      166 -                if (m->character != 1) sfx_play(23, 0);   /* o
+          -nly Fireball is playable in the demo */                       
+      167 +                if (!hero_available(m->character)) sfx_play(23
+          +, 0);   /* the demo only had Fireball; April is our reconstruc
+          +tion */                                                       
+      168                  else { sfx_play(11, 0); m->t = STEP; }
+      169              }
+      170          } else {
+     ...
+      331          if (fr) sprite_draw_mod(fr, 0, (float)x, 0x30, 255, 25
+           5, 255, on ? 255 : 128);
+      332          if (nm) sprite_draw(nm, 0, (float)(x + ((i == 0 || i =
+           = 3) ? 0x10 : 0)), 0xd0, false);
+      333          if (po) sprite_draw(po, 0, (float)x, 0x30, false);
+      333 -        if (i != 1 && na) sprite_draw_mod(na, 0, (float)(x - N
+          -A_ADJ[i] + 8), 0x68, 255, 255, 255, 116);                     
+      334 +        if (!hero_available(i) && na) sprite_draw_mod(na, 0, (
+          +float)(x - NA_ADJ[i] + 8), 0x68, 255, 255, 255, 116);         
+      335          if (on && hl && (frame_no() & 8)) sprite_draw(hl, 0, (
+           float)(x - HL_ADJ[i]), 0x30, false);
+      336          if (on && cursor) sprite_draw(cursor, 0, (float)(x + C
+           UR_ADJ[i]), 0x22, false);
+      337      }
+  ⎿  Found 1 new diagnostic issue in 1 file (ctrl+o to expand)
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● Now the audio voice-file playback and the dialog changes.
+
+● Bash(python3 - <<'PY'
+      p='src/audio.c'; s=open(p).read()…)
+  ⎿  1:#include "audio.h"
+     2:#include "assets.h"
+     3:#include "pack.h"
+     … +6 lines (ctrl+o to expand)
+  ⎿  Updated src/audio.c (+42 -0)
+      1  #include "audio.h"
+      2 +#include "assets.h"                                             
+      3  #include "pack.h"
+      4  #include "lzo1z.h"
+      5  #include <SDL3/SDL.h>
+     ...
+      285      if (blob_voice) { SDL_ClearAudioStream(blob_voice); blob_v
+           oice = NULL; }
+      286  }
+      287  
+      288 +/* ---- our own voice lines: plain PCM16 WAV files in assets/ 
+          +(April's dialog lines, see ../heroes/voice) ---- */           
+      289 +static SDL_AudioStream *file_voice;                           
+      290 +void voice_stop(void)                                         
+      291 +{                                                             
+      292 +    if (file_voice) { SDL_ClearAudioStream(file_voice); file_v
+          +oice = NULL; }                                                
+      293 +}                                                             
+      294 +void voice_play_file(const char *path)                        
+      295 +{                                                             
+      296 +    voice_stop();                                             
+      297 +    if (!dev || !path) return;                                
+      298 +    size_t size; uint8_t *d = file_read(path, &size);         
+      299 +    if (!d) return;                                           
+      300 +    /* RIFF/WAVE, fmt chunk (PCM 1, 16-bit) then the data chun
+          +k */                                                          
+      301 +    int ch = 1, rate = 44100, bits = 16; const uint8_t *pcm = 
+          +NULL; uint32_t n = 0;                                         
+      302 +    if (size > 12 && !memcmp(d, "RIFF", 4) && !memcmp(d + 8, "
+          +WAVE", 4)) {                                                  
+      303 +        size_t p = 12;                                        
+      304 +        while (p + 8 <= size) {                               
+      305 +            uint32_t len = d[p + 4] | d[p + 5] << 8 | d[p + 6]
+          + << 16 | (uint32_t)d[p + 7] << 24;                            
+      306 +            if (!memcmp(d + p, "fmt ", 4) && len >= 16) { ch =
+          + d[p + 10] | d[p + 11] << 8; rate = d[p + 12] | d[p + 13] << 8
+          + | d[p + 14] << 16 | d[p + 15] << 24; bits = d[p + 22] | d[p +
+          + 23] << 8; }                                                  
+      307 +            else if (!memcmp(d + p, "data", 4)) { pcm = d + p 
+          ++ 8; n = len; if (p + 8 + n > size) n = (uint32_t)(size - p - 
+          +8); break; }                                                  
+      308 +            p += 8 + len + (len & 1);                         
+      309 +        }                                                     
+      310 +    }                                                         
+      311 +    if (pcm && bits == 16 && ch >= 1 && ch <= 2) {            
+      312 +        SDL_AudioSpec in = { SDL_AUDIO_S16, ch, rate };       
+      313 +        for (int v = 0; v < MAX_VOICES; v++) {                
+      314 +            if (voices[v] && SDL_GetAudioStreamQueued(voices[v
+          +]) > 0) continue;                                             
+      315 +            if (voices[v]) SDL_DestroyAudioStream(voices[v]); 
+      316 +            voices[v] = SDL_CreateAudioStream(&in, &spec);    
+      317 +            if (!voices[v]) break;                            
+      318 +            SDL_SetAudioStreamGain(voices[v], GAIN_VOICE);    
+      319 +            SDL_BindAudioStream(dev, voices[v]);              
+     … 12 more lines (ctrl+o to expand)
+  ⎿  Updated src/audio.h (+2 -0)
+      13  void sfx_stop_blob(void);                       /* stop a video
+          's RIFF audio (video closed) */
+      14  bool music_play_blob(const uint8_t *mups, uint32_t size, bool l
+          oop);   /* MUPS data not in the music table (video audio); fals
+          e = not started */
+      15  void sfx_play_blob(const uint8_t *riff, uint32_t size);        
+                   /* RIFF ADPCM blob (video audio) */
+      16 +void voice_play_file(const char *path);         /* our own PCM1
+         +6 wav voice line (stops the previous one) */                   
+      17 +void voice_stop(void);                                         
+      18  void audio_update(void);                        /* per frame: d
+          elayed sfx, music refill */
+
+● Bash(python3 - <<'PY'
+      p='src/dialog.h'; s=open(p).read()…)
+  ⎿  129:void dialog_close(Dialog *d) { if (d->active && d->t > 0) { d->t =
+      -DLG_CLOSE_FRAMES; d->box = -DLG_OPEN_FRAMES; d->closing = true; d->f
+     rame = DLG_CLOSE_FRAMES; } }
+     … +9 lines (ctrl+o to expand)
+  ⎿  Updated src/dialog.h (+4 -0)
+      10  #define DLG_MAX_PAGES 8
+      11  typedef struct {
+      12      uint32_t avatar_id; int color; char text[512];
+      13 +    char voice[48];       /* our own voice line for the page (a
+         +ssets/ wav), empty = none */                                   
+      14  } DialogPage;
+      15  
+      16  typedef struct {
+     ...
+      26  } Dialog;
+      27  
+      28  enum { DLG_GREEN, DLG_PURPLE, DLG_RED, DLG_BLUE };
+      29 +/* the hero the player picked: the level-1 scripts were written
+         + for Fireball, so with April the lines that name               
+      30 + * him are rewritten for her and the two avatars swap roles (Ap
+         +ril speaks to Fireball instead of the other way round) */      
+      31 +void dialog_set_hero(int character);                           
+      32  bool dialog_open(Dialog *d, uint32_t text_id);
+      33  bool dialog_open_text(Dialog *d, const char *text, int color); 
+            /* plain text (no script header), e.g. the mission briefing *
+          /
+      34  bool dialog_text_done(const Dialog *d);
+  ⎿  Updated src/dialog.c (+46 -0)
+       4  #include "font.h"
+       5  #include "audio.h"
+       6  #include "namehash.h"
+       7 +#include "heroes.h"                                            
+       8 +#include "assets.h"                                            
+       9  #include <string.h>
+      10  #include <stdio.h>
+      11  #include <math.h>
+     ...
+      16  static const uint32_t TILESET[4] = { 0x8D39AA67, 0xA2122E71, 0x
+          1495B0AB, 0x84652CBC };
+      17  static const uint8_t TEXTRGB[4][3] = { {255,255,255}, {255,232,
+          208}, {224,232,255}, {255,224,192} };
+      18  
+      19 +static int g_hero = HERO_FIREBALL;                             
+      20 +void dialog_set_hero(int character) { g_hero = character; }    
+      21 +                                                               
+      22 +#define AVATAR_APRIL    0x7AB49CB5   /* dialog_avatar_april2 */
+      23 +#define AVATAR_FIREBALL 0x742F352A   /* dialog_avatar_fireball1
+         + */                                                            
+      24 +                                                               
+      25 +/* April's spoken lines (generated with OmniVoice, ../heroes/vo
+         +ice/): keyed by script + page as the page reads                
+      26 + * after the hero rewrite, so a line is only voiced when April 
+         +is the one saying it */                                        
+      27 +static const struct { uint32_t text_id; int page; int hero; con
+         +st char *file; } APRIL_VOICE[] = {                             
+      28 +    { 0xC3B6D081, 2, HERO_FIREBALL, "voice/april_goodluck.wav" 
+         +},       /* "Good luck Fireball!" */                           
+      29 +    { 0xC5AAD2B7, 1, HERO_FIREBALL, "voice/april_stampede.wav" 
+         +},       /* "Oh no! Fireball that is a Robot Horse Stampede..."
+         + */                                                            
+      30 +    { 0xC5AAD2B7, 0, HERO_APRIL,    "voice/april_whatsthat.wav"
+         + },      /* "Huh! What's that!?" */                            
+      31 +    { 0xC6A4D3AC, 0, HERO_APRIL,    "voice/april_sheriff.wav" }
+         +,        /* "It looks like this town needs a new Sheriff..." */
+      32 +};                                                             
+      33 +                                                               
+      34 +static void replace_word(char *text, size_t cap, const char *fr
+         +om, const char *to)                                            
+      35 +{                                                              
+      36 +    char *p;                                                   
+      37 +    while ((p = strstr(text, from))) {                         
+      38 +        size_t lf = strlen(from), lt = strlen(to), rest = strle
+         +n(p + lf);                                                     
+      39 +        if (strlen(text) - lf + lt >= cap) return;             
+      40 +        memmove(p + lt, p + lf, rest + 1); memcpy(p, to, lt);  
+      41 +    }                                                          
+      42 +}                                                              
+      43 +                                                               
+      44 +static void adapt_pages(Dialog *d, uint32_t text_id)           
+      45 +{                                                              
+      46 +    for (int i = 0; i < d->npages; i++) {                      
+      47 +        DialogPage *pg = &d->pages[i];                         
+     … 30 more lines (ctrl+o to expand)
+
+● Bash(python3 - <<'PY'
+      p='src/dialog.c'; s=open(p).read()…)
+  ⎿  44:    dialog_set_hero(g->menu.character);
+     /home/anonymous/Documents/DEV/Saber_Rider/game/src/dialog.c:106:13: wa
+     rning: 'strncat' output may be truncated copying between 0 and 511 byt
+     … +9 lines (ctrl+o to expand)
+  ⎿  Updated src/dialog.c (+1 -1)
+      140          d->t++; d->frame = -d->t;
+      141          if (d->box < 0) d->box++;
+      142          if (d->t == 0) {
+      143 -            if (++d->page >= d->npages) { d->active = false; d
+          -->page = d->npages - 1; return; }                             
+      143 +            if (++d->page >= d->npages) { d->active = false; d
+          +->page = d->npages - 1; voice_stop(); return; }               
+      144              d->t = 1; d->box = 0; d->chars = 0; d->done = fals
+           e; d->closing = false; d->frame = 1;
+      145          }
+      146          return;
+  ⎿  Updated src/game.c (+1 -0)
+      41      player_spawn(&g->player, (unsigned)(g->menu.character - 1) 
+          < 3 ? HERO_CRHC[g->menu.character - 1] : 0x8403195A, px, py);
+      42      g->player.lives = g->menu.lives; g->player.hp = g->player.m
+          ax_hp = hearts_for(g->menu.difficulty);
+      43      enemies_reset(&g->enemies);
+      44 +    dialog_set_hero(g->menu.character);                        
+      45      static const uint32_t DIALOG_TEXT[4] = { 0xC3B6D081, 0xC4B0
+          D1BA, 0xC5AAD2B7, 0xC6A4D3AC };
+      46      for (int i = 0; i < g->level.nobjs; i++) {
+      47          LevelObject *o = &g->level.objs[i];
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The GLOB needs a re-configure to pick up new files. Also there are
+  pre-existing uncommitted changes (README, enemies.c) — I'll leave those as
+  they are.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Builds. Let me add a SABER_HERO debug switch and take screenshots of April in
+  the level.
+
+● Bash(python3 - <<'PY'
+      p='src/game.c'; s=open(p).read()…)
+  ⎿  src/main.c:84:        /* debug: SABER_SHOT=path,camx,frames -> save a
+     screenshot after N frames and quit */
+     src/main.c:87:            const char *s = SDL_getenv("SABER_SHOT");
+  ⎿  Updated src/game.c (+1 -0)
+      18      memset(g, 0, sizeof *g);
+      19      g->ren = ren; g->sw = sw; g->sh = sh;
+      20      g->menu.difficulty = 1; g->menu.lives = 2; g->menu.continue
+          s = 3; g->menu.character = 1;   /* option defaults: NORMAL, 02,
+           03; Fireball */
+      21 +    if (SDL_getenv("SABER_HERO")) g->menu.character = atoi(SDL_
+         +getenv("SABER_HERO")) & 3;   /* debug: 0 Saber 1 Fireball 2 Apr
+         +il 3 Colt */                                                   
+      22      if (!SDL_getenv("SABER_MENU") && (SDL_getenv("SABER_START")
+           || SDL_getenv("SABER_SCRIPT"))) return level_start(g);   /* de
+          bug: straight into the level */
+      23      menu_enter(&g->menu, SDL_getenv("SABER_MENU") ? atoi(SDL_ge
+          tenv("SABER_MENU")) : MS_SPLASH0);
+      24      return true;
+
+  Read 1 file, ran 4 shell commands (ctrl+o to expand)
+
+● The character is small at this scale; let me crop around the player position
+  in each shot.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● April is hidden behind a cactus at that spot and the screenshot frame lands
+  after the scripted action ends. Let me use a clearer spot and capture
+  mid-action.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● Several actions didn't trigger — she's boxed in by rocks at x=900. Let me find
+  open ground first.
+
+  Read 2 files, ran 5 shell commands (ctrl+o to expand)
+
+● The screenshot countdown is per rendered frame, and with the offscreen driver
+  rendering isn't vsynced, so only one game step ran. I'll count game steps
+  instead (matching the README's description).
+
+● Bash(python3 - <<'PY'
+      p='src/main.c'; s=open(p).read()…)
+  ⎿  Shell cwd was reset to /home/anonymous/Documents/DEV/Saber_Rider
+  ⎿  Updated src/main.c (+5 -8)
+      39      const char *script = SDL_getenv("SABER_SCRIPT");
+      40      int script_n = 0; char script_keys[16] = "";
+      41      bool running = true;
+      42 +    /* debug: SABER_SHOT=path,camx,steps -> save a screenshot a
+         +fter N fixed steps and quit */                                 
+      43 +    int shot_frames = -1; char shot_path[256] = "";            
+      44 +    if (SDL_getenv("SABER_SHOT")) { float cx = -1; int n = 1; s
+         +scanf(SDL_getenv("SABER_SHOT"), "%255[^,],%f,%d", shot_path, &c
+         +x, &n); if (cx >= 0) g.cam_x = cx; shot_frames = n; }          
+      45      Uint64 prev = SDL_GetTicksNS();
+      46      double acc = 0;
+      47      const double step = 1.0 / 60.0;
+     ...
+      80                  g.in.raw[BTN_PAUSE] = false;
+      81              }
+      82              game_update(&g, (float)step); audio_update(); acc -
+          = step;
+      83 +            if (shot_frames > 0) shot_frames--;   /* SABER_SHOT
+         + counts fixed steps, not rendered frames */                    
+      84          }
+      85          SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+      86          SDL_RenderClear(ren);
+      87          game_draw(&g);
+      84 -        /* debug: SABER_SHOT=path,camx,frames -> save a screens
+         -hot after N frames and quit */                                 
+      85 -        static int shot_frames = -1; static char shot_path[256]
+         -;                                                              
+      86 -        if (shot_frames < 0) {                                 
+      87 -            const char *s = SDL_getenv("SABER_SHOT");          
+      88 -            shot_frames = 0;                                   
+      89 -            if (s) { float cx = -1; int n = 1; sscanf(s, "%255[
+         -^,],%f,%d", shot_path, &cx, &n); if (cx >= 0) g.cam_x = cx; sho
+         -t_frames = n; }                                                
+      90 -        }                                                      
+      91 -        if (shot_frames > 0 && --shot_frames == 0) {           
+      88 +        if (shot_frames == 0 && shot_path[0]) {                
+      89              SDL_Surface *sf = SDL_RenderReadPixels(ren, NULL);
+      90              if (sf) { SDL_SaveBMP(sf, shot_path); SDL_DestroySu
+          rface(sf); }
+      91              running = false;
+  ⎿  (timeout 5m)
+
+  Read 1 file (ctrl+o to expand)
+
+● Actions work now. Let me make a capture helper that crops around the player's
+  actual screen position (from the trace line) so I can review poses properly.
+
+● Write(tools/pose_sheet.py)
+  ⎿  Wrote 44 lines to tools/pose_sheet.py
+       1 #!/usr/bin/env python3
+          crops (hero review).
+       3 
+       4 pose_sheet.py out.png [hero] [start_x]   e.g. pose_sheet.py /tmp
+       5 Runs the game headless (SDL offscreen driver) once per pose with
+          SABER_SCRIPT, reads the player's position from the
+          around it, 4x nearest."""
+       7 import os, re, subprocess, sys
+       8 from PIL import Image
+      10 HERE = os.path.dirname(os.path.abspath(__file__))
+     … +54 lines (ctrl+o to expand)
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Bash(python3 - <<'PY'
+      p='src/game.c'; s=open(p).read()…)
+  ⎿  death
+  ⎿  Updated src/game.c (+1 -0)
+      188          }
+      189          for (int k = 0; k < g->ndeath; k++) if (IN_ZONE(g->dea
+           thzones[k])) { p->respawn_x = g->deathzones[k].rx; p->respawn_
+           y = g->deathzones[k].ry; c->state = CS_DEAD; }
+      190          if (by - hh > g->level.height) { p->respawn_x = p->saf
+           e_x; p->respawn_y = p->safe_y; c->state = CS_DEAD; sfx_play(15
+           , 0); }   /* fell out of the level */
+      191 +        { static int kill = -2; if (kill == -2) kill = SDL_get
+          +env("SABER_KILL") ? atoi(SDL_getenv("SABER_KILL")) : -1; if (k
+          +ill >= 0 && kill-- == 0) c->state = CS_DEAD; }   /* debug: die
+          + at step N */                                                 
+      192          #undef IN_ZONE
+      193      }
+      194      if (g->enemies.release_request) {
+  ⎿  Updated tools/pose_sheet.py (+2 -1)
+      14           ("aim DR", "100:ARD"), ("aim D", "100:AD"), ("aim DL",
+           "100:ALD"), ("shoot", "100:S"),
+      15           ("crouch", "100:D"), ("crouch+shoot", "100:DS"), ("sli
+          de", "20:D,80:DJ"), ("jump", "30:,60:J"),
+      16           ("fall", "30:,8:J,52:"), ("fall+shoot", "30:,8:J,52:S"
+          ), ("fall+aim up", "30:,8:J,52:SU"), ("fall+aim down", "30:,8:J
+          ,52:SD"),
+      17 -         ("walk L", "100:L"), ("death", "20:,200:R")]          
+      17 +         ("walk L", "100:L"), ("death", "200:")]               
+      18  
+      19  def shoot(name, script, hero, start, steps=88):
+      20      bmp = f"/tmp/pose_{os.getpid()}.bmp"
+      21      env = dict(os.environ, SDL_VIDEODRIVER="offscreen", SDL_AUD
+          IODRIVER="dummy", SABER_HERO=str(hero), SABER_START=str(start),
+      22                 SABER_SCRIPT=script, SABER_SHOT=f"{bmp},-1,{step
+          s}", SABER_WINDOW="426x240", SABER_TRACE="1")
+      23 +    if name == "death": env["SABER_KILL"] = "60"               
+      24      r = subprocess.run([os.path.join(GAME, "build", "saber_ride
+          r"), os.path.join(GAME, "..", "SaberRider", "data")],
+      25                         env=env, cwd=GAME, capture_output=True, 
+          text=True, timeout=60)
+      26      lines = [l for l in r.stderr.splitlines() if l.startswith("
+          cam=")]
+  ⎿  (timeout 10m)
+
+  Read 1 file (ctrl+o to expand)
+
+● Poses are wired correctly, but the engine sheet was still built from the
+  pre-refinement master. I'll rebuild it from the refined version and inspect
+  the weak families closely. · summarized
+
+● Bash(cd /home/anonymous/Documents/DEV/Saber_Rider/heroes && python3
+      build_april_engine_sheet.py && python3 - <<'PY'
+      from PIL import Image…)
+  ⎿  wrote /home/anonymous/Documents/DEV/Saber_Rider/game/assets/april.png
+     from april_master_refined.png (158 cells, 29 rows)
+  ⎿  1 file changed (binary, mode only or too large to show)
+
+  Read 1 file (ctrl+o to expand)
+
+● The somersault and death frames are still noisy, so I'll add a majority filter
+  to remove salt-and-pepper noise plus a data-driven outline based on native
+  frame boundary/interior color pairings to clean up the silhouettes. 
+  · summarized
+● Write(~/Documents/DEV/Saber_Rider/heroes/polish_april.py)
+  ⎿  Wrote 94 lines to ../heroes/polish_april.py
+      1 """Silhouette polish for the noisiest reconstructed April cells (
+      2 
+      3 Two deterministic passes, both learned from / constrained to Apri
+      4   * mode filter: a pixel whose colour no 3x3 neighbour shares tak
+      5     (2 passes; removes the salt and pepper the inverse resampling
+         leaves in low-contrast areas)
+        the colour April's native art uses for a
+      7     boundary pixel next to that interior colour (a table counted 
+      8     reconstructed frames get the same one-pixel dark contour as t
+      9 Cells are read from outpu
+     … +108 lines (ctrl+o to expand)
+
+  Read 2 files, ran 2 shell commands (ctrl+o to expand)
+
+● I'll let the exemplar prior take over for these rows so it can generate
+  coherent interiors on the recovered silhouette, since polishing alone can't
+  resolve their inherently ambiguous interiors. · summarized
+
+  Read 3 files, ran 3 shell commands (ctrl+o to expand)
+
+● The polished cells have a consistent contour without losing detail. I'll make
+  the pipeline default to the polished master and rebuild the engine sheet, then
+  move on to the voice lines.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● Bash(python3 - <<'PY'
+      import sys; sys.path.insert(0,'tools')…)
+  ⎿  1 file changed (binary, mode only or too large to show)
+  ⎿  (timeout 10m)
+
+  Read 2 files, ran 1 shell command (ctrl+o to expand)
+
+● Run cycle and death sequence play correctly in-engine. Now the voice lines.
+  Let me check how omnivoice-cli takes its models and test one line.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+● The tool's own merged model is in models/. Retrying with it:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Generation works (~1 s of audio per second). I'll script all of April's lines
+  with a few takes each, normalise them and convert to the game's 44.1 kHz PCM
+  format.
+
+● Write(~/Documents/DEV/Saber_Rider/heroes/voice/generate.py)
+  ⎿  Wrote 93 lines to ../heroes/voice/generate.py
+       1 #!/usr/bin/env python3
+         /omnivoice.cpp) from a voice-design prompt.
+       3 
+         ar Sheriffs!!!" and the briefing are voiced),
+         o Fireball lines she inherits when she is the
+       6 player, and a character-select callout.  Several takes per line 
+       7 converted to 44.1 kHz mono PCM16 in ../../game/assets/voice/.  R
+         e-run with --pick line=seed to swap a take.
+       9     python3 generate.py            # generate all takes (GPU), e
+      10     python3 generate.py --export   # o
+     … +113 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Voice takes generated and exported (I can't audition them here — I'll flag
+  that). Now the select-screen callout:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now verify the character select and the rewritten dialog with April as the
+  player.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● Forgot the window size (screenshots crop to the logical corner otherwise).
+  Redo:
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● April is selectable and the HUD icon follows. The intro dialog needs the
+  player to walk into its trigger; let me re-shoot with a walk.
+
+  Read 1 file, ran 6 shell commands (ctrl+o to expand)
+
+● The dialog rewrite works. Let me confirm the voice hooks actually fire (trace
+  print), for both hero configurations.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Both hooks fire as designed. One more in-game check — the fall pose (walk off
+  a ledge, legs cell + torso overlay), which the jump test can't reach:
+
+  Read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+● Fall pose composes correctly. Now the documentation updates: the heroes README
+  (pipeline), the game README (assets, new debug switches), and the PLAN
+  progress log.
+
+● Bash(cd /home/anonymous/Documents/DEV/Saber_Rider && python3 - <<'PY'
+      p='heroes/README.md'; s=open(p).read()…)
+  ⎿  33:`SABER_START=x` spawn at level x · `SABER_MENU=n` start in front-en
+     d state n · `SABER_SHOT=file.bmp,camx,steps`
+     36:`SABER_HERO=n` hero 0..3 for a direct level start · `SABER_KILL=n`
+     … +5 lines (ctrl+o to expand)
+  ⎿  Updated README.md (+12 -3)
+      14      cmake --build build
+      15      ./build/saber_rider /path/to/SaberRider/data
+      16  
+      17 +## Playable heroes                                             
+      18 +                                                               
+      19 +Fireball (the demo's hero, from the packs) and **April** (our r
+         +econstruction: `assets/april.png`, built from the              
+      20 +archived sprite sheet and tweet clips by `../heroes/`, loaded b
+         +y `src/heroes.c` on top of her shipped CRHC                    
+      21 +`79260A58`; the level-1 dialogs are rewritten for her and her l
+         +ines are voiced from `assets/voice/`, generated with           
+      22 +OmniVoice by `../heroes/voice/generate.py`). Saber Rider and Co
+         +lt stay "not available". Assets are looked up in               
+      23 +`$SABER_ASSETS`, `./assets` and next to the executable.        
+      24 +                                                               
+      25  ## Controls (as in the demo)
+      26  
+      27  Arrows move · **W/A** jump · **S/D** shoot · hold **Q/E** aim (
+          8 directions) · **Enter** pause/start ·
+     ...
+      30  
+      31  ## Debug switches (environment variables)
+      32  
+      25 -`SABER_START=x` spawn at level x · `SABER_MENU=n` start in fron
+         -t-end state n · `SABER_SHOT=file.bmp,camx,frames`              
+      26 -screenshot after N steps and quit · `SABER_SCRIPT="60:R,3:RJ,40
+         -:"` scripted input (L R U D J S A P) ·                         
+      33 +`SABER_START=x` spawn at level x · `SABER_MENU=n` start in fron
+         +t-end state n · `SABER_SHOT=file.bmp,camx,steps`               
+      34 +screenshot after N fixed steps and quit · `SABER_SCRIPT="60:R,3
+         +:RJ,40:"` scripted input (L R U D J S A P) ·                   
+      35  `SABER_TRACE=1` per-frame player trace (+ spawn triggers at sta
+          rt, convoy spawn / dying / stuck-enemy diagnostics, every human
+          oid once a second, boss state every 10 frames; `=2` also prints
+           humanoids within 40 px of either screen edge every frame) · `S
+          ABER_FUZZ=1` random input ·
+      28 -`SABER_DEBUG=1` collision overlay from the start · `SABER_WINDO
+         -W=852x480` initial window size · **F1** collision overlay · **F
+         -2** free camera.                                               
+      36 +`SABER_HERO=n` hero 0..3 for a direct level start · `SABER_KILL
+         +=n` kill the player at step n · `SABER_DEBUG=1` collision overl
+         +ay from the start · `SABER_WINDOW=852x480` initial window size 
+         +· **F1** collision overlay · **F2** free camera.               
+      37  
+      38  ## Comparing against the original
+      39  
+     ...
+      43  `AUDIO=1` adds the game's sound to the mp4 (played into a Pulse
+          Audio/PipeWire null sink; the original's static SDL2
+      44  honours `PULSE_SINK`, the port's stream is moved there with `pa
+          ctl`), which is how music fades, stops and sample timing
+      45  were compared (RMS envelope per 50 ms, or cross-correlation aga
+          inst a decoded sfx).
+      46 +`tools/pose_sheet.py out.png [hero] [x]` runs the game headless
+         + through every player pose and tiles crops of the hero (sprite 
+         +review).                                                       
+      47  Tile a recording with `ffmpeg -i out.mp4 -vf "fps=2,scale=213:-
+          1,tile=6x10" -frames:v 1 tiles.png` to eyeball timing.
+      48  Original keys: arrows, A jump, S shoot, Return start/confirm, E
+          scape quits.
+      49  
+
+  Ran 3 shell commands, wrote 1 memory (ctrl+o to expand)
+
+● Bash(rm -rf tools/__pycache__ && echo '__pycache__/' >> .gitignore && git
+      status --short | grep -c .)
+  ⎿  22
+  ⎿  Updated .gitignore (+1 -0)
+      1  build/
+      2 +__pycache__/                                                    
+  ⎿  … 1 more file changed
+
+● Done. Summary of what changed and where things stand:
+
+  April's sprite reconstruction (heroes/)
+
+  Codex's session ended with correct-pose-but-smeared cells
+  (april_master_recovered.png) and, for crouch/slide/jump/death, clean-but-wrong
+  rotated running bodies. I replaced that with two new passes:
+
+  - refine_april.py – exemplar-guided reconstruction: every pixel of a degraded
+    cell takes the centre of the closest 7×7 patch from April's 40 native frames
+    (+ mirrors + RotSprite rotations), and the existing palette ICM solver
+    re-fits the result to the AVIF with that image as a prior (I added
+    prior/prior_weight to recover.py). Geometry stays from the recovered cell;
+    outlines, shading and colours come from her real art, and details the AVIF
+    actually shows (gold gun, cape edge) survive.
+  - polish_april.py – majority filter on the noisiest rows plus a 1‑px contour
+    whose colours are learned from what the native frames put next to each
+    interior colour.
+  - build_april_engine_sheet.py – packs the master onto the engine layout →
+    game/assets/april.png.
+
+  Key discovery: the packs ship April's CRHC (79260A58) with Fireball's
+  animation table byte-for-byte, so her intended cblock has Fireball's 8×19 cell
+  layout. I mapped every family onto those exact cell indices (legs/torso split
+  for up/down aims, run torso overlays, fall legs…) and added extra rows for
+  the 6‑frame idle, 8‑frame deaths and the 23‑frame "gun sling into idle" (now
+  her post‑shooting alert pose).
+
+  Honest quality note: standing, all 8 aims, run, run+shoot, crouch, slide, gun
+  sling and fall are clean pixel art now. The somersault and death frames are
+  still the weakest — their source pixels are the most degraded and no native
+  clip shows those poses; every extra trick (bigger patches, stronger prior)
+  plateaued. They read at game scale in motion but would benefit from a hand
+  pass.
+
+  In the game (game/, uncommitted — you didn't ask for a commit)
+
+  - src/assets.c (asset lookup, PNG via the already-linked libavcodec), gfx.c: 
+    cblock_from_rgba, src/heroes.c (swaps the sheet in on character_init,
+    re-points the anims, disables Fireball's 1 px walk bob).
+  - Character select: April is selectable (no "not available" overlay); HUD icon
+    follows automatically.
+  - Dialogs rewritten when she's the player: "Okay April be ready!", Fireball's
+    avatar says "Good luck April!", she does the "Huh! What's that!?" /
+    new‑Sheriff lines (verified by screenshot).
+  - Debug: SABER_HERO=n, SABER_KILL=n, SABER_SHOT now counts fixed steps (it
+    counted rendered frames, which broke headless use), tools/pose_sheet.py
+    tiles every pose for review.
+
+  Voice
+
+  No April speech exists in the demo (only the Outrider and the briefing are
+  voiced; Fireball is silent too), so I generated five lines with OmniVoice
+  (heroes/voice/generate.py, voice‑design prompt, 3 takes each, picks.json to
+  swap): select callout, "Good luck, Fireball!", the stampede warning, "Huh!
+  What's that?!", the Sheriff line. They play per dialog page only when April is
+  the speaker, and on select. I could not audition them — please listen to
+  game/assets/voice/*.wav and re-pick takes (generate.py --pick april_select=42 
+  --export) or change the voice prompt if she sounds wrong.
+
+  Docs updated: heroes/README.md, game/README.md, PLAN.md progress log.
+
+✻ Worked for 39m 2s · done 10:45 PM
+
+❯ for the voices, i meant more like grunting voices (like fireball's)           
+
+● Let me look at which of the demo's sfx are Fireball's grunts first.
+  Ran 5 shell commands (ctrl+o to expand)
+
+● The demo's Fireball plays jump, hurt, death, and fall grunt sounds rather than
+  dialog. I'll swap the spoken-line hooks for April grunt overrides on those
+  four specific sound events. · summarized
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now the grunt generator (replacing the spoken-lines script):
+
+● Write(~/Documents/DEV/Saber_Rider/heroes/voice/generate.py)
+  ⎿  Added 36 lines, removed 40 lines
+       1  #!/usr/bin/env python3
+       2 -"""April's voice lines, generated with OmniVoice (../../../VOIC
+         -E/omnivoice.cpp) from a voice-design prompt.                   
+       2 +"""April's grunts, generated with OmniVoice (../../../VOICE/omn
+         +ivoice.cpp) from a voice-design prompt.                        
+       3  
+       4 -The demo has no April speech (only the Outrider's "Oh no! The S
+         -tar Sheriffs!!!" and the briefing are voiced),                 
+       5 -so these are new: her two level-1 dialog lines as an NPC, the t
+         -wo Fireball lines she inherits when she is the                 
+       6 -player, and a character-select callout.  Several takes per line
+         - are kept in takes/; the chosen take is                        
+       7 -converted to 44.1 kHz mono PCM16 in ../../game/assets/voice/.  
+         -Re-run with --pick line=seed to swap a take.                   
+       4 +Fireball's only "voice" in the demo is four exertion sounds: ju
+         +mp (game sfx 2 -> table 6, 0.55 s), hurt (sfx 3 ->             
+       5 +tables 3/4/5, 0.1-0.3 s, one picked at random), death (sfx 4 ->
+         + tables 1/2, 0.7-1.2 s) and the fall scream (sfx 15            
+       6 +-> table 23, 0.7 s).  These are April's equivalents; `game/src/
+         +heroes.c` maps them onto the same events when she is           
+       7 +the player.  Several takes per sound are kept in takes/; the pi
+         +cked take is trimmed, peak-normalised and exported as          
+       8 +44.1 kHz mono PCM16 to ../../game/assets/voice/.               
+       9  
+       9 -    python3 generate.py            # generate all takes (GPU), 
+         -export the default picks                                       
+      10 -    python3 generate.py --export   # only re-export the picks (
+         -no generation)                                                 
+      10 +    python3 generate.py                     # generate all take
+         +s (GPU), export the picks                                      
+      11 +    python3 generate.py --export            # only re-export th
+         +e picks                                                        
+      12 +    python3 generate.py --pick jump=21 --export                
+      13  """
+      12 -import os, sys, json, subprocess, argparse, wave, struct       
+      14 +import os, json, subprocess, argparse, wave, struct, re        
+      15  
+      16  HERE = os.path.dirname(os.path.abspath(__file__))
+      17  OMNI = os.path.join(HERE, '..', '..', '..', 'VOICE', 'omnivoice
+          .cpp')
+     ...
+      19  ASSETS = os.path.join(HERE, '..', '..', 'game', 'assets', 'voic
+          e')
+      20  TAKES = os.path.join(HERE, 'takes')
+      21  
+      20 -VOICE = ("Young adult female, bright, confident and energetic, 
+         -an American cartoon heroine from an eighties action "          
+      21 -         "series, clear diction, warm and upbeat, a little play
+         -ful. Natural, not theatrical or childish.")                    
+      22 +VOICE = ("Young adult female, energetic action heroine, natural
+         + non-verbal exertion sound, no words, "                        
+      23 +         "recorded close, dry, no reverb.")                    
+      24  
+      23 -LINES = {                                                      
+      24 -    # file            text (as in the level-1 scripts; punctuat
+         -ion added for delivery)         speed                          
+      25 -    'april_select':   ("Alright, let's ride!", 1.0),           
+      26 -    'april_goodluck': ("Good luck, Fireball!", 1.0),           
+      27 -    'april_stampede': ("Oh no! Fireball, that is a robot horse 
+         -stampede, and it is coming your way! Hurry, find higher ground!
+         -", 1.05),                                                      
+      28 -    'april_whatsthat':("Huh! What's that?!", 1.0),             
+      29 -    'april_sheriff':  ("It looks like this town needs a new she
+         -riff...", 0.95),                                               
+      25 +#  name        text for the model                 fixed duratio
+         +n (s)  extra instruction                                       
+      26 +SOUNDS = {                                                     
+      27 +    'jump':    ("Hup!",                         0.6,  "a short 
+         +effortful jump grunt"),                                        
+      28 +    'hurt1':   ("Ugh!",                         0.35, "a short 
+         +pained grunt, hit by something"),                              
+      29 +    'hurt2':   ("Ah!",                          0.3,  "a short 
+         +pained yelp"),                                                 
+      30 +    'hurt3':   ("Ow!",                          0.35, "a short 
+         +pained grunt"),                                                
+      31 +    'death1':  ("Aaargh!",                      1.0,  "a dying 
+         +cry, falling backwards"),                                      
+      32 +    'death2':  ("Uaaah!",                       0.9,  "a dying 
+         +cry"),                                                         
+      33 +    'fall':    ("Aaaaaaah!",                    0.8,  "a scream
+         + while falling into a pit, fading away"),                      
+      34  }
+      31 -SEEDS = (7, 21, 42)                                            
+      35 +SEEDS = (7, 21, 42, 99)                                        
+      36  PICKS_FILE = os.path.join(HERE, 'picks.json')
+      37  
+      34 -def gen(name, text, speed, seed):                              
+      38 +def gen(name, text, dur, extra, seed):                         
+      39      out = os.path.join(TAKES, f'{name}_s{seed}.wav')
+      40      if os.path.exists(out): return out
+      37 -    cmd = [CLI, '--model', MODEL, '--text', text, '--output', o
+         -ut, '--language', 'English', '--instruct', VOICE,              
+      38 -           '--device', 'cuda:0', '--num-step', '32', '--seed', 
+         -str(seed), '--speed', str(speed)]                              
+      41 +    cmd = [CLI, '--model', MODEL, '--text', text, '--output', o
+         +ut, '--language', 'English',                                   
+      42 +           '--instruct', f'{VOICE} {extra}.', '--device', 'cuda
+         +:0', '--num-step', '32', '--seed', str(seed), '--duration', str
+         +(dur)]                                                         
+      43      r = subprocess.run(cmd, capture_output=True, text=True)
+      44      if r.returncode: print(r.stderr[-800:]); raise SystemExit(f
+          'omnivoice failed on {name}')
+      45      return out
+     ...
+      49          n = w.getnframes(); d = w.readframes(n); rate = w.getfr
+          amerate()
+      50      s = struct.unpack(f'<{n}h', d)
+      51      peak = max(abs(v) for v in s) / 32768.0
+      48 -    # leading/trailing silence                                 
+      52      thr = 0.02 * 32768
+      53      first = next((i for i, v in enumerate(s) if abs(v) > thr), 
+          n); last = next((i for i in range(n - 1, -1, -1) if abs(s[i]) >
+           thr), 0)
+      54      return n / rate, peak, first / rate, (n - last) / rate
+      55  
+      56  def export(name, take):
+      57      os.makedirs(ASSETS, exist_ok=True)
+      55 -    dst = os.path.join(ASSETS, f'{name}.wav')                  
+      56 -    # trim silence, peak-normalise to -1 dBFS, 44.1 kHz mono 16
+         --bit (what audio.c's voice_play_file streams)                  
+      58 +    dst = os.path.join(ASSETS, f'april_{name}.wav')            
+      59      subprocess.check_call(['ffmpeg', '-y', '-v', 'error', '-i',
+           take, '-af',
+      58 -                           'silenceremove=start_periods=1:start
+         -_threshold=-40dB:stop_periods=1:stop_threshold=-40dB:stop_durat
+         -ion=0.25,'                                                     
+      59 -                           'apad=pad_dur=0.15,alimiter=limit=0.
+         -89:level=false,volume=0dB',                                    
+      60 +                           'silenceremove=start_periods=1:start
+         +_threshold=-45dB:stop_periods=1:stop_threshold=-45dB:stop_durat
+         +ion=0.15,apad=pad_dur=0.05',                                   
+      61                             '-ar', '44100', '-ac', '1', '-c:a', 
+          'pcm_s16le', dst])
+      61 -    # peak normalise (ffmpeg's volumedetect -> volume) in a sec
+         -ond pass                                                       
+      62      r = subprocess.run(['ffmpeg', '-v', 'info', '-i', dst, '-af
+          ', 'volumedetect', '-f', 'null', '-'], capture_output=True, tex
+          t=True)
+      63 -    import re                                                  
+      63      m = re.search(r'max_volume: (-?[\d.]+) dB', r.stderr)
+      65 -    if m:                                                      
+      66 -        gain = -1.0 - float(m.group(1))                        
+      64 +    if m:      # Fireball's grunts peak at 0 dBFS; the sfx bus 
+         +has its own headroom                                           
+      65          tmp = dst + '.tmp.wav'
+      68 -        subprocess.check_call(['ffmpeg', '-y', '-v', 'error', '
+         --i', dst, '-af', f'volume={gain:.2f}dB', '-c:a', 'pcm_s16le', t
+         -mp])                                                           
+      66 +        subprocess.check_call(['ffmpeg', '-y', '-v', 'error', '
+         +-i', dst, '-af', f'volume={-0.5 - float(m.group(1)):.2f}dB', '-
+         +c:a', 'pcm_s16le', tmp])                                       
+      67          os.replace(tmp, dst)
+      68      return dst
+      69  
+     ...
+      74      for p in a.pick: k, v = p.split('='); picks[k] = int(v)
+      75      os.makedirs(TAKES, exist_ok=True)
+      76      if not a.export:
+      79 -        for name, (text, speed) in LINES.items():              
+      77 +        for name, (text, dur, extra) in SOUNDS.items():        
+      78              for seed in SEEDS:
+      81 -                t = gen(name, text, speed, seed)               
+      82 -                dur, peak, lead, trail = stats(t)              
+      83 -                print(f'{name:16s} seed {seed:3d}: {dur:5.2f} s
+         -  peak {peak:.2f}  silence {lead:.2f}/{trail:.2f}', flush=True)
+      79 +                t = gen(name, text, dur, extra, seed)          
+      80 +                d, peak, lead, trail = stats(t)                
+      81 +                print(f'{name:8s} seed {seed:3d}: {d:4.2f} s  p
+         +eak {peak:.2f}  silence {lead:.2f}/{trail:.2f}', flush=True)   
+      82              picks.setdefault(name, SEEDS[0])
+      83      json.dump(picks, open(PICKS_FILE, 'w'), indent=1)
+      86 -    for name in LINES:                                         
+      87 -        seed = picks.get(name, SEEDS[0])                       
+      88 -        take = os.path.join(TAKES, f'{name}_s{seed}.wav')      
+      89 -        if os.path.exists(take): print('export', export(name, t
+         -ake))                                                          
+      90 -        else: print('missing take', take)                      
+      84 +    for name in SOUNDS:                                        
+      85 +        take = os.path.join(TAKES, f'{name}_s{picks.get(name, S
+         +EEDS[0])}.wav')                                                
+      86 +        print('export', export(name, take) if os.path.exists(ta
+         +ke) else f'missing {take}')                                    
+      87  
+      88  if __name__ == '__main__':
+      89      main()
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now the C side: drop the spoken-line hooks, add per-hero sfx overrides for the
+  four events.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The override table and play_wav are defined after sfx_play; I'll add forward
+  declarations, then wire the hero side.
+
+● Bash(python3 - <<'PY'
+      p='src/audio.c'; s=open(p).read()…)
+  ⎿  built
+     april_death1.wav
+     april_death2.wav
+     … +6 lines (ctrl+o to expand)
+  ⎿  Updated src/audio.c (+7 -3)
+      167  
+      168  static int rnd(int n) { return rand() % (n + 1); }   /* FUN_00
+           40cf30(0, n) inclusive per the switch usage */
+      169  
+      170 +typedef struct WavFile WavFile;                               
+      171 +static WavFile *wav_load(const char *path);                   
+      172 +static SDL_AudioStream *play_wav(const WavFile *w, float gain)
+          +;                                                             
+      173 +static struct { int n; char file[4][256]; } sfx_over[24];   /*
+          + per-hero replacements for the player's grunts (game sfx ids) 
+          +*/                                                            
+      174 +                                                              
+      175  void sfx_play(int id, int delay)
+      176  {
+      177      if (id >= 0 && id < 24 && sfx_over[id].n) {
+     ...
+      297  }
+      298  
+      299  /* ---- our own samples: plain PCM16 WAV files in assets/ (Apr
+           il's grunts, ../heroes/voice) ---- */
+      295 -typedef struct { char path[256]; int16_t *pcm; uint32_t bytes;
+          - int ch, rate; } WavFile;                                     
+      300 +struct WavFile { char path[256]; int16_t *pcm; uint32_t bytes;
+          + int ch, rate; };                                             
+      301  static WavFile wavs[32]; static int nwavs;
+      302  
+      303  static WavFile *wav_load(const char *path)
+     ...
+      351      file_voice = play_wav(wav_load(path), GAIN_VOICE);
+      352  }
+      353  
+      349 -/* per-hero replacements for the player's grunts (game sfx ids
+          -), picked at random like the original's variants */           
+      350 -static struct { int n; char file[4][256]; } sfx_over[24];     
+      354 +/* picked at random like the original's variants */           
+      355  void sfx_set_override(int game_id, const char *const *paths, i
+           nt n)
+      356  {
+      357      if (game_id < 0 || game_id >= 24) return;
+  ⎿  Updated src/heroes.c (+21 -0)
+       1  #include "heroes.h"
+       2  #include "assets.h"
+       3  #include "gfx.h"
+       4 +#include "audio.h"                                             
+       5  #include <SDL3/SDL.h>
+       6  #include <stdio.h>
+       7  #include <stdlib.h>
+       8 +#include <string.h>                                            
+       9  
+      10  #define CRHC_APRIL 0x79260A58
+      11  
+     ...
+      46      { 52, 168, 168, 168, 4.0f },
+      47  };
+      48  
+      49 +/* April's grunts (../heroes/voice/generate.py) on the events F
+         +ireball's table 6 / 3-5 / 1-2 / 23 samples cover */            
+      50 +static void april_sfx(void)                                    
+      51 +{                                                              
+      52 +    static const struct { int id; const char *files[3]; } G[] =
+         + {                                                             
+      53 +        { 2,  { "voice/april_jump.wav" } },                    
+      54 +        { 3,  { "voice/april_hurt1.wav", "voice/april_hurt2.wav
+         +", "voice/april_hurt3.wav" } },                                
+      55 +        { 4,  { "voice/april_death1.wav", "voice/april_death2.w
+         +av" } },                                                       
+      56 +        { 15, { "voice/april_fall.wav" } },                    
+      57 +    };                                                         
+      58 +    for (size_t i = 0; i < sizeof G / sizeof *G; i++) {        
+      59 +        const char *paths[3]; int n = 0;                       
+      60 +        for (int k = 0; k < 3 && G[i].files[k]; k++) { const ch
+         +ar *p = asset_path(G[i].files[k]); if (p) paths[n++] = strdup(p
+         +); }                                                           
+      61 +        if (n) sfx_set_override(G[i].id, paths, n);            
+      62 +        for (int k = 0; k < n; k++) free((char *)paths[k]);    
+      63 +    }                                                          
+      64 +}                                                              
+      65 +                                                               
+      66  bool hero_apply(Character *c)
+      67  {
+      68 +    sfx_clear_overrides();         /* the player is re-created 
+         +on every level start; Fireball keeps the pack's samples */     
+      69      if (c->crhc_id != CRHC_APRIL) return false;
+      70 +    april_sfx();                                               
+      71      CBlock *cb = april_sheet();
+      72      if (!cb) return false;
+      73      c->cb = cb; c->spr = NULL;
+  ⎿  (timeout 2m)
+
+  Searched for 2 patterns, ran 5 shell commands (ctrl+o to expand)
+
+● The enemy flag is really "spawn falling in", so enemies also go through
+  hero_apply and clear the overrides. I'll key it on the CRHC id being a hero's
+  instead.
+
+● Bash(python3 - <<'PY'
+      p='src/character.c'; s=open(p).read()…)
+  ⎿  sfx 2 -> assets/voice/april_jump.wav
+     sfx 3 -> assets/voice/april_hurt3.wav
+     sfx 3 -> assets/voice/april_hurt3.wav
+     fireball:
+  ⎿  Updated src/character.c (+1 -1)
+      32      c->hp_max = rd32(d + 0xadc);
+      33      { const PackEntry *se = packs_find(c->sprite_id); if (se &&
+           se->type == RES_SPRITE) c->spr = sprite_get(c->sprite_id); els
+          e c->cb = cblock_get(c->sprite_id); }
+      34      c->torso_bob = true;
+      35 -    if (!enemy) hero_apply(c);     /* recreated hero sheets (Ap
+         -ril) replace the pack's cblock + patch the table */            
+      35 +    hero_apply(c);                 /* player heroes only: recre
+         +ated sheets (April) replace the pack's cblock + patch the table
+         + */                                                            
+      36      c->body.ox = c->box_ox; c->body.oy = c->box_oy; c->body.hx 
+          = c->box_hx; c->body.hy = c->box_hy;
+      37      character_reset(c, enemy);
+      38      c->anim = 0xff; c->overlay = 0;
+  ⎿  Updated src/heroes.c (+5 -0)
+      63      }
+      64  }
+      65  
+      66 +#define CRHC_FIREBALL 0x9C8F9A9E                               
+      67 +#define CRHC_COLT     0x26818B85                               
+      68 +#define CRHC_DEFAULT  0x8403195A                               
+      69 +                                                               
+      70  bool hero_apply(Character *c)
+      71  {
+      72 +    if (c->crhc_id != CRHC_APRIL && c->crhc_id != CRHC_FIREBALL
+         + && c->crhc_id != CRHC_COLT && c->crhc_id != CRHC_DEFAULT) retu
+         +rn false;   /* enemies */                                      
+      73      sfx_clear_overrides();         /* the player is re-created 
+          on every level start; Fireball keeps the pack's samples */
+      74      if (c->crhc_id != CRHC_APRIL) return false;
+      75      april_sfx();
+  ⎿  (timeout 2m)
+
+● April gets her grunts; Fireball is untouched. Cleaning up the spoken-line
+  leftovers and fixing the docs:
+
+● Bash(cd /home/anonymous/Documents/DEV/Saber_Rider && rm -rf
+      heroes/voice/spoken_takes && python3 - <<'PY'
+      p='game/README.md'; s=open(p).read()…)
+  ⎿  20
+     april_death1.wav
+     april_death2.wav
+     … +5 lines (ctrl+o to expand)
+  ⎿  Updated README.md (+2 -2)
+      18  
+      19  Fireball (the demo's hero, from the packs) and **April** (our r
+          econstruction: `assets/april.png`, built from the
+      20  archived sprite sheet and tweet clips by `../heroes/`, loaded b
+          y `src/heroes.c` on top of her shipped CRHC
+      21 -`79260A58`; the level-1 dialogs are rewritten for her and her l
+         -ines are voiced from `assets/voice/`, generated with           
+      22 -OmniVoice by `../heroes/voice/generate.py`). Saber Rider and Co
+         -lt stay "not available". Assets are looked up in               
+      21 +`79260A58`; the level-1 dialogs are rewritten for her; her jump
+         + / hurt / death / fall grunts in `assets/voice/` replace       
+      22 +Fireball's table samples on the same events and were generated 
+         +with OmniVoice by `../heroes/voice/generate.py`). Saber Rider a
+         +nd Colt stay "not available". Assets are looked up in          
+      23  `$SABER_ASSETS`, `./assets` and next to the executable.
+      24  
+      25  ## Controls (as in the demo)
+
+● Switched the voice work to grunts, matching what Fireball actually has in the
+  demo.
+
+  What Fireball's "voice" is: four exertion samples — jump (sfx 2 → table 6,
+  0.55 s), hurt (sfx 3 → one of tables 3/4/5, 0.1–0.3 s), death (sfx 4 → tables
+  1/2, 0.7–1.2 s) and the fall-into-pit scream (sfx 15 → table 23, 0.7 s).
+
+  April's equivalents (heroes/voice/generate.py → game/assets/voice/):
+  april_jump ("Hup!"), april_hurt1..3 ("Ugh!/Ah!/Ow!", picked at random like the
+  original's variants), april_death1..2, april_fall — generated with OmniVoice
+  from a "young female action heroine, non-verbal exertion, dry" prompt, forced
+  to Fireball-like durations, trimmed and peak-normalised. 4 takes each in
+  heroes/voice/takes/, picks.json selects.
+
+  In the game: sfx_set_override() in audio.c swaps those four game sfx ids for
+  our wav files; heroes.c sets them when April spawns and clears them for
+  Fireball (verified with the trace: April's jump/hurt fire her files, Fireball
+  still uses the pack samples). The spoken dialog lines and the select callout
+  from before are removed — dialog text rewriting for April stays.
+
+  Same caveat as before: I can't listen to them here, so please audition
+  game/assets/voice/*.wav; swap a take with e.g. python3 
+  heroes/voice/generate.py --pick jump=42 --export, or edit the texts/prompt in
+  SOUNDS/VOICE and re-run (takes are cached per seed, delete the ones you want
+  regenerated).
+
+✻ Crunched for 5m 27s · done 10:52 PM

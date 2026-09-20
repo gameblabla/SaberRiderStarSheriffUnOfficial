@@ -165,7 +165,7 @@ void menu_update(Menu *m, const Input *in, float dt, int sw, SDL_Renderer *r)
             if (btn_pressed(in, BTN_RIGHT) && m->character < 3) { m->character++; sfx_play(0, 0); }
             if (confirm(in)) {
                 if (!hero_available(m->character)) sfx_play(23, 0);   /* the demo only had Fireball; April is our reconstruction */
-                else { sfx_play(11, 0); m->t = STEP; }
+                else { hero_select_sfx(m->character); m->t = STEP; }
             }
         } else {
             m->t += dt;
