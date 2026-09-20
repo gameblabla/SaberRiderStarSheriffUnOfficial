@@ -24,7 +24,7 @@ East/West shoot, shoulders aim, Start pause.
 
 `SABER_START=x` spawn at level x · `SABER_MENU=n` start in front-end state n · `SABER_SHOT=file.bmp,camx,frames`
 screenshot after N steps and quit · `SABER_SCRIPT="60:R,3:RJ,40:"` scripted input (L R U D J S A P) ·
-`SABER_TRACE=1` per-frame player trace (+ convoy spawn / dying / stuck-enemy diagnostics) · `SABER_FUZZ=1` random input ·
+`SABER_TRACE=1` per-frame player trace (+ convoy spawn / dying / stuck-enemy diagnostics, every humanoid once a second, boss state every 10 frames) · `SABER_FUZZ=1` random input ·
 `SABER_DEBUG=1` collision overlay from the start · `SABER_WINDOW=852x480` initial window size · **F1** collision overlay · **F2** free camera.
 
 ## Comparing against the original
