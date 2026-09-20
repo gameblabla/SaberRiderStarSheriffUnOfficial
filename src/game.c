@@ -106,9 +106,11 @@ void game_update(Game *g, float dt)
         return;
     }
     if (g->state == 10 && btn_pressed(&g->in, BTN_PAUSE)) { g->state = 0xc; sfx_play(10, 0); return; }
-    if (p->game_over && g->state == 10) { g->state = 0xb; g->state_t = 0; music_stop(); }
-    if (g->state == 0xb) { g->state_t += dt; if (g->state_t > 2.0f) { g->in_level = false; menu_enter(&g->menu, MS_GAMEOVER); return; } }
-    if (g->state == 0xe) { g->state_t += dt; if (g->state_t > 4.0f) { g->in_level = false; menu_enter(&g->menu, MS_ACCOMPLISHED); return; } }
+    /* FUN_0042d690: 0xb (last life lost) runs the level on with the player standing locked until 2*sin(pi*t/3) reaches 2
+     * (1.5 s, the screen fades over the last 0.5 s); 0xe (mission done) plays the jingle for 5.5 s, then fades ~0.8 s */
+    if (p->game_over && g->state == 10) { g->state = 0xb; g->state_t = 0; p->locked = true; }
+    if (g->state == 0xb) { g->state_t += dt; if (2.0f * sinf(3.1415927f * g->state_t / 3.0f) >= 2.0f || g->state_t >= 1.5f) { g->in_level = false; menu_enter(&g->menu, MS_GAMEOVER); return; } }
+    if (g->state == 0xe) { g->state_t += dt; if (g->state_t > 5.5f && 2.1f * sinf((g->state_t - 5.5f) * 1.5707964f) >= 2.0f) { g->in_level = false; menu_enter(&g->menu, MS_ACCOMPLISHED); return; } }
     bool cutscene_world = false;    /* state 0xd branches that still run the world (player not idle yet, timed holds) */
     if (g->state == 0xd) {          /* dialog / cutscene (FUN_0042d690, state 0xd) */
         float half = g->sw * 0.5f, maxx = g->level.width - g->sw;
@@ -274,8 +276,10 @@ void game_draw(Game *g)
         if (ps && ((SDL_GetTicks() / 16) & 0x7f) > 0x30) sprite_draw(ps, 0, (float)((g->sw - ps->w) / 2), (float)((g->sh - ps->h) / 2), false);
     }
     draw_scanlines(g);
-    if (g->state == 0xe || g->state == 0xb) {   /* fade out */
-        float a = g->state_t / (g->state == 0xe ? 4.0f : 2.0f); if (a > 1) a = 1;
+    if (g->state == 0xe || g->state == 0xb) {   /* fade out: the same sine ramps that end the states, minus 1 */
+        float a = g->state == 0xb ? 2.0f * sinf(3.1415927f * g->state_t / 3.0f) - 1.0f
+                                  : (g->state_t > 5.5f ? 2.1f * sinf((g->state_t - 5.5f) * 1.5707964f) - 1.0f : 0.0f);
+        if (a > 1) a = 1; if (a < 0) a = 0;
         SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(g->ren, g->state == 0xe ? 255 : 0, g->state == 0xe ? 255 : 0, g->state == 0xe ? 255 : 0, (uint8_t)(a * 255));
         SDL_FRect q = { 0, 0, (float)g->sw, (float)g->sh }; SDL_RenderFillRect(g->ren, &q);
     }

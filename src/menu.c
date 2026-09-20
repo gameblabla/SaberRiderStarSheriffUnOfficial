@@ -64,9 +64,9 @@ void menu_enter(Menu *m, int state)
     case MS_OPTIONS: m->sel = 1; m->music_track = 0; if (prev != MS_CREDITS) music_play(3, true); break;
     case MS_BRIEFING: m->dlg.active = false; music_play(2, true); break;
     case MS_CHARSEL: m->t = -0.25f; m->character = 1; music_play(1, true); break;
-    case MS_GAMEOVER: m->dur = 6.0f; music_play(7, false); break;
-    case MS_ACCOMPLISHED: m->dur = 6.0f; music_play(6, false); break;
-    case MS_CREDITS: m->credits_page = 0; m->credits_t = 0; break;
+    case MS_GAMEOVER: m->dur = 3.0f; music_play(4, false); break;        /* FUN_0042d690 -> state 9 + music 4 */
+    case MS_ACCOMPLISHED: m->dur = 10.0f; music_play(7, false); break;   /* state 0xf + music 7 */
+    case MS_CREDITS: m->credits_page = 0; m->credits_t = 0; music_play(9, true); break;   /* FUN_004265a0: backer credits music */
     default: break;
     }
 }
@@ -170,9 +170,13 @@ void menu_update(Menu *m, const Input *in, float dt, int sw, SDL_Renderer *r)
             if (m->t >= 1.0f) { m->start_level = true; m->t = 1.0f; }
         }
         break;
-    case MS_GAMEOVER: case MS_ACCOMPLISHED:
+    case MS_GAMEOVER:   /* FUN_0042a210: zoom/fade in for 1 s, hold for START or an action button, then ~1.9 s out */
+        if (m->t < 1.0f || m->t > 1.0166667f || confirm(in)) m->t += dt;
+        if (m->t > 2.9f) menu_enter(m, MS_SPLASH1);
+        break;
+    case MS_ACCOMPLISHED:   /* FUN_00429de0: 4 s, then a 1 s countdown to the splash */
         m->t += dt;
-        if (m->t >= m->dur || (m->t > 1.5f && confirm(in))) menu_enter(m, MS_MAIN);
+        if (m->t > 5.0f) menu_enter(m, MS_SPLASH1);
         break;
     default: break;
     }
@@ -391,12 +395,14 @@ void menu_draw(Menu *m, SDL_Renderer *r, int sw, int sh)
     case MS_BRIEFING: draw_briefing(m, r, sw, sh); break;
     case MS_CHARSEL: draw_charsel(m, r, sw, sh); break;
     case MS_CREDITS: draw_credits(m, r, sw, sh); break;
-    case MS_GAMEOVER: {   /* FUN_0042a310: Nemesis art + pulsing GAME OVER, fading up over the first half */
+    case MS_GAMEOVER: {   /* FUN_0042a310: Nemesis art + pulsing GAME OVER zoom in from 32x (period 3 s) under a black veil */
         fill(r, sw, sh, 0, 0, 0, 255);
         Sprite *bg = sprite_get(0x64981FC5), *s = sprite_get(0x24138418);
-        if (bg) sprite_draw(bg, 0, (float)((sw - bg->w) / 2), (float)((sh - bg->h) / 2), false);
+        float f = ease(m->t, m->dur), sc = zoom_scale(f);
+        if (bg) sprite_draw_scaled(bg, 0, (sw - bg->w * sc) * 0.5f, (sh - bg->h * sc) * 0.5f, bg->w * sc, bg->h * sc);
         if (s) sprite_draw_mod(s, 0, (float)((sw - s->w) / 2), (float)((sh - s->h) / 2 + 0x48), 255, 255, 255, pulse_alpha());
-        fill(r, sw, sh, 0, 0, 0, clamp255((1 - ease(m->t, m->dur)) * 255));
+        if (f < 1.0f) fill(r, sw, sh, 0, 0, 0, clamp255((1 - f) * 255));
+        if (m->t > 2.0f) fill(r, sw, sh, 0, 0, 0, clamp255((m->t - 2.0f) / 0.9f * 255));   /* out with the music fade */
         break; }
     case MS_ACCOMPLISHED: {   /* FUN_00429d80: Fireball art + pulsing MISSION / ACCOMPLISHED */
         fill(r, sw, sh, 0, 0, 0, 255);
@@ -405,7 +411,9 @@ void menu_draw(Menu *m, SDL_Renderer *r, int sw, int sh)
         uint8_t al = pulse_alpha();
         if (a) sprite_draw_mod(a, 0, (float)((sw - a->w) / 2), (float)((sh + 0x60 - a->h) / 2), 255, 255, 255, al);
         if (b) sprite_draw_mod(b, 0, (float)((sw - b->w) / 2), (float)((sh + 0x90 - b->h) / 2), 255, 255, 255, al);
-        fill(r, sw, sh, 0, 0, 0, clamp255((1 - ease(m->t, m->dur)) * 255));
+        float f = ease(m->t, m->dur);
+        if (f < 1.0f) fill(r, sw, sh, 0, 0, 0, clamp255((1 - f) * 255));
+        if (m->t > 4.0f) fill(r, sw, sh, 0, 0, 0, clamp255((m->t - 4.0f) * 255));
         break; }
     default: break;
     }
