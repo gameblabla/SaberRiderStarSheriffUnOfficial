@@ -93,6 +93,14 @@ void video_draw(Video *v, SDL_Renderer *r, int sw, int sh)
     SDL_RenderTexture(r, v->tex, NULL, &dst);
 }
 
+void video_draw_rect(Video *v, SDL_Renderer *r, float x, float y, float w, float h)
+{
+    if (!v || !v->have_frame) return;
+    SDL_FRect dst = { x, y, w, h };
+    SDL_RenderTexture(r, v->tex, NULL, &dst);
+}
+void video_size(const Video *v, int *w, int *h) { *w = v ? v->w : 0; *h = v ? v->h : 0; }
+
 void video_close(Video *v)
 {
     if (!v) return;

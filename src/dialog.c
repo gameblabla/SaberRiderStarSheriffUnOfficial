@@ -8,9 +8,11 @@
 #include <stdio.h>
 #include <math.h>
 
-enum { COL_WHITE, COL_GREEN, COL_PURPLE, COL_RED };
-static const uint32_t TILESET[4] = { 0x8D39AA67, 0x84652CBC, 0xA2122E71, 0x1495B0AB };
-static const uint8_t TEXTRGB[4][3] = { {255,255,255}, {160,255,160}, {255,160,255}, {255,120,120} };
+/* box tilesets (ARGB4444): default/GREEN 8D39AA67, PURPLE A2122E71, RED 1495B0AB, BLUE 84652CBC (FUN_0042a5e0 matches "PU"/"RE"/"BL");
+ * the text tint is the box's colour argument (0x80 = neutral): PU 80807468, BL 80807060, RE 80707480 */
+enum { COL_GREEN = DLG_GREEN, COL_PURPLE = DLG_PURPLE, COL_RED = DLG_RED, COL_BLUE = DLG_BLUE, COL_WHITE = DLG_GREEN };
+static const uint32_t TILESET[4] = { 0x8D39AA67, 0xA2122E71, 0x1495B0AB, 0x84652CBC };
+static const uint8_t TEXTRGB[4][3] = { {255,255,255}, {255,232,208}, {224,232,255}, {255,224,192} };
 
 bool dialog_open(Dialog *d, uint32_t text_id)
 {
@@ -39,8 +41,8 @@ bool dialog_open(Dialog *d, uint32_t text_id)
         size_t l = strlen(line); while (l && line[l-1] == '\r') line[--l] = 0;
         if (!strncmp(line, "<<>>", 4)) { pg = NULL; }
         else if (!strncmp(line, "<|", 2)) {
-            if (strstr(line, "GREEN")) color = COL_GREEN; else if (strstr(line, "PURPLE")) color = COL_PURPLE;
-            else if (strstr(line, "RED")) color = COL_RED; else color = COL_WHITE;
+            if (strstr(line, "PU")) color = COL_PURPLE; else if (strstr(line, "RE")) color = COL_RED;
+            else if (strstr(line, "BL")) color = COL_BLUE; else color = COL_GREEN;
         } else if (!strncmp(line, "</", 2)) {
             char name[64] = {0}; sscanf(line, "</%63[^/]/>", name); avatar = namehash(name);
         } else if (l) {
@@ -63,9 +65,27 @@ bool dialog_open(Dialog *d, uint32_t text_id)
     return d->active;
 }
 
+bool dialog_open_text(Dialog *d, const char *text, int color)
+{
+    memset(d, 0, sizeof *d);
+    DialogPage *pg = &d->pages[0];
+    pg->color = color; snprintf(pg->text, sizeof pg->text, "%s", text);
+    size_t l = strlen(pg->text); while (l && (pg->text[l-1] == '\n' || pg->text[l-1] == '\r' || pg->text[l-1] == ' ')) pg->text[--l] = 0;
+    d->npages = 1; d->active = l > 0;
+    return d->active;
+}
+
+void dialog_close(Dialog *d) { if (d->active && !d->closing) { d->closing = true; d->frame = 21; } }
+
+bool dialog_text_done(const Dialog *d)
+{
+    return d->active && d->page == d->npages - 1 && d->chars >= (float)strlen(d->pages[d->page].text);
+}
+
 void dialog_update(Dialog *d, const Input *in, float dt)
 {
     if (!d->active) return;
+    if (d->closing) { if (--d->frame <= 0) d->active = false; return; }   /* close animation (22 frames, FUN_0042bc60) */
     if (d->frame < 21) { d->frame++; return; }
     const DialogPage *pg = &d->pages[d->page];
     size_t total = strlen(pg->text);
@@ -73,7 +93,7 @@ void dialog_update(Dialog *d, const Input *in, float dt)
     bool press = btn_pressed(in, BTN_SHOOT) || btn_pressed(in, BTN_JUMP) || btn_pressed(in, BTN_PAUSE);
     if (press) {
         if (d->chars < (float)total) d->chars = (float)total;
-        else if (++d->page >= d->npages) { d->active = false; }
+        else if (++d->page >= d->npages) { d->page = d->npages - 1; d->closing = true; d->frame = 21; }
         else d->chars = 0;
     }
 }
@@ -115,12 +135,13 @@ void dialog_draw(const Dialog *d, SDL_Renderer *r, int sw, int sh)
     const DialogPage *pg = &d->pages[d->page];
     Font *f = font_get(0x12072E60);
     float open = d->frame < 21 ? d->frame / 21.0f : 1.0f;
+    if (d->closing) { /* text disappears at once, the box shrinks back */ }
     /* box x 76..350 (avatar) / text rect 100..350 x 176..224, avatar label at 1/3 scale top-left (offset 6,-8) */
     Sprite *av = pg->avatar_id ? sprite_get(pg->avatar_id) : NULL;
     int bx = av ? 72 : 72, by = 168, bw = 350 - bx + 6, bh = sh - 8 - by;
     int shown = (int)(bh * open);
     draw_box(r, sprite_get(TILESET[pg->color]), bx, by + (bh - shown), bw, shown);
-    if (open < 1.0f || !f) return;
+    if (open < 1.0f || !f || d->closing) return;
     if (av) sprite_draw(av, 0, (float)(bx + 6), (float)(by - 8), false);
     (void)sw;
     char lines[8][80]; int n = wrap(f, pg->text, av ? 228 : 260, lines);

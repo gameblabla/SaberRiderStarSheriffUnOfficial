@@ -3,227 +3,413 @@
 #include "pack.h"
 #include "audio.h"
 #include "font.h"
-#include "dialog.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 
+#define PI 3.1415927f
+#define STEP (1.0f / 60.0f)
+#define MENU_PERIOD 2.4f          /* +0x60: splash / zoom period */
+#define ATTRACT_FRAMES 1800       /* title idle -> intro (DAT_007c5bac) */
+
 static void fill(SDL_Renderer *r, int sw, int sh, uint8_t R, uint8_t G, uint8_t B, uint8_t A)
 {
+    if (A == 0) return;
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(r, R, G, B, A);
     SDL_FRect q = { 0, 0, (float)sw, (float)sh }; SDL_RenderFillRect(r, &q);
 }
 static bool confirm(const Input *in) { return btn_pressed(in, BTN_PAUSE) || btn_pressed(in, BTN_JUMP) || btn_pressed(in, BTN_SHOOT); }
+static bool action(const Input *in) { return btn_pressed(in, BTN_JUMP) || btn_pressed(in, BTN_SHOOT); }
+static uint8_t clamp255(float v) { return v <= 0 ? 0 : v >= 255 ? 255 : (uint8_t)v; }
+/* the menu's universal easing: min(1, 2 sin(pi t / period)) — 0 at both ends of the period, 1 in the middle */
+static float ease(float t, float dur) { float x = 2.0f * sinf(PI * t / dur); return x > 1 ? 1 : x < 0 ? 0 : x; }
+static float zoom_scale(float f) { return 32.0f - 31.0f * f; }   /* DAT_007c422c + DAT_007c5854 * f */
+static bool blink_on(int mask, int lim) { return ((int)(SDL_GetTicks() / 16) & mask) < lim; }
+static uint32_t frame_no(void) { return (uint32_t)(SDL_GetTicks() / 16); }
+static void draw_centered(Sprite *s, int sw, int y) { if (s) sprite_draw(s, 0, (float)((sw - s->w) / 2), (float)y, false); }
+/* triangle-wave alpha used by the result screens: (frame*2)&0x7f folded into 0x33..0x73, relative to a 0x80 neutral */
+static uint8_t pulse_alpha(void) { unsigned u = (frame_no() * 2) & 0x7f; unsigned a = u < 0x40 ? u + 0x33 : 0xb3 - u; return (uint8_t)(a * 2); }
+/* highlighted menu item colour (0x80805b00 -> (255,182,0)), white while blinking */
+static void hilite(int on, uint8_t *R, uint8_t *G, uint8_t *B) { if (on && !blink_on(0x1f, 8)) { *R = 255; *G = 182; *B = 0; } else { *R = *G = *B = 255; } }
+
+static void lives_caps(int difficulty, int *max_lives, int *max_cont)
+{
+    *max_lives = difficulty == 0 ? 7 : difficulty == 1 ? 5 : 3;
+    *max_cont  = difficulty == 0 ? 5 : difficulty == 1 ? 4 : 3;
+}
+
+static void open_briefing(Menu *m, SDL_Renderer *r)
+{
+    const PackEntry *e = packs_find(0x29CAD5D3);   /* briefing script: line 1 = video name, rest = text */
+    if (!e) return;
+    char buf[512]; size_t n = e->size < sizeof buf - 1 ? e->size : sizeof buf - 1; memcpy(buf, e->data, n); buf[n] = 0;
+    char *text = strchr(buf, '\n'); if (text) *text++ = 0; else text = buf;
+    (void)r;
+    dialog_open_text(&m->dlg, text, DLG_GREEN);
+    m->video = video_open(r, 0x2FE798C3);
+}
 
 void menu_enter(Menu *m, int state)
 {
     if (m->video) { video_close(m->video); m->video = NULL; }
     int prev = m->state;
-    m->state = state; m->t = 0; m->text_chars = 0;
+    m->state = state; m->t = 0; m->dur = MENU_PERIOD; m->idle_frames = 0;
     switch (state) {
-    case MS_SPLASH0: case MS_SPLASH1: case MS_SPLASH2: case MS_SPLASH3: m->dur = 3.0f; break;
     case MS_INTRO: m->dur = 0; break;
-    case MS_MAIN: m->dur = prev == MS_OPTIONS ? 0.0f : 3.0f; m->sel = 0; if (prev != MS_OPTIONS) music_play(0, true); break;
-    case MS_CHARSEL: m->dur = 1.0f; m->character = 1; music_play(1, true); break;
-    case MS_BRIEFING: m->dur = 1.0f; music_stop(); break;
+    case MS_MAIN:
+        if (prev == MS_OPTIONS || prev == MS_CREDITS) m->t = m->dur * 0.5f;   /* no zoom-in when coming back from a sub menu */
+        m->sel = 0; music_play(0, true); break;
+    case MS_OPTIONS: m->sel = 1; m->music_track = 0; if (prev != MS_CREDITS) music_play(3, true); break;
+    case MS_BRIEFING: m->dlg.active = false; music_play(2, true); break;
+    case MS_CHARSEL: m->t = -0.25f; m->character = 1; music_play(1, true); break;
     case MS_GAMEOVER: m->dur = 6.0f; music_play(7, false); break;
     case MS_ACCOMPLISHED: m->dur = 6.0f; music_play(6, false); break;
-    case MS_CREDITS: m->dur = 3.5f; m->credits_page = 0; music_play(3, true); break;
-    case MS_OPTIONS: m->dur = 0.0f; m->opt_sel = 0; break;
-    default: m->dur = 1.0f; break;
+    case MS_CREDITS: m->credits_page = 0; m->credits_t = 0; break;
+    default: break;
     }
 }
 
 void menu_update(Menu *m, const Input *in, float dt, int sw, SDL_Renderer *r)
 {
     (void)sw;
-    m->t += dt;
     switch (m->state) {
-    case MS_SPLASH0: case MS_SPLASH1: case MS_SPLASH2: case MS_SPLASH3:
-        if (m->t >= m->dur || confirm(in)) menu_enter(m, m->state + 1);
-        break;
+    case MS_SPLASH0: case MS_SPLASH1: case MS_SPLASH2: case MS_SPLASH3: {
+        /* FUN_00425ee0: the "please note" splash runs at 1/3 speed between t=1 and t=2; the last one runs double after t=2 */
+        float step = dt;
+        if (m->state == MS_SPLASH1 && m->t > 1.0f && m->t < 2.0f) step = dt / 3.0f;
+        if (m->state == MS_SPLASH3 && m->t > 2.0f) step = dt * 2.0f;
+        m->t += step;
+        if (btn_pressed(in, BTN_PAUSE)) { menu_enter(m, MS_MAIN); break; }
+        if (m->t >= m->dur || action(in)) menu_enter(m, m->state + 1);
+        break; }
     case MS_INTRO:
         if (!m->video) { m->video = video_open(r, 0xE46721E5); if (!m->video) { menu_enter(m, MS_MAIN); break; } }
         if (!video_update(m->video, dt) || confirm(in)) menu_enter(m, MS_MAIN);
         break;
-    case MS_MAIN:
-        if (m->t < m->dur) { if (confirm(in)) m->t = m->dur; break; }
-        if (btn_pressed(in, BTN_UP) || btn_pressed(in, BTN_DOWN)) { m->sel ^= 1; sfx_play(8, 0); }
-        if (confirm(in)) { sfx_play(9, 0); menu_enter(m, m->sel == 0 ? MS_CHARSEL : MS_OPTIONS); }
-        break;
-    case MS_OPTIONS: {
-        enum { O_SCREEN, O_SCAN, O_MUSIC, O_CREDITS, O_BACK, O_COUNT };
-        if (btn_pressed(in, BTN_UP)) { m->opt_sel = (m->opt_sel + O_COUNT - 1) % O_COUNT; sfx_play(8, 0); }
-        if (btn_pressed(in, BTN_DOWN)) { m->opt_sel = (m->opt_sel + 1) % O_COUNT; sfx_play(8, 0); }
-        int dir = btn_pressed(in, BTN_RIGHT) ? 1 : btn_pressed(in, BTN_LEFT) ? -1 : 0;
-        if (m->opt_sel == O_MUSIC && dir) { m->music_track = (m->music_track + 18 + dir) % 18; sfx_play(8, 0); }
-        if (m->opt_sel == O_SCREEN && (dir || confirm(in))) { m->mode43 = !m->mode43; m->apply_screen_mode = true; sfx_play(8, 0); }
-        if (m->opt_sel == O_SCAN && (dir || confirm(in))) { m->scanlines = !m->scanlines; sfx_play(8, 0); }
+    case MS_MAIN: {
+        float f = ease(m->t, m->dur);
+        if (f < 1.0f && m->t < m->dur * 0.5f) { m->t += dt; break; }   /* zoom-in */
+        bool any = false;
+        for (int b = 0; b < BTN_COUNT; b++) if (btn_pressed(in, b)) any = true;
+        if (btn_pressed(in, BTN_DOWN) && m->sel == 0) { m->sel = 1; sfx_play(0, 0); }
+        else if (btn_pressed(in, BTN_UP) && m->sel > 0) { m->sel--; sfx_play(0, 0); }
         if (confirm(in)) {
-            if (m->opt_sel == O_MUSIC) music_play(m->music_track, true);
-            else if (m->opt_sel == O_CREDITS) menu_enter(m, MS_CREDITS);
-            else if (m->opt_sel == O_BACK) { sfx_play(9, 0); menu_enter(m, MS_MAIN); }
+            sfx_play(0, 0);
+            if (m->sel == 1) menu_enter(m, MS_OPTIONS);
+            else { menu_enter(m, MS_BRIEFING); open_briefing(m, r); }
+            break;
+        }
+        m->idle_frames = any ? 0 : m->idle_frames + 1;
+        if (m->idle_frames > ATTRACT_FRAMES) {   /* attract: fade out and replay the intro */
+            m->t += dt;
+            if (m->t >= m->dur * 0.5f + 1.0f) menu_enter(m, MS_INTRO);
+        } else m->t = m->dur * 0.5f;
+        break; }
+    case MS_OPTIONS: {
+        int maxl, maxc;
+        if (btn_pressed(in, BTN_UP)) { m->sel = m->sel == 0 ? OPT_COUNT - 1 : m->sel - 1; sfx_play(0, 0); }
+        if (btn_pressed(in, BTN_DOWN)) { m->sel = m->sel == OPT_COUNT - 1 ? 0 : m->sel + 1; sfx_play(0, 0); }
+        int dir = btn_pressed(in, BTN_RIGHT) ? 1 : btn_pressed(in, BTN_LEFT) ? -1 : 0;
+        if (dir) sfx_play(0, 0);
+        switch (m->sel) {
+        case OPT_LEVEL:
+            if (dir) { m->difficulty = (m->difficulty + 3 + dir) % 3; lives_caps(m->difficulty, &maxl, &maxc); if (m->lives > maxl) m->lives = maxl; if (m->continues > maxc) m->continues = maxc; }
+            break;
+        case OPT_PLAYER: lives_caps(m->difficulty, &maxl, &maxc); m->lives += dir; if (m->lives < 0) m->lives = 0; if (m->lives > maxl) m->lives = maxl; break;
+        case OPT_CONTINUE: lives_caps(m->difficulty, &maxl, &maxc); m->continues += dir; if (m->continues < 0) m->continues = 0; if (m->continues > maxc) m->continues = maxc; break;
+        case OPT_SCREEN: if (dir) { m->screen = (m->screen + 4 + dir) % 4; m->apply_screen_mode = true; } break;
+        case OPT_RATIO:   /* WIDE -> 4:3 -> STRETCH -> WIDE */
+            if (dir) { m->ratio = m->ratio == RATIO_WIDE ? (dir > 0 ? RATIO_43 : RATIO_STRETCH) : m->ratio == RATIO_43 ? (dir > 0 ? RATIO_STRETCH : RATIO_WIDE) : (dir > 0 ? RATIO_WIDE : RATIO_43); m->apply_screen_mode = true; }
+            break;
+        case OPT_FILTER: if (dir) m->filter = (m->filter + FILTER_COUNT + dir) % FILTER_COUNT; break;
+        case OPT_MUSIC:
+            if (dir || confirm(in)) {
+                m->music_track = (m->music_track + 9 + (dir ? dir : 1)) % 9;
+                music_play(m->music_track == 0 ? 3 : 9 + m->music_track, true);   /* tracks 1..8 -> music table 10..17 */
+            }
+            break;
+        default: break;
+        }
+        if (confirm(in)) {
+            if (m->sel == OPT_EXIT) { sfx_play(0, 0); menu_enter(m, MS_MAIN); }
+            else if (m->sel == OPT_CREDITS) { sfx_play(0, 0); menu_enter(m, MS_CREDITS); }
         }
         break; }
     case MS_CREDITS: {
         const PackEntry *e = packs_find(0x7E11BC19);
         int pages = 1; if (e) for (uint32_t i = 0; i + 6 <= e->size; i++) if (!memcmp(e->data + i, "[fade]", 6)) pages++;
-        if (m->t >= 3.5f) { m->t = 0; m->credits_page++; }
+        m->credits_t += dt;
+        if (m->credits_t >= 3.5f) { m->credits_t = 0; m->credits_page++; }
         if (m->credits_page >= pages || confirm(in)) menu_enter(m, MS_OPTIONS);
         break; }
+    case MS_BRIEFING: {
+        /* FUN_00429050: text plays; START (or an action button once the text is complete) closes the box, then the
+         * four hero pieces slide in (t 0..0.25), hold, fade to black (1.75..2) and character select follows */
+        if (m->video && !video_update(m->video, dt)) { /* keep the last frame on the screen */ }
+        if (m->t == 0.0f) {
+            if (m->dlg.active && !m->dlg.closing) {
+                if (btn_pressed(in, BTN_PAUSE) || (dialog_text_done(&m->dlg) && action(in))) { dialog_close(&m->dlg); sfx_play(0, 0); }
+                else dialog_update(&m->dlg, in, dt);
+            } else if (m->dlg.active) dialog_update(&m->dlg, in, dt);
+            else { if (m->video) { video_close(m->video); m->video = NULL; } m->t = 0.0001f; sfx_play(8, 0); }
+        } else {
+            m->t += dt;
+            if (m->t > 2.0f) menu_enter(m, MS_CHARSEL);
+        }
+        break; }
     case MS_CHARSEL:
-        if (btn_pressed(in, BTN_LEFT)) { m->character = (m->character + 2) % 3; sfx_play(8, 0); }
-        if (btn_pressed(in, BTN_RIGHT)) { m->character = (m->character + 1) % 3; sfx_play(8, 0); }
-        if (confirm(in) && m->t > 0.3f) { if (m->character == 1) { sfx_play(9, 0); menu_enter(m, MS_BRIEFING); } else sfx_play(11, 0); }   /* only Fireball is playable in the demo */
-        break;
-    case MS_BRIEFING:
-        if (!m->video) m->video = video_open(r, 0x2FE798C3);
-        m->text_chars += dt * 30.0f;
-        if (m->video && !video_update(m->video, dt)) { video_close(m->video); m->video = NULL; }
-        if (confirm(in) && m->t > 0.5f) { if (m->video) { video_close(m->video); m->video = NULL; } m->start_level = true; }
-        else if (!m->video && m->t > 8.0f) m->start_level = true;
+        if (m->t < 0.0f) { m->t += dt; if (m->t > 0) m->t = 0; break; }   /* fade in */
+        if (m->t == 0.0f) {
+            if (btn_pressed(in, BTN_LEFT) && m->character > 0) { m->character--; sfx_play(0, 0); }
+            if (btn_pressed(in, BTN_RIGHT) && m->character < 3) { m->character++; sfx_play(0, 0); }
+            if (confirm(in)) {
+                if (m->character != 1) sfx_play(23, 0);   /* only Fireball is playable in the demo */
+                else { sfx_play(11, 0); m->t = STEP; }
+            }
+        } else {
+            m->t += dt;
+            if (m->t >= 1.0f) { m->start_level = true; m->t = 1.0f; }
+        }
         break;
     case MS_GAMEOVER: case MS_ACCOMPLISHED:
+        m->t += dt;
         if (m->t >= m->dur || (m->t > 1.5f && confirm(in))) menu_enter(m, MS_MAIN);
         break;
     default: break;
     }
 }
 
-static void draw_centered(Sprite *s, int sw, int y) { if (s) sprite_draw(s, 0, (float)((sw - s->w) / 2), (float)y, false); }
+/* ---- drawing ---- */
+
+static void draw_title_bg(Sprite *bg, int sw, int sh, float s)
+{
+    /* the title background is a half-screen strip drawn twice, the right copy mirrored */
+    if (!bg) return;
+    float w = bg->w * s, h = bg->h * s, cx = sw * 0.5f, y = (sh - h) * 0.5f;
+    if (s == 1.0f) { sprite_draw(bg, 0, 0, 0, false); sprite_draw(bg, 0, (float)(sw - bg->w), 0, true); return; }
+    SDL_FRect src = { 0, 0, (float)bg->w, (float)bg->h };
+    SDL_FRect l = { cx - w, y, w, h }, rr = { cx, y, w, h };
+    SDL_RenderTexture(SDL_GetRendererFromTexture(bg->tex), bg->tex, &src, &l);
+    SDL_RenderTextureRotated(SDL_GetRendererFromTexture(bg->tex), bg->tex, &src, &rr, 0, NULL, SDL_FLIP_HORIZONTAL);
+}
+
+static void draw_spiral(Menu *m, int sw, int sh, uint8_t bright)
+{
+    /* rotating spiral + counter-rotating moon (character select / options backdrop) */
+    Sprite *sp = sprite_get(0x92702CF3), *moon = sprite_get(0x2178AD91);
+    float deg = m->angle * 180.0f / PI;
+    if (sp) sprite_draw_rotated(sp, 0, sw * 0.5f, sh * 0.5f, sw / 420.0f, -deg, bright, 255);
+    if (moon) sprite_draw_rotated(moon, 0, sw * 0.5f, sh * 0.5f, 1.0f, deg, bright, 255);
+}
+
+static void draw_options(Menu *m, SDL_Renderer *r, int sw, int sh)
+{
+    m->angle += STEP;
+    draw_spiral(m, sw, sh, 0x33 * 2);
+    Sprite *holes = sprite_get(0xE740F153), *hdr = sprite_get(0xF8F9017C), *ex = sprite_get(0x94C9A3DA);
+    if (holes) {
+        if (m->ratio == RATIO_43) sprite_draw(holes, 0, (float)((sw - holes->w) / 2), (float)((sh - holes->h) / 2), false);
+        else sprite_draw_scaled(holes, 0, 0, 0, (float)sw, (float)sh);
+    }
+    draw_centered(hdr, sw, 0x10);
+    uint8_t R, G, B;
+    if (ex) { hilite(m->sel == OPT_EXIT, &R, &G, &B); sprite_draw_mod(ex, 0, (float)((sw - ex->w) / 2), 0xd0, R, G, B, 255); }
+    Font *f = font_get(0x4058897F);
+    if (!f) return;
+    int x0 = sw / 2 - 256, y0 = sh / 2 - 256;   /* the spiral's top-left corner is the layout origin */
+    int lx = x0 + 0xb0, vx = x0 + 0x11c;
+    static const char *DIFF[3] = { "EASY", "NORMAL", "HARD" };
+    static const char *FILT[FILTER_COUNT] = { "NONE", "CRT", "DOUBLE", "DOUBLE+SCANLINES", "CRT+SCANLINES" };
+    char lives[16], cont[16], scr[32], mus[24];
+    snprintf(lives, sizeof lives, "%02d", m->lives); snprintf(cont, sizeof cont, "%02d", m->continues);
+    if (m->screen == 0) snprintf(scr, sizeof scr, "FULL %ux%u", 852, 480); else snprintf(scr, sizeof scr, "WINDOWED x%u", m->screen + 1);
+    if (m->music_track == 0) snprintf(mus, sizeof mus, "OPTIONS"); else snprintf(mus, sizeof mus, "TEST TRACK%02d", m->music_track);
+    const char *rows[7][2] = { { "LEVEL", DIFF[m->difficulty] }, { "PLAYER", lives }, { "CONTINUE", cont }, { "SCREEN", scr },
+                               { "RATIO", m->ratio == RATIO_WIDE ? "WIDE" : m->ratio == RATIO_43 ? "4:3" : "STRETCH" }, { "FILTER", FILT[m->filter] }, { "MUSIC TEST", mus } };
+    for (int i = 0; i < 7; i++) {
+        hilite(m->sel == OPT_LEVEL + i, &R, &G, &B);
+        font_draw(f, rows[i][0], (float)lx, (float)(y0 + 0xd8 + i * 0x10), R, G, B);
+        font_draw(f, rows[i][1], (float)vx, (float)(y0 + 0xd8 + i * 0x10), 255, 255, 255);
+    }
+    hilite(m->sel == OPT_CREDITS, &R, &G, &B);
+    font_draw(f, "BACKER CREDITS", (float)(x0 + 0xca), (float)(y0 + 0x14e), R, G, B);
+    (void)r;
+}
+
+static void draw_main(Menu *m, SDL_Renderer *r, int sw, int sh)
+{
+    Sprite *bg = sprite_get(0xD7DEBAC0), *logo = sprite_get(0xB04BAC5F), *shadow = sprite_get(0x989121EC);
+    Sprite *start = sprite_get(0x01E9B701), *opt = sprite_get(0x8FF0AB30);
+    float f = ease(m->t, m->dur);
+    if (f < 1.0f && m->t < m->dur * 0.5f) {   /* zoom-in from 32x, fading up from black (FUN_00428b30) */
+        float s = zoom_scale(f);
+        draw_title_bg(bg, sw, sh, s);
+        if (logo) sprite_draw_scaled(logo, 0, (sw - logo->w * s) * 0.5f, (sh - 16 * s - logo->h * s) * 0.5f, logo->w * s, logo->h * s);
+        fill(r, sw, sh, 0, 0, 0, clamp255((1 - f) * 255));
+        return;
+    }
+    draw_title_bg(bg, sw, sh, 1.0f);
+    if (logo) {
+        int lx = (sw - logo->w) / 2;
+        if (shadow) sprite_draw_mod(shadow, 0, (float)lx, 0x20, 255, 255, 255, 80);
+        sprite_draw(logo, 0, (float)lx, 0x20, false);
+    }
+    uint8_t R, G, B;
+    if (start) { hilite(m->sel == 0, &R, &G, &B); sprite_draw_mod(start, 0, (float)((sw - start->w) / 2), 0xc0, R, G, B, 255); }
+    if (opt) { hilite(m->sel == 1, &R, &G, &B); sprite_draw_mod(opt, 0, (float)((sw - opt->w) / 2), 0xd0, R, G, B, 255); }
+    if (m->idle_frames > ATTRACT_FRAMES) fill(r, sw, sh, 0, 0, 0, clamp255((m->t - m->dur * 0.5f) * 255));
+}
+
+static void draw_briefing(Menu *m, SDL_Renderer *r, int sw, int sh)
+{
+    Sprite *room = sprite_get(0x0EAE8AEB);
+    fill(r, sw, sh, 0, 0, 0, 255);
+    if (room) sprite_draw(room, 0, (float)((sw - room->w) / 2), (float)((sh - room->h) / 2), false);
+    if (m->video) {
+        /* FUN_0042ba20: the video plays at 1/3 scale on the room's big screen, bottom edge at sh-74; while the text box opens
+         * (frames 1..21) it unfolds vertically from its centre line */
+        int vw, vh; video_size(m->video, &vw, &vh);
+        float w = vw / 3.0f, h = vh / 3.0f, x = (sw - w) * 0.5f, cy = sh - 74 - h * 0.5f;
+        float half = h * 0.5f;
+        if (m->dlg.active && !m->dlg.closing && m->dlg.frame < 21) half = m->dlg.frame * 0.0075757f * vh;
+        if (m->dlg.closing) half = m->dlg.frame * 0.0075757f * vh;
+        if (half > 0) {
+            SDL_Rect clip = { (int)x, (int)(cy - half), (int)w + 1, (int)(half * 2) + 1 };
+            SDL_SetRenderClipRect(r, &clip);
+            video_draw_rect(m->video, r, x, cy - h * 0.5f, w, h);
+            SDL_SetRenderClipRect(r, NULL);
+        }
+    }
+    if (m->dlg.active) dialog_draw(&m->dlg, r, sw, sh);
+    if (m->t > 0.0f) {   /* FUN_00429200: the four hero pieces slide in from the edges */
+        CBlock *pc = cblock_get(0x2DEF1664);
+        if (pc) {
+            float pw = (float)(pc->cols * pc->tw), ph = (float)(pc->rows * pc->th);
+            float x0 = floorf((sw - pw) * 0.5f), y0 = floorf((sh - ph) * 0.5f);
+            float tt = m->t > 0.25f ? 0.25f : m->t;
+            float f = sinf(tt * 2.0f * PI) * 0.25f;
+            float dx = floorf(0.5f * (pw - f * 4.0f * pw)), dy = floorf(0.5f * (ph - f * 4.0f * ph));
+            cblock_draw_frame(pc, 0, x0 - dx, y0, false);
+            cblock_draw_frame(pc, 1, x0 + dx, y0, false);
+            cblock_draw_frame(pc, 2, x0, y0 - dy, false);
+            cblock_draw_frame(pc, 3, x0, y0 + dy, false);
+        }
+        if (m->t > 1.75f) fill(r, sw, sh, 0, 0, 0, clamp255((m->t - 1.75f) * 4.0f * 255));
+    }
+}
+
+static void draw_charsel(Menu *m, SDL_Renderer *r, int sw, int sh)
+{
+    /* FUN_004296d0 */
+    m->angle += STEP;
+    draw_spiral(m, sw, sh, 255);
+    int x0 = (sw - 0x140) / 2;
+    Sprite *title = sprite_get(0x4813ED48), *prev = sprite_get(0xAE16B01D), *next = sprite_get(0xE34D3083);
+    Sprite *cursor = sprite_get(0x5B550481), *hl = sprite_get(0x7673D08E), *na = sprite_get(0x7255866F);
+    if (title) sprite_draw(title, 0, (float)(x0 + 0x20), 0x10, false);
+    bool arrows = (frame_no() & 0x20) != 0;
+    if (prev && arrows) sprite_draw(prev, 0, (float)x0, 0x60, false);
+    if (next && arrows) sprite_draw(next, 0, (float)(x0 + 0x120), 0x60, false);
+    /* per panel: frame, name on/off, portrait on/off */
+    static const uint32_t FRAME[4]    = { 0xC2EBBACE, 0x13D53116, 0xCDC8A9CC, 0x957325FD };
+    static const uint32_t NAME_ON[4]  = { 0xB48828F4, 0x699DC4C3, 0xA9AB3BF0, 0xF6CBB2F4 };
+    static const uint32_t NAME_OFF[4] = { 0xEC2B5E94, 0x2F75D0AA, 0xE14E4D96, 0xBFFFBB29 };
+    static const uint32_t PORT_ON[4]  = { 0x67C9A3D9, 0x74100546, 0x72A6B0FB, 0xEEE2331F };
+    static const uint32_t PORT_OFF[4] = { 0x3459994C, 0xAA051172, 0x3F368A4E, 0x217B03F1 };
+    static const int PX[4] = { 0x10, 0x60, 0xa0, 0xe0 }, NA_ADJ[4] = { 0, 0, 8, 4 }, HL_ADJ[4] = { 0, 0xc, 8, 4 }, CUR_ADJ[4] = { 0xe, 2, 7, 10 };
+    for (int i = 0; i < 4; i++) {
+        bool on = i == m->character;
+        int x = x0 + PX[i];
+        Sprite *fr = sprite_get(FRAME[i]), *nm = sprite_get(on ? NAME_ON[i] : NAME_OFF[i]), *po = sprite_get(on ? PORT_ON[i] : PORT_OFF[i]);
+        if (fr) sprite_draw_mod(fr, 0, (float)x, 0x30, 255, 255, 255, on ? 255 : 128);
+        if (nm) sprite_draw(nm, 0, (float)(x + ((i == 0 || i == 3) ? 0x10 : 0)), 0xd0, false);
+        if (po) sprite_draw(po, 0, (float)x, 0x30, false);
+        if (i != 1 && na) sprite_draw_mod(na, 0, (float)(x - NA_ADJ[i] + 8), 0x68, 255, 255, 255, 116);
+        if (on && hl && (frame_no() & 8)) sprite_draw(hl, 0, (float)(x - HL_ADJ[i]), 0x30, false);
+        if (on && cursor) sprite_draw(cursor, 0, (float)(x + CUR_ADJ[i]), 0x22, false);
+    }
+    if (m->t < 0.0f) fill(r, sw, sh, 0, 0, 0, clamp255(-m->t * 4.0f * 255));
+    else if (m->t > 0.0f) {
+        fill(r, sw, sh, 0, 0, 0, clamp255(ease(m->t, m->dur) * 255));
+        Font *f = font_get(0x4058897F);
+        if (f && m->t > 0.5f) font_draw(f, "LOADING", (float)(sw - font_text_width(f, "LOADING") - 8), (float)(sh - 16), 255, 255, 255);
+    }
+}
+
+static void draw_credits(Menu *m, SDL_Renderer *r, int sw, int sh)
+{
+    /* FUN_00427a60: title backdrop, half-size logo, EXIT, one [fade] block of the credits text at a time */
+    Sprite *bg = sprite_get(0xD7DEBAC0), *logo = sprite_get(0xB04BAC5F), *shadow = sprite_get(0x989121EC), *ex = sprite_get(0x94C9A3DA);
+    draw_title_bg(bg, sw, sh, 1.0f);
+    if (logo) {
+        float lx = (sw - logo->w * 0.5f) * 0.5f;
+        if (shadow) { SDL_SetTextureAlphaMod(shadow->tex, 80); sprite_draw_scaled(shadow, 0, lx, 0xc, shadow->w * 0.5f, shadow->h * 0.5f); SDL_SetTextureAlphaMod(shadow->tex, 255); }
+        sprite_draw_scaled(logo, 0, lx, 0xc, logo->w * 0.5f, logo->h * 0.5f);
+    }
+    uint8_t R, G, B; hilite(1, &R, &G, &B);
+    if (ex) sprite_draw_mod(ex, 0, (float)((sw - ex->w) / 2), 0xc5, R, G, B, 255);
+    const PackEntry *e = packs_find(0x7E11BC19); Font *f = font_get(0x7405B203);
+    if (!e || !f) return;
+    /* page = block between [fade] markers; lines centred; <cRRGGBB> colours a line */
+    char buf[12000]; size_t n = e->size < sizeof buf - 1 ? e->size : sizeof buf - 1; memcpy(buf, e->data, n); buf[n] = 0;
+    int page = 0; char *lines[24]; int nl = 0;
+    for (char *line = strtok(buf, "\n"); line; line = strtok(NULL, "\n")) {
+        if (!strncmp(line, "[fade]", 6) || !strncmp(line, "[roll]", 6)) { if (page == m->credits_page) break; page++; nl = 0; continue; }
+        if (page == m->credits_page && nl < 24) lines[nl++] = line;
+    }
+    while (nl > 0 && lines[nl-1][0] == 0) nl--;
+    int first = 0; while (first < nl && lines[first][0] == 0) first++;
+    float a = sinf(PI * m->credits_t / 3.5f) * 2.5f; if (a > 1) a = 1;
+    int lh = f->h + 2, y = 0x6c - (nl - first) * lh / 2;
+    for (int i = first; i < nl; i++, y += lh) {
+        char *t = lines[i]; uint8_t cR = 255, cG = 255, cB = 255;
+        size_t l = strlen(t); while (l && t[l-1] == '\r') t[--l] = 0;
+        if (!strncmp(t, "<c", 2) && strlen(t) >= 9 && t[8] == '>') { unsigned v = (unsigned)strtoul(t + 2, NULL, 16); cR = v >> 16; cG = (v >> 8) & 255; cB = v & 255; t += 9; }
+        font_draw(f, t, (float)((sw - font_text_width(f, t)) / 2), (float)y, (uint8_t)(cR * a), (uint8_t)(cG * a), (uint8_t)(cB * a));
+    }
+    (void)r;
+}
 
 void menu_draw(Menu *m, SDL_Renderer *r, int sw, int sh)
 {
-    float fade = 1.0f;   /* 1 = fully visible; splash screens fade in/out with a sine */
-    if (m->state <= MS_SPLASH3 || m->state == MS_GAMEOVER || m->state == MS_ACCOMPLISHED) {
-        float x = sinf(3.1415927f * (m->t / m->dur)) * 2.0f; fade = x > 1 ? 1 : x;
-    }
     switch (m->state) {
     case MS_SPLASH0: { fill(r, sw, sh, 0, 0, 0, 255); Sprite *s = sprite_get(0x7C5F519A); draw_centered(s, sw, s ? (sh - s->h) / 2 : 0); break; }
     case MS_SPLASH1: case MS_SPLASH2: case MS_SPLASH3: {
+        /* FUN_00426030: white screen, sprite zooms in from 32x under a white veil, holds, zooms out again;
+         * the last one stays at 1x after t=2 and fades to black instead */
         fill(r, sw, sh, 255, 255, 255, 255);
         static const uint32_t ids[3] = { 0x7C655085, 0x7C6B538C, 0x7C71528B };
         Sprite *s = sprite_get(ids[m->state - 1]);
-        if (s) {
-            float sc = m->state == MS_SPLASH3 && m->t >= 2.0f ? 1.0f : 0.76f + 0.24f * fade;   /* zoom-in (0x7c422c/0x7c5854) */
-            sprite_draw_scaled(s, 0, (sw - s->w * sc) * 0.5f, (sh - s->h * sc) * 0.5f, s->w * sc, s->h * sc);
-        }
+        float f = ease(m->t, m->dur);
+        bool tail = m->state == MS_SPLASH3 && m->t >= 2.0f;
+        float sc = tail ? 1.0f : zoom_scale(f);
+        if (s) sprite_draw_scaled(s, 0, (sw - s->w * sc) * 0.5f, (sh - s->h * sc) * 0.5f, s->w * sc, s->h * sc);
+        if (f < 1.0f) { uint8_t v = tail ? 0 : 255; fill(r, sw, sh, v, v, v, clamp255((1 - f) * 255)); }
         break; }
-    case MS_INTRO: fill(r, sw, sh, 0, 0, 0, 255); video_draw(m->video, r, sw, sh); return;
-    case MS_MAIN: case MS_OPTIONS: {
-        Sprite *bg = sprite_get(0xD7DEBAC0), *logo = sprite_get(0xB04BAC5F), *shadow = sprite_get(0x989121EC);
-        Sprite *start = sprite_get(0x01E9B701), *opt = sprite_get(0x8FF0AB30);
-        float open = m->dur > 0 && m->t < m->dur ? m->t / m->dur : 1.0f;
-        if (bg) { sprite_draw(bg, 0, 0, 0, false); sprite_draw(bg, 0, (float)(sw - bg->w), 0, true); }
-        if (logo) {
-            int lx = (sw - logo->w) / 2, ly = 0x20 - (int)((1 - open) * 120);
-            if (shadow) { SDL_SetTextureAlphaMod(shadow->tex, 80); sprite_draw(shadow, 0, (float)lx, (float)ly, false); SDL_SetTextureAlphaMod(shadow->tex, 255); }
-            sprite_draw(logo, 0, (float)lx, (float)ly, false);
-        }
-        if (open >= 1.0f) {
-            bool blink = ((SDL_GetTicks() / 16) & 0x1f) < 8;
-            if (start) { if (m->sel == 0 && !blink) SDL_SetTextureColorMod(start->tex, 255, 255, 0); draw_centered(start, sw, 0xc0); SDL_SetTextureColorMod(start->tex, 255, 255, 255); }
-            if (opt) { if (m->sel == 1 && !blink) SDL_SetTextureColorMod(opt->tex, 255, 255, 0); draw_centered(opt, sw, 0xd0); SDL_SetTextureColorMod(opt->tex, 255, 255, 255); }
-            if (m->state == MS_OPTIONS) {
-                Font *f = font_get(0x12072E60); Sprite *hdr = sprite_get(0xF8F9017C /* placeholder */);
-                fill(r, sw, sh, 0, 0, 0, 215);
-                Sprite *om = sprite_get(0x8FF0AB30); (void)hdr;
-                draw_centered(om, sw, 0x28);
-                if (f) {
-                    char line[64]; const char *items[5];
-                    static const char *TRACKS[18] = { "MENU", "SELECT", "CREDITS", "OPTIONS", "BRIEFING", "LEVEL 1", "CLEAR", "GAME OVER", "BOSS", "TRACK 10", "TRACK 11", "TRACK 12", "TRACK 13", "TRACK 14", "TRACK 15", "TRACK 16", "TRACK 17", "TRACK 18" };
-                    char a[48], b[48], c[48];
-                    snprintf(a, sizeof a, "SCREEN      %s", m->mode43 ? "< 4:3 >" : "< 16:9 >");
-                    snprintf(b, sizeof b, "SCANLINES   %s", m->scanlines ? "< ON >" : "< OFF >");
-                    snprintf(c, sizeof c, "MUSIC TEST  < %02d %s >", m->music_track + 1, TRACKS[m->music_track]);
-                    items[0] = a; items[1] = b; items[2] = c; items[3] = "BAKER CREDITS"; items[4] = "BACK";
-                    for (int i = 0; i < 5; i++) {
-                        bool on = i == m->opt_sel;
-                        snprintf(line, sizeof line, "%s", items[i]);
-                        font_draw(f, line, (float)((sw - font_text_width(f, line)) / 2), (float)(0x60 + i * 16), on ? 255 : 170, on ? 255 : 170, on ? 80 : 170);
-                    }
-                }
-            }
-        } else fade = open;
-        break; }
-    case MS_CHARSEL: {
-        Sprite *bg = sprite_get(0x92702CF3), *moon = sprite_get(0x2178AD91), *title = sprite_get(0x4813ED48);
-        Sprite *prev = sprite_get(0xAE16B01D), *next = sprite_get(0xE34D3083);
-        /* panels: Saber (gold), Fireball (red), April (green); selected shows the portrait + white name */
-        static const uint32_t FRAME[3] = { 0xC2EBBACE, 0x13D53116, 0xCDC8A9CC };
-        static const uint32_t PORT[3]  = { 0x67C9A3D9, 0x74100546, 0x72A6B0FB };
-        static const uint32_t NAME_ON[3]  = { 0xB48828F4, 0x699DC4C3, 0xA9AB3BF0 };
-        static const uint32_t NAME_OFF[3] = { 0xEC2B5E94, 0x2F75D0AA, 0xA9AB3BF0 };
+    case MS_INTRO: fill(r, sw, sh, 0, 0, 0, 255); video_draw(m->video, r, sw, sh); break;
+    case MS_MAIN: draw_main(m, r, sw, sh); break;
+    case MS_OPTIONS: draw_options(m, r, sw, sh); break;
+    case MS_BRIEFING: draw_briefing(m, r, sw, sh); break;
+    case MS_CHARSEL: draw_charsel(m, r, sw, sh); break;
+    case MS_CREDITS: draw_credits(m, r, sw, sh); break;
+    case MS_GAMEOVER: {   /* FUN_0042a310: Nemesis art + pulsing GAME OVER, fading up over the first half */
         fill(r, sw, sh, 0, 0, 0, 255);
-        if (bg) { float ox = fmodf(m->t * 8.0f, (float)bg->w); sprite_draw(bg, 0, -ox, (float)((sh - bg->h) / 2), false); sprite_draw(bg, 0, bg->w - ox, (float)((sh - bg->h) / 2), false); }
-        if (moon) sprite_draw(moon, 0, (float)((sw - moon->w) / 2), (float)((sh - moon->h) / 2), false);
-        int x0 = (sw - 0x120 - 16) / 2;
-        if (title) sprite_draw(title, 0, (float)(x0 + 0x20), 0x10, false);
-        if (prev) sprite_draw(prev, 0, (float)x0, 0x60, false);
-        if (next) sprite_draw(next, 0, (float)(x0 + 0x120), 0x60, false);
-        int px = (sw - (80 + 8 + 64 + 8 + 64)) / 2;
-        for (int i = 0; i < 3; i++) {
-            Sprite *fr = sprite_get(FRAME[i]);
-            bool on = i == m->character;
-            if (fr) { if (!on) SDL_SetTextureAlphaMod(fr->tex, 96); sprite_draw(fr, 0, (float)px, 0x30, false); SDL_SetTextureAlphaMod(fr->tex, 255); }
-            if (on) { Sprite *po = sprite_get(PORT[i]); if (po) sprite_draw(po, 0, (float)px, 0x30, false); }
-            Sprite *nm = sprite_get(on ? NAME_ON[i] : NAME_OFF[i]);
-            if (nm) sprite_draw(nm, 0, (float)(px + ((fr ? fr->w : 64) - nm->w) / 2), 0x30 + 160 + 4, false);
-            px += (fr ? fr->w : 64) + 8;
-        }
+        Sprite *bg = sprite_get(0x64981FC5), *s = sprite_get(0x24138418);
+        if (bg) sprite_draw(bg, 0, (float)((sw - bg->w) / 2), (float)((sh - bg->h) / 2), false);
+        if (s) sprite_draw_mod(s, 0, (float)((sw - s->w) / 2), (float)((sh - s->h) / 2 + 0x48), 255, 255, 255, pulse_alpha());
+        fill(r, sw, sh, 0, 0, 0, clamp255((1 - ease(m->t, m->dur)) * 255));
         break; }
-    case MS_BRIEFING: {
-        Sprite *room = sprite_get(0x0EAE8AEB);
+    case MS_ACCOMPLISHED: {   /* FUN_00429d80: Fireball art + pulsing MISSION / ACCOMPLISHED */
         fill(r, sw, sh, 0, 0, 0, 255);
-        if (room) sprite_draw(room, 0, (float)((sw - room->w) / 2), 0, false);
-        if (m->video && m->t > 1.0f) {
-            /* the briefing video plays on the big screen in the upper part of the room art (768x312 -> 234x95) */
-            SDL_Rect clip = { 104, 60, 218, 88 };
-            SDL_SetRenderClipRect(r, &clip);
-            video_draw(m->video, r, sw, 60 * 2 + 88);
-            SDL_SetRenderClipRect(r, NULL);
-        }
-        const PackEntry *e = packs_find(0x29CAD5D3);
-        Font *f = font_get(0x12072E60);
-        if (e && f && m->t > 1.5f) {
-            char buf[256]; size_t n = e->size < 255 ? e->size : 255; memcpy(buf, e->data, n); buf[n] = 0;
-            char *text = strchr(buf, '\n'); text = text ? text + 1 : buf;   /* first line = video name */
-            int shown = (int)m->text_chars, y = 196;
-            char *line = strtok(text, "\n");
-            while (line && shown > 0) { int l = (int)strlen(line); font_draw_n(f, line, shown < l ? shown : l, (float)((sw - font_text_width(f, line)) / 2), (float)y, 255, 230, 120); shown -= l; y += 12; line = strtok(NULL, "\n"); }
-        }
-        break; }
-    case MS_CREDITS: {
-        fill(r, sw, sh, 0, 0, 0, 255);
-        const PackEntry *e = packs_find(0x7E11BC19); Font *f = font_get(0x12072E60);
-        if (e && f) {
-            /* page = block between [fade] markers; lines centred; <cRRGGBB> colours a line */
-            char buf[12000]; size_t n = e->size < sizeof buf - 1 ? e->size : sizeof buf - 1; memcpy(buf, e->data, n); buf[n] = 0;
-            int page = 0; char *lines[24]; int nl = 0;
-            for (char *line = strtok(buf, "\n"); line; line = strtok(NULL, "\n")) {
-                if (!strncmp(line, "[fade]", 6)) { if (page == m->credits_page) break; page++; nl = 0; continue; }
-                if (page == m->credits_page && nl < 24) lines[nl++] = line;
-            }
-            while (nl > 0 && lines[nl-1][0] == 0) nl--;
-            int first = 0; while (first < nl && lines[first][0] == 0) first++;
-            float a = sinf(3.1415927f * m->t / m->dur) * 2.5f; if (a > 1) a = 1;
-            int y = sh / 2 - (nl - first) * 6;
-            for (int i = first; i < nl; i++, y += 12) {
-                char *t = lines[i]; uint8_t R = 255, G = 255, B = 255;
-                if (!strncmp(t, "<c", 2) && strlen(t) >= 9 && t[8] == '>') { unsigned v = (unsigned)strtoul(t + 2, NULL, 16); R = v >> 16; G = (v >> 8) & 255; B = v & 255; t += 9; }
-                font_draw(f, t, (float)((sw - font_text_width(f, t)) / 2), (float)y, (uint8_t)(R * a), (uint8_t)(G * a), (uint8_t)(B * a));
-            }
-        }
-        break; }
-    case MS_GAMEOVER: { fill(r, sw, sh, 0, 0, 0, 255); Sprite *s = sprite_get(0xF629241D); draw_centered(s, sw, s ? (sh - s->h) / 2 : 0); break; }
-    case MS_ACCOMPLISHED: {
-        fill(r, sw, sh, 0, 0, 0, 255);
-        Sprite *a = sprite_get(0x24138418), *b = sprite_get(0xF8F9017C);
-        draw_centered(a, sw, sh / 2 - 34); draw_centered(b, sw, sh / 2 - 4);
+        Sprite *bg = sprite_get(0xE963788C), *a = sprite_get(0xF6172502), *b = sprite_get(0xF629241D);
+        if (bg) sprite_draw(bg, 0, (float)((sw - bg->w) / 2), (float)((sh - bg->h) / 2), false);
+        uint8_t al = pulse_alpha();
+        if (a) sprite_draw_mod(a, 0, (float)((sw - a->w) / 2), (float)((sh + 0x60 - a->h) / 2), 255, 255, 255, al);
+        if (b) sprite_draw_mod(b, 0, (float)((sw - b->w) / 2), (float)((sh + 0x90 - b->h) / 2), 255, 255, 255, al);
+        fill(r, sw, sh, 0, 0, 0, clamp255((1 - ease(m->t, m->dur)) * 255));
         break; }
     default: break;
     }
-    if (fade < 1.0f) fill(r, sw, sh, 0, 0, 0, (uint8_t)((1.0f - fade) * 255));
 }

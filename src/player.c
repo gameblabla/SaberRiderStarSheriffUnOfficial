@@ -6,7 +6,7 @@ void player_spawn(Player *p, uint32_t crhc_id, float x, float y)
     memset(p, 0, sizeof *p);
     character_init(&p->ch, crhc_id, false);
     p->ch.body.x = x; p->ch.body.y = y;
-    p->hp = 2; p->lives = 2;   /* DAT_00aab788 = 2 lives, normal difficulty = 2 hearts */
+    p->hp = 2; p->lives = 2;   /* lives are overridden from the options (DAT_00aab788), 2 hearts */
     p->safe_x = p->respawn_x = x; p->safe_y = p->respawn_y = y;
 }
 

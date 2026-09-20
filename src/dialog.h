@@ -20,6 +20,10 @@ typedef struct {
     bool closing;
 } Dialog;
 
+enum { DLG_GREEN, DLG_PURPLE, DLG_RED, DLG_BLUE };
 bool dialog_open(Dialog *d, uint32_t text_id);
+bool dialog_open_text(Dialog *d, const char *text, int color);   /* plain text (no script header), e.g. the mission briefing */
+bool dialog_text_done(const Dialog *d);
+void dialog_close(Dialog *d);                                    /* start the close animation */                          /* typewriter finished on the last page */
 void dialog_update(Dialog *d, const Input *in, float dt);   /* advances pages, sets active=false when done */
 void dialog_draw(const Dialog *d, SDL_Renderer *r, int sw, int sh);

@@ -15,6 +15,7 @@ bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh)
 {
     memset(g, 0, sizeof *g);
     g->ren = ren; g->sw = sw; g->sh = sh;
+    g->menu.difficulty = 1; g->menu.lives = 2; g->menu.continues = 3;   /* option defaults: NORMAL, 02, 03 */
     if (!SDL_getenv("SABER_MENU") && (SDL_getenv("SABER_START") || SDL_getenv("SABER_SCRIPT"))) return level_start(g);   /* debug: straight into the level */
     menu_enter(&g->menu, SDL_getenv("SABER_MENU") ? atoi(SDL_getenv("SABER_MENU")) : MS_SPLASH0);
     return true;
@@ -36,6 +37,7 @@ static bool level_start(Game *g)
     for (int i = 0; i < g->level.nobjs; i++) if (g->level.objs[i].type == 0) { px = g->level.objs[i].x; py = g->level.objs[i].y; }
     if (SDL_getenv("SABER_START")) px = (float)atof(SDL_getenv("SABER_START"));   /* debug */
     player_spawn(&g->player, HERO_CRHC[0], px, py);
+    g->player.lives = g->menu.lives;
     enemies_reset(&g->enemies);
     static const uint32_t DIALOG_TEXT[4] = { 0xC3B6D081, 0xC4B0D1BA, 0xC5AAD2B7, 0xC6A4D3AC };
     for (int i = 0; i < g->level.nobjs; i++) {
@@ -215,17 +217,22 @@ static void draw_collision(Game *g)
 
 static void draw_scanlines(Game *g)
 {
-    if (!g->menu.scanlines) return;
+    if (!menu_scanlines(&g->menu)) return;
     SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(g->ren, 0, 0, 0, 70);
     for (int y = 1; y < g->sh; y += 2) { SDL_FRect q = { 0, (float)y, (float)g->sw, 1 }; SDL_RenderFillRect(g->ren, &q); }
 }
 
 void game_draw(Game *g)
 {
-    if (g->menu.apply_screen_mode) {
+    if (g->menu.apply_screen_mode && !g->in_level) {
         g->menu.apply_screen_mode = false;
-        g->sw = g->menu.mode43 ? 320 : 426;
-        SDL_SetRenderLogicalPresentation(g->ren, g->sw, g->sh, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+        g->sw = g->menu.ratio == RATIO_WIDE ? 426 : 320;
+        SDL_SetRenderLogicalPresentation(g->ren, g->sw, g->sh, g->menu.ratio == RATIO_STRETCH ? SDL_LOGICAL_PRESENTATION_STRETCH : SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+        SDL_Window *win = SDL_GetRenderWindow(g->ren);
+        if (win) {
+            SDL_SetWindowFullscreen(win, g->menu.screen == 0);
+            if (g->menu.screen > 0) SDL_SetWindowSize(win, 426 * (g->menu.screen + 1), 240 * (g->menu.screen + 1));
+        }
     }
     if (!g->in_level) { menu_draw(&g->menu, g->ren, g->sw, g->sh); draw_scanlines(g); return; }
     Level *L = &g->level;

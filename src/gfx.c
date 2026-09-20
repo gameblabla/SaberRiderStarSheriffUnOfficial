@@ -24,6 +24,15 @@ static void argb1555_to_rgba(const uint8_t *src, uint32_t *dst, int n)
     }
 }
 
+static void argb4444_to_rgba(const uint8_t *src, uint32_t *dst, int n)
+{
+    for (int i = 0; i < n; i++) {
+        uint16_t v = rd16(src + i * 2);
+        uint32_t a = (v >> 12) * 17, rr = ((v >> 8) & 15) * 17, g = ((v >> 4) & 15) * 17, b = (v & 15) * 17;
+        dst[i] = a << 24 | b << 16 | g << 8 | rr;
+    }
+}
+
 static SDL_Texture *make_tex(int w, int h, const uint32_t *px)
 {
     SDL_Texture *t = SDL_CreateTexture(R, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, w, h);
@@ -112,6 +121,7 @@ Sprite *sprite_from_blob(uint32_t id, const uint8_t *d, uint32_t size)
     struct { const uint8_t *data; uint32_t size; } ev = { d, size }; const void *e = &ev;
     (void)e;
     s->id = id; s->w = rd16(d); s->h = rd16(d + 2); s->frames = rd16(d + 6);
+    int fmt = rd16(d + 4);   /* 1 = ARGB1555, 3 = ARGB4444 (translucent dialog boxes) */
     uint32_t dsz = rd32(d + 12);
     int pw = pot(s->w), ph = pot(s->h);
     uint8_t *raw = malloc(dsz + 16);
@@ -124,7 +134,8 @@ Sprite *sprite_from_blob(uint32_t id, const uint8_t *d, uint32_t size)
     uint32_t *px = calloc((size_t)W * H, 4);
     uint32_t *fr = malloc((size_t)pw * ph * 4);
     for (int f = 0; f < s->frames; f++) {
-        argb1555_to_rgba(raw + (size_t)f * pw * ph * 2, fr, pw * ph);
+        if (fmt == 3) argb4444_to_rgba(raw + (size_t)f * pw * ph * 2, fr, pw * ph);
+        else argb1555_to_rgba(raw + (size_t)f * pw * ph * 2, fr, pw * ph);
         for (int y = 0; y < s->h; y++) memcpy(px + (size_t)y * W + f * s->w, fr + (size_t)y * pw, s->w * 4);
     }
     s->tex = make_tex(W, H, px);
@@ -156,4 +167,21 @@ void sprite_draw_scaled(const Sprite *s, int frame, float x, float y, float w, f
     SDL_FRect src = { (float)(frame * s->w), 0, (float)s->w, (float)s->h };
     SDL_FRect dst = { x, y, w, h };
     SDL_RenderTexture(R, s->tex, &src, &dst);
+}
+
+void sprite_draw_rotated(const Sprite *s, int frame, float cx, float cy, float scale, float angle, uint8_t bright, uint8_t alpha)
+{
+    if (!s) return;
+    SDL_FRect src = { (float)(frame * s->w), 0, (float)s->w, (float)s->h };
+    SDL_FRect dst = { cx - s->w * scale * 0.5f, cy - s->h * scale * 0.5f, s->w * scale, s->h * scale };
+    SDL_SetTextureColorMod(s->tex, bright, bright, bright); SDL_SetTextureAlphaMod(s->tex, alpha);
+    SDL_RenderTextureRotated(R, s->tex, &src, &dst, angle, NULL, SDL_FLIP_NONE);
+    SDL_SetTextureColorMod(s->tex, 255, 255, 255); SDL_SetTextureAlphaMod(s->tex, 255);
+}
+void sprite_draw_mod(const Sprite *s, int frame, float x, float y, uint8_t r, uint8_t g, uint8_t b, uint8_t alpha)
+{
+    if (!s) return;
+    SDL_SetTextureColorMod(s->tex, r, g, b); SDL_SetTextureAlphaMod(s->tex, alpha);
+    sprite_draw(s, frame, x, y, false);
+    SDL_SetTextureColorMod(s->tex, 255, 255, 255); SDL_SetTextureAlphaMod(s->tex, 255);
 }

@@ -31,3 +31,6 @@ void  cblock_draw_tile(const CBlock *c, int t, float x, float y, bool flip);
 void  cblock_draw_frame(const CBlock *c, int frame, float x, float y, bool flip);
 void  sprite_draw(const Sprite *s, int frame, float x, float y, bool flip);
 void  sprite_draw_scaled(const Sprite *s, int frame, float x, float y, float w, float h);
+/* draw centred at cx,cy, rotated by angle (degrees), with a brightness/alpha modulation (255 = unchanged) */
+void  sprite_draw_rotated(const Sprite *s, int frame, float cx, float cy, float scale, float angle, uint8_t bright, uint8_t alpha);
+void  sprite_draw_mod(const Sprite *s, int frame, float x, float y, uint8_t r, uint8_t g, uint8_t b, uint8_t alpha);

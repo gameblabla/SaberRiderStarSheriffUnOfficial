@@ -19,7 +19,9 @@ int main(int argc, char **argv)
     const char *data_dir = argc > 1 ? argv[1] : "SaberRider/data";
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1; }
     SDL_Window *win; SDL_Renderer *ren;
-    if (!SDL_CreateWindowAndRenderer("Saber Rider and the Star Sheriffs", SCREEN_W * 3, SCREEN_H * 3, SDL_WINDOW_RESIZABLE, &win, &ren)) {
+    int ww = SCREEN_W * 3, wh = SCREEN_H * 3;
+    if (SDL_getenv("SABER_WINDOW")) sscanf(SDL_getenv("SABER_WINDOW"), "%dx%d", &ww, &wh);   /* debug: initial window size */
+    if (!SDL_CreateWindowAndRenderer("Saber Rider and the Star Sheriffs", ww, wh, SDL_WINDOW_RESIZABLE, &win, &ren)) {
         fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1;
     }
     SDL_SetRenderLogicalPresentation(ren, SCREEN_W, SCREEN_H, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
