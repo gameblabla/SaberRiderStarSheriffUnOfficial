@@ -530,7 +530,6 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
 {
     Character *c = &e->ch; Body *b = &c->body;
     (void)W;
-    float px = E->phcx;
     E->frame++;
     /* hover: vertical sine, gravity cancelled */
     float amp = c->state == CS_FALL ? 10.0f : c->state == CS_SLIDE ? 13.0f : 16.0f;
@@ -554,6 +553,8 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
         return;
     }
     if (E->boss_phase == 0) { E->boss_phase = 1; E->cam_locked = true; music_play(8, true); sfx_play(0x13, 0); }
+    if (SDL_getenv("SABER_TRACE") && (E->frame % 10) == 0)
+        fprintf(stderr, "boss st=%d layer=%d x=%.0f y=%.0f vx=%.0f cam=%.0f phase=%d dir=%d aim=%d hp=%d anim=%d\n", c->state, e->layer, b->x, b->y, b->vx, cam_x, E->boss_phase, e->dir, c->aim, e->hp, c->anim);
 
     switch (c->state) {
     case CS_FALL:      /* fly-in from the right in the far layer, accelerating left (0x7c4200) */
@@ -563,7 +564,7 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
             int nl = next_sprite_layer(L, e->layer);
             if (nl >= 0) e->layer = nl;
             c->state = CS_SLIDE; e->dir = 1; e->ft = 400.0f; c->speed = 140.0f; E->boss_phase = 0; sfx_play(0x13, 0);
-            b->x = cam_x - 230.0f;
+            b->x = cam_x - 820.0f; b->vx = 0;   /* re-enters at the left edge ~1.9 s later (measured on the original) */
         }
         break;
     case CS_SLIDE:     /* mid layer, accelerating right (0x7c4208) */
@@ -573,57 +574,44 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
             int nl = next_sprite_layer(L, e->layer);
             if (nl >= 0) { e->layer = nl; b->x = cam_x - 230.0f; b->vx = 0; }
             if (nl < 0 || next_sprite_layer(L, nl) < 0) {
-                /* reached the play layer: enter the fight, with the rider */
+                /* reached the play layer: the boss sweeps (state 1, facing left, aiming down-left) and a clone of
+                 * it (FUN_0041fbf0) rides along in state 8 as a second gun; both share the phase counter */
                 e->layer = nl >= 0 ? nl : e->layer;
-                c->state = CS_AIM; c->aim = AIM_DR; e->dir = 0; b->x = cam_x + sw + 100.0f; b->vx = 0;
+                c->state = CS_WALK; c->aim = AIM_DL; e->dir = 0; c->facing = 0; b->x = cam_x + sw + 280.0f; b->vx = 0;   /* ~1.5 s until it shows */
                 Enemy *r = alloc_slot(E, EC_HORSEBOSS);
                 if (r) { character_init(&r->ch, 0x2A02BD4F, false); r->type = 10; r->layer = e->layer; r->link = (int)(e - E->e); r->hp = 1; r->variant = 99; r->ch.state = CS_AIM; r->ch.aim = AIM_DR; r->ch.body = *b; e->link = (int)(r - E->e); }
                 E->boss_phase = 1;
             }
         }
         break;
-    case CS_AIM:       /* hover-and-shoot */
-        b->flags = PHYS_IGNORE_LEFT | PHYS_IGNORE_RIGHT | PHYS_NO_GRAVITY;
-        b->vx = 0;
-        if (!((unsigned)(E->boss_phase - 0xa0) < 0x19) && b->x > cam_x - 64.0f && b->x < cam_x + sw) {
-            float dx = fabsf(px - b->x);
-            c->aim = e->dir == 1 ? (dx >= 60.0f ? AIM_DL : AIM_L) : (dx >= 60.0f ? AIM_DR : AIM_R);
-            boss_fire(E, e, eb, 0x12);
-        }
-        E->boss_phase++;
-        if (E->boss_phase > 0xb9) { c->state = CS_WALK; E->boss_phase = 1; c->speed = 140.0f; }
-        break;
-    case CS_WALK: {    /* sweep across the screen, pause near the middle to shoot */
+    case CS_WALK: {    /* FUN_00412750 state 1: fly in to the centre (+128 / -160), hold and shoot for 0x50 frames,
+                        * then leave on the far side and come back from there. The resolver turns c->speed into vx. */
         float camc = cam_x + sw * 0.5f;
         bool can_shoot = false;
         if (e->dir == 0) {
             if (E->boss_phase > 0x50) {
-                c->speed = 140.0f; b->vx = -140.0f; E->boss_phase++;
+                c->speed = 140.0f; E->boss_phase++;
                 if (b->x + 180.0f < cam_x) { e->dir = 1; c->aim = AIM_DR; E->boss_phase = 1; }
             } else if (E->boss_phase < 2 && b->x >= camc) {
-                if (b->x > camc + 128.0f) { b->vx = -140.0f; can_shoot = true; } else { E->boss_phase++; b->vx = 0; }
-            } else { E->boss_phase++; b->vx = 0; can_shoot = true; }
+                if (b->x > camc + 128.0f) { c->speed = 140.0f; can_shoot = true; } else { E->boss_phase++; c->speed = 0; }
+            } else { E->boss_phase++; c->speed = 0; can_shoot = true; }
         } else {
             if (E->boss_phase > 0x50) {
-                b->vx = 140.0f; E->boss_phase++;
+                c->speed = 140.0f; E->boss_phase++;
                 if (b->x - 280.0f > cam_x + sw) { e->dir = 0; c->aim = AIM_DL; E->boss_phase = 1; }
             } else if (E->boss_phase < 2 && b->x <= camc) {
-                if (b->x < camc - 160.0f) { b->vx = 140.0f; can_shoot = true; } else { E->boss_phase++; b->vx = 0; }
-            } else { E->boss_phase++; b->vx = 0; can_shoot = true; }
+                if (b->x < camc - 160.0f) { c->speed = 140.0f; can_shoot = true; } else { E->boss_phase++; c->speed = 0; }
+            } else { E->boss_phase++; c->speed = 0; can_shoot = true; }
         }
-        c->facing = e->dir;
-        if (can_shoot && b->x > cam_x - 64.0f && b->x < cam_x + sw) {
-            float dx = fabsf(px - b->x);
-            c->aim = e->dir == 1 ? (dx >= 60.0f ? AIM_DR : AIM_R) : (dx >= 60.0f ? AIM_DL : AIM_L);
-            boss_fire(E, e, eb, 0x10);
-        }
+        c->facing = e->dir; c->aim = e->dir ? AIM_DR : AIM_DL;
+        if (can_shoot && b->x > cam_x - 64.0f && b->x < cam_x + sw) boss_fire(E, e, eb, 0x10);
         break; }
     default:
         c->state = CS_FALL;
         break;
     }
-    /* player bullets */
-    {
+    /* player bullets: only the sweeping boss takes hits (state 1); the passes and the rider are invulnerable */
+    if (c->state == CS_WALK) {
         const HurtBox *h = &c->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0];
         float cx = b->x + h->ox, cy = b->y + h->oy;
         float hw = h->hw > 0 ? h->hw : 48, hh = h->hh > 0 ? h->hh : 32;
@@ -648,21 +636,34 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
     if (e->gun_cd < 0.1f) c->flags &= ~CF_SHOOT;
     /* animation from the enemy resolver (CRHC anims 28-35 = laser charge, etc.) */
     uint8_t st = c->state;
-    if (st == CS_FALL || st == CS_SLIDE || st == CS_WALK) { c->state = CS_WALK; character_resolve(c, dt); c->state = st; b->vx = b->vx; }
-    else character_resolve(c, dt);
+    if (st == CS_FALL || st == CS_SLIDE) {
+        /* the passes keep their accelerated velocity (the walk resolver would pin it to +-speed); the original
+         * crosses the screen at ~390 px/s */
+        float vx = b->vx; if (vx > 390.0f) vx = 390.0f; if (vx < -390.0f) vx = -390.0f;
+        c->state = CS_WALK; character_resolve(c, dt); c->state = st; b->vx = vx;
+    } else character_resolve(c, dt);
     (void)pl;
 }
 
-/* the rider follows the horse and mirrors its facing */
-static void update_boss_rider(Enemies *E, Enemy *e, float dt)
+/* FUN_00412750 state 8: the rider clone sits on the boss (position copied from the link), takes the boss's facing
+ * and covers the other side: boss facing right -> aims left (down-left when the player is 60+ px below), facing
+ * left -> aims right / down-right. It holds fire while the shared phase counter is in 0xa0..0xb8. */
+static void update_boss_rider(Enemies *E, Enemy *e, Bullets *eb, float cam_x, int sw, float dt)
 {
     Character *c = &e->ch;
     if (e->link < 0 || !E->e[e->link].cls) { e->cls = 0; E->count--; return; }
     Enemy *h = &E->e[e->link];
     c->body = h->ch.body; c->body.flags = 0x1f;
     e->layer = h->layer;
-    c->facing = h->ch.facing; c->aim = h->ch.facing ? AIM_DR : AIM_DL; c->state = CS_AIM;
-    c->flags = (c->flags & ~CF_SHOOT) | (h->ch.flags & CF_SHOOT);
+    c->state = CS_AIM;
+    e->dir = h->dir; c->facing = h->ch.facing;
+    bool below = E->phcy - c->body.y >= 60.0f;
+    c->aim = e->dir == 1 ? (below ? AIM_DL : AIM_L) : (below ? AIM_DR : AIM_R);
+    if (h->ch.state == CS_WALK && !h->dying && !((unsigned)(E->boss_phase - 0xa0) < 0x19) && c->body.x > cam_x - 64.0f && c->body.x < cam_x + sw)
+        boss_fire(E, e, eb, 0x12);
+    e->gun_cd -= dt; if (e->gun_cd < 0) e->gun_cd = 0;
+    if (e->gun_cd < 0.1f) c->flags &= ~CF_SHOOT;
+    c->flags = (c->flags & ~(CF_HIT | CF_HIT_ALT)) | (h->ch.flags & (CF_HIT | CF_HIT_ALT)); c->hit_t = h->ch.hit_t;
     character_resolve(c, dt);
 }
 
@@ -684,6 +685,7 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
     const HurtBox *ph = &p->hurt[p->anim < CHAR_MAX_ANIMS ? p->anim : 0];
     E->phcx = p->body.x + ph->ox; E->phcy = p->body.y + ph->oy; E->phx = ph->hw; E->phy = ph->hh;
     E->death_floor = L->height; E->dt = dt;
+    E->tick++;
     spawner_update(E, pl, L, W, cam_x, sw, sh, dt);
     for (int i = 0; i < MAX_ENEMIES; i++) {
         Enemy *e = &E->e[i];
@@ -702,7 +704,7 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
             case EC_KNEELER: case EC_KNEELER_B: case EC_END: update_kneeler(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt); break;
             case EC_BUGGY: update_horse(E, e, pl, cam_x, sw, dt); break;
             case EC_CUTSCENE: update_cutscene_outrider(E, e, cam_x, sw, dt); break;
-            case EC_HORSEBOSS: if (e->variant == 99) update_boss_rider(E, e, dt); else update_boss(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt); break;
+            case EC_HORSEBOSS: if (e->variant == 99) update_boss_rider(E, e, eb, cam_x, sw, dt); else update_boss(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt); break;
             case EC_STAMPEDE: case EC_STAMPEDE + 1: case EC_STAMPEDE + 2: case EC_STAMPEDE + 3: update_stampede(E, e, cam_x, sw); break;
             case EC_PROP: case EC_PROP + 1: case EC_PROP + 2: case EC_PROP + 3: case EC_PROP + 4: case EC_PROP + 5:
             case EC_PROP + 6: case EC_PROP + 7: case EC_PROP + 8: case EC_PROP + 9: case EC_PROP + 10: case EC_PROP + 11:
@@ -712,6 +714,8 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
         }
         physics_step(W, L, &e->ch.body, dt);
         character_animate(&e->ch, dt);
+        if (SDL_getenv("SABER_TRACE") && e->cls < 8 && !e->dying && (E->tick % 60) == 0)
+            fprintf(stderr, "enemy[%d] cls=%d type=%d st=%d face=%d pos=%.0f,%.0f v=%.0f,%.0f coll=%x speed=%g gun=%d cd=%.2f cam=%.0f\n", (int)(e - E->e), e->cls, e->type, e->ch.state, e->ch.facing, e->ch.body.x, e->ch.body.y, e->ch.body.vx, e->ch.body.vy, e->ch.coll, e->ch.speed, e->gun_alive, e->gun_cd, cam_x);
         if (SDL_getenv("SABER_TRACE") && e->cls < 8 && !e->dying) {   /* debug: humanoid that wants to move but does not */
             if (fabsf(e->ch.body.x - e->dbg_x) < 0.5f && e->ch.body.vx != 0) { if (++e->dbg_still == 120) fprintf(stderr, "stuck? cls=%d state=%d pos=%.0f,%.0f vx=%.0f coll=%x cam=%.0f\n", e->cls, e->ch.state, e->ch.body.x, e->ch.body.y, e->ch.body.vx, e->ch.coll, cam_x); }
             else e->dbg_still = 0;

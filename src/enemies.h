@@ -47,7 +47,7 @@ typedef struct {
     bool release_request;            /* set when the last convoy horse is gone */
     int boss_phase;                  /* +0x40028 */
     bool boss_done;                  /* boss slot expired -> level complete (state 0xe) */
-    int frame;
+    int frame, tick;
     Trigger tr[MAX_TRIGGERS]; int ntr;
     /* per-frame cache (FUN_0041f240 preamble) */
     float px, py, phx, phy, phcx, phcy, death_floor, dt;
