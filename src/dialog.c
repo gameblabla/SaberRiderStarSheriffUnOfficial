@@ -4,6 +4,7 @@
 #include "font.h"
 #include "audio.h"
 #include "namehash.h"
+#include "heroes.h"
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
@@ -13,6 +14,34 @@
 enum { COL_GREEN = DLG_GREEN, COL_PURPLE = DLG_PURPLE, COL_RED = DLG_RED, COL_BLUE = DLG_BLUE, COL_WHITE = DLG_GREEN };
 static const uint32_t TILESET[4] = { 0x8D39AA67, 0xA2122E71, 0x1495B0AB, 0x84652CBC };
 static const uint8_t TEXTRGB[4][3] = { {255,255,255}, {255,232,208}, {224,232,255}, {255,224,192} };
+
+static int g_hero = HERO_FIREBALL;
+void dialog_set_hero(int character) { g_hero = character; }
+
+#define AVATAR_APRIL    0x7AB49CB5   /* dialog_avatar_april2 */
+#define AVATAR_FIREBALL 0x742F352A   /* dialog_avatar_fireball1 */
+
+static void replace_word(char *text, size_t cap, const char *from, const char *to)
+{
+    char *p;
+    while ((p = strstr(text, from))) {
+        size_t lf = strlen(from), lt = strlen(to), rest = strlen(p + lf);
+        if (strlen(text) - lf + lt >= cap) return;
+        memmove(p + lt, p + lf, rest + 1); memcpy(p, to, lt);
+    }
+}
+
+static void adapt_pages(Dialog *d)
+{
+    for (int i = 0; i < d->npages; i++) {
+        DialogPage *pg = &d->pages[i];
+        if (g_hero == HERO_APRIL) {
+            replace_word(pg->text, sizeof pg->text, "Fireball", "April");
+            if (pg->avatar_id == AVATAR_APRIL) pg->avatar_id = AVATAR_FIREBALL;
+            else if (pg->avatar_id == AVATAR_FIREBALL) pg->avatar_id = AVATAR_APRIL;
+        }
+    }
+}
 
 bool dialog_open(Dialog *d, uint32_t text_id)
 {
@@ -64,6 +93,7 @@ bool dialog_open(Dialog *d, uint32_t text_id)
         line = end ? end + 1 : NULL;
     }
     d->active = d->npages > 0;
+    adapt_pages(d);
     return d->active;
 }
 

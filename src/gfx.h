@@ -22,6 +22,8 @@ typedef struct Sprite {
 
 bool  gfx_init(SDL_Renderer *r);
 CBlock *cblock_get(uint32_t id);          /* cached */
+/* a cblock made of our own RGBA sheet: one frame of (w/tw) x (h/th) cells, cell i = tile i (recreated heroes) */
+CBlock *cblock_from_rgba(uint32_t id, const uint32_t *px, int w, int h, int tw, int th);
 Sprite *sprite_get(uint32_t id);          /* cached */
 Sprite *sprite_from_blob(uint32_t id, const uint8_t *blob, uint32_t size);   /* decode a sprite blob not in a pack (fonts) */
 int   cblock_ncells(const CBlock *c);

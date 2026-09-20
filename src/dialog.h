@@ -25,6 +25,9 @@ typedef struct {
 } Dialog;
 
 enum { DLG_GREEN, DLG_PURPLE, DLG_RED, DLG_BLUE };
+/* the hero the player picked: the level-1 scripts were written for Fireball, so with April the lines that name
+ * him are rewritten for her and the two avatars swap roles (April speaks to Fireball instead of the other way round) */
+void dialog_set_hero(int character);
 bool dialog_open(Dialog *d, uint32_t text_id);
 bool dialog_open_text(Dialog *d, const char *text, int color);   /* plain text (no script header), e.g. the mission briefing */
 bool dialog_text_done(const Dialog *d);

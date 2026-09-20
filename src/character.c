@@ -1,5 +1,6 @@
 #include "character.h"
 #include "pack.h"
+#include "heroes.h"
 #include <SDL3/SDL.h>
 #include <string.h>
 #include <stdio.h>
@@ -19,7 +20,7 @@ bool character_init(Character *c, uint32_t crhc_id, bool enemy)
     c->speed = rdf(d + 0x10); c->slide_speed = rdf(d + 0x14); c->slide_time = rdf(d + 0x18);
     c->jump_vel = rdf(d + 0x1c); c->alert_time = rdf(d + 0x20);
     c->box_ox = rdf(d + 0x24); c->box_oy = rdf(d + 0x28); c->box_hx = rdf(d + 0x2c); c->box_hy = rdf(d + 0x30);
-    for (int i = 0; i < CHAR_MAX_ANIMS; i++) {
+    for (int i = 0; i < CHAR_CRHC_ANIMS; i++) {
         const uint8_t *a = d + 0x34 + i * 0x18;
         c->anims[i].id = rd32(a); c->anims[i].first = rd32(a + 4); c->anims[i].last = rd32(a + 8);
         c->anims[i].loop = rd32(a + 12); c->anims[i].frame_time = rdf(a + 16); c->anims[i].flags = rd32(a + 20);
@@ -30,6 +31,9 @@ bool character_init(Character *c, uint32_t crhc_id, bool enemy)
     }
     c->hp_max = rd32(d + 0xadc);
     { const PackEntry *se = packs_find(c->sprite_id); if (se && se->type == RES_SPRITE) c->spr = sprite_get(c->sprite_id); else c->cb = cblock_get(c->sprite_id); }
+    c->torso_bob = true;
+    c->bored_anim[0] = c->bored_anim[1] = -1;
+    hero_apply(c);                 /* player heroes only: recreated sheets (April) replace the pack's cblock + patch the table */
     c->body.ox = c->box_ox; c->body.oy = c->box_oy; c->body.hx = c->box_hx; c->body.hy = c->box_hy;
     character_reset(c, enemy);
     c->anim = 0xff; c->overlay = 0;
@@ -231,7 +235,7 @@ void character_draw(const Character *c, float cam_x, float cam_y)
     draw_cell(c, c->frame, (int)(c->anims[c->anim].flags & 0xff), x, y);
     /* the torso is its own sprite object placed at the base offset (up/down aims, 1 px walk bob) */
     float oy = c->base_oy;
-    if (c->walk_bob && ((c->frame + 1 - (int)c->anims[c->anim].first) % 3) == 0) oy += 1.0f;   /* legs cells 2 and 5 sit 1 px lower */
+    if (c->walk_bob && c->torso_bob && ((c->frame + 1 - (int)c->anims[c->anim].first) % 3) == 0) oy += 1.0f;   /* legs cells 2 and 5 sit 1 px lower */
     if (c->overlay) draw_cell(c, c->ov_frame, (int)(c->anims[c->overlay].flags & 0xff), x + c->base_ox, y + oy);
 }
 
@@ -247,11 +251,20 @@ void player_resolve(Character *c, float dt)
     c->base_ox = c->base_oy = 0;
 #define UPBASE()   do { c->base_ox = L ? 4.0f : -4.0f; c->base_oy = -29.0f; } while (0)
 #define DOWNBASE() do { c->base_ox = L ? 4.0f : -4.0f; c->base_oy = -8.0f; } while (0)
+    if (c->state != CS_IDLE) c->idle_t = 0;
     switch (c->state) {
     case CS_IDLE:
-        if (shoot) body = L ? 12 : 15;
-        else if (c->alert_t > 0) body = L ? 4 : 7;
-        else body = L ? 1 : 2;
+        if (shoot) { body = L ? 12 : 15; c->idle_t = 0; }
+        else if (c->alert_t > 0) { body = L ? 4 : 7; c->idle_t = 0; }
+        else {
+            body = L ? 1 : 2;
+            c->idle_t += dt;
+            if (c->bored_anim[0] >= 0 && c->idle_t >= c->bored_time) {   /* play the bored animation once, then sway again */
+                int bored = c->bored_anim[L ? 0 : 1];
+                if (c->anim == bored && c->frame >= c->anims[bored].last) c->idle_t = 0;
+                else body = bored;
+            }
+        }
         c->flags &= ~CF_CROUCH;
         c->alert_t -= dt;
         break;

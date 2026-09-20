@@ -1,4 +1,5 @@
 #include "menu.h"
+#include "heroes.h"
 #include "gfx.h"
 #include "pack.h"
 #include "audio.h"
@@ -163,7 +164,7 @@ void menu_update(Menu *m, const Input *in, float dt, int sw, SDL_Renderer *r)
             if (btn_pressed(in, BTN_LEFT) && m->character > 0) { m->character--; sfx_play(0, 0); }
             if (btn_pressed(in, BTN_RIGHT) && m->character < 3) { m->character++; sfx_play(0, 0); }
             if (confirm(in)) {
-                if (m->character != 1) sfx_play(23, 0);   /* only Fireball is playable in the demo */
+                if (!hero_available(m->character)) sfx_play(23, 0);   /* the demo only had Fireball; April is our reconstruction */
                 else { sfx_play(11, 0); m->t = STEP; }
             }
         } else {
@@ -330,7 +331,7 @@ static void draw_charsel(Menu *m, SDL_Renderer *r, int sw, int sh)
         if (fr) sprite_draw_mod(fr, 0, (float)x, 0x30, 255, 255, 255, on ? 255 : 128);
         if (nm) sprite_draw(nm, 0, (float)(x + ((i == 0 || i == 3) ? 0x10 : 0)), 0xd0, false);
         if (po) sprite_draw(po, 0, (float)x, 0x30, false);
-        if (i != 1 && na) sprite_draw_mod(na, 0, (float)(x - NA_ADJ[i] + 8), 0x68, 255, 255, 255, 116);
+        if (!hero_available(i) && na) sprite_draw_mod(na, 0, (float)(x - NA_ADJ[i] + 8), 0x68, 255, 255, 255, 116);
         if (on && hl && (frame_no() & 8)) sprite_draw(hl, 0, (float)(x - HL_ADJ[i]), 0x30, false);
         if (on && cursor) sprite_draw(cursor, 0, (float)(x + CUR_ADJ[i]), 0x22, false);
     }

@@ -18,7 +18,8 @@ enum { AIM_L = 0, AIM_UL, AIM_U, AIM_UR, AIM_R, AIM_DR, AIM_D, AIM_DL };
 typedef struct { int32_t id, first, last, loop; float frame_time; uint32_t flags; } AnimDef;
 typedef struct { float ox, oy, hw, hh; } HurtBox;
 
-#define CHAR_MAX_ANIMS 53
+#define CHAR_CRHC_ANIMS 53          /* entries in the CRHC table */
+#define CHAR_MAX_ANIMS 56           /* + slots for recreated heroes' extra animations (heroes.c) */
 
 typedef struct {
     /* definition (from CRHC) */
@@ -43,6 +44,9 @@ typedef struct {
     float alert_t;
     float hit_t;
     bool walk_bob;              /* player walk cycle: torso follows the legs' 1 px bob (FUN_0041c530) */
+    bool torso_bob;             /* the sheet's run legs sit 1 px lower on cells 2 and 5 (Fireball's art) */
+    int bored_anim[2];          /* L/R animation played once after idling for bored_time seconds (-1: none; April's stretch) */
+    float bored_time, idle_t;
     float base_ox, base_oy;   /* +0x1c/+0x20 */
     float muzzle_x, muzzle_y; /* +0x24/+0x28 */
     /* animation playback */

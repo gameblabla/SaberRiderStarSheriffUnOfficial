@@ -31,6 +31,7 @@ void enemies_add_trigger(Enemies *E, const LevelObject *o)   /* FUN_00421070 + F
     t->remaining = o->loops; t->remaining_init = o->loops;
     for (int i = 0; i < o->n_wp && i < 8; i++) { t->wp[i][0] = o->wp[i][0]; t->wp[i][1] = o->wp[i][1]; t->nwp++; }
     if (t->nwp == 0) { t->wp[0][0] = o->x; t->wp[0][1] = o->y; t->nwp = 1; }
+    if (SDL_getenv("SABER_TRACE")) { fprintf(stderr, "trigger type=%d zone=%.0f..%.0f x %.0f..%.0f every=%d loops=%d wp=", t->type, t->cx - t->hx, t->cx + t->hx, t->cy - t->hy, t->cy + t->hy, t->interval_ms, t->remaining); for (int i = 0; i < t->nwp; i++) fprintf(stderr, "(%.0f,%.0f)", t->wp[i][0], t->wp[i][1]); fprintf(stderr, "\n"); }
 }
 
 static Enemy *alloc_slot(Enemies *E, int cls)   /* FUN_0041f980 */
@@ -59,24 +60,30 @@ static void snap_to_ground(Enemy *e, const Level *L, const PhysicsWorld *W)
     }
 }
 
-/* Look ahead `right?` for walls/ledges; auto-jump if a jump clears the obstacle. */
+/* FUN_00420290 (facing right) / FUN_00420730 (facing left): spawn probe for the screen-edge spawns. Walk 32 steps
+ * ahead; if a wall is hit, try again with a jump; if that hits too, raise the spawn point by 8 px, add 8 steps and
+ * retry until the body clears (or y reaches the top). The body is left at the raised position, so an enemy whose
+ * spawn point falls inside a crashed car ends up above it and drops onto its roof instead of jittering inside. */
 static void face_and_probe(Enemy *e, bool right, const Level *L, const PhysicsWorld *W, float cam_x, int sw)
 {
     Character *c = &e->ch; Body *b = &c->body;
     if (right) character_move_right(c, 4); else character_move_left(c, 0);
-    if (b->x > cam_x + sw - 16.0f && right) return;   /* original: only probes when on-screen-ish */
-    if (b->y <= 8.0f) return;
+    if (right ? b->x > cam_x + 16.0f : b->x < cam_x + sw - 16.0f) return;   /* only the edge spawns are probed */
     Body save = *b;
+    float y = b->y;
     int n = 32; bool jump = false;
-    Body p = save; p.vx = right ? 120.0f : -120.0f; p.vy = 0; p.coll = 0;
-    uint8_t hit = 0; int k = 0;
-    for (; k < n; k++) { physics_step(W, L, &p, 1.0f / 60.0f); hit = p.coll; if (hit & (COLL_LEFT | COLL_RIGHT)) break; }
-    if (hit & (COLL_LEFT | COLL_RIGHT)) {
-        p = save; p.vx = right ? 120.0f : -120.0f; p.vy = -250.0f; p.coll = 0;
-        for (k = 0; k < n; k++) { physics_step(W, L, &p, 1.0f / 60.0f); if (p.coll & (COLL_LEFT | COLL_RIGHT)) break; }
-        if (!(p.coll & (COLL_LEFT | COLL_RIGHT))) jump = true;
+    while (y > 8.0f) {
+        bool hit = true;
+        for (int pass = 0; pass < 2 && hit; pass++) {   /* walk first, then the jump */
+            Body p = save; p.y = y; p.vx = right ? 120.0f : -120.0f; p.vy = pass ? -250.0f : 0.0f; p.coll = 0;
+            for (int k = 0; k < n; k++) { physics_step(W, L, &p, 1.0f / 60.0f); if (p.coll & (COLL_LEFT | COLL_RIGHT)) break; }
+            hit = (p.coll & (COLL_LEFT | COLL_RIGHT)) != 0;
+            if (!hit && pass) jump = true;
+        }
+        if (!hit) break;
+        n += 8; y -= 8.0f;
     }
-    *b = save;
+    *b = save; b->y = y;
     if (jump) b->vy -= 250.0f;
 }
 
@@ -720,8 +727,8 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
         }
         physics_step(W, L, &e->ch.body, dt);
         character_animate(&e->ch, dt);
-        if (SDL_getenv("SABER_TRACE") && e->cls < 8 && !e->dying && (E->tick % 60) == 0)
-            fprintf(stderr, "enemy[%d] cls=%d type=%d st=%d face=%d pos=%.0f,%.0f v=%.0f,%.0f coll=%x speed=%g gun=%d cd=%.2f cam=%.0f\n", (int)(e - E->e), e->cls, e->type, e->ch.state, e->ch.facing, e->ch.body.x, e->ch.body.y, e->ch.body.vx, e->ch.body.vy, e->ch.coll, e->ch.speed, e->gun_alive, e->gun_cd, cam_x);
+        if (SDL_getenv("SABER_TRACE") && e->cls < 8 && !e->dying && ((E->tick % 60) == 0 || (SDL_getenv("SABER_TRACE")[0] == '2' && (e->ch.body.x < cam_x + 40.0f || e->ch.body.x > cam_x + 380.0f))))
+            fprintf(stderr, "enemy[%d] cls=%d type=%d st=%d face=%d pos=%.1f,%.0f hx=%.0f ox=%.0f fl=%x v=%.0f,%.0f coll=%x speed=%g gun=%d cd=%.2f cam=%.0f\n", (int)(e - E->e), e->cls, e->type, e->ch.state, e->ch.facing, e->ch.body.x, e->ch.body.y, e->ch.body.hx, e->ch.body.ox, e->ch.body.flags, e->ch.body.vx, e->ch.body.vy, e->ch.coll, e->ch.speed, e->gun_alive, e->gun_cd, cam_x);
         if (SDL_getenv("SABER_TRACE") && e->cls < 8 && !e->dying) {   /* debug: humanoid that wants to move but does not */
             if (fabsf(e->ch.body.x - e->dbg_x) < 0.5f && e->ch.body.vx != 0) { if (++e->dbg_still == 120) fprintf(stderr, "stuck? cls=%d state=%d pos=%.0f,%.0f vx=%.0f coll=%x cam=%.0f\n", e->cls, e->ch.state, e->ch.body.x, e->ch.body.y, e->ch.body.vx, e->ch.coll, cam_x); }
             else e->dbg_still = 0;

@@ -14,6 +14,16 @@ Dependencies: SDL3, libvorbisfile, libavcodec/libswscale (FMV), CMake, a C11 com
     cmake --build build
     ./build/saber_rider /path/to/SaberRider/data
 
+## Playable heroes
+
+Fireball (the demo's hero, from the packs) and **April** (our reconstruction: `assets/april.png`, built from the
+archived sprite sheet and tweet clips by `../heroes/`, loaded by `src/heroes.c` on top of her shipped CRHC
+`79260A58`; the level-1 dialogs are rewritten for her; her jump / hurt / death / fall grunts in `assets/voice/` replace
+Fireball's table samples on the same events and were generated with OmniVoice by `../heroes/voice/generate.py`).
+Her idle sway, run cycle (7 frames) and the stretch-and-wave she plays after 10 s of standing still are the
+artist's own clip frames; the rest of the sheet is reconstructed. Saber Rider and Colt stay "not available". Assets are looked up in
+`$SABER_ASSETS`, `./assets` and next to the executable.
+
 ## Controls (as in the demo)
 
 Arrows move · **W/A** jump · **S/D** shoot · hold **Q/E** aim (8 directions) · **Enter** pause/start ·
@@ -22,10 +32,10 @@ East/West shoot, shoulders aim, Start pause.
 
 ## Debug switches (environment variables)
 
-`SABER_START=x` spawn at level x · `SABER_MENU=n` start in front-end state n · `SABER_SHOT=file.bmp,camx,frames`
-screenshot after N steps and quit · `SABER_SCRIPT="60:R,3:RJ,40:"` scripted input (L R U D J S A P) ·
-`SABER_TRACE=1` per-frame player trace (+ convoy spawn / dying / stuck-enemy diagnostics, every humanoid once a second, boss state every 10 frames) · `SABER_FUZZ=1` random input ·
-`SABER_DEBUG=1` collision overlay from the start · `SABER_WINDOW=852x480` initial window size · **F1** collision overlay · **F2** free camera.
+`SABER_START=x` spawn at level x · `SABER_MENU=n` start in front-end state n · `SABER_SHOT=file.bmp,camx,steps`
+screenshot after N fixed steps and quit · `SABER_SCRIPT="60:R,3:RJ,40:"` scripted input (L R U D J S A P) ·
+`SABER_TRACE=1` per-frame player trace (+ spawn triggers at start, convoy spawn / dying / stuck-enemy diagnostics, every humanoid once a second, boss state every 10 frames; `=2` also prints humanoids within 40 px of either screen edge every frame) · `SABER_FUZZ=1` random input ·
+`SABER_HERO=n` hero 0..3 for a direct level start · `SABER_KILL=n` kill the player at step n · `SABER_DEBUG=1` collision overlay from the start · `SABER_WINDOW=852x480` initial window size · **F1** collision overlay · **F2** free camera.
 
 ## Comparing against the original
 
@@ -35,6 +45,7 @@ this port with `RUN_CMD="./build/saber_rider ../SaberRider/data" RUN_CWD=$PWD SA
 `AUDIO=1` adds the game's sound to the mp4 (played into a PulseAudio/PipeWire null sink; the original's static SDL2
 honours `PULSE_SINK`, the port's stream is moved there with `pactl`), which is how music fades, stops and sample timing
 were compared (RMS envelope per 50 ms, or cross-correlation against a decoded sfx).
+`tools/pose_sheet.py out.png [hero] [x]` runs the game headless through every player pose and tiles crops of the hero (sprite review).
 Tile a recording with `ffmpeg -i out.mp4 -vf "fps=2,scale=213:-1,tile=6x10" -frames:v 1 tiles.png` to eyeball timing.
 Original keys: arrows, A jump, S shoot, Return start/confirm, Escape quits.
 

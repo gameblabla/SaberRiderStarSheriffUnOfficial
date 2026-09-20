@@ -13,4 +13,8 @@ void music_pause(bool pause);                   /* FUN_00411300 / FUN_004113b0 (
 void sfx_stop_blob(void);                       /* stop a video's RIFF audio (video closed) */
 bool music_play_blob(const uint8_t *mups, uint32_t size, bool loop);   /* MUPS data not in the music table (video audio); false = not started */
 void sfx_play_blob(const uint8_t *riff, uint32_t size);                 /* RIFF ADPCM blob (video audio) */
+void voice_play_file(const char *path);         /* our own PCM16 wav voice line (stops the previous one) */
+void voice_stop(void);
+void sfx_set_override(int game_id, const char *const *paths, int n);   /* hero grunts: replace a game sfx id by our wav files (random pick) */
+void sfx_clear_overrides(void);
 void audio_update(void);                        /* per frame: delayed sfx, music refill */

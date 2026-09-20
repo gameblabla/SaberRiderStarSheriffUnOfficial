@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "assets.h"
 #include "pack.h"
 #include "lzo1z.h"
 #include <SDL3/SDL.h>
@@ -77,12 +78,19 @@ static Sfx *load_sfx_entry(const PackEntry *e, Sfx *s)
     if (fmt == 0xF423) {          /* Yamaha ADPCM, mono */
         s->frames = n * 2; s->channels = 1;
         s->pcm = malloc((size_t)s->frames * 2);
+        /* FUN_0045bbe0 decodes in chunks of 0x1ffe0 output bytes (0x7ff8 input bytes, 1.486 s) and restarts the
+         * predictor (step 0x7f, sample 0) at every chunk; the encoder did the same, so a decoder that carries the
+         * state across the boundary drifts off for the rest of the sample */
         int step = 0x7f, prev = 0, k = 0;
         for (int i = 0; i < n; i++) {
+            if (i % 0x7ff8 == 0) { step = 0x7f; prev = 0; }
             for (int h = 0; h < 2; h++) {
                 int nib = h ? (raw[i] >> 4) & 15 : raw[i] & 15;
                 int prod = T1[nib] * step;
-                int v = (prod >= 0 ? (prod + 7) >> 3 : prod >> 3) + prev;
+                /* FUN_0045bbe0: the +7 is added only to a negative product, i.e. prod/8 truncated toward zero.
+                 * Rounding away from zero instead biases every step and the signal drifts ~3000 LSB/s into
+                 * the rails, which garbled the loud end of the outrider line */
+                int v = ((prod >= 0 ? prod : prod + 7) >> 3) + prev;
                 if (v > 32767) v = 32767;
                 if (v < -32768) v = -32768;
                 s->pcm[k++] = (int16_t)v; prev = v;
@@ -159,8 +167,19 @@ static void play_table(int idx)
 
 static int rnd(int n) { return rand() % (n + 1); }   /* FUN_0040cf30(0, n) inclusive per the switch usage */
 
+typedef struct WavFile WavFile;
+static WavFile *wav_load(const char *path);
+static SDL_AudioStream *play_wav(const WavFile *w, float gain);
+static struct { int n; char file[4][256]; } sfx_over[24];   /* per-hero replacements for the player's grunts (game sfx ids) */
+
 void sfx_play(int id, int delay)
 {
+    if (id >= 0 && id < 24 && sfx_over[id].n) {
+        const char *f = sfx_over[id].file[rnd(sfx_over[id].n - 1)];
+        if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "sfx %d -> %s\n", id, f);
+        play_wav(wav_load(f), GAIN_SFX);
+        return;
+    }
     int t = -1, t2 = -1;
     switch (id) {
     case 0: t = 0; break;
@@ -276,6 +295,70 @@ void sfx_stop_blob(void)
 {
     if (blob_voice) { SDL_ClearAudioStream(blob_voice); blob_voice = NULL; }
 }
+
+/* ---- our own samples: plain PCM16 WAV files in assets/ (April's grunts, ../heroes/voice) ---- */
+struct WavFile { char path[256]; int16_t *pcm; uint32_t bytes; int ch, rate; };
+static WavFile wavs[32]; static int nwavs;
+
+static WavFile *wav_load(const char *path)
+{
+    for (int i = 0; i < nwavs; i++) if (!strcmp(wavs[i].path, path)) return wavs[i].pcm ? &wavs[i] : NULL;
+    if (nwavs == 32) return NULL;
+    WavFile *w = &wavs[nwavs++]; memset(w, 0, sizeof *w); snprintf(w->path, sizeof w->path, "%s", path);
+    size_t size; uint8_t *d = file_read(path, &size);
+    if (!d) return NULL;
+    int ch = 1, rate = 44100, bits = 16; const uint8_t *pcm = NULL; uint32_t n = 0;
+    if (size > 12 && !memcmp(d, "RIFF", 4) && !memcmp(d + 8, "WAVE", 4)) {   /* fmt (PCM 1, 16-bit) then data */
+        size_t p = 12;
+        while (p + 8 <= size) {
+            uint32_t len = d[p + 4] | d[p + 5] << 8 | d[p + 6] << 16 | (uint32_t)d[p + 7] << 24;
+            if (!memcmp(d + p, "fmt ", 4) && len >= 16) { ch = d[p + 10] | d[p + 11] << 8; rate = d[p + 12] | d[p + 13] << 8 | d[p + 14] << 16 | d[p + 15] << 24; bits = d[p + 22] | d[p + 23] << 8; }
+            else if (!memcmp(d + p, "data", 4)) { pcm = d + p + 8; n = len; if (p + 8 + n > size) n = (uint32_t)(size - p - 8); break; }
+            p += 8 + len + (len & 1);
+        }
+    }
+    if (pcm && bits == 16 && ch >= 1 && ch <= 2) { w->pcm = malloc(n); memcpy(w->pcm, pcm, n); w->bytes = n; w->ch = ch; w->rate = rate; }
+    else fprintf(stderr, "%s: not a PCM16 wav\n", path);
+    free(d);
+    return w->pcm ? w : NULL;
+}
+
+static SDL_AudioStream *play_wav(const WavFile *w, float gain)
+{
+    if (!dev || !w) return NULL;
+    SDL_AudioSpec in = { SDL_AUDIO_S16, w->ch, w->rate };
+    for (int v = 0; v < MAX_VOICES; v++) {
+        if (voices[v] && SDL_GetAudioStreamQueued(voices[v]) > 0) continue;
+        if (voices[v]) SDL_DestroyAudioStream(voices[v]);
+        voices[v] = SDL_CreateAudioStream(&in, &spec);
+        if (!voices[v]) return NULL;
+        SDL_SetAudioStreamGain(voices[v], gain);
+        SDL_BindAudioStream(dev, voices[v]);
+        SDL_PutAudioStreamData(voices[v], w->pcm, (int)w->bytes);
+        SDL_FlushAudioStream(voices[v]);
+        return voices[v];
+    }
+    return NULL;
+}
+
+static SDL_AudioStream *file_voice;
+void voice_stop(void) { if (file_voice) { SDL_ClearAudioStream(file_voice); file_voice = NULL; } }
+void voice_play_file(const char *path)
+{
+    voice_stop();
+    if (!path) return;
+    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "voice %s\n", path);
+    file_voice = play_wav(wav_load(path), GAIN_VOICE);
+}
+
+/* picked at random like the original's variants */
+void sfx_set_override(int game_id, const char *const *paths, int n)
+{
+    if (game_id < 0 || game_id >= 24) return;
+    sfx_over[game_id].n = 0;
+    for (int i = 0; i < n && i < 4; i++) if (paths[i]) snprintf(sfx_over[game_id].file[sfx_over[game_id].n++], 256, "%s", paths[i]);
+}
+void sfx_clear_overrides(void) { memset(sfx_over, 0, sizeof sfx_over); }
 
 void music_play(int index, bool loop)
 {

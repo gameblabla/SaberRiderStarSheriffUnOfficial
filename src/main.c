@@ -39,6 +39,9 @@ int main(int argc, char **argv)
     const char *script = SDL_getenv("SABER_SCRIPT");
     int script_n = 0; char script_keys[16] = "";
     bool running = true;
+    /* debug: SABER_SHOT=path,camx,steps -> save a screenshot after N fixed steps and quit */
+    int shot_frames = -1; char shot_path[256] = "";
+    if (SDL_getenv("SABER_SHOT")) { float cx = -1; int n = 1; sscanf(SDL_getenv("SABER_SHOT"), "%255[^,],%f,%d", shot_path, &cx, &n); if (cx >= 0) g.cam_x = cx; shot_frames = n; }
     Uint64 prev = SDL_GetTicksNS();
     double acc = 0;
     const double step = 1.0 / 60.0;
@@ -77,18 +80,12 @@ int main(int argc, char **argv)
                 g.in.raw[BTN_PAUSE] = false;
             }
             game_update(&g, (float)step); audio_update(); acc -= step;
+            if (shot_frames > 0) shot_frames--;   /* SABER_SHOT counts fixed steps, not rendered frames */
         }
         SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
         SDL_RenderClear(ren);
         game_draw(&g);
-        /* debug: SABER_SHOT=path,camx,frames -> save a screenshot after N frames and quit */
-        static int shot_frames = -1; static char shot_path[256];
-        if (shot_frames < 0) {
-            const char *s = SDL_getenv("SABER_SHOT");
-            shot_frames = 0;
-            if (s) { float cx = -1; int n = 1; sscanf(s, "%255[^,],%f,%d", shot_path, &cx, &n); if (cx >= 0) g.cam_x = cx; shot_frames = n; }
-        }
-        if (shot_frames > 0 && --shot_frames == 0) {
+        if (shot_frames == 0 && shot_path[0]) {
             SDL_Surface *sf = SDL_RenderReadPixels(ren, NULL);
             if (sf) { SDL_SaveBMP(sf, shot_path); SDL_DestroySurface(sf); }
             running = false;

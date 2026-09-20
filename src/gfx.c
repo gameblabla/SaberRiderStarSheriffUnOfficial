@@ -85,6 +85,24 @@ CBlock *cblock_get(uint32_t id)
     return c;
 }
 
+CBlock *cblock_from_rgba(uint32_t id, const uint32_t *px, int w, int h, int tw, int th)
+{
+    for (int i = 0; i < g_ncb; i++) if (g_cb[i].id == id) return &g_cb[i];
+    if (g_ncb == MAX_CB) return NULL;
+    CBlock *c = &g_cb[g_ncb];
+    memset(c, 0, sizeof *c);
+    c->id = id; c->frames = 1; c->cols = w / tw; c->rows = h / th; c->tw = tw; c->th = th;
+    c->ntiles = c->cols * c->rows;
+    uint16_t *cells = malloc((size_t)c->ntiles * 2);
+    for (int i = 0; i < c->ntiles; i++) cells[i] = (uint16_t)i;
+    c->cells = cells; c->mask = NULL;
+    c->sheet_cols = c->cols;          /* the sheet is the image itself */
+    c->tex = make_tex(w, h, px);
+    if (!c->tex) { free(cells); return NULL; }
+    g_ncb++;
+    return c;
+}
+
 int cblock_ncells(const CBlock *c) { return c->frames * c->cols * c->rows; }
 
 void cblock_draw_tile(const CBlock *c, int t, float x, float y, bool flip)

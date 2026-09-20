@@ -18,6 +18,7 @@ bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh)
     memset(g, 0, sizeof *g);
     g->ren = ren; g->sw = sw; g->sh = sh;
     g->menu.difficulty = 1; g->menu.lives = 2; g->menu.continues = 3; g->menu.character = 1;   /* option defaults: NORMAL, 02, 03; Fireball */
+    if (SDL_getenv("SABER_HERO")) g->menu.character = atoi(SDL_getenv("SABER_HERO")) & 3;   /* debug: 0 Saber 1 Fireball 2 April 3 Colt */
     if (!SDL_getenv("SABER_MENU") && (SDL_getenv("SABER_START") || SDL_getenv("SABER_SCRIPT"))) return level_start(g);   /* debug: straight into the level */
     menu_enter(&g->menu, SDL_getenv("SABER_MENU") ? atoi(SDL_getenv("SABER_MENU")) : MS_SPLASH0);
     return true;
@@ -41,6 +42,7 @@ static bool level_start(Game *g)
     player_spawn(&g->player, (unsigned)(g->menu.character - 1) < 3 ? HERO_CRHC[g->menu.character - 1] : 0x8403195A, px, py);
     g->player.lives = g->menu.lives; g->player.hp = g->player.max_hp = hearts_for(g->menu.difficulty);
     enemies_reset(&g->enemies);
+    dialog_set_hero(g->menu.character);
     static const uint32_t DIALOG_TEXT[4] = { 0xC3B6D081, 0xC4B0D1BA, 0xC5AAD2B7, 0xC6A4D3AC };
     for (int i = 0; i < g->level.nobjs; i++) {
         LevelObject *o = &g->level.objs[i];
@@ -186,6 +188,7 @@ void game_update(Game *g, float dt)
         }
         for (int k = 0; k < g->ndeath; k++) if (IN_ZONE(g->deathzones[k])) { p->respawn_x = g->deathzones[k].rx; p->respawn_y = g->deathzones[k].ry; c->state = CS_DEAD; }
         if (by - hh > g->level.height) { p->respawn_x = p->safe_x; p->respawn_y = p->safe_y; c->state = CS_DEAD; sfx_play(15, 0); }   /* fell out of the level */
+        { static int kill = -2; if (kill == -2) kill = SDL_getenv("SABER_KILL") ? atoi(SDL_getenv("SABER_KILL")) : -1; if (kill >= 0 && kill-- == 0) c->state = CS_DEAD; }   /* debug: die at step N */
         #undef IN_ZONE
     }
     if (g->enemies.release_request) {
