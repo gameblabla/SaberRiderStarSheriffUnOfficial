@@ -6,16 +6,18 @@
 #include <stdlib.h>
 #include <math.h>
 
-/* player CRHC per selected hero (DAT_007c5250): Fireball, Saber Rider, Colt; default 8403195A */
+/* player CRHC by selected hero (FUN_00424b20: DAT_007c5250[character - 1], so Fireball, April, Colt; Saber Rider
+ * (0) falls back to the default 8403195A) */
 static const uint32_t HERO_CRHC[3] = { 0x9C8F9A9E, 0x79260A58, 0x26818B85 };
 
 static bool level_start(Game *g);
+static int hearts_for(int difficulty) { return difficulty == 0 ? 4 : difficulty == 1 ? 2 : 0; }   /* FUN_00422d10 / FUN_00428840 */
 
 bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh)
 {
     memset(g, 0, sizeof *g);
     g->ren = ren; g->sw = sw; g->sh = sh;
-    g->menu.difficulty = 1; g->menu.lives = 2; g->menu.continues = 3;   /* option defaults: NORMAL, 02, 03 */
+    g->menu.difficulty = 1; g->menu.lives = 2; g->menu.continues = 3; g->menu.character = 1;   /* option defaults: NORMAL, 02, 03; Fireball */
     if (!SDL_getenv("SABER_MENU") && (SDL_getenv("SABER_START") || SDL_getenv("SABER_SCRIPT"))) return level_start(g);   /* debug: straight into the level */
     menu_enter(&g->menu, SDL_getenv("SABER_MENU") ? atoi(SDL_getenv("SABER_MENU")) : MS_SPLASH0);
     return true;
@@ -36,8 +38,8 @@ static bool level_start(Game *g)
     float px = 100, py = 155;
     for (int i = 0; i < g->level.nobjs; i++) if (g->level.objs[i].type == 0) { px = g->level.objs[i].x; py = g->level.objs[i].y; }
     if (SDL_getenv("SABER_START")) px = (float)atof(SDL_getenv("SABER_START"));   /* debug */
-    player_spawn(&g->player, HERO_CRHC[0], px, py);
-    g->player.lives = g->menu.lives;
+    player_spawn(&g->player, (unsigned)(g->menu.character - 1) < 3 ? HERO_CRHC[g->menu.character - 1] : 0x8403195A, px, py);
+    g->player.lives = g->menu.lives; g->player.hp = g->player.max_hp = hearts_for(g->menu.difficulty);
     enemies_reset(&g->enemies);
     static const uint32_t DIALOG_TEXT[4] = { 0xC3B6D081, 0xC4B0D1BA, 0xC5AAD2B7, 0xC6A4D3AC };
     for (int i = 0; i < g->level.nobjs; i++) {
@@ -267,7 +269,7 @@ void game_draw(Game *g)
         }
     }
     g->cam_y = saved;
-    hud_draw(g->ren, 0, 1, g->player.lives, g->player.hp, 0);
+    hud_draw(g->ren, g->menu.character, g->menu.difficulty, g->player.lives, g->player.hp, 0);
     if (g->state == 0xd) dialog_draw(&g->dialog, g->ren, g->sw, g->sh);
     if (g->state == 0xc) {   /* pause: dim + blinking PAUSE sprite (B2143E42) */
         SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(g->ren, 0, 0, 0, 64);

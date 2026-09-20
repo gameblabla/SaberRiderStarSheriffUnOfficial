@@ -96,10 +96,31 @@ void sfx_play_id(uint32_t id)
     nextra++;
 }
 
+/* FUN_00425880 / FUN_004109a0: every table sample owns one slot. A request opens (or extends) a window of
+ * len*3 ms; inside a window the sample plays at most once per len*6 ms, so hammering the trigger (auto-fire,
+ * a burst of hits) does not stack identical copies or eat all 16 voices, which is what starved other sounds. */
+static const int SFX_LEN[32] = {   /* 0x7c5484: retrigger length units */
+    40, 60, 60, 60, 60, 60, 40, 36, 36, 16, 16, 16, 20, 20, 12, 12,
+    40, 40, 40, 40, 40, 20, 40, 40, 36, 18, 36, 60, 200, 60, 60, 50 };
+static struct { uint32_t end, next; } slot[32];
+
+static void service_slots(void)
+{
+    uint32_t now = SDL_GetTicks();
+    for (int i = 0; i < 32; i++) {
+        if (!slot[i].end) continue;
+        if ((int32_t)(now - slot[i].end) >= 0) { slot[i].end = 0; continue; }
+        if ((int32_t)(now - slot[i].next) >= 0) { play_sfx(load_sfx(i)); slot[i].next = now + SFX_LEN[i] * 6; }
+    }
+}
+
 static void play_table(int idx)
 {
     if (idx < 0 || idx >= 32) return;
-    play_sfx(load_sfx(idx));
+    uint32_t now = SDL_GetTicks();
+    if (!slot[idx].end) slot[idx].next = now;
+    slot[idx].end = now + SFX_LEN[idx] * 3 - 3;
+    service_slots();
 }
 
 static int rnd(int n) { return rand() % (n + 1); }   /* FUN_0040cf30(0, n) inclusive per the switch usage */
@@ -224,6 +245,7 @@ void audio_update(void)
         if ((int)(frame_counter - delayed[i].frame) >= 0) { play_table(delayed[i].table_idx); delayed[i] = delayed[--ndelayed]; }
         else i++;
     }
+    service_slots();
     if (music_open && music_stream) {
         char buf[8192]; int sec;
         while (SDL_GetAudioStreamQueued(music_stream) < 44100 * 4 / 2) {   /* keep ~0.5 s queued */

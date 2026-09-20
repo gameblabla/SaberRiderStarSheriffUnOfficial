@@ -12,7 +12,7 @@ typedef struct {
     int lives;
     bool game_over;
     bool locked;             /* +0xc08: controls disabled (cutscene/death) */
-    int hp;
+    int hp, max_hp;          /* hearts: 4 / 2 / 0 by difficulty (DAT_00ac9be0[1]) */
 } Player;
 void player_spawn(Player *p, uint32_t crhc_id, float x, float y);
 void player_control(Player *p, const Input *in, float dt);   /* FUN_00422d10 input part */

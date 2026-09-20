@@ -6,7 +6,7 @@ void player_spawn(Player *p, uint32_t crhc_id, float x, float y)
     memset(p, 0, sizeof *p);
     character_init(&p->ch, crhc_id, false);
     p->ch.body.x = x; p->ch.body.y = y;
-    p->hp = 2; p->lives = 2;   /* lives are overridden from the options (DAT_00aab788), 2 hearts */
+    p->hp = p->max_hp = 2; p->lives = 2;   /* overridden from the options by the caller (DAT_00aab788 lives, hearts by difficulty) */
     p->safe_x = p->respawn_x = x; p->safe_y = p->respawn_y = y;
 }
 
@@ -93,7 +93,7 @@ bool player_death_update(Player *p, float dt, float level_h, float *cam_x, int s
     c->flags |= CF_HIT; c->hit_t = 170.0f;
     if (p->lives < 1) { p->game_over = true; c->flags |= CF_DEAD; return true; }
     p->lives--;
-    p->hp = 2;
+    p->hp = p->max_hp;
     float half = sw * 0.5f;
     float camc = *cam_x + half;
     if (p->respawn_x < 12.0f) p->respawn_x = b->x = 12.0f;
