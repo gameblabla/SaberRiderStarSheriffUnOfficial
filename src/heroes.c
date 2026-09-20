@@ -36,16 +36,17 @@ const char *hero_name(int character)
     return (unsigned)character < 4 ? names[character] : "Fireball";
 }
 
-/* animation table changes: April's clip has a 7-frame idle sway followed by a 19-frame crouch + jumping jacks + wave
- * (10 fps; played once after 10 s of idling), 7 run frames and 8 death frames.  The "alert" pose (anims 4/7, held for
+/* animation table changes: April's clip has a 6-frame idle sway followed by a 20-frame crouch + jumping jacks + wave
+ * (10 fps; played once after 10 s of idling), 7 whole run frames (kept while aiming / shooting on the move) and 8
+ * death frames.  The "alert" pose (anims 4/7, held for
  * alert_time after shooting / landing) is the sway itself: her sheet has no clean alert art. */
 typedef struct { int anim, first, last, loop; float frame_time; } AnimPatch;
 #define APRIL_BORED_L 53
 #define APRIL_BORED_R 54
 static const AnimPatch APRIL_ANIMS[] = {
-    { 1, 168, 174, 168, 0.10f }, { 2, 176, 182, 176, 0.10f },     /* idle L / R */
-    { 4, 168, 174, 168, 0.10f }, { 7, 176, 182, 176, 0.10f },     /* alert L / R = idle */
-    { APRIL_BORED_L, 184, 203, 203, 0.10f }, { APRIL_BORED_R, 208, 227, 227, 0.10f },   /* bored jump + wave L / R */
+    { 1, 168, 173, 168, 0.10f }, { 2, 176, 181, 176, 0.10f },     /* idle L / R */
+    { 4, 168, 173, 168, 0.10f }, { 7, 176, 181, 176, 0.10f },     /* alert L / R = idle */
+    { APRIL_BORED_L, 184, 204, 204, 0.10f }, { APRIL_BORED_R, 208, 228, 228, 0.10f },   /* bored jump + wave L / R */
     { 36, 80, 86, 80, 0.10f }, { 37, 104, 110, 104, 0.10f },      /* run legs L / R */
     { 38, 64, 70, 64, 0.10f }, { 39, 88, 94, 88, 0.10f },         /* run torso overlays L / R */
     { 50, 152, 159, 159, 0.10f }, { 51, 160, 167, 167, 0.10f },   /* death L / R */
@@ -89,6 +90,7 @@ bool hero_apply(Character *c)
     if (!cb) return false;
     c->cb = cb; c->spr = NULL;
     c->torso_bob = false;      /* Fireball's run legs bob 1 px on cells 2 and 5; April's do not */
+    c->walk_aim_ov = false;    /* her run frames are whole clip frames; no aim torso is composed over them */
     for (size_t i = 0; i < sizeof APRIL_ANIMS / sizeof *APRIL_ANIMS; i++) {
         const AnimPatch *p = &APRIL_ANIMS[i];
         AnimDef *a = &c->anims[p->anim];
