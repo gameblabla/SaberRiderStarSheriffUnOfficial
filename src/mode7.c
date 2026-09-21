@@ -407,6 +407,7 @@ void mode7_destroy(Mode7 *m)
 }
 
 int mode7_result(const Mode7 *m) { return m->result; }
+int mode7_lives(const Mode7 *m) { return m->lives; }
 
 /* ---------------------------------------------------------------- combat helpers */
 static bool phase_plays(const Mode7 *m) { return m->phase == PH_RACE || m->phase == PH_PURSUIT || m->phase == PH_BOSS; }
@@ -959,8 +960,10 @@ static void render_horizon(Mode7 *m)
     SDL_FRect sky = { 0, 0, (float)m->sw, (float)(HORIZON + 1) }; SDL_RenderFillRect(m->ren, &sky);
     if (!m->horizon_ok) return;
     float turn = m->cam_heading / TWO_PI;
+    /* period must match each layer's actual painted width (976/7040/7040/7040px) or the strip repeats
+     * a narrow slice of the panorama instead of tiling the whole thing */
     const struct { const char *name; float period, speed; float oy; } LY[4] = {
-        { "SkyBG", 976, 976, 0 }, { "FarMountains", 1280, 1280, 44 }, { "Mountains", 1248, 1248 * 1.0f, 44 }, { "NearMountains", 1280, 1280, 44 } };
+        { "SkyBG", 976, 976, 0 }, { "FarMountains", 7040, 7040, 44 }, { "Mountains", 7040, 7040, 44 }, { "NearMountains", 7040, 7040, 44 } };
     for (int k = 0; k < 4; k++) {
         for (int i = 0; i < m->horizon.nlayers; i++) {
             if (strcmp(m->horizon.layers[i].name, LY[k].name)) continue;
