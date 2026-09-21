@@ -38,6 +38,12 @@ int font_text_width(const Font *f, const char *s)
     return w;
 }
 
+int font_text_width_n(const Font *f, const char *s, int n)
+{
+    int w = 0; for (int i = 0; s[i] && i < n; i++) w += glyph_w(f, (unsigned char)s[i]);
+    return w;
+}
+
 void font_draw_n(const Font *f, const char *s, int n, float x, float y, uint8_t r, uint8_t g, uint8_t b)
 {
     if (!f || !f->spr) return;

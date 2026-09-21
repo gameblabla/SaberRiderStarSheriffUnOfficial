@@ -15,6 +15,8 @@ bool music_play_blob(const uint8_t *mups, uint32_t size, bool loop);   /* MUPS d
 void sfx_play_blob(const uint8_t *riff, uint32_t size);                 /* RIFF ADPCM blob (video audio) */
 void voice_play_file(const char *path);         /* our own PCM16 wav voice line (stops the previous one) */
 void voice_stop(void);
+void sfx_play_file(const char *path);           /* one-shot of our own PCM16 wav (turbo ignition) */
+void sfx_loop(const char *path);                /* keep a wav looping (turbo roar); NULL fades it out */
 void sfx_set_override(int game_id, const char *const *paths, int n);   /* hero grunts: replace a game sfx id by our wav files (random pick) */
 void sfx_clear_overrides(void);
 void audio_update(void);                        /* per frame: delayed sfx, music refill */

@@ -258,6 +258,30 @@ def smoke_frames():
         out.append(np.array(img))
     return out
 
+def turbo_frames():
+    """the turbo flame out of each exhaust nozzle: 10x10, 4 frames of flicker (blue-white core, yellow, orange rim),
+    drawn over the buggy's nozzles at (23,21) and (60,21) by mode7.c while the booster is lit"""
+    out = []
+    for i in range(4):
+        img = pil(10, 10); d = ImageDraw.Draw(img)
+        rnd = random.Random(31 + i)
+        rim, mid, core = (255, 120, 30, 255), (255, 220, 70, 255), (220, 245, 255, 255)
+        r = 4 + (i & 1)
+        d.ellipse([5 - r, 5 - r, 4 + r, 4 + r], fill=rim)
+        d.ellipse([5 - r + 1, 5 - r + 1, 3 + r, 3 + r], fill=mid)
+        d.ellipse([3, 3, 6, 6], fill=core)
+        # licks of flame around the rim, different every frame
+        for _ in range(4):
+            a = rnd.uniform(0, math.tau); x, y = 4.5 + math.cos(a) * (r + 0.5), 4.5 + math.sin(a) * (r + 0.5)
+            d.point((int(x), int(y)), fill=mid if rnd.random() < 0.5 else rim)
+        # blue tint on the outer pixels every other frame (the afterburner's shock ring)
+        if i & 1:
+            for a in range(0, 360, 60):
+                x, y = 4.5 + math.cos(math.radians(a)) * (r + 0.6), 4.5 + math.sin(math.radians(a)) * (r + 0.6)
+                d.point((int(x), int(y)), fill=(120, 170, 255, 255))
+        out.append(np.array(img))
+    return out
+
 # ---------------------------------------------------------------- atlas packing
 def main():
     entries = []  # (name, [frames], ox, oy)
@@ -275,6 +299,7 @@ def main():
     entries.append(("mine", mine_sprite()))
     entries.append(("gate", [finish_gate()]))
     entries.append(("smoke", smoke_frames()))
+    entries.append(("turbo", turbo_frames()))
 
     W = 1024; x = y = 0; rowh = 0; placed = []
     for name, frames in entries:

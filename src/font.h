@@ -5,5 +5,6 @@
 typedef struct { uint32_t id; int count; const uint8_t *widths; struct Sprite *spr; int h; } Font;
 Font *font_get(uint32_t id);
 int   font_text_width(const Font *f, const char *s);
+int   font_text_width_n(const Font *f, const char *s, int n);   /* the first n characters */
 void  font_draw(const Font *f, const char *s, float x, float y, uint8_t r, uint8_t g, uint8_t b);
 void  font_draw_n(const Font *f, const char *s, int n, float x, float y, uint8_t r, uint8_t g, uint8_t b);

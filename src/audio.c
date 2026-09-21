@@ -351,6 +351,35 @@ void voice_play_file(const char *path)
     file_voice = play_wav(wav_load(path), GAIN_VOICE);
 }
 
+void sfx_play_file(const char *path) { if (path) play_wav(wav_load(path), GAIN_SFX); }
+
+/* a looping sample on its own stream: audio_update keeps it topped up while it is wanted and fades it out (~0.15 s)
+ * when it is not, then clears the stream so a re-start begins from the loop's head */
+static SDL_AudioStream *loop_stream; static const WavFile *loop_wav; static float loop_gain; static bool loop_want;
+void sfx_loop(const char *path)
+{
+    if (!path) { loop_want = false; return; }
+    const WavFile *w = wav_load(path); if (!w || !dev) return;
+    if (loop_stream && loop_wav != w) { SDL_DestroyAudioStream(loop_stream); loop_stream = NULL; }
+    if (!loop_stream) {
+        SDL_AudioSpec in = { SDL_AUDIO_S16, w->ch, w->rate };
+        loop_stream = SDL_CreateAudioStream(&in, &spec); if (!loop_stream) return;
+        SDL_BindAudioStream(dev, loop_stream); loop_gain = 0;
+    }
+    loop_wav = w; loop_want = true;
+}
+static void service_loop(void)
+{
+    if (!loop_stream) return;
+    float target = loop_want ? 1.0f : 0.0f;
+    loop_gain += (target - loop_gain) * (loop_want ? 0.35f : 0.2f);
+    if (!loop_want && loop_gain < 0.02f) { loop_gain = 0; SDL_ClearAudioStream(loop_stream); SDL_SetAudioStreamGain(loop_stream, 0); return; }
+    SDL_SetAudioStreamGain(loop_stream, loop_gain * GAIN_SFX);
+    if (loop_want) while (SDL_GetAudioStreamQueued(loop_stream) < (int)(loop_wav->rate * loop_wav->ch * 2 * 0.25f)) {   /* keep ~0.25 s queued */
+        SDL_PutAudioStreamData(loop_stream, loop_wav->pcm, (int)loop_wav->bytes);
+    }
+}
+
 /* picked at random like the original's variants */
 void sfx_set_override(int game_id, const char *const *paths, int n)
 {
@@ -387,7 +416,7 @@ void audio_update(void)
         if ((int)(frame_counter - delayed[i].frame) >= 0) { play_table(delayed[i].table_idx); delayed[i] = delayed[--ndelayed]; }
         else i++;
     }
-    service_slots();
+    service_slots(); service_loop();
     if (music_open && music_stream) {
         float buf[4096]; float **pcm; int sec, ch = ov_info(&vf, -1)->channels;
         while (SDL_GetAudioStreamQueued(music_stream) < 44100 * 8 / 2) {   /* keep ~0.5 s queued (f32 stereo) */

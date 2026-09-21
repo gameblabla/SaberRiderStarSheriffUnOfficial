@@ -2,6 +2,7 @@
 #include "pack.h"
 #include "hud.h"
 #include "audio.h"
+#include "font.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -11,9 +12,10 @@
 static const uint32_t HERO_CRHC[3] = { 0x9C8F9A9E, 0x79260A58, 0x26818B85 };
 
 static bool level_start(Game *g);
+static void title_start(Game *g);
 static int hearts_for(int difficulty) { return difficulty == 0 ? 4 : difficulty == 1 ? 2 : 0; }   /* FUN_00422d10 / FUN_00428840 */
 
-bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh)
+bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh, int start_level)
 {
     memset(g, 0, sizeof *g);
     g->ren = ren; g->sw = sw; g->sh = sh;
@@ -21,6 +23,7 @@ bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh)
     if (SDL_getenv("SABER_HERO")) g->menu.character = atoi(SDL_getenv("SABER_HERO")) & 3;   /* debug: 0 Saber 1 Fireball 2 April 3 Colt */
     if (SDL_getenv("SABER_LIVES")) g->menu.lives = atoi(SDL_getenv("SABER_LIVES"));   /* debug: starting lives */
     g->stage = 1;
+    if (start_level) { g->stage = start_level; return level_start(g); }   /* --level N: skip the front end */
     if (SDL_getenv("SABER_STAGE")) { g->stage = atoi(SDL_getenv("SABER_STAGE")); if (g->stage == 2) return level_start(g); }   /* debug: straight into stage 2 */
     if (!SDL_getenv("SABER_MENU") && (SDL_getenv("SABER_START") || SDL_getenv("SABER_SCRIPT"))) return level_start(g);   /* debug: straight into the level */
     menu_enter(&g->menu, SDL_getenv("SABER_MENU") ? atoi(SDL_getenv("SABER_MENU")) : MS_SPLASH0);
@@ -36,6 +39,7 @@ static bool level_start(Game *g)
     g->ren = ren; g->sw = sw; g->sh = sh; g->menu = menu; g->in_level = true; g->stage = stage; g->carry_lives = carry;
     if (stage == 2) {   /* the Mode-7 Grand Prix: its own world, HUD and flow */
         g->mode7 = mode7_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives);
+        if (g->mode7) title_start(g);
         return g->mode7 != NULL;
     }
     const PackEntry *t = packs_find(0x119090BF);
@@ -75,7 +79,80 @@ static bool level_start(Game *g)
     g->player_layer = 11;
     for (int i = 0; i < g->level.nlayers; i++) if (!strcmp(g->level.layers[i].name, "PlayerSprites")) g->player_layer = i;
     g->cam_x = px - sw / 2; if (g->cam_x < 0) g->cam_x = 0;
+    title_start(g);
     return true;
+}
+
+/* ---- the level's title card: black, an amber band sweeps open across the middle, "STAGE n" and the level's name
+ * type in, then the level shows through venetian-blind strips and the last of the black fades (every level, also a
+ * --level start). The world does not run under it; the music comes up with the wipe. */
+#define TITLE_TEXT_T 0.9f    /* the band is open: the name starts typing */
+#define TITLE_WIPE_T 3.1f    /* the strips start opening */
+#define TITLE_END_T  4.3f
+static const struct { const char *no, *name, *sub; } TITLE[3] = {
+    { "", "", "" },
+    { "STAGE 1", "THE FRONTIER TOWN", "OUTRIDERS IN THE STREETS" },
+    { "STAGE 2", "THE ALL GALAXY GRAND PRIX", "NEW BORDERLAND CIRCUIT" },
+};
+static void title_start(Game *g) { g->title_on = true; g->title_t = 0; music_set_volume(0); }
+static void title_update(Game *g, float dt)
+{
+    float prev = g->title_t; g->title_t += dt;
+    bool any = false; for (int b = 0; b < BTN_COUNT; b++) if (btn_pressed(&g->in, b)) any = true;
+    if (any && g->title_t < TITLE_WIPE_T) g->title_t = TITLE_WIPE_T;   /* a button skips to the wipe */
+    const char *name = TITLE[g->stage == 2 ? 2 : 1].name; int len = (int)strlen(name);
+    int shown_prev = (int)((prev - TITLE_TEXT_T) * 22), shown = (int)((g->title_t - TITLE_TEXT_T) * 22);   /* 22 letters / s */
+    if (shown > shown_prev && shown <= len && shown > 0 && name[shown - 1] != ' ') sfx_play(0, 0);   /* a tick per letter */
+    if (prev < 0.05f && g->title_t >= 0.05f) sfx_play(8, 0);                                          /* the band sweeps open */
+    if (g->title_t >= TITLE_WIPE_T) music_set_volume((g->title_t - TITLE_WIPE_T) / (TITLE_END_T - TITLE_WIPE_T));
+    if (g->title_t >= TITLE_END_T) { g->title_on = false; music_set_volume(1); g->level_t = 0.25f; }
+}
+static void title_draw(Game *g)
+{
+    float t = g->title_t; int sw = g->sw, sh = g->sh;
+    Font *f = font_get(0x4058897F), *small = font_get(0x12072E60);
+    SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND);
+    /* the black: solid until the wipe, then 10 strips that each shrink toward their own centre line, staggered top to
+     * bottom, and a thin veil that fades out last */
+    if (t < TITLE_WIPE_T) { SDL_SetRenderDrawColor(g->ren, 0, 0, 0, 255); SDL_FRect q = { 0, 0, (float)sw, (float)sh }; SDL_RenderFillRect(g->ren, &q); }
+    else {
+        const int N = 10; float strip = (float)sh / N, w = (t - TITLE_WIPE_T) / (TITLE_END_T - TITLE_WIPE_T);
+        for (int i = 0; i < N; i++) {
+            float open = SDL_clamp((w - i * 0.045f) / 0.5f, 0.0f, 1.0f); open = 1 - (1 - open) * (1 - open);   /* ease out */
+            float h = strip * (1 - open); if (h <= 0) continue;
+            SDL_SetRenderDrawColor(g->ren, 0, 0, 0, 255); SDL_FRect q = { 0, i * strip + (strip - h) * 0.5f, (float)sw, h }; SDL_RenderFillRect(g->ren, &q);
+        }
+        SDL_SetRenderDrawColor(g->ren, 0, 0, 0, (uint8_t)(120 * (1 - w))); SDL_FRect v = { 0, 0, (float)sw, (float)sh }; SDL_RenderFillRect(g->ren, &v);
+    }
+    /* the band: a line growing from the centre (0..0.4 s), then opening vertically to 46 px (0.4..0.9 s); it slides
+     * up and away with the wipe */
+    float cy = sh * 0.5f - 2, half_w = sw * SDL_clamp(t / 0.4f, 0.0f, 1.0f) * 0.5f;
+    float half_h = 1.5f + 21.5f * SDL_clamp((t - 0.4f) / 0.5f, 0.0f, 1.0f);
+    float gone = SDL_clamp((t - TITLE_WIPE_T) / 0.45f, 0.0f, 1.0f); gone *= gone;
+    cy -= gone * (sh * 0.5f + 40); uint8_t fade = (uint8_t)(255 * (1 - gone));
+    if (t > 0.0f && half_w > 1) {
+        SDL_SetRenderDrawColor(g->ren, 14, 22, 52, fade); SDL_FRect band = { sw * 0.5f - half_w, cy - half_h, half_w * 2, half_h * 2 }; SDL_RenderFillRect(g->ren, &band);
+        SDL_SetRenderDrawColor(g->ren, 255, 182, 0, fade);
+        SDL_FRect top = { sw * 0.5f - half_w, cy - half_h - 2, half_w * 2, 2 }, bot = { sw * 0.5f - half_w, cy + half_h, half_w * 2, 2 };
+        SDL_RenderFillRect(g->ren, &top); SDL_RenderFillRect(g->ren, &bot);
+        /* hatch marks running along the band's edges (a rolling shimmer) */
+        SDL_SetRenderDrawColor(g->ren, 255, 230, 120, (uint8_t)(fade * 0.6f));
+        int off = (int)(t * 90) % 16;
+        for (float x = sw * 0.5f - half_w + off; x < sw * 0.5f + half_w; x += 16) { SDL_FRect m1 = { x, cy - half_h - 2, 6, 2 }, m2 = { x + 8, cy + half_h, 6, 2 }; SDL_RenderFillRect(g->ren, &m1); SDL_RenderFillRect(g->ren, &m2); }
+    }
+    if (!f || !small || t < TITLE_TEXT_T - 0.2f) return;
+    const char *no = TITLE[g->stage == 2 ? 2 : 1].no, *name = TITLE[g->stage == 2 ? 2 : 1].name, *sub = TITLE[g->stage == 2 ? 2 : 1].sub;
+    /* "STAGE n" slides in from the left over 0.2 s */
+    float sl = SDL_clamp((t - (TITLE_TEXT_T - 0.2f)) / 0.2f, 0.0f, 1.0f); sl = 1 - (1 - sl) * (1 - sl);
+    float x0 = sw * 0.5f - font_text_width(f, name) * 0.5f;
+    font_draw(small, no, x0 - (1 - sl) * 120, cy - half_h + 4, (uint8_t)(255 * sl * (1 - gone)), (uint8_t)(182 * sl * (1 - gone)), 0);
+    /* the name types in, a bright cursor block at its head */
+    int len = (int)strlen(name), shown = (int)((t - TITLE_TEXT_T) * 22); if (shown < 0) shown = 0; if (shown > len) shown = len;
+    font_draw_n(f, name, shown, x0, cy - 6, fade, fade, fade);
+    if (shown < len && ((int)(t * 12) & 1)) { SDL_SetRenderDrawColor(g->ren, 255, 182, 0, fade); SDL_FRect cur = { x0 + font_text_width_n(f, name, shown), cy - 6, 8, (float)f->h }; SDL_RenderFillRect(g->ren, &cur); }
+    /* the sub line fades in once the name is complete */
+    float sf = SDL_clamp((t - TITLE_TEXT_T - len / 22.0f - 0.2f) / 0.4f, 0.0f, 1.0f) * (1 - gone);
+    font_draw(small, sub, sw * 0.5f - font_text_width(small, sub) * 0.5f, cy + half_h - 12, (uint8_t)(200 * sf), (uint8_t)(200 * sf), (uint8_t)(210 * sf));
 }
 
 void game_event(Game *g, const SDL_Event *ev)
@@ -113,6 +190,7 @@ void game_update(Game *g, float dt)
         if (g->menu.next_stage) { g->menu.next_stage = false; if (g->stage == 2) level_start(g); }
         return;
     }
+    if (g->title_on) { title_update(g, dt); return; }
     if (g->mode7) {
         mode7_update(g->mode7, &g->in, dt);
         int res = mode7_result(g->mode7);
@@ -287,7 +365,7 @@ void game_draw(Game *g)
         }
     }
     if (!g->in_level) { menu_draw(&g->menu, g->ren, g->sw, g->sh); draw_scanlines(g); return; }
-    if (g->mode7) { mode7_draw(g->mode7, menu_scanlines(&g->menu)); return; }
+    if (g->mode7) { mode7_draw(g->mode7, menu_scanlines(&g->menu)); if (g->title_on) title_draw(g); return; }
     Level *L = &g->level;
     float shake = g->enemies.cam_shake ? (float)(rand() % 4) : 0.0f;
     float saved = g->cam_y; g->cam_y += shake;
@@ -311,6 +389,7 @@ void game_draw(Game *g)
         if (ps && ((SDL_GetTicks() / 16) & 0x7f) > 0x30) sprite_draw(ps, 0, (float)((g->sw - ps->w) / 2), (float)((g->sh - ps->h) / 2), false);
     }
     draw_scanlines(g);
+    if (g->title_on) title_draw(g);
     if (g->state == 0xe || g->state == 0xb) {   /* fade out: the same sine ramps that end the states, minus 1 */
         float a = g->state == 0xb ? 2.0f * sinf(3.1415927f * g->state_t / 3.0f) - 1.0f
                                   : (g->state_t > 5.5f ? 2.1f * sinf((g->state_t - 5.5f) * 1.5707964f) - 1.0f : 0.0f);
