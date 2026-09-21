@@ -162,6 +162,18 @@ Sprite *sprite_from_blob(uint32_t id, const uint8_t *d, uint32_t size)
     return s;
 }
 
+Sprite *sprite_from_rgba(uint32_t id, const uint32_t *px, int w, int h, int frames)
+{
+    for (int i = 0; i < g_nspr; i++) if (g_spr[i].id == id) return &g_spr[i];
+    if (g_nspr == MAX_SPR || frames < 1) return NULL;
+    Sprite *s = &g_spr[g_nspr]; memset(s, 0, sizeof *s);
+    s->id = id; s->w = w / frames; s->h = h; s->frames = frames;
+    s->tex = make_tex(w, h, px);
+    if (!s->tex) return NULL;
+    g_nspr++;
+    return s;
+}
+
 Sprite *sprite_get(uint32_t id)
 {
     for (int i = 0; i < g_nspr; i++) if (g_spr[i].id == id) return &g_spr[i];

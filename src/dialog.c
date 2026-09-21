@@ -50,11 +50,17 @@ static void adapt_pages(Dialog *d)
 
 bool dialog_open(Dialog *d, uint32_t text_id)
 {
-    memset(d, 0, sizeof *d);
     const PackEntry *e = packs_find(text_id);
-    if (!e) return false;
+    if (!e) { memset(d, 0, sizeof *d); return false; }
     char buf[2048]; size_t n = e->size < sizeof buf - 1 ? e->size : sizeof buf - 1;
     memcpy(buf, e->data, n); buf[n] = 0;
+    return dialog_open_script(d, buf);
+}
+
+bool dialog_open_script(Dialog *d, const char *script)
+{
+    memset(d, 0, sizeof *d);
+    char buf[4096]; snprintf(buf, sizeof buf, "%s", script);
     /* first line: optional sfx name */
     char *p = buf, *nl = strchr(p, '\n');
     if (nl) {

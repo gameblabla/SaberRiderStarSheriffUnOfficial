@@ -29,6 +29,7 @@ enum { DLG_GREEN, DLG_PURPLE, DLG_RED, DLG_BLUE };
  * him are rewritten for her and the two avatars swap roles (April speaks to Fireball instead of the other way round) */
 void dialog_set_hero(int character);
 bool dialog_open(Dialog *d, uint32_t text_id);
+bool dialog_open_script(Dialog *d, const char *script);   /* the same script format from a string (our own stages) */
 bool dialog_open_text(Dialog *d, const char *text, int color);   /* plain text (no script header), e.g. the mission briefing */
 bool dialog_text_done(const Dialog *d);
 void dialog_close(Dialog *d);                                    /* start the close animation */                          /* typewriter finished on the last page */

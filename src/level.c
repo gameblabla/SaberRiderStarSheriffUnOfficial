@@ -109,3 +109,30 @@ void level_draw_layer(const Level *L, int li, float cam_x, float cam_y, int sw, 
         }
     }
 }
+
+void level_draw_layer_strip(const Level *L, int li, float ox, float oy, int period_px, int sw, int sh)
+{
+    const Layer *ly = &L->layers[li];
+    const TileMap *m = ly->map;
+    if (!m || !m->cb) return;
+    const CBlock *cb = m->cb;
+    int tw = cb->tw, th = cb->th;
+    int period = period_px / tw; if (period <= 0 || period > m->w) period = m->w;
+    int ncells = cblock_ncells(cb);
+    ox = fmodf(ox, (float)(period * tw)); if (ox < 0) ox += period * tw;
+    int cx0 = (int)floorf(ox / tw);
+    int ncx = sw / tw + 2;
+    for (int cy = 0; cy < m->h; cy++) {
+        float sy = cy * th - oy;
+        if (sy + th <= 0 || sy >= sh) continue;
+        for (int cx = cx0; cx < cx0 + ncx; cx++) {
+            int mx = ((cx % period) + period) % period;
+            uint32_t v = m->cells[cy * m->w + mx];
+            if (!v) continue;
+            int ci = (int)((v - 1) % (uint32_t)ncells);
+            uint16_t t = cb->cells[ci];
+            if (t == 0xFFFF) continue;
+            cblock_draw_tile(cb, t, floorf(cx * tw - ox), floorf(sy), false);
+        }
+    }
+}

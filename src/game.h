@@ -6,6 +6,7 @@
 #include "enemies.h"
 #include "dialog.h"
 #include "menu.h"
+#include "mode7.h"
 
 typedef struct {
     SDL_Renderer *ren;
@@ -27,6 +28,9 @@ typedef struct {
     struct { float cx, cy, hx, hy, rx, ry; } deathzones[8]; int ndeath;       /* type 3 */
     int state;              /* 10 playing, 0xd dialog, 0xe level clear, 0xb game over, 0xc pause */
     Menu menu; bool in_level;
+    int stage;              /* 1 frontier town (LEVL), 2 the Mode-7 Grand Prix */
+    int carry_lives;        /* lives left when stage 1 was cleared (-1: fresh start) */
+    Mode7 *mode7;
     float state_t;
     float level_t;               /* +0x64 in state 10: music fade-in timer */
     uint32_t dialog_text; float dialog_t;

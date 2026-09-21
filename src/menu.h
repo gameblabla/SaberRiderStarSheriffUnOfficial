@@ -20,6 +20,8 @@ typedef struct {
     Video *video;
     Dialog dlg;                /* briefing text */
     bool start_level;          /* set when character select finished -> game starts the level */
+    bool next_stage;           /* MISSION ACCOMPLISHED finished: the game decides whether another stage follows */
+    bool more_stages;          /* set by the game while a stage follows: the result screen hands over instead of splashing */
     int idle_frames;           /* title attract timer */
     float angle;               /* rotating background (DAT_00ac9a88 / DAT_00ac9a8c) */
     int credits_page; float credits_t;

@@ -29,6 +29,28 @@ game's own sprites under the sheet's exact bicubic downscale, then a joint palet
 Saber Rider and Colt stay "not available". Assets are looked up in
 `$SABER_ASSETS`, `./assets` and next to the executable.
 
+## Stage 2 — "The All Galaxy Grand Prix" (Mode-7)
+
+After the frontier town's MISSION ACCOMPLISHED the game continues with a full-screen SNES-style Mode-7 stage built
+on anime episode 28: Fireball races the New Borderland circuit against the retiring champion Marco Firenza and the
+"Black Hornets" team - Outriders in disguise whose real target is the Cavalry Command Nerve Center in Dome City
+(the fan "Claudia" who lures Fireball into a trap and April's rescue open the stage as a dialog scene). One lap of
+racing with guns (the Hornets fire back and drop mines), then the Hornets break away and the stage turns into a
+desert pursuit toward Dome City with April riding alongside on Nova and Outrider tanks in the way, and ends with the
+Hornet leader shelling the dome on the city plaza.
+
+`src/mode7.c` draws the floor per scanline into a streaming texture (affine floor, fog, wrapping 256x256 tile
+world), the level-1 sky / mountain layers from the packs as the horizon (`level_draw_layer_strip`), and distance-
+sorted scaled billboards. Art: `assets/mode7.png` + `mode7.txt`, built by `tools/build_mode7_assets.py` from the
+tweet clips (the buggy's 6 rear-view frames, April on Nova, Fireball's rear-view hop, the Outrider tank lifted from
+the 320x240 Mode-7 mockup), the level-1 cacti / rock spires, recolours of the buggy for the field, and drawn floor
+tiles, Dome City, shots, mines and explosions. The stage is Fireball's story whichever hero was picked.
+
+Controls: left/right steer · jump button or up accelerate · shoot button fire · aim button turbo (meter) ·
+down brake · Enter pause. Off the asphalt the car is slow; kerbs rattle; rocks and cacti are solid.
+Debug: `SABER_STAGE=2` starts there, `SABER_M7PHASE=1|2|3` skips to the race / pursuit / boss (`SABER_M7LAP=1`
+starts on lap 2 so the breakaway fires after 5 s, `SABER_M7BOSSHP=n` sets the leader's HP).
+
 ## Controls (as in the demo)
 
 Arrows move · **W/A** jump · **S/D** shoot · hold **Q/E** aim (8 directions) · **Enter** pause/start ·
@@ -60,6 +82,7 @@ Original keys: arrows, A jump, S shoot, Return start/confirm, Escape quits.
 - `src/pack.c`, `src/gfx.c`, `src/level.c`, `src/font.c` — HEADLIST packs, cblock/sprite decoding, LEVL levels, fonts
 - `src/physics.c`, `src/character.c`, `src/player.c`, `src/enemies.c`, `src/bullets.c`, `src/effects.c` — gameplay (ports of `saber_game::*`)
 - `src/dialog.c`, `src/hud.c`, `src/menu.c`, `src/video.c`, `src/audio.c` — presentation
+- `src/mode7.c` — stage 2, the Mode-7 Grand Prix (our own design, see above)
 - `src/audio.c` mixes deliberately *unlike* the original: the demo's mixer (`FUN_00563900`) sums the music at vol/256
   and every sfx voice at unity into 16-bit and hard-clips at ±0x7fbc, and the material is mastered hot (most sfx and
   the music tracks peak at 0 dBFS or above), so a voice line over a gunshot clips. The port decodes the music in float,

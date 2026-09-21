@@ -178,9 +178,9 @@ void menu_update(Menu *m, const Input *in, float dt, int sw, SDL_Renderer *r)
         if (m->t > 2.0f) music_set_volume(3.0f - m->t);   /* FUN_00425e70(3 - t) while fading out */
         if (m->t > 2.9f) menu_enter(m, MS_SPLASH1);
         break;
-    case MS_ACCOMPLISHED:   /* FUN_00429de0: 4 s, then a 1 s countdown to the splash */
+    case MS_ACCOMPLISHED:   /* FUN_00429de0: 4 s, then a 1 s countdown to the splash (or the next stage) */
         m->t += dt;
-        if (m->t > 5.0f) menu_enter(m, MS_SPLASH1);
+        if (m->t > 5.0f) { if (m->more_stages) { m->more_stages = false; m->next_stage = true; music_stop(); } else menu_enter(m, MS_SPLASH1); }
         break;
     default: break;
     }

@@ -19,6 +19,8 @@ bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh)
     g->ren = ren; g->sw = sw; g->sh = sh;
     g->menu.difficulty = 1; g->menu.lives = 2; g->menu.continues = 3; g->menu.character = 1;   /* option defaults: NORMAL, 02, 03; Fireball */
     if (SDL_getenv("SABER_HERO")) g->menu.character = atoi(SDL_getenv("SABER_HERO")) & 3;   /* debug: 0 Saber 1 Fireball 2 April 3 Colt */
+    g->stage = 1;
+    if (SDL_getenv("SABER_STAGE")) { g->stage = atoi(SDL_getenv("SABER_STAGE")); if (g->stage == 2) return level_start(g); }   /* debug: straight into stage 2 */
     if (!SDL_getenv("SABER_MENU") && (SDL_getenv("SABER_START") || SDL_getenv("SABER_SCRIPT"))) return level_start(g);   /* debug: straight into the level */
     menu_enter(&g->menu, SDL_getenv("SABER_MENU") ? atoi(SDL_getenv("SABER_MENU")) : MS_SPLASH0);
     return true;
@@ -27,9 +29,14 @@ bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh)
 static bool level_start(Game *g)
 {
     SDL_Renderer *ren = g->ren; int sw = g->sw, sh = g->sh;
-    Menu menu = g->menu;
+    Menu menu = g->menu; int stage = g->stage ? g->stage : 1; int carry = g->carry_lives;
+    if (g->mode7) { mode7_destroy(g->mode7); g->mode7 = NULL; }
     memset(g, 0, sizeof *g);
-    g->ren = ren; g->sw = sw; g->sh = sh; g->menu = menu; g->in_level = true;
+    g->ren = ren; g->sw = sw; g->sh = sh; g->menu = menu; g->in_level = true; g->stage = stage; g->carry_lives = carry;
+    if (stage == 2) {   /* the Mode-7 Grand Prix: its own world, HUD and flow */
+        g->mode7 = mode7_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives);
+        return g->mode7 != NULL;
+    }
     const PackEntry *t = packs_find(0x119090BF);
     uint32_t lvl = 0x12DAD1A7;
     if (t && !memcmp(t->data, "TLVL", 4)) lvl = t->data[8] | t->data[9] << 8 | t->data[10] << 16 | (uint32_t)t->data[11] << 24;
@@ -101,7 +108,19 @@ void game_update(Game *g, float dt)
     input_update(&g->in);
     if (!g->in_level) {
         menu_update(&g->menu, &g->in, dt, g->sw, g->ren);
-        if (g->menu.start_level) { g->menu.start_level = false; level_start(g); }
+        if (g->menu.start_level) { g->menu.start_level = false; g->stage = 1; g->carry_lives = 0; level_start(g); }   /* character select always starts stage 1 */
+        if (g->menu.next_stage) { g->menu.next_stage = false; if (g->stage == 2) level_start(g); }
+        return;
+    }
+    if (g->mode7) {
+        mode7_update(g->mode7, &g->in, dt);
+        int res = mode7_result(g->mode7);
+        if (res) {
+            mode7_destroy(g->mode7); g->mode7 = NULL; g->in_level = false;
+            dialog_set_hero(g->menu.character);
+            if (res == 1) { g->stage = 3; menu_enter(&g->menu, MS_ACCOMPLISHED); }   /* the game ends after stage 2 */
+            else menu_enter(&g->menu, MS_GAMEOVER);
+        }
         return;
     }
     Player *p = &g->player; Character *c = &p->ch;
@@ -121,7 +140,7 @@ void game_update(Game *g, float dt)
     }
     if (g->state == 0xe) {
         g->state_t += dt; float f = g->state_t > 5.5f ? 2.1f * sinf((g->state_t - 5.5f) * 1.5707964f) : 0.0f;
-        if (f >= 2.0f) { g->in_level = false; menu_enter(&g->menu, MS_ACCOMPLISHED); return; }
+        if (f >= 2.0f) { g->in_level = false; g->stage = 2; g->carry_lives = g->player.lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return; }   /* the Grand Prix follows */
         music_set_volume(2.0f - f);
     }
     bool cutscene_world = false;    /* state 0xd branches that still run the world (player not idle yet, timed holds) */
@@ -267,6 +286,7 @@ void game_draw(Game *g)
         }
     }
     if (!g->in_level) { menu_draw(&g->menu, g->ren, g->sw, g->sh); draw_scanlines(g); return; }
+    if (g->mode7) { mode7_draw(g->mode7, menu_scanlines(&g->menu)); return; }
     Level *L = &g->level;
     float shake = g->enemies.cam_shake ? (float)(rand() % 4) : 0.0f;
     float saved = g->cam_y; g->cam_y += shake;
