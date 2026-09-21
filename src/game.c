@@ -107,7 +107,6 @@ static void title_update(Game *g, float dt)
     const char *name = TITLE[g->stage == 2 ? 2 : 1].name; int len = (int)strlen(name);
     int shown_prev = (int)((prev - TITLE_TEXT_T) * 22), shown = (int)((g->title_t - TITLE_TEXT_T) * 22);   /* 22 letters / s */
     if (shown > shown_prev && shown <= len && shown > 0 && name[shown - 1] != ' ') sfx_play(0, 0);   /* a tick per letter */
-    if (prev < 0.05f && g->title_t >= 0.05f) sfx_play(8, 0);                                          /* the band sweeps open */
     if (g->title_t >= TITLE_WIPE_T) music_set_volume((g->title_t - TITLE_WIPE_T) / (TITLE_END_T - TITLE_WIPE_T));
     if (g->title_t >= TITLE_END_T) { g->title_on = false; music_set_volume(1); g->level_t = 0.25f; }
 }

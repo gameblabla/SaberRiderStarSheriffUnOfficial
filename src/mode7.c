@@ -807,7 +807,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         if (m->lap >= 3) {   /* the chequered flag after three laps: the car coasts on under the FINISH banner while the
                               * Hornets bolt off the course */
             m->phase = PH_FINISH; m->phase_t = 0; m->finish_rank = m->rank; m->msg_t = 0; sfx_loop(NULL); m->turbo_on = false;
-            sfx_play(8, 0); music_stop(); m->music_now = -1;
+            music_stop(); m->music_now = -1;
             for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_RACER && m->ents[i].hornet) { m->ents[i].lat_target = 420; m->ents[i].t = 99; }   /* off the course, no more line changes */
             for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE;
         }
@@ -849,7 +849,6 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         int line_prev = (int)((m->phase_t - dt) * 2.2f), line_now = (int)(m->phase_t * 2.2f);
         if (line_now != line_prev && m->phase_t < BRIEF_TEXT_DUR - 0.6f) sfx_play(0, 0);   /* a blip per line */
         if (any && m->phase_t > 0.3f + 5 / 2.2f + 0.3f && m->phase_t < BRIEF_TEXT_DUR) m->phase_t = BRIEF_TEXT_DUR;   /* once the lines are in */
-        if (m->phase_t >= BRIEF_TEXT_DUR && m->phase_t - dt < BRIEF_TEXT_DUR) sfx_play(8, 0);   /* the zoom kicks off */
         if (m->phase_t >= BRIEF_TEXT_DUR + BRIEF_ZOOM_DUR) { m->phase = PH_PURSUIT; m->phase_t = 0; m->white = 1; begin_pursuit(m); }
         break; }
     case PH_PURSUIT: {
