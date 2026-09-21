@@ -25,20 +25,27 @@
 #define FOG1 3400.0f
 
 /* ---- world ---- */
-#define WN 256               /* cells per side (wraps) */
-#define CELL 32
-#define WORLD (WN * CELL)
-enum { T_SAND, T_SAND2, T_ASPHALT, T_ASPHALT_L, T_ASPHALT_R, T_RUMBLE_A, T_RUMBLE_B, T_CHECKER, T_DIRT, T_SAND_DARK, T_ASPHALT_DASH, T_PLAZA, T_COUNT };
+/* The floor is a material map at 8 world units per cell (wraps at 8192 units); every material is a 32x32 texture sampled
+ * by world position, so a material continues seamlessly across cells and the road's edges/kerbs can follow the track
+ * at 8-unit resolution instead of 32-unit tiles. Textures carry 4 mip levels against far-row shimmer. */
+#define MAPN 1024            /* cells per side (wraps) */
+#define MAPSH 3              /* log2(cell size): 8 units */
+#define WORLD (MAPN << MAPSH)
+#define TEX 32               /* material texture size */
+#define MIPS 4
+enum { T_SAND, T_SAND2, T_ASPHALT, T_LINE, T_KERB_RED, T_KERB_WHITE, T_CHECKER, T_DIRT, T_SAND_DARK, T_DASH, T_SHOULDER, T_COUNT };
 
 /* ---- atlas ---- */
-enum { S_BUGGY, S_HORNET, S_FIRENZA, S_RBLUE, S_RPURPLE, S_TANK, S_APRIL, S_FIREBALL, S_CACTUS, S_ROCK_S, S_ROCK_B, S_MESA,
-       S_FLOOR, S_DOME, S_SHOT, S_ESHOT, S_EXPL, S_FLASH, S_MINE, S_GATE, S_SMOKE, S_CLAUDIA, S_COUNT };
-static const char *const SPR_NAMES[S_COUNT] = { "buggy", "hornet", "firenza", "racer_blue", "racer_purple", "tank", "april", "fireball",
-    "cactus", "rock_small", "rock_big", "mesa", "floor", "dome", "shot", "eshot", "explosion", "flash", "mine", "gate", "smoke", "claudia" };
+enum { S_BUGGY, S_HORNET, S_LEADER, S_FIRENZA, S_RBLUE, S_RPURPLE, S_FIREBALL, S_CACTUS, S_ROCK_S, S_ROCK_B, S_MESA,
+       S_FLOOR, S_SHOT, S_ESHOT, S_EXPL, S_FLASH, S_MINE, S_GATE, S_SMOKE, S_CLAUDIA, S_COUNT };
+static const char *const SPR_NAMES[S_COUNT] = { "buggy", "hornet", "leader", "firenza", "racer_blue", "racer_purple", "fireball",
+    "cactus", "rock_small", "rock_big", "mesa", "floor", "shot", "eshot", "explosion", "flash", "mine", "gate", "smoke", "claudia" };
 typedef struct { int x, y, w, h, frames; } Spr;
 
 /* ---- entities ---- */
-enum { K_NONE, K_RACER, K_TANK, K_PROP, K_SHOT, K_ESHOT, K_MINE, K_EXPL, K_APRIL, K_BOSS, K_GATE, K_SMOKE, K_DOME, K_FLASH };
+enum { K_NONE, K_RACER, K_ESCORT, K_PROP, K_SHOT, K_ESHOT, K_MINE, K_EXPL, K_BOSS, K_GATE, K_SMOKE, K_FLASH };
+/* boss states: the Hornet leader flees up the desert road during the pursuit, then fights */
+enum { B_ORBIT, B_CHARGE, B_MINES, B_FLEE = 10 };
 typedef struct {
     int kind, spr, frame; float anim;
     float x, y, z, heading, speed, vx, vy;
@@ -50,7 +57,9 @@ typedef struct {
 } Ent;
 #define MAX_ENT 200
 
-enum { PH_INTRO, PH_COUNTDOWN, PH_RACE, PH_BREAKAWAY, PH_PURSUIT, PH_ARRIVE, PH_BOSS, PH_VICTORY, PH_DEAD, PH_GAMEOVER, PH_CLEARED };
+enum { PH_INTRO, PH_COUNTDOWN, PH_RACE, PH_BREAKAWAY, PH_PURSUIT, PH_CAUGHT, PH_BOSS, PH_VICTORY, PH_DEAD, PH_GAMEOVER, PH_CLEARED };
+#define CATCH_GAP 260.0f     /* the pursuit ends when the leader is this close */
+#define GAP_MAX 4200.0f      /* HUD gap bar full scale */
 
 #define TRACK_N 1024
 #define N_RACERS 7
@@ -58,8 +67,8 @@ enum { PH_INTRO, PH_COUNTDOWN, PH_RACE, PH_BREAKAWAY, PH_PURSUIT, PH_ARRIVE, PH_
 struct Mode7 {
     SDL_Renderer *ren; int sw, sh;
     SDL_Texture *atlas; Spr spr[S_COUNT]; bool ok;
-    uint32_t tiles[T_COUNT][CELL * CELL];
-    uint8_t cells[WN * WN];
+    uint32_t tiles[T_COUNT][MIPS][TEX * TEX];   /* level L is (TEX >> L) square */
+    uint8_t cells[MAPN * MAPN];
     SDL_Texture *floor_tex; uint32_t *floor_px; int floor_h;
     Level horizon; bool horizon_ok;
     /* track */
@@ -74,12 +83,12 @@ struct Mode7 {
     Dialog dlg; bool paused; int result;
     Ent ents[MAX_ENT];
     /* pursuit */
-    float remaining, hornet_eta, pursuit_spawn_t, april_t;
+    float gap, pursuit_spawn_t, pursuit_t;
     /* boss */
-    float dome_hp, boss_hp_max, arena_x, arena_y; int boss_i;
+    float boss_hp_max; int boss_i;
     float race_time; int kills;
     unsigned rng;
-    float dead_t; bool april_in; int resume_phase;
+    float dead_t; int resume_phase;
     char msg[64]; float msg_t;
     int music_now;
 };
@@ -101,10 +110,10 @@ static Ent *ent_new(Mode7 *m)
 }
 static void ents_clear(Mode7 *m, bool keep_player_stuff) { (void)keep_player_stuff; memset(m->ents, 0, sizeof m->ents); }
 
-static uint8_t cell_at(const Mode7 *m, float x, float y) { int cx = ((int)floorf(x / CELL)) & (WN - 1), cy = ((int)floorf(y / CELL)) & (WN - 1); return m->cells[cy * WN + cx]; }
-static void cell_set(Mode7 *m, int cx, int cy, uint8_t t) { m->cells[(cy & (WN - 1)) * WN + (cx & (WN - 1))] = t; }
-static bool is_road(uint8_t t) { return t == T_ASPHALT || t == T_ASPHALT_L || t == T_ASPHALT_R || t == T_CHECKER || t == T_ASPHALT_DASH || t == T_DIRT || t == T_PLAZA; }
-static bool is_rumble(uint8_t t) { return t == T_RUMBLE_A || t == T_RUMBLE_B; }
+static uint8_t cell_at(const Mode7 *m, float x, float y) { int cx = ((int)floorf(x) >> MAPSH) & (MAPN - 1), cy = ((int)floorf(y) >> MAPSH) & (MAPN - 1); return m->cells[cy * MAPN + cx]; }
+static void cell_set(Mode7 *m, int cx, int cy, uint8_t t) { m->cells[(cy & (MAPN - 1)) * MAPN + (cx & (MAPN - 1))] = t; }
+static bool is_road(uint8_t t) { return t == T_ASPHALT || t == T_LINE || t == T_CHECKER || t == T_DASH || t == T_DIRT; }
+static bool is_rumble(uint8_t t) { return t == T_KERB_RED || t == T_KERB_WHITE || t == T_SHOULDER; }
 
 static void spawn_expl(Mode7 *m, float x, float y, float scale)
 {
@@ -137,11 +146,21 @@ static bool load_atlas(Mode7 *m)
     m->atlas = SDL_CreateTexture(m->ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, w, h);
     SDL_UpdateTexture(m->atlas, NULL, px, w * 4);
     SDL_SetTextureBlendMode(m->atlas, SDL_BLENDMODE_BLEND); SDL_SetTextureScaleMode(m->atlas, SDL_SCALEMODE_NEAREST);
-    /* floor tiles into memory */
+    /* floor materials into memory, with box-filtered mips */
     Spr *fl = &m->spr[S_FLOOR];
-    for (int t = 0; t < T_COUNT && t < fl->frames; t++)
-        for (int yy = 0; yy < CELL; yy++)
-            memcpy(m->tiles[t] + yy * CELL, px + (size_t)(fl->y + yy) * w + fl->x + t * fl->w, CELL * 4);
+    for (int t = 0; t < T_COUNT && t < fl->frames; t++) {
+        for (int yy = 0; yy < TEX; yy++)
+            memcpy(m->tiles[t][0] + yy * TEX, px + (size_t)(fl->y + yy) * w + fl->x + t * fl->w, TEX * 4);
+        for (int L = 1; L < MIPS; L++) {
+            int n = TEX >> L, pn = TEX >> (L - 1); const uint32_t *src = m->tiles[t][L - 1]; uint32_t *dst = m->tiles[t][L];
+            for (int yy = 0; yy < n; yy++) for (int xx = 0; xx < n; xx++) {
+                uint32_t c[4] = { src[(2 * yy) * pn + 2 * xx], src[(2 * yy) * pn + 2 * xx + 1], src[(2 * yy + 1) * pn + 2 * xx], src[(2 * yy + 1) * pn + 2 * xx + 1] };
+                uint32_t r = 0, g = 0, b = 0;
+                for (int k = 0; k < 4; k++) { r += c[k] & 0xff; g += (c[k] >> 8) & 0xff; b += (c[k] >> 16) & 0xff; }
+                dst[yy * n + xx] = 0xff000000u | ((b + 2) / 4) << 16 | ((g + 2) / 4) << 8 | ((r + 2) / 4);
+            }
+        }
+    }
     /* Claudia's avatar for the dialog system */
     Spr *cl = &m->spr[S_CLAUDIA];
     uint32_t *av = malloc((size_t)cl->w * cl->h * 4);
@@ -170,7 +189,12 @@ static void draw_spr(Mode7 *m, int id, int frame, float cx, float ybot, float sc
 /* ---------------------------------------------------------------- worlds */
 static void fill_sand(Mode7 *m)
 {
-    for (int i = 0; i < WN * WN; i++) { float r = frand(m); m->cells[i] = r < 0.015f ? T_SAND_DARK : r < 0.5f ? T_SAND : T_SAND2; }
+    for (int i = 0; i < MAPN * MAPN; i++) m->cells[i] = frand(m) < 0.5f ? T_SAND : T_SAND2;
+    /* scorched patches: a few hundred blobs a few cells across */
+    for (int k = 0; k < 400; k++) {
+        int cx = (int)(frand(m) * MAPN), cy = (int)(frand(m) * MAPN), r = 2 + (int)(frand(m) * 4);
+        for (int y = -r; y <= r; y++) for (int x = -r; x <= r; x++) if (x * x + y * y <= r * r) cell_set(m, cx + x, cy + y, T_SAND_DARK);
+    }
 }
 
 /* the New Borderland circuit: a Catmull-Rom loop through hand-placed control points, sampled into TRACK_N points */
@@ -197,35 +221,37 @@ static void build_track(Mode7 *m)
         float d = hypotf(m->tx[b] - m->tx[a], m->ty[b] - m->ty[a]);
         if (i < TRACK_N) m->tlen[i] = m->tlen[a] + d; else m->track_len = m->tlen[a] + d;
     }
-    /* rasterize: distance from the centreline decides the tile */
+    /* rasterize: every map cell near the track remembers its nearest sample (distance + index), then the distance
+     * from the centreline picks the material and the sample's arc length phases the kerb / dash pattern */
     fill_sand(m);
-    const float HALF = 104, KERB = 128;
+    const float HALF = 104, LINE_W = 4, KERB = 118;
+    float *dist = malloc(sizeof(float) * MAPN * MAPN); int16_t *near = malloc(sizeof(int16_t) * MAPN * MAPN);
+    for (int i = 0; i < MAPN * MAPN; i++) { dist[i] = 1e9f; near[i] = -1; }
+    const int R = (int)(KERB / (1 << MAPSH)) + 1;
     for (int i = 0; i < TRACK_N; i++) {
-        int cx0 = (int)floorf((m->tx[i] - KERB) / CELL), cx1 = (int)floorf((m->tx[i] + KERB) / CELL);
-        int cy0 = (int)floorf((m->ty[i] - KERB) / CELL), cy1 = (int)floorf((m->ty[i] + KERB) / CELL);
-        for (int cy = cy0; cy <= cy1; cy++) for (int cx = cx0; cx <= cx1; cx++) {
-            float wx = cx * CELL + CELL / 2, wy = cy * CELL + CELL / 2;
+        int ccx = (int)floorf(m->tx[i]) >> MAPSH, ccy = (int)floorf(m->ty[i]) >> MAPSH;
+        for (int cy = ccy - R; cy <= ccy + R; cy++) for (int cx = ccx - R; cx <= ccx + R; cx++) {
+            float wx = (cx << MAPSH) + (1 << MAPSH) * 0.5f, wy = (cy << MAPSH) + (1 << MAPSH) * 0.5f;
             float d = hypotf(wx - m->tx[i], wy - m->ty[i]);
-            uint8_t cur = m->cells[(cy & (WN - 1)) * WN + (cx & (WN - 1))];
-            if (d < HALF) { if (!is_road(cur)) cell_set(m, cx, cy, ((cx * 7 + cy * 13) % 11 == 0) ? T_ASPHALT_DASH : T_ASPHALT); }
-            else if (d < KERB && !is_road(cur) && !is_rumble(cur)) cell_set(m, cx, cy, ((cx + cy) & 1) ? T_RUMBLE_A : T_RUMBLE_B);
+            int idx = (cy & (MAPN - 1)) * MAPN + (cx & (MAPN - 1));
+            if (d < dist[idx]) { dist[idx] = d; near[idx] = (int16_t)i; }
         }
     }
-    /* road dashes should only sit near the centre: second pass keeps them within 20 units of the line */
-    for (int i = 0; i < TRACK_N; i += 2) {
-        int cx0 = (int)floorf((m->tx[i] - HALF) / CELL), cx1 = (int)floorf((m->tx[i] + HALF) / CELL);
-        int cy0 = (int)floorf((m->ty[i] - HALF) / CELL), cy1 = (int)floorf((m->ty[i] + HALF) / CELL);
-        for (int cy = cy0; cy <= cy1; cy++) for (int cx = cx0; cx <= cx1; cx++) {
-            float wx = cx * CELL + CELL / 2, wy = cy * CELL + CELL / 2;
-            float d = hypotf(wx - m->tx[i], wy - m->ty[i]);
-            uint8_t cur = m->cells[(cy & (WN - 1)) * WN + (cx & (WN - 1))];
-            if (cur == T_ASPHALT_DASH && d > 24) cell_set(m, cx, cy, T_ASPHALT);
-        }
+    for (int idx = 0; idx < MAPN * MAPN; idx++) {
+        float d = dist[idx]; if (d >= KERB) continue;
+        float along = m->tlen[near[idx]];
+        uint8_t t;
+        if (along < 28) t = d < HALF ? T_CHECKER : T_SAND;                            /* start / finish line */
+        else if (d < 3) t = ((int)(along / 48) & 1) ? T_DASH : T_ASPHALT;            /* centre dashes */
+        else if (d < HALF - LINE_W) t = T_ASPHALT;
+        else if (d < HALF) t = T_LINE;
+        else t = ((int)(along / 40) & 1) ? T_KERB_RED : T_KERB_WHITE;
+        m->cells[idx] = t;
     }
-    /* start / finish line across the track at sample 0 */
-    {
-        float nx = -(m->ty[1] - m->ty[0]), ny = m->tx[1] - m->tx[0]; float l = hypotf(nx, ny); nx /= l; ny /= l;
-        for (float k = -HALF; k <= HALF; k += 8) cell_set(m, (int)floorf((m->tx[0] + nx * k) / CELL), (int)floorf((m->ty[0] + ny * k) / CELL), T_CHECKER);
+    free(dist); free(near);
+    if (SDL_getenv("SABER_M7MAP")) {   /* debug: dump the material map */
+        FILE *f = fopen(SDL_getenv("SABER_M7MAP"), "wb");
+        if (f) { fprintf(f, "P5\n%d %d\n255\n", MAPN, MAPN); for (int i = 0; i < MAPN * MAPN; i++) fputc(m->cells[i] * 20, f); fclose(f); }
     }
 }
 
@@ -278,22 +304,21 @@ static void place_props_around_track(Mode7 *m)
     if (g) { g->kind = K_GATE; g->spr = S_GATE; g->x = m->tx[0]; g->y = m->ty[0]; g->scale = 1.6f; }
 }
 
-static void build_desert(Mode7 *m, bool plaza)
+/* the open desert with the dirt road north to Dome City down its middle (x = WORLD / 2), soft shoulders */
+static void build_desert(Mode7 *m)
 {
     fill_sand(m);
-    int road_cx = WN / 2;
-    for (int cy = 0; cy < WN; cy++) for (int cx = road_cx - 3; cx <= road_cx + 3; cx++) cell_set(m, cx, cy, T_DIRT);
-    if (plaza) {
-        int pcx = WN / 2, pcy = (int)floorf(m->arena_y / CELL);
-        for (int cy = pcy - 22; cy <= pcy + 22; cy++) for (int cx = pcx - 22; cx <= pcx + 22; cx++)
-            if ((cx - pcx) * (cx - pcx) + (cy - pcy) * (cy - pcy) <= 22 * 22) cell_set(m, cx, cy, T_PLAZA);
+    const int ROAD = 108 >> MAPSH, SHOULDER = 128 >> MAPSH, mid = MAPN / 2;
+    for (int cy = 0; cy < MAPN; cy++) {
+        int wob = (int)(sinf(cy * 0.021f) * 3 + sinf(cy * 0.0071f) * 5);   /* the road meanders a little */
+        for (int cx = mid + wob - SHOULDER; cx <= mid + wob + SHOULDER; cx++) cell_set(m, cx, cy, abs(cx - mid - wob) <= ROAD ? T_DIRT : T_SHOULDER);
     }
 }
 
 /* ---------------------------------------------------------------- stage setup */
 static const char *const SCRIPT_INTRO =
     "<|GREEN|>\n</dialog_avatar_fireball1/>\nNew Borderland... the All Galaxy Grand Prix. I haven't sat on a grid like this since Cavalry Command recruited me.\n<<>>\n"
-    "<|GREEN|>\n</dialog_avatar_saber2/>\nEnjoy it, Fireball. It's Marco Firenza's last race - beat him and you're the youngest champion twice over.\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_saber2/>\nEnjoy it, Fireball. It's Marco Firenza's last race - and the three of us are riding along, so give us a good show.\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_april2/>\nKeep your eyes open. That Black Hornets team came out of nowhere and nobody has seen their drivers' faces.\n<<>>\n"
     "<|PURPLE|>\n</dialog_avatar_claudia/>\nFireball! I'm Claudia - your biggest fan! Meet me behind the paddock after qualifying? Alone?\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_fireball1/>\n...Sure. Hey, what's- OUTRIDERS! It's a trap!\n<<>>\n"
@@ -302,13 +327,13 @@ static const char *const SCRIPT_INTRO =
     "<|BLUE|>\nSTEER left/right - ACCELERATE jump button or up - FIRE shoot button - TURBO aim button - BRAKE down.\n<<>>\n";
 static const char *const SCRIPT_BREAKAWAY =
     "<|RED|>\n</dialog_avatar_april2/>\nThe Black Hornets are leaving the course! They're heading straight for Dome City - the Cavalry Command Nerve Center!\n<<>>\n"
-    "<|GREEN|>\n</dialog_avatar_fireball1/>\nFirenza can keep his trophy. I'm going after them!\n<<>>\n"
-    "<|GREEN|>\n</dialog_avatar_saber2/>\nApril will ride with you on Nova. Don't let them reach the dome, Fireball!\n<<>>\n";
-static const char *const SCRIPT_ARRIVE =
-    "<|PURPLE|>\n</dialog_avatar_outrider/>\nToo late, Star Sheriff! The Nerve Center falls today, and the Vapor Zone swallows the New Frontier!\n<<>>\n"
-    "<|GREEN|>\n</dialog_avatar_fireball1/>\nNot on my track, bug. Ramrod, if you can hear me - keep Dome City's shields up. I'll handle the Hornet.\n<<>>\n";
+    "<|GREEN|>\n</dialog_avatar_fireball1/>\nFirenza can keep his trophy. Hang on, everybody - I'm going after them!\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_saber2/>\nRun their leader down before he reaches the dome, Fireball. Colt and I will cover you from the back seat.\n<<>>\n";
+static const char *const SCRIPT_CAUGHT =
+    "<|PURPLE|>\n</dialog_avatar_outrider/>\nYou again, Star Sheriff! Fine - the Nerve Center can wait. I'll bury you right here in the sand!\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_fireball1/>\nNobody outruns the Red Fury, bug. April, Colt - light him up!\n<<>>\n";
 static const char *const SCRIPT_VICTORY =
-    "<|GREEN|>\n</dialog_avatar_saber2/>\nThat's the last of the Black Hornets. Dome City is safe, Fireball.\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_saber2/>\nThat's the last of the Black Hornets. Dome City never even knew, Fireball.\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_april2/>\nClaudia was a Vapor Zone puppet all along... don't take it personally, champ.\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_fireball1/>\nMarco Firenza wins his last Grand Prix - and I'll take that rematch any day. Let's go home, Ramrod.\n<<>>\n";
 
@@ -346,11 +371,12 @@ Mode7 *mode7_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives
     m->floor_tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, sw, m->floor_h);
     SDL_SetTextureScaleMode(m->floor_tex, SDL_SCALEMODE_NEAREST);
     m->ok = load_atlas(m);
+    if (m->ok && m->spr[S_BUGGY].frames < 5) { fprintf(stderr, "mode7.png is stale (buggy needs 5 steering frames): rerun tools/build_mode7_assets.py\n"); m->ok = false; }
     m->horizon_ok = level_load(&m->horizon, 0x12DAD1A7);   /* level 1's sky + mountain layers */
     m->difficulty = difficulty; m->lives = lives;
     m->max_hp = difficulty == 0 ? 4 : difficulty == 1 ? 2 : 1; m->hp = m->max_hp;   /* hard: one hit = out */
     m->boost = 1.0f; m->music_now = -1;
-    dialog_set_hero(HERO_FIREBALL);   /* the Grand Prix is Fireball's story whoever was picked */
+    dialog_set_hero(HERO_FIREBALL);   /* the Grand Prix is Fireball's story whoever was picked: everyone rides in his buggy */
     start_race(m);
     m->phase = PH_INTRO; m->phase_t = 0;
     play_music(m, 10, true);
@@ -359,7 +385,7 @@ Mode7 *mode7_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives
         int ph = atoi(SDL_getenv("SABER_M7PHASE")); m->dlg.active = false;
         if (ph == 1) { m->phase = PH_COUNTDOWN; m->countdown = 3.99f; if (SDL_getenv("SABER_M7LAP")) { m->lap = 1; m->progress = m->track_len + m->s; } }
         else if (ph == 2) { m->phase = PH_PURSUIT; begin_pursuit(m); }
-        else if (ph == 3) { m->phase = PH_BOSS; begin_boss(m); m->dome_hp = 100; if (SDL_getenv("SABER_M7BOSSHP")) m->ents[m->boss_i].hp = (float)atof(SDL_getenv("SABER_M7BOSSHP")); }
+        else if (ph == 3) { begin_pursuit(m); m->phase = PH_BOSS; begin_boss(m); if (SDL_getenv("SABER_M7BOSSHP")) m->ents[m->boss_i].hp = (float)atof(SDL_getenv("SABER_M7BOSSHP")); }
     }
     return m;
 }
@@ -399,11 +425,10 @@ static void damage_ent(Mode7 *m, Ent *e, float dmg)
 {
     e->hp -= dmg; e->knock = 0.25f; sfx_play(14, 0);
     if (e->hp <= 0) {
-        spawn_expl(m, e->x, e->y, e->kind == K_BOSS ? 2.5f : e->kind == K_TANK ? 1.8f : 1.2f);
+        spawn_expl(m, e->x, e->y, e->kind == K_BOSS ? 2.5f : 1.2f);
         sfx_play(5, 0); sfx_play(6, 3); m->kills++;
-        if (e->kind == K_RACER) { e->kind = K_NONE; set_msg(m, e->hornet ? "BLACK HORNET DESTROYED" : "RIVAL WRECKED", 2.0f); }
-        else if (e->kind == K_BOSS) { e->kind = K_NONE; }
-        else e->kind = K_NONE;
+        if (e->kind == K_RACER || e->kind == K_ESCORT) set_msg(m, e->hornet ? "BLACK HORNET DESTROYED" : "RIVAL WRECKED", 2.0f);
+        e->kind = K_NONE;
     }
 }
 
@@ -422,7 +447,7 @@ static void player_drive(Mode7 *m, const Input *in, float dt, bool free_drive)
     if (accel) m->speed += (turbo ? 520.0f : 300.0f) * dt;
     else m->speed -= 120.0f * dt;
     if (brake) m->speed -= 500.0f * dt;
-    if (m->speed > vmax) m->speed -= (m->speed - vmax) * (road ? 1.5f : 4.0f) * dt;
+    if (m->speed > vmax) m->speed -= (m->speed - vmax) * (road ? 6.0f : 8.0f) * dt;
     if (m->speed < 0) m->speed = brake ? clampf(m->speed, -80, 0) : 0;
     float steer = (btn_down(in, BTN_LEFT) ? -1 : 0) + (btn_down(in, BTN_RIGHT) ? 1 : 0);
     if (m->spin_t > 0) steer = 0;
@@ -473,7 +498,7 @@ static void update_racers(Mode7 *m, float dt)
         if (e->s >= m->track_len) { e->s -= m->track_len; e->lap++; }
         (void)prev_s;
         track_point(m, e->s, e->lat, &e->x, &e->y, &e->heading);
-        e->anim += e->speed * dt * 0.02f; e->frame = (int)e->anim & 1;
+        e->tilt += ((e->lat_target - e->lat) * 0.05f - e->tilt) * clampf(dt * 5, 0, 1);   /* steering pose from where it is heading */
         /* Black Hornets fight: mines behind when ahead of the player, shots when behind */
         if (e->hornet && m->phase == PH_RACE && m->race_time > 8.0f && e->speed > 200) {
             e->t2 -= dt;
@@ -505,11 +530,12 @@ static void update_ents(Mode7 *m, float dt)
             if (e->kind == K_SHOT) {
                 for (int j = 0; j < MAX_ENT; j++) {
                     Ent *o = &m->ents[j];
-                    if (o->kind != K_RACER && o->kind != K_TANK && o->kind != K_BOSS && o->kind != K_MINE) continue;
-                    float r = o->kind == K_BOSS ? 90 : o->kind == K_TANK ? 48 : o->kind == K_MINE ? 18 : 34;
+                    if (o->kind != K_RACER && o->kind != K_ESCORT && o->kind != K_BOSS && o->kind != K_MINE) continue;
+                    float r = o->kind == K_BOSS ? 70 : o->kind == K_MINE ? 18 : 34;
                     if (fabsf(dwrap(e->x, o->x)) < r && fabsf(dwrap(e->y, o->y)) < r) {
                         e->kind = K_NONE;
                         if (o->kind == K_MINE) { spawn_expl(m, o->x, o->y, 0.8f); o->kind = K_NONE; sfx_play(5, 0); }
+                        else if (o->kind == K_BOSS && o->state == B_FLEE) { o->knock = 0.3f; sfx_play(14, 0); }   /* a hit slows the fleeing leader: shooting helps close the gap */
                         else damage_ent(m, o, 1);
                         break;
                     }
@@ -538,66 +564,70 @@ static void update_ents(Mode7 *m, float dt)
             float dx = dwrap(m->px, e->x), dy = dwrap(m->py, e->y); float d = hypotf(dx, dy);
             if (d < 44) bump_player(m, e, d, 44);
             break; }
-        case K_TANK: {
-            /* pursuit tanks: drive north ahead of the player, weave, stop to turn their gun on him */
+        case K_ESCORT: {
+            /* the leader's Hornet escort: runs north ahead of the player, weaving, and drops back to block and shoot */
             e->t -= dt;
             float dx = dwrap(m->px, e->x), dy = dwrap(m->py, e->y), d = hypotf(dx, dy);
-            if (e->state == 0) {   /* fleeing north at 70 % of the player's pace, weaving */
+            float prev_h = e->heading;
+            if (e->state == 0) {   /* running, weaving across the road */
                 e->heading = -PI / 2 + sinf(e->anim) * 0.35f; e->anim += dt * 1.3f;
-                e->speed = 250;
-                if (e->t <= 0) { e->state = 1; e->t = 2.5f + frand(m) * 1.5f; e->speed = 0; }
-            } else {               /* stopped, firing at the player */
-                e->speed *= 0.9f; e->t2 -= dt;
-                if (e->t2 <= 0 && d < 1400) { e->t2 = 0.9f; float h = atan2f(dy, dx); fire_shot(m, e->x, e->y, h + (frand(m) - 0.5f) * 0.15f, 620, false, 16); sfx_play(7, 0); }
+                e->speed += (300 - e->speed) * clampf(dt * 2, 0, 1);
+                if (e->t <= 0) { e->state = 1; e->t = 2.5f + frand(m) * 1.5f; }
+            } else {               /* slowed right down, guns on the player */
+                e->speed += (90 - e->speed) * clampf(dt * 3, 0, 1); e->t2 -= dt;
+                e->heading = -PI / 2 + sinf(e->anim * 3) * 0.1f;
+                if (e->t2 <= 0 && d < 1400) { e->t2 = 0.9f; float h = atan2f(dy, dx); fire_shot(m, e->x, e->y, h + (frand(m) - 0.5f) * 0.15f, 620, false, 12); sfx_play(7, 0); }
                 if (e->t <= 0) { e->state = 0; e->t = 3 + frand(m) * 3; }
             }
+            e->tilt += (angdiff(e->heading, prev_h) * 60 - e->tilt) * clampf(dt * 6, 0, 1);
+            if (e->knock > 0) { e->knock -= dt; e->speed *= 0.97f; }
             e->x = wrapf(e->x + cosf(e->heading) * e->speed * dt); e->y = wrapf(e->y + sinf(e->heading) * e->speed * dt);
-            if (e->knock > 0) e->knock -= dt;
-            if (d < 60) { bump_player(m, e, d, 60); if (m->hurt_t <= 0) { player_hurt(m, 1); m->spin_t = 0.5f; } m->speed *= 0.3f; }
+            if (d < 44) { bump_player(m, e, d, 44); if (m->hurt_t <= 0) player_hurt(m, 1); m->speed *= 0.6f; }
             /* fell too far behind the player (he passed it): drop it */
             if (dy < -1800 || dy > 5000) e->kind = K_NONE;
             break; }
-        case K_APRIL: {
-            /* April on Nova rides at the player's left, bobbing, and takes a shot at the nearest tank now and then */
-            float tx = m->px + cosf(m->heading) * 130 - sinf(m->heading) * -100, ty = m->py + sinf(m->heading) * 130 + cosf(m->heading) * -100;
-            e->x = wrapf(e->x + dwrap(tx, e->x) * clampf(dt * 2.5f, 0, 1)); e->y = wrapf(e->y + dwrap(ty, e->y) * clampf(dt * 2.5f, 0, 1));
-            e->anim += dt * 7; e->frame = ((int)e->anim) & 1; e->z = 6 + 5 * sinf(e->anim * 0.9f);
-            e->t -= dt;
-            if (e->t <= 0) {
-                e->t = 3.0f;
-                Ent *best = NULL; float bd = 1e9f;
-                for (int j = 0; j < MAX_ENT; j++) { Ent *o = &m->ents[j]; if (o->kind != K_TANK && o->kind != K_BOSS) continue; float d = hypotf(dwrap(o->x, e->x), dwrap(o->y, e->y)); if (d < bd && d < 1500) { bd = d; best = o; } }
-                if (best) { float h = atan2f(dwrap(best->y, e->y), dwrap(best->x, e->x)); fire_shot(m, e->x, e->y, h, 1300, true, 30); sfx_play(1, 0); }
-            }
-            break; }
         case K_BOSS: {
-            float ax = m->arena_x, ay = m->arena_y;
             e->t -= dt; if (e->knock > 0) e->knock -= dt;
             float dx = dwrap(m->px, e->x), dy = dwrap(m->py, e->y), d = hypotf(dx, dy);
-            if (e->state == 0) {   /* orbit the plaza, shelling the dome and the player */
-                e->anim += dt * 0.55f;
-                float tx = ax + cosf(e->anim) * 430, ty = ay + sinf(e->anim) * 430;
-                e->heading = atan2f(dwrap(ty, e->y), dwrap(tx, e->x)); e->speed = 240;
-                e->t2 -= dt;
-                if (e->t2 <= 0) {
-                    e->t2 = 1.3f;
-                    float h = atan2f(dy, dx); fire_shot(m, e->x, e->y, h + (frand(m) - 0.5f) * 0.2f, 680, false, 24); sfx_play(7, 0);
-                    if (((int)(e->anim * 10)) % 4 == 0) { m->dome_hp -= 5; if (m->dome_hp < 0) m->dome_hp = 0; spawn_expl(m, ax + (frand(m) - 0.5f) * 200, ay - 600, 1.4f); set_msg(m, "DOME CITY UNDER FIRE", 1.0f); }
+            float prev_h = e->heading;
+            if (e->state == B_FLEE) {   /* the pursuit: up the road, weaving, pace rubber-banded to the gap so he stays in reach but never free */
+                float gap = dy;   /* how far north of the player he is (dy = player y - his y, y grows southward) */
+                float target = gap > 3400 ? 250 : gap > 2200 ? 380 : gap < 600 ? 540 : 470;   /* the player does ~550 on the road, ~700 on turbo */
+                if (e->knock > 0 && e->t <= 0) target *= 0.75f;
+                if (e->t <= 0 && gap < 560 && gap > 0 && m->pursuit_t < 40 && e->t < -3) {   /* early in the chase he always has one more booster (e->t: > 0 boosting, < 0 seconds since) */
+                    e->t = 3.5f; e->speed = 700; set_msg(m, "THE HORNET HITS HIS BOOSTER", 1.5f); sfx_play(0x13, 0);
+                    for (int k = 0; k < 3; k++) spawn_smoke(m, e->x - cosf(e->heading) * 30 * k, e->y - sinf(e->heading) * 30 * k, 10);
                 }
-                if (e->t <= 0) { e->state = frand(m) < 0.5f ? 1 : 2; e->t = e->state == 1 ? 2.2f : 3.0f; if (e->state == 1) { set_msg(m, "HORNET CHARGING", 1.0f); sfx_play(0x13, 0); } }
-            } else if (e->state == 1) {   /* charge the player */
+                if (e->t > 0) target = 700;   /* booster */
+                e->speed += (target - e->speed) * clampf(dt * (e->t > 0 ? 4.0f : 1.5f), 0, 1);
+                e->anim += dt * 0.9f;
+                float road_x = WORLD * 0.5f + sinf(e->anim) * 60;
+                e->heading = -PI / 2 + clampf(dwrap(road_x, e->x) * 0.004f, -0.4f, 0.4f);
+                e->t2 -= dt;
+                if (e->t2 <= 0 && gap < 900 && gap > 0) {   /* mines out the back when the player is close */
+                    e->t2 = 1.4f + frand(m); Ent *mn = ent_new(m); if (mn) { mn->kind = K_MINE; mn->spr = S_MINE; mn->x = e->x; mn->y = e->y; mn->t = 14; }
+                }
+            } else if (e->state == B_ORBIT) {   /* circle the player, shooting */
+                e->anim += dt * 0.55f;
+                float tx = m->px + cosf(e->anim) * 430, ty = m->py + sinf(e->anim) * 430;
+                e->heading += angdiff(atan2f(dwrap(ty, e->y), dwrap(tx, e->x)), e->heading) * clampf(dt * 4, 0, 1); e->speed = 260;
+                e->t2 -= dt;
+                if (e->t2 <= 0) { e->t2 = 1.3f; float h = atan2f(dy, dx); fire_shot(m, e->x, e->y, h + (frand(m) - 0.5f) * 0.2f, 680, false, 16); sfx_play(7, 0); }
+                if (e->t <= 0) { e->state = frand(m) < 0.5f ? B_CHARGE : B_MINES; e->t = e->state == B_CHARGE ? 2.2f : 3.0f; if (e->state == B_CHARGE) { set_msg(m, "HORNET CHARGING", 1.0f); sfx_play(0x13, 0); } }
+            } else if (e->state == B_CHARGE) {   /* ram the player */
                 e->heading += angdiff(atan2f(dy, dx), e->heading) * clampf(dt * 2.5f, 0, 1); e->speed = 620;
-                if (e->t <= 0) { e->state = 0; e->t = 6 + frand(m) * 3; }
-            } else {                      /* mine ring while orbiting */
+                if (e->t <= 0) { e->state = B_ORBIT; e->t = 6 + frand(m) * 3; }
+            } else {                              /* mine ring while circling */
                 e->anim += dt * 0.8f;
-                float tx = ax + cosf(e->anim) * 430, ty = ay + sinf(e->anim) * 430;
-                e->heading = atan2f(dwrap(ty, e->y), dwrap(tx, e->x)); e->speed = 300;
+                float tx = m->px + cosf(e->anim) * 430, ty = m->py + sinf(e->anim) * 430;
+                e->heading += angdiff(atan2f(dwrap(ty, e->y), dwrap(tx, e->x)), e->heading) * clampf(dt * 4, 0, 1); e->speed = 320;
                 e->t2 -= dt; if (e->t2 <= 0) { e->t2 = 0.35f; Ent *mn = ent_new(m); if (mn) { mn->kind = K_MINE; mn->spr = S_MINE; mn->x = e->x; mn->y = e->y; mn->t = 20; } }
-                if (e->t <= 0) { e->state = 0; e->t = 6 + frand(m) * 3; }
+                if (e->t <= 0) { e->state = B_ORBIT; e->t = 6 + frand(m) * 3; }
             }
+            e->tilt += (angdiff(e->heading, prev_h) * 40 - e->tilt) * clampf(dt * 6, 0, 1);
             e->x = wrapf(e->x + cosf(e->heading) * e->speed * dt); e->y = wrapf(e->y + sinf(e->heading) * e->speed * dt);
-            if (d < 95) { bump_player(m, e, d, 95); if (m->hurt_t <= 0) { player_hurt(m, 1); m->spin_t = 0.6f; } m->speed *= 0.2f; }
-            if (e->hp < m->boss_hp_max * 0.4f && ((int)(m->phase_t * 6) & 1)) spawn_smoke(m, e->x, e->y, 60);
+            if (d < 70) { bump_player(m, e, d, 70); if (m->hurt_t <= 0) { player_hurt(m, 1); m->spin_t = 0.6f; } m->speed *= 0.2f; }
+            if (e->state != B_FLEE && e->hp < m->boss_hp_max * 0.4f && ((int)(m->phase_t * 6) & 1)) spawn_smoke(m, e->x, e->y, 40);
             break; }
         default: break;
         }
@@ -605,42 +635,42 @@ static void update_ents(Mode7 *m, float dt)
 }
 
 /* ---------------------------------------------------------------- phases */
+/* the chase: the Hornet leader runs north up the desert road with the player on his tail; catch him to start the fight */
 static void begin_pursuit(Mode7 *m)
 {
     ents_clear(m, false);
-    build_desert(m, false);
+    build_desert(m);
     m->px = WORLD * 0.5f; m->py = WORLD * 0.5f; m->heading = m->cam_heading = -PI / 2; m->speed = 200;
-    m->remaining = 26000; m->hornet_eta = 75; m->pursuit_spawn_t = 1.5f; m->april_t = 4; m->april_in = false;
-    for (int i = 0; i < 120; i++) {
+    m->pursuit_spawn_t = 2.5f; m->pursuit_t = 0;
+    for (int i = 0; i < 160; i++) {
         Ent *e = ent_new(m); if (!e) break;
         float x = frand(m) * WORLD, y = frand(m) * WORLD;
-        if (fabsf(dwrap(x, WORLD * 0.5f)) < 150) { e->kind = K_NONE; continue; }
+        if (fabsf(dwrap(x, WORLD * 0.5f)) < 190) { e->kind = K_NONE; continue; }
         float r = frand(m);
         e->kind = K_PROP; e->spr = r < 0.5f ? S_CACTUS : r < 0.85f ? S_ROCK_S : r < 0.96f ? S_ROCK_B : S_MESA; e->x = x; e->y = y;
         e->scale = e->spr == S_MESA ? 2.2f : e->spr == S_ROCK_B ? 1.5f : 1.2f; e->solid = true;
     }
+    Ent *b = ent_new(m);
+    b->kind = K_BOSS; b->spr = S_LEADER; b->scale = 1.25f; b->hp = m->boss_hp_max = m->difficulty == 0 ? 30 : m->difficulty == 1 ? 42 : 55;
+    b->x = WORLD * 0.5f; b->y = m->py - 1500; b->state = B_FLEE; b->heading = -PI / 2; b->speed = 300; b->t = -10; b->t2 = 3; b->solid = true;
+    m->boss_i = (int)(b - m->ents); m->gap = 1500;
     play_music(m, 14, true);
-    set_msg(m, "PURSUIT - REACH DOME CITY", 3.0f);
+    set_msg(m, "CATCH THE HORNET LEADER", 3.0f);
 }
 
+/* caught him: he turns to fight where he stands */
 static void begin_boss(Mode7 *m)
 {
-    ents_clear(m, false);
-    m->arena_x = WORLD * 0.5f; m->arena_y = WORLD * 0.5f - 400;
-    build_desert(m, true);
-    m->px = WORLD * 0.5f; m->py = WORLD * 0.5f + 500; m->heading = m->cam_heading = -PI / 2; m->speed = 0;
-    Ent *b = ent_new(m);
-    b->kind = K_BOSS; b->spr = S_TANK; b->scale = 1.7f; b->hp = m->boss_hp_max = m->difficulty == 0 ? 40 : m->difficulty == 1 ? 55 : 70;
-    b->x = m->arena_x + 430; b->y = m->arena_y; b->state = 0; b->t = 5; b->t2 = 1.5f; b->r = 255; b->g = 150; b->b = 150; b->solid = true;
-    m->boss_i = (int)(b - m->ents);
-    Ent *d = ent_new(m); d->kind = K_DOME; d->spr = S_DOME; d->x = m->arena_x; d->y = m->arena_y - 760; d->scale = 3.0f;
-    Ent *a = ent_new(m); a->kind = K_APRIL; a->spr = S_APRIL; a->x = m->px - 150; a->y = m->py; a->t = 2; a->scale = 0.9f;
+    Ent *b = &m->ents[m->boss_i];
+    b->state = B_ORBIT; b->t = 4; b->t2 = 1.5f; b->knock = 0; b->anim = atan2f(dwrap(b->y, m->py), dwrap(b->x, m->px));
+    for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_ESCORT || m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE;
     play_music(m, 17, true);
 }
 
 static void begin_victory(Mode7 *m)
 {
     m->phase = PH_VICTORY; m->phase_t = 0; m->speed = 0;
+    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "victory after %.0f s\n", m->phase_t);
     for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE;
     music_play(6, false); m->music_now = 6;
     dialog_open_script(&m->dlg, SCRIPT_VICTORY);
@@ -691,48 +721,36 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
     case PH_PURSUIT: {
         player_drive(m, in, dt, true);
         update_ents(m, dt);
-        float north = -m->vy;   /* progress toward Dome City = northward speed */
-        if (north > 0) m->remaining -= north * dt;
-        m->hornet_eta -= dt;
-        if (!m->april_in && (m->april_t -= dt) <= 0) {
-            m->april_in = true; Ent *a = ent_new(m);
-            if (a) { a->kind = K_APRIL; a->spr = S_APRIL; a->x = m->px - 150; a->y = m->py + 300; a->t = 2; a->scale = 0.9f; }
-            set_msg(m, "APRIL JOINS ON NOVA", 2.0f);
-        }
+        m->pursuit_t += dt;
+        Ent *b = &m->ents[m->boss_i];
+        m->gap = hypotf(dwrap(b->x, m->px), dwrap(b->y, m->py));
+        if (SDL_getenv("SABER_TRACE") && (int)m->pursuit_t != (int)(m->pursuit_t - dt)) fprintf(stderr, "pursuit t=%.0f gap=%.0f leader %.0f,%.0f v=%.0f | player %.0f,%.0f v=%.0f\n", m->pursuit_t, m->gap, b->x, b->y, b->speed, m->px, m->py, m->speed);
+        /* the escort drops back in pairs to get between the player and the leader */
         m->pursuit_spawn_t -= dt;
-        if (m->pursuit_spawn_t <= 0 && m->remaining > 2500) {
-            m->pursuit_spawn_t = 2.2f + frand(m) * 1.5f;
+        if (m->pursuit_spawn_t <= 0 && m->gap > 700) {
+            m->pursuit_spawn_t = 3.0f + frand(m) * 2.0f;
             int n = 1 + (frand(m) < 0.4f ? 1 : 0) + (m->difficulty == 2 ? 1 : 0);
             for (int k = 0; k < n; k++) {
                 Ent *e = ent_new(m); if (!e) break;
-                e->kind = K_TANK; e->spr = S_TANK; e->hp = 4 + m->difficulty; e->scale = 1.0f; e->solid = true;
-                e->x = wrapf(m->px + (frand(m) - 0.5f) * 420); e->y = wrapf(m->py - 750 - frand(m) * 400); e->state = 0; e->t = 1.0f + frand(m) * 2; e->heading = -PI / 2;
+                e->kind = K_ESCORT; e->spr = S_HORNET; e->hornet = true; e->hp = 3 + m->difficulty; e->scale = 1.0f; e->solid = true;
+                e->x = wrapf(WORLD * 0.5f + (frand(m) - 0.5f) * 160); e->y = wrapf(m->py - 900 - frand(m) * 300); e->state = 0; e->t = 1.0f + frand(m) * 2; e->heading = -PI / 2; e->speed = 300;
             }
         }
-        /* keep the car roughly northbound: the road is the way, but the desert is open */
-        if (m->remaining <= 0) {
-            m->phase = PH_ARRIVE; m->phase_t = 0; begin_boss(m);
-            if (m->hornet_eta < 0) { m->dome_hp = 55; set_msg(m, "THE HORNETS GOT THERE FIRST", 3.0f); } else m->dome_hp = 100;
-            dialog_open_script(&m->dlg, SCRIPT_ARRIVE);
+        if (m->gap < CATCH_GAP && dwrap(b->y, m->py) < 0) {   /* on his tail: he stops running */
+            m->phase = PH_CAUGHT; m->phase_t = 0; m->speed *= 0.5f;
+            dialog_open_script(&m->dlg, SCRIPT_CAUGHT);
         }
         break; }
-    case PH_ARRIVE:
+    case PH_CAUGHT:
         if (m->dlg.active) dialog_update(&m->dlg, in, dt);
-        else { m->phase = PH_BOSS; m->phase_t = 0; set_msg(m, "DESTROY THE HORNET LEADER", 3.0f); }
+        else { m->phase = PH_BOSS; m->phase_t = 0; begin_boss(m); set_msg(m, "DESTROY THE HORNET LEADER", 3.0f); }
         break;
     case PH_BOSS: {
         player_drive(m, in, dt, true);
         update_ents(m, dt);
         Ent *b = &m->ents[m->boss_i];
         if (b->kind != K_BOSS) { begin_victory(m); break; }
-        if (SDL_getenv("SABER_TRACE") && ((int)(m->phase_t * 60) % 60) == 0) fprintf(stderr, "boss st=%d pos=%.0f,%.0f hp=%.0f | player %.0f,%.0f h=%.2f arena %.0f,%.0f\n", b->state, b->x, b->y, b->hp, m->px, m->py, m->heading, m->arena_x, m->arena_y);
-        if (m->dome_hp <= 0) { set_msg(m, "THE NERVE CENTER IS LOST", 3.0f); m->hp = 0; spawn_expl(m, m->px, m->py, 1.6f); m->phase = PH_DEAD; m->phase_t = 0; m->lives = 0; }
-        /* leash: stay near the plaza */
-        { float dx = dwrap(m->px, m->arena_x), dy = dwrap(m->py, m->arena_y), d = hypotf(dx, dy);
-          if (d > 1000) { m->px = wrapf(m->arena_x + dx / d * 1000); m->py = wrapf(m->arena_y + dy / d * 1000); m->speed *= 0.3f; m->shake = 0.2f; set_msg(m, "STAY WITH THE DOME", 1.0f); }
-          /* the dome itself is solid */
-          float ex = dwrap(m->px, m->arena_x), ey = dwrap(m->py, m->arena_y - 760), ed = hypotf(ex, ey);
-          if (ed < 330) { m->px = wrapf(m->arena_x + ex / ed * 330); m->py = wrapf(m->arena_y - 760 + ey / ed * 330); m->speed = -fabsf(m->speed) * 0.3f; m->shake = 0.2f; } }
+        if (SDL_getenv("SABER_TRACE") && ((int)(m->phase_t * 60) % 60) == 0) fprintf(stderr, "boss st=%d pos=%.0f,%.0f hp=%.0f | player %.0f,%.0f h=%.2f\n", b->state, b->x, b->y, b->hp, m->px, m->py, m->heading);
         break; }
     case PH_VICTORY:
         update_ents(m, dt);
@@ -748,8 +766,8 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
             else {
                 m->lives--; m->hp = m->max_hp; m->hurt_t = 2.0f; m->speed = 0; m->spin_t = 0; m->boost = 1;
                 /* back onto the course / the road */
-                if (m->resume_phase == PH_BOSS) { m->px = m->arena_x; m->py = m->arena_y + 500; m->heading = m->cam_heading = -PI / 2; m->phase = PH_BOSS; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE; }
-                else if (m->resume_phase == PH_PURSUIT) { m->px = WORLD * 0.5f; m->heading = m->cam_heading = -PI / 2; m->phase = PH_PURSUIT; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_TANK || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE; }
+                if (m->resume_phase == PH_BOSS) { Ent *b = &m->ents[m->boss_i]; m->px = wrapf(b->x); m->py = wrapf(b->y + 500); m->heading = m->cam_heading = -PI / 2; m->phase = PH_BOSS; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE; }
+                else if (m->resume_phase == PH_PURSUIT) { Ent *b = &m->ents[m->boss_i]; m->px = WORLD * 0.5f; m->py = wrapf(b->y + 1200); m->heading = m->cam_heading = -PI / 2; m->phase = PH_PURSUIT; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_ESCORT || m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE; }
                 else { track_point(m, m->s, 0, &m->px, &m->py, &m->heading); m->cam_heading = m->heading; m->lat = 0; m->phase = PH_RACE; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE; }
             }
             m->phase_t = 0;
@@ -774,15 +792,17 @@ static void render_floor(Mode7 *m)
     for (int row = 0; row < m->floor_h; row++) {
         int y = HORIZON + 1 + row;
         float d = CAM_H * FOCAL / (float)(y - HORIZON);
-        float step = d / FOCAL;
+        float step = d / FOCAL;   /* world units per screen pixel across this row */
         float fog = clampf((d - FOG0) / (FOG1 - FOG0), 0, 1);
         int fa = (int)(fog * 256);
+        int mip = step < 1.5f ? 0 : step < 3.0f ? 1 : step < 6.0f ? 2 : 3;
+        int msz = TEX >> mip, mmask = msz - 1, msh = 5 - mip;
         float wx = camx + fx * d - rx * step * (sw * 0.5f), wy = camy + fy * d - ry * step * (sw * 0.5f);
         uint32_t *out = m->floor_px + (size_t)row * sw;
         for (int x = 0; x < sw; x++) {
             int ix = (int)floorf(wx), iy = (int)floorf(wy);
-            uint8_t t = m->cells[((iy >> 5) & (WN - 1)) * WN + ((ix >> 5) & (WN - 1))];
-            uint32_t c = m->tiles[t][(iy & 31) * CELL + (ix & 31)];
+            uint8_t t = m->cells[((iy >> MAPSH) & (MAPN - 1)) * MAPN + ((ix >> MAPSH) & (MAPN - 1))];
+            uint32_t c = m->tiles[t][mip][(((iy >> mip) & mmask) << msh) + ((ix >> mip) & mmask)];
             if (fa) {
                 uint32_t r = ((c & 0xff) * (256 - fa) + (haze & 0xff) * fa) >> 8;
                 uint32_t g = (((c >> 8) & 0xff) * (256 - fa) + ((haze >> 8) & 0xff) * fa) >> 8;
@@ -813,15 +833,10 @@ static void render_horizon(Mode7 *m)
             level_draw_layer_strip(&m->horizon, i, turn * LY[k].speed * (k == 0 ? 0.5f : 1.0f) + k * 300, LY[k].oy, (int)LY[k].period, m->sw, HORIZON + 1);
         }
     }
-    /* the far Dome City on the horizon during the pursuit */
-    if (m->phase == PH_PURSUIT) {
-        float f = 1.0f - clampf(m->remaining / 26000.0f, 0, 1);
-        float sc = 0.15f + f * f * 1.4f;
-        float rel = angdiff(-PI / 2, m->cam_heading);
-        float sx = m->sw * 0.5f - rel * (m->sw / 1.6f);
-        draw_spr(m, S_DOME, 0, sx, HORIZON + 2, sc, 0, 255, 255, 255, 255);
-    }
 }
+
+/* which of a car's three steering poses (left / straight / right) to show */
+static int steer_frame(float tilt) { return tilt < -0.5f ? 0 : tilt > 0.5f ? 2 : 1; }
 
 typedef struct { float d, sx, sy, scale; Ent *e; } DrawItem;
 static int cmp_far(const void *a, const void *b) { float x = ((const DrawItem *)a)->d, y = ((const DrawItem *)b)->d; return x < y ? 1 : x > y ? -1 : 0; }
@@ -850,10 +865,8 @@ static void render_sprites(Mode7 *m)
         uint8_t r = e->r, g = e->g, b = e->b;
         if (e->knock > 0 && ((int)(e->knock * 30) & 1)) { r = 255; g = 120; b = 120; }
         int frame = e->frame;
-        if (e->kind == K_RACER) frame = ((int)e->anim) % (m->spr[e->spr].frames > 1 ? 2 : 1);
-        float ang = 0;
-        if (e->kind == K_RACER) ang = clampf(angdiff(e->heading, m->cam_heading) * 20, -12, 12);
-        draw_spr(m, e->spr, frame, items[i].sx, items[i].sy, items[i].scale, ang, r, g, b, a);
+        if (e->kind == K_RACER || e->kind == K_ESCORT || e->kind == K_BOSS) frame = steer_frame(e->tilt + angdiff(e->heading, m->cam_heading) * 2);
+        draw_spr(m, e->spr, frame, items[i].sx, items[i].sy, items[i].scale, 0, r, g, b, a);
         if (e->kind == K_BOSS) {   /* boss shadow ring so the charge reads */
             SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(m->ren, 0, 0, 0, 60);
             SDL_FRect sh = { items[i].sx - 40 * items[i].scale, items[i].sy - 4, 80 * items[i].scale, 6 }; SDL_RenderFillRect(m->ren, &sh);
@@ -867,13 +880,14 @@ static void render_player(Mode7 *m)
     float sy = HORIZON + CAM_H * FOCAL / CAM_BACK - 6 - m->bounce;
     float sx = m->sw * 0.5f + m->tilt * 1.2f;
     if (m->shake > 0) { sx += (float)(rand() % 5 - 2); sy += (float)(rand() % 3 - 1); }
-    int frame = ((int)m->anim_t) % 6;
+    /* the clip is a steering set: hard left, left, straight, right, hard right */
+    int frame = m->tilt < -5 ? 0 : m->tilt < -1.5f ? 1 : m->tilt <= 1.5f ? 2 : m->tilt <= 5 ? 3 : 4;
     uint8_t r = 255, g = 255, b = 255;
     if (m->hurt_t > 0 && ((int)(m->hurt_t * 20) & 1)) { r = 255; g = 90; b = 90; }
-    float ang = m->spin_t > 0 ? m->spin_t * 720 : m->tilt;
+    float ang = m->spin_t > 0 ? m->spin_t * 720 : 0;
     if (m->phase == PH_VICTORY && m->phase_t > 1.0f) {
         /* Fireball hops out and cheers next to the car */
-        draw_spr(m, S_BUGGY, 0, sx, sy, 1, 0, r, g, b, 255);
+        draw_spr(m, S_BUGGY, 2, sx, sy, 1, 0, r, g, b, 255);
         int f = (int)((m->phase_t - 1.0f) * 8) % m->spr[S_FIREBALL].frames;
         draw_spr(m, S_FIREBALL, f, sx + 60, sy + 4, 1, 0, 255, 255, 255, 255);
         return;
@@ -911,18 +925,15 @@ static void render_hud(Mode7 *m)
         if (m->phase == PH_COUNTDOWN) {
             int c = (int)m->countdown; if (c >= 1 && c <= 3) { snprintf(buf, sizeof buf, "%d", c); font_draw(f, buf, (float)(m->sw / 2 - font_text_width(f, buf) / 2), 70, 255, 60, 60); }
         }
-    } else if (m->phase == PH_PURSUIT) {
-        font_draw(small, "DOME CITY", (float)(m->sw / 2 - 30), 6, 255, 255, 255);
-        bar(m->ren, (float)(m->sw / 2 - 60), 18, 120, 5, 1.0f - m->remaining / 26000.0f, 90, 200, 255);
-        snprintf(buf, sizeof buf, "HORNETS ETA %02d", m->hornet_eta > 0 ? (int)m->hornet_eta : 0);
-        font_draw(small, buf, (float)(m->sw - 8 - font_text_width(small, buf)), 8, m->hornet_eta < 15 ? 255 : 255, m->hornet_eta < 15 ? 80 : 255, m->hornet_eta < 15 ? 80 : 255);
-    } else if (m->phase == PH_BOSS || m->phase == PH_ARRIVE) {
+    } else if (m->phase == PH_PURSUIT || m->phase == PH_CAUGHT || m->phase == PH_BOSS) {
         Ent *b = &m->ents[m->boss_i];
-        font_draw(small, "HORNET LEADER", (float)(m->sw / 2 - 40), 6, 255, 120, 120);
-        bar(m->ren, (float)(m->sw / 2 - 70), 18, 140, 5, b->kind == K_BOSS ? b->hp / m->boss_hp_max : 0, 230, 50, 50);
-        font_draw(small, "DOME CITY", (float)(m->sw - 8 - 60), 6, 120, 200, 255);
-        bar(m->ren, (float)(m->sw - 8 - 100), 18, 100, 5, m->dome_hp / 100.0f, 90, 200, 255);
-        if (b->kind == K_BOSS) {   /* where is it? a red arrow along the screen edge when the leader is off screen */
+        font_draw(small, "HORNET LEADER", (float)(m->sw / 2 - font_text_width(small, "HORNET LEADER") / 2), 6, 255, 120, 120);
+        if (m->phase == PH_PURSUIT) {   /* how close you are to catching him */
+            bar(m->ren, (float)(m->sw / 2 - 70), 18, 140, 5, 1.0f - clampf((m->gap - CATCH_GAP) / (GAP_MAX - CATCH_GAP), 0, 1), 255, 182, 0);
+            snprintf(buf, sizeof buf, "GAP %4dM", (int)m->gap);
+            font_draw(small, buf, (float)(m->sw - 8 - font_text_width(small, buf)), 8, 255, 255, 255);
+        } else bar(m->ren, (float)(m->sw / 2 - 70), 18, 140, 5, b->kind == K_BOSS ? b->hp / m->boss_hp_max : 0, 230, 50, 50);
+        if (b->kind == K_BOSS) {   /* where is he? a red arrow along the screen edge when the leader is off screen */
             float rel = angdiff(atan2f(dwrap(b->y, m->py), dwrap(b->x, m->px)), m->cam_heading);
             if (fabsf(rel) > 0.75f) {
                 float cx = m->sw * 0.5f + sinf(rel) * (m->sw * 0.45f), cy = 60 - cosf(rel) * 40 + 60;

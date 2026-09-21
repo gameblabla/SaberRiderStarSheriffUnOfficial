@@ -2,13 +2,16 @@
 """Build assets/mode7.png + assets/mode7.txt for the Mode-7 stage ("The All Galaxy Grand Prix").
 
 Sources (all in the project root, none redistributed by the game):
-  video.twimg.com_tweet_video_DXEYQnaXkAAXBY8.mp4   Fireball's buggy, rear view, 6 frames at 2x, green-keyed
-  video.twimg.com_tweet_video_DZFh80TX4AAEO93.mp4   the 320x240 Mode-7 mockup: the Outrider tank is lifted from it
-  media_DXtfxJQXcAE9ahL.webp                         April on Nova, rear view, 1x, green-keyed
+  video.twimg.com_tweet_video_DXEYQnaXkAAXBY8.mp4   Fireball's buggy, rear view, 2x, green-keyed. The clip is a STEERING
+                                                     set, not a loop: hard left, left, straight, right, hard right (+ a
+                                                     near-duplicate of the last one, dropped)
   video.twimg.com_tweet_video_DUaM4BaW0AAnRbO.mp4   Fireball rear view, 9 frames at 2x (victory hop)
   decoded/level1/06_Playfield_D8B018EE.png           level-1 cacti / rock spires (billboards)
-Recolours of the buggy give the Black Hornets, Marco Firenza and the field; the floor tiles, Dome City, shots,
+Recolours of the buggy give the Black Hornets, their leader, Marco Firenza and the field; the floor materials, shots,
 explosions, mines and the finish gate are drawn here.
+
+The clips are lossy (chroma-subsampled), so the key is a soft one: alpha from how green a pixel is relative to the
+key, the colour un-premultiplied against the key, then the 2x frames are reduced to native with a majority vote.
 
 Atlas text format: one line per sprite  "name x y w h frames [ox oy]"  (frames laid out horizontally).
 """
@@ -31,23 +34,40 @@ def frames_of(video):
             os.remove(os.path.join(TMP, n))
     return out
 
-def key_green(rgb, tol=70):
-    """alpha from the tweet clips' green screen (3,111,43)"""
-    key = np.array([3, 111, 43])
-    d = np.abs(rgb - key).sum(2)
-    a = (d > tol).astype(np.uint8) * 255
-    return a
+KEY = np.array([3, 111, 43])
+
+def key_soft(rgb, key=KEY):
+    """Soft chroma key against the tweet clips' green screen. Returns (rgb un-premultiplied, alpha 0..1).
+    Greenness = g - max(r, b): the key scores ~68, real pixels of the sprite score <= 0 (nothing on the buggy is
+    greener than it is red/blue). A pixel half blended with the screen (a dark tyre edge) scores ~34 -> alpha 0.5,
+    and dividing the key's share back out recovers the dark colour instead of leaving a green fringe."""
+    rgb = rgb.astype(float)
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    kg = float(key[1] - max(key[0], key[2]))
+    green = g - np.maximum(r, b)
+    a = np.clip(1.0 - (green - 8.0) / (kg - 8.0), 0.0, 1.0)
+    # anything far from the key in plain distance is opaque whatever its greenness (bright colours near the screen)
+    a[np.abs(rgb - key).sum(2) > 200] = 1.0
+    out = np.zeros_like(rgb)
+    m = a > 0.05
+    out[m] = (rgb[m] - (1 - a[m])[:, None] * key) / a[m][:, None]
+    out = np.clip(out, 0, 255)
+    # despill what is left: a kept pixel is never greener than its red/blue
+    out[..., 1] = np.minimum(out[..., 1], np.maximum(out[..., 0], out[..., 2]) + 6)
+    return out, a
 
 def downscale2(rgb, a):
-    """2x-upscaled clip -> native: majority colour per 2x2 block (robust against codec noise)"""
+    """2x-upscaled clip -> native: a 2x2 block is opaque when most of it is, its colour the median of the covered
+    pixels (robust against codec noise). rgb/a from key_soft."""
     h, w = a.shape
     h2, w2 = h // 2, w // 2
     out = np.zeros((h2, w2, 4), np.uint8)
     for y in range(h2):
         for x in range(w2):
-            blk = rgb[2*y:2*y+2, 2*x:2*x+2].reshape(-1, 3); ab = a[2*y:2*y+2, 2*x:2*x+2].reshape(-1)
-            if ab.sum() < 2 * 255: continue
-            sel = blk[ab > 0]
+            ab = a[2*y:2*y+2, 2*x:2*x+2].reshape(-1)
+            if ab.sum() < 2.0: continue
+            blk = rgb[2*y:2*y+2, 2*x:2*x+2].reshape(-1, 3)
+            sel = blk[ab >= 0.5] if (ab >= 0.5).sum() >= 2 else blk[ab > 0.25]
             out[y, x, :3] = np.median(sel, axis=0); out[y, x, 3] = 255
     return out
 
@@ -63,11 +83,11 @@ def unique_frames(frames):
 
 # ---------------------------------------------------------------- buggy
 def buggy_frames():
-    fr = unique_frames(frames_of("video.twimg.com_tweet_video_DXEYQnaXkAAXBY8.mp4"))
+    """5 steering poses: 0 hard left, 1 left, 2 straight, 3 right, 4 hard right (the clip's 6th is a near copy of 4)"""
+    fr = unique_frames(frames_of("video.twimg.com_tweet_video_DXEYQnaXkAAXBY8.mp4"))[:5]
     res = []
     for f in fr:
-        a = key_green(f)
-        res.append(downscale2(f, a))
+        res.append(downscale2(*key_soft(f)))
     # common crop box
     ys, xs = [], []
     for r in res:
@@ -93,6 +113,10 @@ def hornet(h, s, v):        # Black Hornets: black body, yellow trim
     if is_red(h, s): return (0.14, 0.9, min(1, v * 1.05))
     if s < 0.3 and v > 0.35: return (h, 0.0, v * 0.35)
     return (h, s, v)
+def leader(h, s, v):        # the Hornet leader: black body, blood-red trim, darker tyres
+    if is_red(h, s): return (0.98, 0.95, min(1, v * 1.1))
+    if s < 0.3 and v > 0.35: return (h, 0.0, v * 0.28)
+    return (h, s, v * 0.8)
 def firenza(h, s, v):       # Marco Firenza: white and green
     if is_red(h, s): return (0.36, 0.85, v)
     return (h, s * 0.5, min(1, v * 1.1))
@@ -103,70 +127,10 @@ def racer_purple(h, s, v):
     if is_red(h, s): return (0.8, 0.7, v)
     return (h, s, v)
 
-# ---------------------------------------------------------------- tank (from the mockup)
-def tank_sprite():
-    fr = frames_of("video.twimg.com_tweet_video_DZFh80TX4AAEO93.mp4")
-    st = np.stack(fr); moving = (st.max(0) - st.min(0)).sum(2) >= 24
-    x0, y0, x1, y1 = 195, 95, 270, 150; HORIZON = 126
-    im = fr[0]; crop = im[y0:y1, x0:x1]
-    def is_floor(px):
-        r, g, b = px[..., 0], px[..., 1], px[..., 2]
-        return (r > g + 15) & (g > b + 10) & (r - b > 60) & (r > 120)
-    mask = np.zeros((y1 - y0, x1 - x0), bool)
-    for y in range(y0, y1):
-        row = im[y, x0:x1]
-        margin = np.concatenate([im[yy, max(0, x0 - 10):x0] for yy in (y - 1, y, y + 1)] + [im[yy, x1:x1 + 10] for yy in (y - 1, y, y + 1)])
-        dbg = np.abs(row[:, None, :] - margin[None, :, :]).sum(2).min(1)
-        bg = (is_floor(row) | (dbg <= 30)) if y >= HORIZON else (dbg <= 45)
-        mask[y - y0] = ~bg
-    mv = moving[y0:y1, x0:x1]
-    mask |= (mv & ~is_floor(crop)); mask &= ~(is_floor(crop) & ~mv)
-    mask = ndimage.binary_opening(mask, structure=np.ones((2, 2))) | (mv & ~is_floor(crop))
-    lab, n = ndimage.label(mask, structure=np.ones((3, 3)))
-    sizes = ndimage.sum(mask, lab, range(1, n + 1)); big = int(np.argmax(sizes)) + 1
-    keep = ndimage.binary_fill_holes(lab == big)
-    # the muzzle flashes were animated over the floor: drop the orange residue on the bottom rows
-    keep[-8:] &= ~is_floor(crop[-8:])
-    rgba = np.dstack([crop.astype(np.uint8), (keep * 255).astype(np.uint8)])
-    rgba = crop_alpha(rgba)
-    # the thin antennae were keyed away against the mountains: redraw two, in the hull's grey
-    h, w = rgba.shape[:2]
-    pad = np.zeros((h + 14, w, 4), np.uint8); pad[14:] = rgba
-    grey = (150, 160, 178, 255); dark = (60, 64, 90, 255)
-    for ax in (10, w - 11):
-        for yy in range(0, 16):
-            pad[yy, ax] = grey; pad[yy, ax + 1] = dark
-        pad[0, ax] = (230, 60, 60, 255); pad[0, ax + 1] = (230, 60, 60, 255)
-    # upscale 2x (the mockup drew it at half the sheet scale)
-    up = np.repeat(np.repeat(pad, 2, axis=0), 2, axis=1)
-    return up
-
-# ---------------------------------------------------------------- April on Nova
-def april_sprite():
-    im = np.array(Image.open(os.path.join(ROOT, "media_DXtfxJQXcAE9ahL.webp")).convert("RGB")).astype(int)
-    key = np.array([5, 111, 46]); a = (np.abs(im - key).sum(2) > 70).astype(np.uint8) * 255
-    a = ndimage.binary_opening(a > 0, structure=np.ones((2, 2))).astype(np.uint8) * 255
-    rgba = np.dstack([im.astype(np.uint8), a])
-    base = crop_alpha(rgba)
-    # two-frame wing flap: the wings (the pink region right of the rider's back) are sheared up a little
-    h, w = base.shape[:2]
-    f2 = base.copy()
-    wing = np.zeros((h, w), bool)
-    for y in range(h):
-        for x in range(w):
-            r, g, b, al = base[y, x]
-            if al and x > w * 0.45 and y < h * 0.6 and r > 150 and g < 110: wing[y, x] = True
-    f2[wing] = 0
-    ys, xs = np.where(wing)
-    for y, x in zip(ys, xs):
-        ny = y - int((x - w * 0.45) / (w * 0.55) * 6)
-        if 0 <= ny < h: f2[ny, x] = base[y, x]
-    return [base, f2]
-
 # ---------------------------------------------------------------- Fireball rear view (victory)
 def fireball_frames():
     fr = frames_of("video.twimg.com_tweet_video_DUaM4BaW0AAnRbO.mp4")
-    res = [downscale2(f, key_green(f)) for f in fr]
+    res = [downscale2(*key_soft(f)) for f in fr]
     ys, xs = [], []
     for r in res:
         yy, xx = np.where(r[:, :, 3] > 0); ys += [yy.min(), yy.max()]; xs += [xx.min(), xx.max()]
@@ -186,8 +150,9 @@ def level_props():
 def pil(w, h): return Image.new("RGBA", (w, h), (0, 0, 0, 0))
 
 def floor_tiles():
-    """32x32 tiles: 0 sand A, 1 sand B, 2 asphalt, 3 asphalt+left line, 4 asphalt+right line, 5 rumble L, 6 rumble R,
-    7 start/finish checker, 8 dirt road, 9 dark sand (shadow / scorched), 10 asphalt centre dash, 11 dome plaza"""
+    """32x32 floor materials, sampled by world position so they tile seamlessly across the 8-unit material map:
+    0 sand A, 1 sand B, 2 asphalt, 3 edge line, 4 kerb red, 5 kerb white, 6 start/finish checker, 7 dirt road,
+    8 dark sand (scorched), 9 centre dash, 10 dirt shoulder"""
     T = 32
     tiles = []
     sand = [(214, 128, 62), (226, 143, 74), (238, 158, 88), (200, 112, 52), (190, 100, 46), (246, 172, 104)]
@@ -207,76 +172,37 @@ def floor_tiles():
                 img[y, x] = (*c, 255)
         return img
     tiles.append(sand_tile(1)); tiles.append(sand_tile(2))
-    asphalt = (74, 70, 82); asphalt2 = (66, 62, 74); line = (236, 236, 236)
-    def asp_tile(seed, left=False, right=False, dash=False):
+    asphalt = (74, 70, 82); asphalt2 = (66, 62, 74)
+    def flat(seed, c1, c2, p=0.15):
         rnd = random.Random(seed); img = np.zeros((T, T, 4), np.uint8)
         for y in range(T):
             for x in range(T):
-                c = asphalt if rnd.random() > 0.15 else asphalt2
-                if left and x < 3: c = line
-                if right and x >= T - 3: c = line
-                if dash and 14 <= x < 18 and y < 20: c = (220, 200, 70)
-                img[y, x] = (*c, 255)
+                img[y, x] = (*(c1 if rnd.random() > p else c2), 255)
         return img
-    tiles.append(asp_tile(3)); tiles.append(asp_tile(4, left=True)); tiles.append(asp_tile(5, right=True))
-    def rumble(seed, left):
-        img = asp_tile(seed)
-        for y in range(T):
-            for x in range(T):
-                edge = x < 6 if left else x >= T - 6
-                if edge: img[y, x, :3] = (220, 40, 40) if (y // 8) % 2 == 0 else (240, 240, 240)
-        return img
-    tiles.append(rumble(6, True)); tiles.append(rumble(7, False))
-    chk = asp_tile(8)
+    tiles.append(flat(3, asphalt, asphalt2))                    # 2 asphalt
+    tiles.append(flat(4, (232, 232, 236), (214, 214, 220)))     # 3 edge line
+    tiles.append(flat(5, (222, 44, 44), (200, 36, 36)))         # 4 kerb red
+    tiles.append(flat(6, (242, 242, 242), (222, 222, 226)))     # 5 kerb white
+    chk = flat(8, asphalt, asphalt2)
     for y in range(T):
         for x in range(T):
-            if ((x // 4) + (y // 4)) % 2 == 0: chk[y, x, :3] = (240, 240, 240)
-            else: chk[y, x, :3] = (20, 20, 24)
-    tiles.append(chk)
+            chk[y, x, :3] = (240, 240, 240) if ((x // 8) + (y // 8)) % 2 == 0 else (20, 20, 24)
+    tiles.append(chk)                                           # 6 checker
     dirt = sand_tile(9)
+    rnd = random.Random(19)
     for y in range(T):
         for x in range(T):
-            if random.random() < 0.55: dirt[y, x, :3] = (170, 96, 50) if random.random() < 0.7 else (150, 82, 40)
-    tiles.append(dirt)
-    tiles.append(sand_tile(10, dark=True))
-    tiles.append(asp_tile(11, dash=True))
-    plaza = np.zeros((T, T, 4), np.uint8)
+            if rnd.random() < 0.55: dirt[y, x, :3] = (170, 96, 50) if rnd.random() < 0.7 else (150, 82, 40)
+    tiles.append(dirt)                                          # 7 dirt road
+    tiles.append(sand_tile(10, dark=True))                      # 8 dark sand
+    tiles.append(flat(11, (226, 200, 70), (206, 182, 60)))      # 9 centre dash
+    sh = sand_tile(12)
+    rnd = random.Random(20)
     for y in range(T):
         for x in range(T):
-            c = (120, 130, 150) if (x % 16 and y % 16) else (90, 98, 116)
-            plaza[y, x] = (*c, 255)
-    tiles.append(plaza)
+            if rnd.random() < 0.5: sh[y, x, :3] = (176, 104, 56) if rnd.random() < 0.6 else (156, 92, 48)
+    tiles.append(sh)                                            # 10 dirt shoulder
     return tiles
-
-def dome_city():
-    """Dome City on the horizon: a big glass dome with the Cavalry Command tower, plus outbuildings. 240x96."""
-    W, H = 240, 96
-    img = pil(W, H); d = ImageDraw.Draw(img)
-    # ground plate
-    d.rectangle([0, H - 10, W, H], fill=(96, 104, 124, 255))
-    # outbuildings
-    for x, w, h, c in [(4, 30, 30, (150, 158, 176)), (36, 20, 40, (130, 138, 158)), (190, 26, 34, (150, 158, 176)), (218, 18, 26, (130, 138, 158))]:
-        d.rectangle([x, H - 10 - h, x + w, H - 10], fill=(*c, 255))
-        for wy in range(H - 10 - h + 4, H - 12, 6):
-            for wx in range(x + 3, x + w - 3, 5): d.point((wx, wy), fill=(255, 236, 150, 255))
-    # dome
-    cx, cy, rx, ry = 120, H - 10, 72, 58
-    for yy in range(cy - ry, cy + 1):
-        t = (cy - yy) / ry
-        hw = int(rx * math.sqrt(max(0, 1 - t * t)))
-        shade = int(150 + 80 * t)
-        d.line([(cx - hw, yy), (cx + hw, yy)], fill=(120, shade, 230, 255))
-    for yy in range(cy - ry, cy + 1, 7):
-        t = (cy - yy) / ry; hw = int(rx * math.sqrt(max(0, 1 - t * t)))
-        d.line([(cx - hw, yy), (cx + hw, yy)], fill=(70, 100, 170, 255))
-    for k in range(-3, 4):
-        d.line([(cx, cy - ry), (cx + k * 22, cy)], fill=(70, 100, 170, 255))
-    # the Nerve Center tower
-    d.rectangle([cx - 8, 6, cx + 8, cy - ry + 20], fill=(210, 214, 226, 255))
-    d.rectangle([cx - 12, 4, cx + 12, 10], fill=(230, 60, 60, 255))
-    d.line([(cx, 0), (cx, 4)], fill=(255, 255, 255, 255))
-    d.rectangle([cx - 5, 12, cx + 5, 16], fill=(90, 200, 255, 255))
-    return np.array(img)
 
 def shot_sprite():
     img = pil(16, 8); d = ImageDraw.Draw(img)
@@ -358,16 +284,12 @@ def main():
     entries = []  # (name, [frames], ox, oy)
     bug = buggy_frames()
     entries.append(("buggy", bug))
-    entries.append(("hornet", [recolour(bug[0], hornet), recolour(bug[3], hornet)]))
-    entries.append(("firenza", [recolour(bug[0], firenza), recolour(bug[3], firenza)]))
-    entries.append(("racer_blue", [recolour(bug[0], racer_blue), recolour(bug[3], racer_blue)]))
-    entries.append(("racer_purple", [recolour(bug[0], racer_purple), recolour(bug[3], racer_purple)]))
-    entries.append(("tank", [tank_sprite()]))
-    entries.append(("april", april_sprite()))
+    # the other cars get three steering poses: left, straight, right
+    for name, fn in (("hornet", hornet), ("leader", leader), ("firenza", firenza), ("racer_blue", racer_blue), ("racer_purple", racer_purple)):
+        entries.append((name, [recolour(bug[0], fn), recolour(bug[2], fn), recolour(bug[4], fn)]))
     entries.append(("fireball", fireball_frames()))
     for n, im in level_props().items(): entries.append((n, [im]))
     entries.append(("floor", floor_tiles()))
-    entries.append(("dome", [dome_city()]))
     entries.append(("shot", [shot_sprite()]))
     entries.append(("eshot", [enemy_shot_sprite()]))
     entries.append(("explosion", explosion_frames()))

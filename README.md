@@ -36,15 +36,17 @@ on anime episode 28: Fireball races the New Borderland circuit against the retir
 "Black Hornets" team - Outriders in disguise whose real target is the Cavalry Command Nerve Center in Dome City
 (the fan "Claudia" who lures Fireball into a trap and April's rescue open the stage as a dialog scene). One lap of
 racing with guns (the Hornets fire back and drop mines), then the Hornets break away and the stage turns into a
-desert pursuit toward Dome City with April riding alongside on Nova and Outrider tanks in the way, and ends with the
-Hornet leader shelling the dome on the city plaza.
+chase up the desert road after the Hornet leader (gap bar; he hits his booster when you get close, his escort drops
+back to block and shoot, he drops mines), and once you are on his tail he turns to fight: orbit + shots, charges,
+mine rings. All four Star Sheriffs ride in Fireball's buggy - it is always his car whichever hero was picked.
 
-`src/mode7.c` draws the floor per scanline into a streaming texture (affine floor, fog, wrapping 256x256 tile
-world), the level-1 sky / mountain layers from the packs as the horizon (`level_draw_layer_strip`), and distance-
-sorted scaled billboards. Art: `assets/mode7.png` + `mode7.txt`, built by `tools/build_mode7_assets.py` from the
-tweet clips (the buggy's 6 rear-view frames, April on Nova, Fireball's rear-view hop, the Outrider tank lifted from
-the 320x240 Mode-7 mockup), the level-1 cacti / rock spires, recolours of the buggy for the field, and drawn floor
-tiles, Dome City, shots, mines and explosions. The stage is Fireball's story whichever hero was picked.
+`src/mode7.c` draws the floor per scanline into a streaming texture (affine floor, fog, a wrapping 1024x1024
+material map at 8 world units per cell with 32x32 mipmapped material textures sampled by world position, so the
+road's edge line and red / white kerb bands follow the track), the level-1 sky / mountain layers from the packs as
+the horizon (`level_draw_layer_strip`), and distance-sorted scaled billboards. Art: `assets/mode7.png` + `mode7.txt`,
+built by `tools/build_mode7_assets.py` from the tweet clips with a soft chroma key (the buggy's 5 rear-view steering
+poses - hard left to hard right, Fireball's rear-view hop), the level-1 cacti / rock spires, recolours of the buggy
+for the field / Hornets / leader, and drawn floor materials, shots, mines and explosions.
 
 Controls: left/right steer · jump button or up accelerate · shoot button fire · aim button turbo (meter) ·
 down brake · Enter pause. Off the asphalt the car is slow; kerbs rattle; rocks and cacti are solid.
