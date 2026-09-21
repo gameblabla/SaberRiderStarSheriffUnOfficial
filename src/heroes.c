@@ -126,6 +126,10 @@ bool hero_apply(Character *c)
         CBlock *cb = saber_sheet();
         if (!cb) return false;
         c->cb = cb; c->spr = NULL;   /* table is already Fireball's own layout: no anim/hurtbox patches needed */
+        /* but the run art is not Fireball's: the master's rows 10 / 11 are one figure cut at the hip per frame
+         * (like April's clip halves), so torso frame k only fits on legs frame k, and none of the legs bob */
+        c->torso_bob = false;
+        c->ov_sync = true;
         return true;
     }
     if (c->crhc_id != CRHC_APRIL) return false;
