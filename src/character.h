@@ -20,6 +20,7 @@ typedef struct { float ox, oy, hw, hh; } HurtBox;
 
 #define CHAR_CRHC_ANIMS 53          /* entries in the CRHC table */
 #define CHAR_MAX_ANIMS 56           /* + slots for recreated heroes' extra animations (heroes.c) */
+enum { WALK_AIM_ALL, WALK_AIM_DIAG, WALK_AIM_NONE };   /* torso overlays while walking: every aim (Fireball), only the up / down diagonals (April: her run torso already holds the gun level), never */
 
 typedef struct {
     /* definition (from CRHC) */
@@ -45,7 +46,8 @@ typedef struct {
     float hit_t;
     bool walk_bob;              /* player walk cycle: torso follows the legs' 1 px bob (FUN_0041c530) */
     bool torso_bob;             /* the sheet's run legs sit 1 px lower on cells 2 and 5 (Fireball's art) */
-    bool walk_aim_ov;           /* aim / shoot torso overlays while walking (Fireball); false: keep the run overlay (April's whole-frame run) */
+    uint8_t walk_aim_ov;        /* WALK_AIM_*: which aim / shoot torso overlays replace the run torso while walking */
+    bool ov_sync;               /* a torso overlay with the legs' frame count and rate starts in phase with the legs (April: the run torso is the clip frames' upper half, so it must sit on its own legs frame) */
     int bored_anim[2];          /* L/R animation played once after idling for bored_time seconds (-1: none; April's stretch) */
     float bored_time, idle_t;
     float base_ox, base_oy;   /* +0x1c/+0x20 */

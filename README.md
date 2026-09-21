@@ -21,9 +21,12 @@ archived sprite sheet and tweet clips by `../heroes/`, loaded by `src/heroes.c` 
 `79260A58`; the level-1 dialogs are rewritten for her; her "OK!" on the character select and her jump / hurt / death /
 fall grunts in `assets/voice/` replace Fireball's table samples on the same events and were generated with OmniVoice,
 cloned from her cartoon voice, by `../heroes/voice/generate.py`).
-Her idle sway (6 frames, also her alert pose), run cycle (7 whole frames, kept while shooting on the move) and the
-jumping jacks + wave she plays after 10 s of standing still are the artist's own clip frames; the rest of the sheet is
-reconstructed. Saber Rider and Colt stay "not available". Assets are looked up in
+Her idle sway (6 frames, also her alert pose), run cycle (7 frames, split at the hip into legs and torso overlay so
+level shots on the move keep the clip pixels while the up / down diagonals draw the sheet's aim torsos over the clip
+legs) and the jumping jacks + wave she plays after 10 s of standing still are the artist's own clip frames; the rest
+of the sheet is recovered from the archived 700 px sheet by `../heroes/learn_inverse.py` (a U-Net trained on the
+game's own sprites under the sheet's exact bicubic downscale, then a joint palette solve against the sheet).
+Saber Rider and Colt stay "not available". Assets are looked up in
 `$SABER_ASSETS`, `./assets` and next to the executable.
 
 ## Controls (as in the demo)

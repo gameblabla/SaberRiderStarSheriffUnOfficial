@@ -32,7 +32,7 @@ bool character_init(Character *c, uint32_t crhc_id, bool enemy)
     c->hp_max = rd32(d + 0xadc);
     { const PackEntry *se = packs_find(c->sprite_id); if (se && se->type == RES_SPRITE) c->spr = sprite_get(c->sprite_id); else c->cb = cblock_get(c->sprite_id); }
     c->torso_bob = true;
-    c->bored_anim[0] = c->bored_anim[1] = -1; c->walk_aim_ov = true;
+    c->bored_anim[0] = c->bored_anim[1] = -1; c->walk_aim_ov = WALK_AIM_ALL; c->ov_sync = false;
     hero_apply(c);                 /* player heroes only: recreated sheets (April) replace the pack's cblock + patch the table */
     c->body.ox = c->box_ox; c->body.oy = c->box_oy; c->body.hx = c->box_hx; c->body.hy = c->box_hy;
     character_reset(c, enemy);
@@ -106,7 +106,13 @@ void character_set_anim(Character *c, int anim)
 void character_set_overlay(Character *c, int anim)
 {
     if (anim < 0 || anim >= CHAR_MAX_ANIMS) return;
-    if (c->overlay != anim) { c->overlay = (uint8_t)anim; c->ov_frame = c->anims[anim].first; c->ov_t = 0; }
+    if (c->overlay != anim) {
+        const AnimDef *o = &c->anims[anim], *a = &c->anims[c->anim];
+        c->overlay = (uint8_t)anim; c->ov_frame = o->first; c->ov_t = 0;
+        if (c->ov_sync && o->last - o->first == a->last - a->first && o->frame_time == a->frame_time) {
+            c->ov_frame = o->first + (c->frame - a->first); c->ov_t = c->anim_t;
+        }
+    }
     uint32_t af = c->anim_flags[anim];
     if (af & 1) {
         float mx = c->muzzle[anim][0], my = c->muzzle[anim][1], x, y;
@@ -270,7 +276,7 @@ void player_resolve(Character *c, float dt)
         break;
     case CS_WALK:
         body = L ? 0x24 : 0x25; vx = L ? -c->speed : c->speed;
-        if (!c->walk_aim_ov) ov = L ? 0x26 : 0x27;
+        if (c->walk_aim_ov == WALK_AIM_NONE || (c->walk_aim_ov == WALK_AIM_DIAG && aim != AIM_UL && aim != AIM_DL && aim != AIM_UR && aim != AIM_DR)) ov = L ? 0x26 : 0x27;
         else if (L) ov = shoot ? (aim == 1 ? 0x1d : aim == 7 ? 0x1e : 0x1c) : (aim == 1 ? 0x15 : aim == 7 ? 0x16 : 0x26);
         else   ov = shoot ? (aim == 3 ? 0x20 : aim == 5 ? 0x21 : 0x1f) : (aim == 3 ? 0x18 : aim == 5 ? 0x19 : 0x27);
         c->flags &= ~CF_CROUCH;

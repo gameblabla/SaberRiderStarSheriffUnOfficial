@@ -37,7 +37,7 @@ const char *hero_name(int character)
 }
 
 /* animation table changes: April's clip has a 6-frame idle sway followed by a 20-frame crouch + jumping jacks + wave
- * (10 fps; played once after 10 s of idling), 7 whole run frames (kept while aiming / shooting on the move) and 8
+ * (10 fps; played once after 10 s of idling), 7 run frames (legs + torso overlay cells, both from the clip) and 8
  * death frames.  The "alert" pose (anims 4/7, held for
  * alert_time after shooting / landing) is the sway itself: her sheet has no clean alert art. */
 typedef struct { int anim, first, last, loop; float frame_time; } AnimPatch;
@@ -48,7 +48,7 @@ static const AnimPatch APRIL_ANIMS[] = {
     { 4, 168, 173, 168, 0.10f }, { 7, 176, 181, 176, 0.10f },     /* alert L / R = idle */
     { APRIL_BORED_L, 184, 204, 204, 0.10f }, { APRIL_BORED_R, 208, 228, 228, 0.10f },   /* bored jump + wave L / R */
     { 36, 80, 86, 80, 0.10f }, { 37, 104, 110, 104, 0.10f },      /* run legs L / R */
-    { 38, 64, 70, 64, 0.10f }, { 39, 88, 94, 88, 0.10f },         /* run torso overlays L / R */
+    { 38, 64, 70, 64, 0.10f }, { 39, 88, 94, 88, 0.10f },         /* run torso overlays L / R (the clip frames' upper half + ponytail) */
     { 50, 152, 159, 159, 0.10f }, { 51, 160, 167, 167, 0.10f },   /* death L / R */
     { 52, 168, 168, 168, 4.0f },
 };
@@ -90,7 +90,8 @@ bool hero_apply(Character *c)
     if (!cb) return false;
     c->cb = cb; c->spr = NULL;
     c->torso_bob = false;      /* Fireball's run legs bob 1 px on cells 2 and 5; April's do not */
-    c->walk_aim_ov = false;    /* her run frames are whole clip frames; no aim torso is composed over them */
+    c->ov_sync = true;         /* run torso frame k belongs on run legs frame k */
+    c->walk_aim_ov = WALK_AIM_DIAG;   /* the run torso (clip pixels, gun held level) stays for level shots; up / down diagonals use the sheet's aim torsos over the clip legs */
     for (size_t i = 0; i < sizeof APRIL_ANIMS / sizeof *APRIL_ANIMS; i++) {
         const AnimPatch *p = &APRIL_ANIMS[i];
         AnimDef *a = &c->anims[p->anim];
