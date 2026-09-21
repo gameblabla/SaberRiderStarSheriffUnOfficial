@@ -7,7 +7,7 @@
 #include <stdbool.h>
 #include "input.h"
 
-#define DLG_MAX_PAGES 8
+#define DLG_MAX_PAGES 16
 typedef struct {
     uint32_t avatar_id; int color; char text[512];
 } DialogPage;

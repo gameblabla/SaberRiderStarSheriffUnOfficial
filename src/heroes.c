@@ -127,9 +127,10 @@ static void saber_sfx(void)
 
 void hero_select_sfx(int character)
 {
-    const char *p = character == HERO_APRIL ? asset_path("voice/april_ok.wav")
-                   : character == HERO_SABER ? asset_path("voice/saber_ok.wav") : NULL;
-    if (p) voice_play_file(p); else sfx_play(11, 0);
+    /* the whole team's "OK!" (game sfx 8, the sample the briefing hands over with) whoever was picked: the demo's
+     * select only had Fireball's own line (sfx 11) and the cloned April / Saber lines sounded out of place next to it */
+    (void)character;
+    sfx_play(8, 0);
 }
 
 #define CRHC_FIREBALL 0x9C8F9A9E

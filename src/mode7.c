@@ -4,7 +4,6 @@
 #include "level.h"
 #include "font.h"
 #include "audio.h"
-#include "hud.h"
 #include "dialog.h"
 #include "heroes.h"
 #include "namehash.h"
@@ -44,12 +43,13 @@ typedef struct { int x, y, w, h, frames; } Spr;
 
 /* ---- entities ---- */
 enum { K_NONE, K_RACER, K_ESCORT, K_PROP, K_SHOT, K_ESHOT, K_MINE, K_EXPL, K_BOSS, K_GATE, K_SMOKE, K_FLASH };
-/* boss states: the Hornet leader flees up the desert road during the pursuit, then fights */
-enum { B_ORBIT, B_CHARGE, B_MINES, B_FLEE = 10 };
+/* boss states: the Hornet leader flees up the desert road during the pursuit, then (Chase H.Q. style) keeps
+ * running on the road while you shoot and ram him, and finally burns out */
+enum { B_FLEE = 10, B_RUN = 20, B_DYING = 30 };
 typedef struct {
     int kind, spr, frame; float anim;
     float x, y, z, heading, speed, vx, vy;
-    float hp, t, t2, scale, tilt;
+    float hp, hp_max, t, t2, t3, gun_t, scale, tilt;
     int state; bool player_owned, hornet, solid;
     /* racers: on rails along the track */
     float s, lat, lat_target, max_speed; int lap, id; float knock;
@@ -85,7 +85,7 @@ struct Mode7 {
     /* pursuit */
     float gap, pursuit_spawn_t, pursuit_t;
     /* boss */
-    float boss_hp_max; int boss_i;
+    float boss_hp_max; int boss_i; float ram_cd; float wreck_x, wreck_y, wreck_t;
     float race_time; int kills;
     unsigned rng;
     float dead_t; int resume_phase;
@@ -301,7 +301,7 @@ static void place_props_around_track(Mode7 *m)
     }
     /* the finish gate */
     Ent *g = ent_new(m);
-    if (g) { g->kind = K_GATE; g->spr = S_GATE; g->x = m->tx[0]; g->y = m->ty[0]; g->scale = 1.6f; }
+    if (g) { g->kind = K_GATE; g->spr = S_GATE; g->x = m->tx[0]; g->y = m->ty[0]; g->scale = 3.9f; }   /* 160 px x 3.9 x CAM_BACK / FOCAL = the road's 208 units plus the kerbs */
 }
 
 /* the open desert with the dirt road north to Dome City down its middle (x = WORLD / 2), soft shoulders */
@@ -318,20 +318,20 @@ static void build_desert(Mode7 *m)
 /* ---------------------------------------------------------------- stage setup */
 static const char *const SCRIPT_INTRO =
     "<|GREEN|>\n</dialog_avatar_fireball1/>\nNew Borderland... the All Galaxy Grand Prix. I haven't sat on a grid like this since Cavalry Command recruited me.\n<<>>\n"
-    "<|GREEN|>\n</dialog_avatar_saber2/>\nEnjoy it, Fireball. It's Marco Firenza's last race - and the three of us are riding along, so give us a good show.\n<<>>\n"
-    "<|GREEN|>\n</dialog_avatar_april2/>\nKeep your eyes open. That Black Hornets team came out of nowhere and nobody has seen their drivers' faces.\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_saber2/>\nEnjoy it, Fireball. It's Marco Firenza's last race, and the three of us are riding along - give us a good show.\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_april2/>\nKeep your eyes open. That Black Hornets team came out of nowhere and nobody has seen their faces.\n<<>>\n"
     "<|PURPLE|>\n</dialog_avatar_claudia/>\nFireball! I'm Claudia - your biggest fan! Meet me behind the paddock after qualifying? Alone?\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_fireball1/>\n...Sure. Hey, what's- OUTRIDERS! It's a trap!\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_april2/>\nFireball, get DOWN! ...You owe me one, hotshot. Now get back in that car - the race is about to start.\n<<>>\n"
-    "<|GREEN|>\n</dialog_avatar_colt2/>\nThose Hornets are Outriders in disguise, pardner. Whatever they came for, it isn't the trophy. Watch 'em.\n<<>>\n"
-    "<|BLUE|>\nSTEER left/right - ACCELERATE jump button or up - FIRE shoot button - TURBO aim button - BRAKE down.\n<<>>\n";
+    "<|GREEN|>\n</dialog_avatar_colt2/>\nThose Hornets are Outriders in disguise, pardner. Whatever they came for, it isn't the trophy.\n<<>>\n"
+    "<|BLUE|>\nSTEER left/right - ACCELERATE jump button or up - FIRE shoot button - TURBO aim button - BRAKE down. Three laps!\n<<>>\n";
 static const char *const SCRIPT_BREAKAWAY =
-    "<|RED|>\n</dialog_avatar_april2/>\nThe Black Hornets are leaving the course! They're heading straight for Dome City - the Cavalry Command Nerve Center!\n<<>>\n"
+    "<|RED|>\n</dialog_avatar_april2/>\nThe Black Hornets are leaving the course! They're heading for Dome City - the Cavalry Command Nerve Center!\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_fireball1/>\nFirenza can keep his trophy. Hang on, everybody - I'm going after them!\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_saber2/>\nRun their leader down before he reaches the dome, Fireball. Colt and I will cover you from the back seat.\n<<>>\n";
 static const char *const SCRIPT_CAUGHT =
-    "<|PURPLE|>\n</dialog_avatar_outrider/>\nYou again, Star Sheriff! Fine - the Nerve Center can wait. I'll bury you right here in the sand!\n<<>>\n"
-    "<|GREEN|>\n</dialog_avatar_fireball1/>\nNobody outruns the Red Fury, bug. April, Colt - light him up!\n<<>>\n";
+    "<|PURPLE|>\nYou again, Star Sheriff! Nobody catches the Hornets on the open road. Eat my mines - and my dust!\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_fireball1/>\nNobody outruns the Red Fury, bug. Ram him off that road! April, Colt - light him up!\n<<>>\n";
 static const char *const SCRIPT_VICTORY =
     "<|GREEN|>\n</dialog_avatar_saber2/>\nThat's the last of the Black Hornets. Dome City never even knew, Fireball.\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_april2/>\nClaudia was a Vapor Zone puppet all along... don't take it personally, champ.\n<<>>\n"
@@ -347,13 +347,14 @@ static void start_race(Mode7 *m)
     place_props_around_track(m);
     /* the grid: 8 cars, two abreast, behind the line */
     static const struct { int spr; float max; bool hornet; const char *name; } FIELD[N_RACERS] = {
-        { S_FIRENZA, 470, false, "FIRENZA" }, { S_HORNET, 445, true, "HORNET" }, { S_HORNET, 440, true, "HORNET" },
-        { S_RBLUE, 420, false, "VEGA" }, { S_HORNET, 435, true, "HORNET" }, { S_RPURPLE, 410, false, "KELLY" }, { S_RBLUE, 400, false, "DUNN" },
+        { S_FIRENZA, 490, false, "FIRENZA" }, { S_HORNET, 470, true, "HORNET" }, { S_HORNET, 462, true, "HORNET" },
+        { S_RBLUE, 445, false, "VEGA" }, { S_HORNET, 455, true, "HORNET" }, { S_RPURPLE, 435, false, "KELLY" }, { S_RBLUE, 425, false, "DUNN" },
     };
     for (int i = 0; i < N_RACERS; i++) {
         Ent *e = ent_new(m); if (!e) break;
         e->kind = K_RACER; e->spr = FIELD[i].spr; e->max_speed = FIELD[i].max; e->hornet = FIELD[i].hornet; e->id = i;
-        e->s = m->track_len - 60.0f * (i + 1) - 30; e->lat = (i & 1) ? 48 : -48; e->lat_target = e->lat; e->hp = e->hornet ? 6 : 4; e->solid = true;
+        e->s = m->track_len - 60.0f * (i + 1) - 30; e->lat = (i & 1) ? 48 : -48; e->lat_target = e->lat; e->solid = true;
+        e->hp = e->hp_max = (e->hornet ? 10 : 7) + 2 * m->difficulty;
         track_point(m, e->s, e->lat, &e->x, &e->y, &e->heading); e->speed = 0;
     }
     /* player last on the grid (right column) */
@@ -374,7 +375,7 @@ Mode7 *mode7_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives
     if (m->ok && m->spr[S_BUGGY].frames < 5) { fprintf(stderr, "mode7.png is stale (buggy needs 5 steering frames): rerun tools/build_mode7_assets.py\n"); m->ok = false; }
     m->horizon_ok = level_load(&m->horizon, 0x12DAD1A7);   /* level 1's sky + mountain layers */
     m->difficulty = difficulty; m->lives = lives;
-    m->max_hp = difficulty == 0 ? 4 : difficulty == 1 ? 2 : 1; m->hp = m->max_hp;   /* hard: one hit = out */
+    m->max_hp = difficulty == 0 ? 16 : difficulty == 1 ? 12 : 8; m->hp = m->max_hp;   /* the car's damage meter: shots 1, mines / crashes 2 */
     m->boost = 1.0f; m->music_now = -1;
     dialog_set_hero(HERO_FIREBALL);   /* the Grand Prix is Fireball's story whoever was picked: everyone rides in his buggy */
     start_race(m);
@@ -401,10 +402,12 @@ void mode7_destroy(Mode7 *m)
 int mode7_result(const Mode7 *m) { return m->result; }
 
 /* ---------------------------------------------------------------- combat helpers */
+static bool phase_plays(const Mode7 *m) { return m->phase == PH_RACE || m->phase == PH_PURSUIT || m->phase == PH_BOSS; }
+
 static void player_hurt(Mode7 *m, int dmg)
 {
-    if (m->hurt_t > 0 || m->phase == PH_DEAD || m->phase == PH_VICTORY || m->phase == PH_INTRO) return;
-    m->hp -= dmg; m->hurt_t = 1.5f; m->shake = 0.4f; sfx_play(3, 0);
+    if (m->hurt_t > 0 || !phase_plays(m)) return;   /* no damage while a story scene or the countdown holds the car */
+    m->hp -= dmg; m->hurt_t = 0.7f; m->shake = 0.4f; sfx_play(3, 0);
     if (m->hp <= 0) {
         m->hp = 0; spawn_expl(m, m->px, m->py, 1.6f); sfx_play(5, 0); sfx_play(6, 3);
         m->phase_t = 0; m->dead_t = 0; m->resume_phase = m->phase;
@@ -421,14 +424,33 @@ static void fire_shot(Mode7 *m, float x, float y, float heading, float speed, bo
     if (player_owned) { Ent *f = ent_new(m); if (f) { f->kind = K_FLASH; f->spr = S_FLASH; f->x = x; f->y = y; f->z = z; f->t = 0.08f; } }
 }
 
+/* enemy guns are deliberately sloppy: a shot goes at the player with this much random spread (radians) */
+static float aim_at_player(Mode7 *m, const Ent *e, float spread) { return atan2f(dwrap(m->py, e->y), dwrap(m->px, e->x)) + (frand(m) - 0.5f) * spread; }
+
 static void damage_ent(Mode7 *m, Ent *e, float dmg)
 {
+    if (e->kind == K_BOSS && e->state == B_DYING) return;
     e->hp -= dmg; e->knock = 0.25f; sfx_play(14, 0);
     if (e->hp <= 0) {
-        spawn_expl(m, e->x, e->y, e->kind == K_BOSS ? 2.5f : 1.2f);
+        if (e->kind == K_BOSS) {   /* the leader burns out over a couple of seconds before he blows (update_ents) */
+            e->state = B_DYING; e->t = 2.4f; e->t2 = 0; e->hp = 0; m->kills++;
+            spawn_expl(m, e->x, e->y, 1.2f); sfx_play(5, 0); set_msg(m, "HORNET LEADER DOWN", 2.0f);
+            return;
+        }
+        spawn_expl(m, e->x, e->y, 1.2f);
         sfx_play(5, 0); sfx_play(6, 3); m->kills++;
         if (e->kind == K_RACER || e->kind == K_ESCORT) set_msg(m, e->hornet ? "BLACK HORNET DESTROYED" : "RIVAL WRECKED", 2.0f);
         e->kind = K_NONE;
+    }
+}
+
+/* the leader's Hornet escort: runs north ahead of the player and drops back to block and shoot */
+static void spawn_escorts(Mode7 *m, int n)
+{
+    for (int k = 0; k < n; k++) {
+        Ent *e = ent_new(m); if (!e) break;
+        e->kind = K_ESCORT; e->spr = S_HORNET; e->hornet = true; e->hp = e->hp_max = 4 + m->difficulty; e->scale = 1.0f; e->solid = true;
+        e->x = wrapf(WORLD * 0.5f + (frand(m) - 0.5f) * 160); e->y = wrapf(m->py - 900 - frand(m) * 300); e->state = 0; e->t = 1.0f + frand(m) * 2; e->heading = -PI / 2; e->speed = 300;
     }
 }
 
@@ -443,13 +465,18 @@ static void player_drive(Mode7 *m, const Input *in, float dt, bool free_drive)
     else m->boost = clampf(m->boost + dt * 0.08f, 0, 1);
     bool accel = btn_down(in, BTN_JUMP) || btn_down(in, BTN_UP);
     bool brake = btn_down(in, BTN_DOWN);
+    float steer = (btn_down(in, BTN_LEFT) ? -1 : 0) + (btn_down(in, BTN_RIGHT) ? 1 : 0);
+    if (!free_drive && SDL_getenv("SABER_M7AUTO")) {   /* debug: drive along the circuit (test laps without a driver) */
+        float ax, ay; track_point(m, m->s + 260, 0, &ax, &ay, NULL);
+        float want = atan2f(dwrap(ay, m->py), dwrap(ax, m->px)), d = angdiff(want, m->heading);
+        steer = d > 0.05f ? 1 : d < -0.05f ? -1 : 0; accel = true;
+    }
     if (m->spin_t > 0) { accel = false; m->spin_t -= dt; }
     if (accel) m->speed += (turbo ? 520.0f : 300.0f) * dt;
     else m->speed -= 120.0f * dt;
     if (brake) m->speed -= 500.0f * dt;
     if (m->speed > vmax) m->speed -= (m->speed - vmax) * (road ? 6.0f : 8.0f) * dt;
     if (m->speed < 0) m->speed = brake ? clampf(m->speed, -80, 0) : 0;
-    float steer = (btn_down(in, BTN_LEFT) ? -1 : 0) + (btn_down(in, BTN_RIGHT) ? 1 : 0);
     if (m->spin_t > 0) steer = 0;
     float turn = 1.9f * steer * clampf(fabsf(m->speed) / 300.0f, 0, 1.15f);
     if (!road && !rumble) turn *= 0.85f;
@@ -474,7 +501,7 @@ static void player_drive(Mode7 *m, const Input *in, float dt, bool free_drive)
         else if (ds > m->track_len * 0.5f) { ds -= m->track_len; }
         m->progress += ds; m->last_s = s; m->s = s;
         int lap = (int)floorf(m->progress / m->track_len);
-        if (lap > m->lap) { m->lap = lap; set_msg(m, lap == 1 ? "LAP 2" : "FINAL LAP", 2.0f); }
+        if (lap > m->lap) { m->lap = lap; set_msg(m, lap == 1 ? "LAP 2" : lap == 2 ? "FINAL LAP" : "FINISH", 2.0f); }
     }
 }
 
@@ -490,9 +517,10 @@ static void update_racers(Mode7 *m, float dt)
         if (e->knock > 0) { e->knock -= dt; target *= 0.35f; }
         if (m->phase == PH_COUNTDOWN || m->phase == PH_INTRO) target = 0;
         e->speed += (target - e->speed) * clampf(dt * (e->speed < target ? 0.9f : 2.5f), 0, 1);
-        /* racing line wobble */
+        /* racing line wobble; a car just ahead of the player drifts over to block the pass */
         e->t -= dt;
         if (e->t <= 0) { e->t = 1.5f + frand(m) * 3; e->lat_target = (frand(m) - 0.5f) * 150; }
+        if (gap > 30 && gap < 320 && m->phase == PH_RACE) e->lat_target += (m->lat - e->lat_target) * clampf(dt * (e->hornet ? 1.6f : 0.8f), 0, 1);
         e->lat += (e->lat_target - e->lat) * clampf(dt * 1.2f, 0, 1);
         float prev_s = e->s; e->s += e->speed * dt;
         if (e->s >= m->track_len) { e->s -= m->track_len; e->lap++; }
@@ -503,8 +531,8 @@ static void update_racers(Mode7 *m, float dt)
         if (e->hornet && m->phase == PH_RACE && m->race_time > 8.0f && e->speed > 200) {
             e->t2 -= dt;
             if (e->t2 <= 0) {
-                if (gap > 60 && gap < 900) { e->t2 = 2.5f + frand(m) * 2; Ent *mn = ent_new(m); if (mn) { mn->kind = K_MINE; mn->spr = S_MINE; mn->x = e->x; mn->y = e->y; mn->t = 12; } }
-                else if (gap < -40 && gap > -700) { e->t2 = 1.6f + frand(m); float h = atan2f(dwrap(m->py, e->y), dwrap(m->px, e->x)); fire_shot(m, e->x, e->y, h, 700, false, 12); sfx_play(7, 0); }
+                if (gap > 60 && gap < 900) { e->t2 = 1.8f + frand(m) * 1.5f; Ent *mn = ent_new(m); if (mn) { mn->kind = K_MINE; mn->spr = S_MINE; mn->x = e->x; mn->y = e->y; mn->t = 12; } }
+                else if (gap < -40 && gap > -800) { e->t2 = 1.2f + frand(m); fire_shot(m, e->x, e->y, aim_at_player(m, e, 0.5f), 650, false, 12); sfx_play(7, 0); }
                 else e->t2 = 0.5f;
             }
         }
@@ -531,7 +559,7 @@ static void update_ents(Mode7 *m, float dt)
                 for (int j = 0; j < MAX_ENT; j++) {
                     Ent *o = &m->ents[j];
                     if (o->kind != K_RACER && o->kind != K_ESCORT && o->kind != K_BOSS && o->kind != K_MINE) continue;
-                    float r = o->kind == K_BOSS ? 70 : o->kind == K_MINE ? 18 : 34;
+                    float r = o->kind == K_BOSS ? 42 : o->kind == K_MINE ? 18 : 34;
                     if (fabsf(dwrap(e->x, o->x)) < r && fabsf(dwrap(e->y, o->y)) < r) {
                         e->kind = K_NONE;
                         if (o->kind == K_MINE) { spawn_expl(m, o->x, o->y, 0.8f); o->kind = K_NONE; sfx_play(5, 0); }
@@ -540,7 +568,7 @@ static void update_ents(Mode7 *m, float dt)
                         break;
                     }
                 }
-            } else if (fabsf(dwrap(e->x, m->px)) < 22 && fabsf(dwrap(e->y, m->py)) < 22) { e->kind = K_NONE; player_hurt(m, 1); }
+            } else if (fabsf(dwrap(e->x, m->px)) < 22 && fabsf(dwrap(e->y, m->py)) < 22) { e->kind = K_NONE; player_hurt(m, 1); }   /* a hit on the car */
             break;
         case K_FLASH: e->t -= dt; if (e->t <= 0) e->kind = K_NONE; break;
         case K_EXPL: e->t += dt; e->frame = (int)(e->t * 14); if (e->frame >= 6) e->kind = K_NONE; if (e->frame == 2 && e->t2 == 0) { e->t2 = 1; spawn_smoke(m, e->x, e->y, 20 * e->scale); } break;
@@ -548,7 +576,7 @@ static void update_ents(Mode7 *m, float dt)
         case K_MINE:
             e->t -= dt; e->anim += dt; e->frame = ((int)(e->anim * 4)) & 1;
             if (e->t <= 0) { e->kind = K_NONE; break; }
-            if (fabsf(dwrap(e->x, m->px)) < 26 && fabsf(dwrap(e->y, m->py)) < 26) { spawn_expl(m, e->x, e->y, 1.0f); e->kind = K_NONE; player_hurt(m, 1); m->speed *= 0.4f; m->spin_t = 0.6f; }
+            if (fabsf(dwrap(e->x, m->px)) < 26 && fabsf(dwrap(e->y, m->py)) < 26) { spawn_expl(m, e->x, e->y, 1.0f); e->kind = K_NONE; player_hurt(m, 2); m->speed *= 0.4f; m->spin_t = 0.6f; }
             break;
         case K_PROP: {
             float dx = dwrap(m->px, e->x), dy = dwrap(m->py, e->y); float r = e->spr == S_CACTUS ? 18 : e->spr == S_MESA ? 70 : e->spr == S_ROCK_B ? 40 : 24;
@@ -556,7 +584,7 @@ static void update_ents(Mode7 *m, float dt)
             if (d < r + 16) {
                 float nx = dx / (d > 1 ? d : 1), ny = dy / (d > 1 ? d : 1);
                 m->px = wrapf(e->x + nx * (r + 17)); m->py = wrapf(e->y + ny * (r + 17));
-                if (m->speed > 150 && m->hurt_t <= 0) { player_hurt(m, 1); m->spin_t = 0.5f; }
+                if (m->speed > 150 && m->hurt_t <= 0) { player_hurt(m, 2); m->spin_t = 0.5f; }
                 m->speed = -fabsf(m->speed) * 0.35f - 40; m->shake = 0.2f;   /* bounce off */
             }
             break; }
@@ -576,7 +604,7 @@ static void update_ents(Mode7 *m, float dt)
             } else {               /* slowed right down, guns on the player */
                 e->speed += (90 - e->speed) * clampf(dt * 3, 0, 1); e->t2 -= dt;
                 e->heading = -PI / 2 + sinf(e->anim * 3) * 0.1f;
-                if (e->t2 <= 0 && d < 1400) { e->t2 = 0.9f; float h = atan2f(dy, dx); fire_shot(m, e->x, e->y, h + (frand(m) - 0.5f) * 0.15f, 620, false, 12); sfx_play(7, 0); }
+                if (e->t2 <= 0 && d < 1400) { e->t2 = 1.1f; fire_shot(m, e->x, e->y, aim_at_player(m, e, 0.45f), 600, false, 12); sfx_play(7, 0); }
                 if (e->t <= 0) { e->state = 0; e->t = 3 + frand(m) * 3; }
             }
             e->tilt += (angdiff(e->heading, prev_h) * 60 - e->tilt) * clampf(dt * 6, 0, 1);
@@ -590,8 +618,19 @@ static void update_ents(Mode7 *m, float dt)
             e->t -= dt; if (e->knock > 0) e->knock -= dt;
             float dx = dwrap(m->px, e->x), dy = dwrap(m->py, e->y), d = hypotf(dx, dy);
             float prev_h = e->heading;
-            if (e->state == B_FLEE) {   /* the pursuit: up the road, weaving, pace rubber-banded to the gap so he stays in reach but never free */
-                float gap = dy;   /* how far north of the player he is (dy = player y - his y, y grows southward) */
+            float gap = dy;   /* how far north of the player he is (dy = player y - his y, y grows southward) */
+            if (e->state == B_DYING) {   /* burning out: rolls to a stop, sparks and smoke, then the big one */
+                e->speed += (0 - e->speed) * clampf(dt * 1.2f, 0, 1);
+                e->t2 -= dt;
+                if (e->t2 <= 0) { e->t2 = 0.16f; spawn_expl(m, e->x + (frand(m) - 0.5f) * 50, e->y + (frand(m) - 0.5f) * 50, 0.6f + frand(m) * 0.5f); spawn_smoke(m, e->x, e->y, 30); if (frand(m) < 0.5f) sfx_play(14, 0); }
+                e->heading += sinf(e->t * 9) * 0.6f * dt;   /* fishtailing */
+                if (e->t <= 0) {
+                    spawn_expl(m, e->x, e->y, 2.6f); spawn_expl(m, e->x + 30, e->y - 20, 1.6f); spawn_expl(m, e->x - 30, e->y + 20, 1.6f);
+                    sfx_play(5, 0); sfx_play(6, 3); sfx_play(14, 6); m->shake = 0.6f;
+                    m->wreck_x = e->x; m->wreck_y = e->y; m->wreck_t = 0;
+                    e->kind = K_NONE; break;
+                }
+            } else if (e->state == B_FLEE) {   /* the pursuit: up the road, weaving, pace rubber-banded to the gap so he stays in reach but never free */
                 float target = gap > 3400 ? 250 : gap > 2200 ? 380 : gap < 600 ? 540 : 470;   /* the player does ~550 on the road, ~700 on turbo */
                 if (e->knock > 0 && e->t <= 0) target *= 0.75f;
                 if (e->t <= 0 && gap < 560 && gap > 0 && m->pursuit_t < 40 && e->t < -3) {   /* early in the chase he always has one more booster (e->t: > 0 boosting, < 0 seconds since) */
@@ -607,27 +646,41 @@ static void update_ents(Mode7 *m, float dt)
                 if (e->t2 <= 0 && gap < 900 && gap > 0) {   /* mines out the back when the player is close */
                     e->t2 = 1.4f + frand(m); Ent *mn = ent_new(m); if (mn) { mn->kind = K_MINE; mn->spr = S_MINE; mn->x = e->x; mn->y = e->y; mn->t = 14; }
                 }
-            } else if (e->state == B_ORBIT) {   /* circle the player, shooting */
-                e->anim += dt * 0.55f;
-                float tx = m->px + cosf(e->anim) * 430, ty = m->py + sinf(e->anim) * 430;
-                e->heading += angdiff(atan2f(dwrap(ty, e->y), dwrap(tx, e->x)), e->heading) * clampf(dt * 4, 0, 1); e->speed = 260;
+            } else {   /* B_RUN, the fight (Chase H.Q.): he keeps racing up the road just ahead of you, weaving to block, mines out the
+                        * back, a rear gunner, a booster now and then; you shoot him and ram him. Pace rubber-banded to the gap */
+                float target = gap < 0 ? 560 : gap < 140 ? 600 : gap < 520 ? 445 : gap < 1200 ? 360 : 280;   /* the player does ~470 on the dirt, ~630 on turbo; passed, he re-passes */
+                if (e->knock > 0) target *= 0.8f;
+                e->t3 -= dt;
+                if (e->t3 <= 0 && gap > 0 && gap < 450 && e->t <= 0) {   /* booster: opens the gap again for a couple of seconds */
+                    e->t = 2.3f; e->t3 = 8 + frand(m) * 4; e->speed = 700; set_msg(m, "THE HORNET HITS HIS BOOSTER", 1.5f); sfx_play(0x13, 0);
+                    for (int k = 0; k < 3; k++) spawn_smoke(m, e->x - cosf(e->heading) * 30 * k, e->y - sinf(e->heading) * 30 * k, 10);
+                }
+                if (e->t > 0) target = 700;
+                e->speed += (target - e->speed) * clampf(dt * (e->t > 0 ? 4.0f : 1.6f), 0, 1);
+                e->anim += dt * 1.4f;
+                float road_x = WORLD * 0.5f + sinf(e->anim) * 85;
+                if (gap > 0 && gap < 260) road_x -= clampf(dwrap(m->px, e->x), -60, 60);   /* jinks out of your line when you close in */
+                e->heading = -PI / 2 + clampf(dwrap(road_x, e->x) * 0.006f, -0.5f, 0.5f);
                 e->t2 -= dt;
-                if (e->t2 <= 0) { e->t2 = 1.3f; float h = atan2f(dy, dx); fire_shot(m, e->x, e->y, h + (frand(m) - 0.5f) * 0.2f, 680, false, 16); sfx_play(7, 0); }
-                if (e->t <= 0) { e->state = frand(m) < 0.5f ? B_CHARGE : B_MINES; e->t = e->state == B_CHARGE ? 2.2f : 3.0f; if (e->state == B_CHARGE) { set_msg(m, "HORNET CHARGING", 1.0f); sfx_play(0x13, 0); } }
-            } else if (e->state == B_CHARGE) {   /* ram the player */
-                e->heading += angdiff(atan2f(dy, dx), e->heading) * clampf(dt * 2.5f, 0, 1); e->speed = 620;
-                if (e->t <= 0) { e->state = B_ORBIT; e->t = 6 + frand(m) * 3; }
-            } else {                              /* mine ring while circling */
-                e->anim += dt * 0.8f;
-                float tx = m->px + cosf(e->anim) * 430, ty = m->py + sinf(e->anim) * 430;
-                e->heading += angdiff(atan2f(dwrap(ty, e->y), dwrap(tx, e->x)), e->heading) * clampf(dt * 4, 0, 1); e->speed = 320;
-                e->t2 -= dt; if (e->t2 <= 0) { e->t2 = 0.35f; Ent *mn = ent_new(m); if (mn) { mn->kind = K_MINE; mn->spr = S_MINE; mn->x = e->x; mn->y = e->y; mn->t = 20; } }
-                if (e->t <= 0) { e->state = B_ORBIT; e->t = 6 + frand(m) * 3; }
+                if (e->t2 <= 0 && gap > 60 && gap < 700) {   /* mines out the back */
+                    e->t2 = 1.0f + frand(m) * 0.8f; Ent *mn = ent_new(m); if (mn) { mn->kind = K_MINE; mn->spr = S_MINE; mn->x = e->x + (frand(m) - 0.5f) * 40; mn->y = e->y; mn->t = 16; }
+                }
+                e->gun_t -= dt;
+                if (e->gun_t <= 0 && gap > 90 && gap < 1500) {   /* the rear gunner: sloppy, so the shots can be dodged */
+                    e->gun_t = 1.2f + frand(m) * 0.6f; fire_shot(m, e->x, e->y, aim_at_player(m, e, 0.4f), 600, false, 16); sfx_play(7, 0);
+                }
             }
             e->tilt += (angdiff(e->heading, prev_h) * 40 - e->tilt) * clampf(dt * 6, 0, 1);
             e->x = wrapf(e->x + cosf(e->heading) * e->speed * dt); e->y = wrapf(e->y + sinf(e->heading) * e->speed * dt);
-            if (d < 70) { bump_player(m, e, d, 70); if (m->hurt_t <= 0) { player_hurt(m, 1); m->spin_t = 0.6f; } m->speed *= 0.2f; }
-            if (e->state != B_FLEE && e->hp < m->boss_hp_max * 0.4f && ((int)(m->phase_t * 6) & 1)) spawn_smoke(m, e->x, e->y, 40);
+            if (d < 70 && e->state != B_DYING) {   /* contact: a fast ram from behind dents him (the Chase H.Q. way), a side-swipe just costs you speed */
+                bump_player(m, e, d, 70);
+                if (m->ram_cd <= 0) {
+                    m->ram_cd = 0.5f;
+                    if (m->speed > 330 && gap > 0) { damage_ent(m, e, 4); m->speed *= 0.55f; m->shake = 0.35f; set_msg(m, "RAM!", 0.6f); }
+                    else { m->speed *= 0.6f; m->shake = 0.15f; }
+                }
+            }
+            if (e->state == B_RUN && e->hp < e->hp_max * 0.4f && ((int)(m->phase_t * 6) & 1)) spawn_smoke(m, e->x, e->y, 40);
             break; }
         default: break;
         }
@@ -651,25 +704,26 @@ static void begin_pursuit(Mode7 *m)
         e->scale = e->spr == S_MESA ? 2.2f : e->spr == S_ROCK_B ? 1.5f : 1.2f; e->solid = true;
     }
     Ent *b = ent_new(m);
-    b->kind = K_BOSS; b->spr = S_LEADER; b->scale = 1.25f; b->hp = m->boss_hp_max = m->difficulty == 0 ? 30 : m->difficulty == 1 ? 42 : 55;
+    b->kind = K_BOSS; b->spr = S_LEADER; b->scale = 1.25f; b->hp = b->hp_max = m->boss_hp_max = m->difficulty == 0 ? 60 : m->difficulty == 1 ? 80 : 100;
     b->x = WORLD * 0.5f; b->y = m->py - 1500; b->state = B_FLEE; b->heading = -PI / 2; b->speed = 300; b->t = -10; b->t2 = 3; b->solid = true;
     m->boss_i = (int)(b - m->ents); m->gap = 1500;
     play_music(m, 14, true);
     set_msg(m, "CATCH THE HORNET LEADER", 3.0f);
 }
 
-/* caught him: he turns to fight where he stands */
+/* caught him: the fight is on, but he keeps racing up the road (B_RUN) */
 static void begin_boss(Mode7 *m)
 {
     Ent *b = &m->ents[m->boss_i];
-    b->state = B_ORBIT; b->t = 4; b->t2 = 1.5f; b->knock = 0; b->anim = atan2f(dwrap(b->y, m->py), dwrap(b->x, m->px));
+    b->state = B_RUN; b->t = 0; b->t2 = 1.5f; b->t3 = 5; b->knock = 0; b->anim = 0;
     for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_ESCORT || m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE;
+    m->pursuit_spawn_t = 7.0f;
     play_music(m, 17, true);
 }
 
 static void begin_victory(Mode7 *m)
 {
-    m->phase = PH_VICTORY; m->phase_t = 0; m->speed = 0;
+    m->phase = PH_VICTORY; m->phase_t = 0;   /* the car coasts to a stop by the burning wreck */
     if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "victory after %.0f s\n", m->phase_t);
     for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE;
     music_play(6, false); m->music_now = 6;
@@ -684,10 +738,12 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         m->paused = !m->paused; sfx_play(10, 0); music_pause(m->paused);
     }
     if (m->paused) return;
+    { static int kill = -2; if (kill == -2) kill = SDL_getenv("SABER_KILL") ? atoi(SDL_getenv("SABER_KILL")) : -1; if (kill >= 0 && kill-- == 0) { m->hurt_t = 0; player_hurt(m, 99); } }   /* debug: die at step N */
     m->phase_t += dt;
     if (m->msg_t > 0) m->msg_t -= dt;
     if (m->hurt_t > 0) m->hurt_t -= dt;
     if (m->shake > 0) m->shake -= dt;
+    if (m->ram_cd > 0) m->ram_cd -= dt;
     Input idle = { 0 }; for (int b = 0; b < BTN_COUNT; b++) idle.state[b] = 1;
 
     switch (m->phase) {
@@ -704,10 +760,11 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
     case PH_RACE:
         m->race_time += dt;
         player_drive(m, in, dt, false);
+        if (SDL_getenv("SABER_TRACE") && (int)m->race_time != (int)(m->race_time - dt)) fprintf(stderr, "race t=%.0f lap=%d s=%.0f lat=%.0f v=%.0f rank=%d hp=%d\n", m->race_time, m->lap, m->s, m->lat, m->speed, m->rank, m->hp);
         update_racers(m, dt); update_ents(m, dt);
         /* standings */
         { int ahead = 0; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_RACER && m->ents[i].lap * m->track_len + m->ents[i].s > m->progress) ahead++; m->rank = ahead + 1; }
-        if (m->lap >= 1 && m->phase_t > 5) {   /* the Hornets break away at the start of lap 2 */
+        if (m->lap >= 3) {   /* the chequered flag after three laps: the Hornets break away from the finish */
             m->phase = PH_BREAKAWAY; m->phase_t = 0; m->speed *= 0.5f;
             dialog_open_script(&m->dlg, SCRIPT_BREAKAWAY);
             for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_RACER && m->ents[i].hornet) m->ents[i].lat_target = 400;   /* off the course */
@@ -729,12 +786,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         m->pursuit_spawn_t -= dt;
         if (m->pursuit_spawn_t <= 0 && m->gap > 700) {
             m->pursuit_spawn_t = 3.0f + frand(m) * 2.0f;
-            int n = 1 + (frand(m) < 0.4f ? 1 : 0) + (m->difficulty == 2 ? 1 : 0);
-            for (int k = 0; k < n; k++) {
-                Ent *e = ent_new(m); if (!e) break;
-                e->kind = K_ESCORT; e->spr = S_HORNET; e->hornet = true; e->hp = 3 + m->difficulty; e->scale = 1.0f; e->solid = true;
-                e->x = wrapf(WORLD * 0.5f + (frand(m) - 0.5f) * 160); e->y = wrapf(m->py - 900 - frand(m) * 300); e->state = 0; e->t = 1.0f + frand(m) * 2; e->heading = -PI / 2; e->speed = 300;
-            }
+            spawn_escorts(m, 1 + (frand(m) < 0.4f ? 1 : 0) + (m->difficulty == 2 ? 1 : 0));
         }
         if (m->gap < CATCH_GAP && dwrap(b->y, m->py) < 0) {   /* on his tail: he stops running */
             m->phase = PH_CAUGHT; m->phase_t = 0; m->speed *= 0.5f;
@@ -750,10 +802,16 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         update_ents(m, dt);
         Ent *b = &m->ents[m->boss_i];
         if (b->kind != K_BOSS) { begin_victory(m); break; }
-        if (SDL_getenv("SABER_TRACE") && ((int)(m->phase_t * 60) % 60) == 0) fprintf(stderr, "boss st=%d pos=%.0f,%.0f hp=%.0f | player %.0f,%.0f h=%.2f\n", b->state, b->x, b->y, b->hp, m->px, m->py, m->heading);
+        m->gap = dwrap(b->y, m->py) < 0 ? hypotf(dwrap(b->x, m->px), dwrap(b->y, m->py)) : 0;
+        m->pursuit_spawn_t -= dt;   /* the odd escort still comes back to block */
+        if (m->pursuit_spawn_t <= 0 && b->state == B_RUN) { m->pursuit_spawn_t = 7.0f + frand(m) * 4.0f; spawn_escorts(m, 1); }
+        if (SDL_getenv("SABER_TRACE") && ((int)(m->phase_t * 60) % 60) == 0) fprintf(stderr, "boss st=%d pos=%.0f,%.0f hp=%.0f | player %.0f,%.0f h=%.2f hp=%d\n", b->state, b->x, b->y, b->hp, m->px, m->py, m->heading, m->hp);
         break; }
     case PH_VICTORY:
-        update_ents(m, dt);
+        if (m->speed > 0) idle.state[BTN_DOWN] = 0;   /* brakes on until it stands */
+        player_drive(m, &idle, dt, true); update_ents(m, dt);
+        m->wreck_t -= dt;
+        if (m->wreck_t <= 0) { m->wreck_t = 0.3f; spawn_smoke(m, m->wreck_x + (frand(m) - 0.5f) * 40, m->wreck_y + (frand(m) - 0.5f) * 40, 10); if (frand(m) < 0.3f) spawn_expl(m, m->wreck_x + (frand(m) - 0.5f) * 40, m->wreck_y + (frand(m) - 0.5f) * 40, 0.5f); }
         if (m->phase_t > 2.5f) { if (m->dlg.active) dialog_update(&m->dlg, in, dt); else if (m->phase_t > 3.0f) { m->phase = PH_CLEARED; m->phase_t = 0; } }
         break;
     case PH_CLEARED:
@@ -766,7 +824,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
             else {
                 m->lives--; m->hp = m->max_hp; m->hurt_t = 2.0f; m->speed = 0; m->spin_t = 0; m->boost = 1;
                 /* back onto the course / the road */
-                if (m->resume_phase == PH_BOSS) { Ent *b = &m->ents[m->boss_i]; m->px = wrapf(b->x); m->py = wrapf(b->y + 500); m->heading = m->cam_heading = -PI / 2; m->phase = PH_BOSS; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE; }
+                if (m->resume_phase == PH_BOSS) { Ent *b = &m->ents[m->boss_i]; m->px = WORLD * 0.5f; m->py = wrapf(b->y + 500); m->heading = m->cam_heading = -PI / 2; m->phase = PH_BOSS; b->t = 0; b->speed = 200; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_ESCORT || m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE; }
                 else if (m->resume_phase == PH_PURSUIT) { Ent *b = &m->ents[m->boss_i]; m->px = WORLD * 0.5f; m->py = wrapf(b->y + 1200); m->heading = m->cam_heading = -PI / 2; m->phase = PH_PURSUIT; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_ESCORT || m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE; }
                 else { track_point(m, m->s, 0, &m->px, &m->py, &m->heading); m->cam_heading = m->heading; m->lat = 0; m->phase = PH_RACE; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE; }
             }
@@ -778,7 +836,6 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         break;
     default: break;
     }
-    (void)idle;
 }
 
 /* ---------------------------------------------------------------- drawing */
@@ -867,16 +924,28 @@ static void render_sprites(Mode7 *m)
         int frame = e->frame;
         if (e->kind == K_RACER || e->kind == K_ESCORT || e->kind == K_BOSS) frame = steer_frame(e->tilt + angdiff(e->heading, m->cam_heading) * 2);
         draw_spr(m, e->spr, frame, items[i].sx, items[i].sy, items[i].scale, 0, r, g, b, a);
-        if (e->kind == K_BOSS) {   /* boss shadow ring so the charge reads */
-            SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(m->ren, 0, 0, 0, 60);
-            SDL_FRect sh = { items[i].sx - 40 * items[i].scale, items[i].sy - 4, 80 * items[i].scale, 6 }; SDL_RenderFillRect(m->ren, &sh);
+        if ((e->kind == K_RACER || e->kind == K_ESCORT) && items[i].d < 2600 && e->hp_max > 0) {   /* a small health bar over every rival */
+            float w = 20 * clampf(items[i].scale * 1.6f, 0.5f, 1.5f), top = items[i].sy - m->spr[e->spr].h * items[i].scale - 5;
+            float f = e->hp / e->hp_max;
+            SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(m->ren, 0, 0, 0, 150); SDL_FRect bg = { floorf(items[i].sx - w * 0.5f - 1), floorf(top - 1), w + 2, 4 }; SDL_RenderFillRect(m->ren, &bg);
+            SDL_SetRenderDrawColor(m->ren, f > 0.5f ? 90 : 240, f > 0.25f ? 220 : 80, 60, 255); SDL_FRect fg = { floorf(items[i].sx - w * 0.5f), floorf(top), w * f, 2 }; SDL_RenderFillRect(m->ren, &fg);
+        }
+        if (e->kind == K_BOSS && e->state != B_DYING) {   /* the target: red corner brackets around the leader, pulsing */
+            float hw = m->spr[e->spr].w * items[i].scale * 0.5f + 4 + 2 * ((int)(m->phase_t * 6) & 1), hh = m->spr[e->spr].h * items[i].scale + 8;
+            float x0 = floorf(items[i].sx - hw), x1 = floorf(items[i].sx + hw), y1 = floorf(items[i].sy + 4), y0 = floorf(y1 - hh);
+            float L = clampf(hw * 0.4f, 3, 10);
+            SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_NONE); SDL_SetRenderDrawColor(m->ren, 255, 50, 50, 255);
+            SDL_FRect q[8] = { { x0, y0, L, 2 }, { x0, y0, 2, L }, { x1 - L, y0, L, 2 }, { x1 - 2, y0, 2, L },
+                               { x0, y1 - 2, L, 2 }, { x0, y1 - L, 2, L }, { x1 - L, y1 - 2, L, 2 }, { x1 - 2, y1 - L, 2, L } };
+            SDL_RenderFillRects(m->ren, q, 8);
         }
     }
 }
 
 static void render_player(Mode7 *m)
 {
-    if (m->phase == PH_DEAD) return;
+    if (m->phase == PH_DEAD || m->phase == PH_GAMEOVER) return;   /* the wreck stays gone */
     float sy = HORIZON + CAM_H * FOCAL / CAM_BACK - 6 - m->bounce;
     float sx = m->sw * 0.5f + m->tilt * 1.2f;
     if (m->shake > 0) { sx += (float)(rand() % 5 - 2); sy += (float)(rand() % 3 - 1); }
@@ -885,7 +954,7 @@ static void render_player(Mode7 *m)
     uint8_t r = 255, g = 255, b = 255;
     if (m->hurt_t > 0 && ((int)(m->hurt_t * 20) & 1)) { r = 255; g = 90; b = 90; }
     float ang = m->spin_t > 0 ? m->spin_t * 720 : 0;
-    if (m->phase == PH_VICTORY && m->phase_t > 1.0f) {
+    if (m->phase == PH_VICTORY && m->phase_t > 1.0f && m->speed <= 0) {
         /* Fireball hops out and cheers next to the car */
         draw_spr(m, S_BUGGY, 2, sx, sy, 1, 0, r, g, b, 255);
         int f = (int)((m->phase_t - 1.0f) * 8) % m->spr[S_FIREBALL].frames;
@@ -904,10 +973,19 @@ static void bar(SDL_Renderer *r, float x, float y, float w, float h, float f, ui
 
 static void render_hud(Mode7 *m)
 {
-    hud_draw(m->ren, HERO_FIREBALL, m->difficulty == 2 ? 2 : m->difficulty, m->lives, m->hp, 0);
     Font *f = font_get(0x4058897F), *small = font_get(0x12072E60);
     if (!f || !small) return;
     char buf[64];
+    /* the car: damage meter + spare cars (it is Fireball's buggy whoever drives, so no hero portrait / hearts here) */
+    {
+        float hp = clampf((float)m->hp / m->max_hp, 0, 1);
+        font_draw(small, "RED FURY", 8, 6, 255, 182, 0);
+        bar(m->ren, 8, 16, 72, 6, hp, hp > 0.5f ? 90 : 240, hp > 0.25f ? 220 : 80, 60);
+        if (m->hurt_t > 0 && ((int)(m->hurt_t * 20) & 1)) bar(m->ren, 8, 16, 72, 6, 1, 255, 255, 255);
+        draw_spr(m, S_BUGGY, 2, 18, 40, 0.28f, 0, 255, 255, 255, 255);
+        snprintf(buf, sizeof buf, "x%d", m->lives);
+        font_draw(small, buf, 30, 30, 255, 255, 255);
+    }
     /* turbo meter + speed */
     bar(m->ren, 8, m->sh - 14, 60, 5, m->boost, 255, 182, 0);
     font_draw(small, "TURBO", 8, (float)(m->sh - 26), 255, 182, 0);
@@ -960,10 +1038,6 @@ void mode7_draw(Mode7 *m, bool scanlines)
     render_sprites(m);
     render_player(m);
     render_hud(m);
-    if (m->phase == PH_INTRO) {   /* letterbox for the story scene */
-        SDL_SetRenderDrawColor(m->ren, 0, 0, 0, 255);
-        SDL_FRect t = { 0, 0, (float)m->sw, 16 }, b = { 0, (float)(m->sh - 16), (float)m->sw, 16 }; SDL_RenderFillRect(m->ren, &t); SDL_RenderFillRect(m->ren, &b);
-    }
     if (m->dlg.active) dialog_draw(&m->dlg, m->ren, m->sw, m->sh);
     if (scanlines) {
         SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(m->ren, 0, 0, 0, 70);

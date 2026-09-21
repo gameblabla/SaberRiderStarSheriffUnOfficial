@@ -16,6 +16,7 @@ static const uint32_t TILESET[4] = { 0x8D39AA67, 0xA2122E71, 0x1495B0AB, 0x84652
 static const uint8_t TEXTRGB[4][3] = { {255,255,255}, {255,232,208}, {224,232,255}, {255,224,192} };
 
 static int g_hero = HERO_FIREBALL;
+static void paginate(Dialog *d);
 void dialog_set_hero(int character) { g_hero = character; }
 
 #define AVATAR_FIREBALL 0x742F352A   /* dialog_avatar_fireball1 */
@@ -105,6 +106,7 @@ bool dialog_open_script(Dialog *d, const char *script)
     }
     d->active = d->npages > 0;
     adapt_pages(d);
+    paginate(d);
     return d->active;
 }
 
@@ -115,6 +117,7 @@ bool dialog_open_text(Dialog *d, const char *text, int color)
     pg->color = color; snprintf(pg->text, sizeof pg->text, "%s", text);
     size_t l = strlen(pg->text); while (l && (pg->text[l-1] == '\n' || pg->text[l-1] == '\r' || pg->text[l-1] == ' ')) pg->text[--l] = 0;
     d->npages = 1; d->active = l > 0;
+    paginate(d);
     return d->active;
 }
 
@@ -153,24 +156,48 @@ void dialog_update(Dialog *d, const Input *in, float dt)
     if (d->chars >= (float)strlen(d->pages[d->page].text)) { d->chars = (float)strlen(d->pages[d->page].text); d->done = true; }
 }
 
-/* word-wrapped text into lines of at most `maxw` pixels */
-static int wrap(const Font *f, const char *text, int maxw, char lines[8][80])
+/* word-wrapped text into at most `maxn` lines of at most `maxw` pixels */
+#define DLG_WRAP_MAX 16
+static int wrap(const Font *f, const char *text, int maxw, char lines[DLG_WRAP_MAX][80], int maxn)
 {
     int n = 0, len = 0; lines[0][0] = 0;
     const char *s = text;
-    while (*s && n < 8) {
-        if (*s == '\n') { lines[n][len] = 0; n++; len = 0; if (n < 8) lines[n][0] = 0; s++; continue; }
+    while (*s && n < maxn) {
+        if (*s == '\n') { lines[n][len] = 0; n++; len = 0; if (n < maxn) lines[n][0] = 0; s++; continue; }
         if (*s == ' ' && len == 0) { while (*s == ' ' && len < 78) lines[n][len++] = *s++; lines[n][len] = 0; continue; }   /* leading spaces are kept (scripts indent with them) */
         const char *w = s; while (*w && *w != ' ' && *w != '\n') w++;
         int wl = (int)(w - s);
         char word[80]; int wn = wl < 79 ? wl : 79; memcpy(word, s, wn); word[wn] = 0;
         char cand[80]; snprintf(cand, sizeof cand, "%s%s%s", lines[n], (len && lines[n][len - 1] != ' ') ? " " : "", word);
-        if (len && font_text_width(f, cand) > maxw) { lines[n][len] = 0; n++; len = 0; if (n >= 8) break; lines[n][0] = 0; continue; }
+        if (len && font_text_width(f, cand) > maxw) { lines[n][len] = 0; n++; len = 0; if (n >= maxn) break; lines[n][0] = 0; continue; }
         strcpy(lines[n], cand); len = (int)strlen(cand);
         s = w; while (*s == ' ') s++;
     }
-    if (n < 8) { lines[n][len] = 0; n++; }
+    if (n < maxn) { lines[n][len] = 0; n++; }
     return n;
+}
+
+/* the box holds DLG_MAX_LINES lines of text (FUN_0042b250: 48 px tall, 10 px per line): a page that wraps to more
+ * continues on extra pages with the same colour and avatar instead of running out of the box (the shipped level-1
+ * scripts were written to fit; our stage-2 lines are wrapped here at the avatar box's width, the narrower one) */
+#define DLG_MAX_LINES 4
+static void paginate(Dialog *d)
+{
+    Font *f = font_get(0x12072E60);
+    if (!f) return;
+    for (int i = 0; i < d->npages; i++) {
+        char lines[DLG_WRAP_MAX][80]; int n = wrap(f, d->pages[i].text, 250 - 16, lines, DLG_WRAP_MAX);
+        if (n <= DLG_MAX_LINES || d->npages == DLG_MAX_PAGES) continue;
+        memmove(&d->pages[i + 2], &d->pages[i + 1], sizeof(DialogPage) * (d->npages - i - 1));
+        d->npages++;
+        DialogPage *a = &d->pages[i], *b = &d->pages[i + 1];
+        *b = *a; a->text[0] = b->text[0] = 0;
+        for (int k = 0; k < n; k++) {
+            char *dst = k < DLG_MAX_LINES ? a->text : b->text;
+            if (dst[0] || (k > 0 && k != DLG_MAX_LINES)) strncat(dst, "\n", sizeof a->text - strlen(dst) - 1);
+            strncat(dst, lines[k], sizeof a->text - strlen(dst) - 1);
+        }
+    }
 }
 
 /* FUN_00474610: 16 px corner tiles, edges and centre stretched; corners shrink when the box is smaller than two tiles */
@@ -215,7 +242,7 @@ void dialog_draw(const Dialog *d, SDL_Renderer *r, int sw, int sh)
     draw_box(sprite_get(TILESET[pg->color]), floorf(cx - hw), floorf(cy - hh), floorf(cx + hw), floorf(cy + hh));
     if (av) sprite_draw(av, 0, (float)(x0 - av->w + 6), (float)(y0 - 8), false);
     if (d->box < DLG_OPEN_FRAMES || !f) return;
-    char lines[8][80]; int n = wrap(f, pg->text, x1 - x0 - 16, lines);
+    char lines[DLG_WRAP_MAX][80]; int n = wrap(f, pg->text, x1 - x0 - 16, lines, DLG_MAX_LINES);
     int remaining = (int)d->chars, ly = y0 + 4;
     for (int i = 0; i < n && remaining > 0; i++) {
         int l = (int)strlen(lines[i]);

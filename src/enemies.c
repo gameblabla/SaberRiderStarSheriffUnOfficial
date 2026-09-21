@@ -165,7 +165,7 @@ Enemy *enemy_spawn(Enemies *E, const Trigger *t, float x, float y, const Level *
         if (cls >= EC_STAMPEDE) { if (E->px <= b->x) character_move_left(&e->ch, 0); else character_move_right(&e->ch, 4); }
     } else if (cls == EC_HORSEBOSS) {
         b->x = x; b->y = y; b->flags = 0x0f | PHYS_NO_GRAVITY;
-        e->hp = 0x42; e->link = -1; e->ch.state = CS_FALL; e->ch.facing = 0; e->ch.aim = AIM_L;
+        e->hp = SDL_getenv("SABER_BOSSHP") ? atoi(SDL_getenv("SABER_BOSSHP")) : 0x42; e->link = -1; e->ch.state = CS_FALL; e->ch.facing = 0; e->ch.aim = AIM_L;   /* debug: SABER_BOSSHP=n */
         E->boss_phase = 0;
     } else if (cls == EC_CUTSCENE) {
         snap_to_ground(e, L, W);
@@ -544,16 +544,13 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
     Character *c = &e->ch; Body *b = &c->body;
     (void)W;
     E->frame++;
-    /* hover: vertical sine, gravity cancelled */
-    float amp = c->state == CS_FALL ? 10.0f : c->state == CS_SLIDE ? 13.0f : 16.0f;
-    b->vy = sinf((float)(E->frame % 66) * 0.0952f) * amp - 480.0f * dt;
-    b->flags = 0x0f | PHYS_NO_GRAVITY;
-    b->vy += 0;   /* (gravity disabled, so no compensation needed) */
-    b->vy = sinf((float)(E->frame % 66) * 0.0952f) * amp;
-
     if (e->dying) {
+        /* FUN_00412750 state 9: the hover is not applied any more and the body keeps its collision-less flags (0xf)
+         * with gravity on, so the wreck drops through the floor and out of the screen while it burns, jittering
+         * sideways (the port used to keep hovering in place here) */
         c->state = CS_DEAD;
-        b->vx += (float)(rnd(180) - 153) * 0.0f;   /* jitter is applied as a position nudge below */
+        b->flags = 0x0f; b->vx = 0;
+        if (SDL_getenv("SABER_TRACE") && (E->boss_phase % 10) == 0) fprintf(stderr, "boss dying phase=%d x=%.0f y=%.0f vy=%.0f\n", E->boss_phase, b->x, b->y, b->vy);
         b->x += (float)(rnd(180)) / 60.0f - 153.0f / 60.0f;
         if (rnd(10) >= 9) {
             AnimDef a = { 0, 0, 11, 11, 0.025f, 0 };
@@ -565,6 +562,10 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
         character_set_anim(c, c->facing ? 0x33 : 0x32);
         return;
     }
+    /* hover: vertical sine, gravity cancelled */
+    float amp = c->state == CS_FALL ? 10.0f : c->state == CS_SLIDE ? 13.0f : 16.0f;
+    b->flags = 0x0f | PHYS_NO_GRAVITY;
+    b->vy = sinf((float)(E->frame % 66) * 0.0952f) * amp;
     if (E->boss_phase == 0) { E->boss_phase = 1; E->cam_locked = true; music_play(8, true); sfx_play(0x13, 0); }
     if (SDL_getenv("SABER_TRACE") && (E->frame % 10) == 0)
         fprintf(stderr, "boss st=%d layer=%d x=%.0f y=%.0f vx=%.0f cam=%.0f phase=%d dir=%d aim=%d hp=%d anim=%d\n", c->state, e->layer, b->x, b->y, b->vx, cam_x, E->boss_phase, e->dir, c->aim, e->hp, c->anim);

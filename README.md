@@ -18,9 +18,9 @@ Dependencies: SDL3, libvorbisfile, libavcodec/libswscale (FMV), CMake, a C11 com
 
 Fireball (the demo's hero, from the packs) and **April** (our reconstruction: `assets/april.png`, built from the
 archived sprite sheet and tweet clips by `../heroes/`, loaded by `src/heroes.c` on top of her shipped CRHC
-`79260A58`; the level-1 dialogs are rewritten for her; her "OK!" on the character select and her jump / hurt / death /
-fall grunts in `assets/voice/` replace Fireball's table samples on the same events and were generated with OmniVoice,
-cloned from her cartoon voice, by `../heroes/voice/generate.py`).
+`79260A58`; the level-1 dialogs are rewritten for her; her jump / hurt / death / fall grunts in `assets/voice/` replace
+Fireball's table samples on the same events and were generated with OmniVoice, cloned from her cartoon voice, by
+`../heroes/voice/generate.py`). The character select answers every pick with the team's "OK!" (game sfx 8).
 Her idle sway (6 frames, also her alert pose), run cycle (7 frames, split at the hip into legs and torso overlay so
 level shots on the move keep the clip pixels while the up / down diagonals draw the sheet's aim torsos over the clip
 legs) and the jumping jacks + wave she plays after 10 s of standing still are the artist's own clip frames; the rest
@@ -34,11 +34,16 @@ Saber Rider and Colt stay "not available". Assets are looked up in
 After the frontier town's MISSION ACCOMPLISHED the game continues with a full-screen SNES-style Mode-7 stage built
 on anime episode 28: Fireball races the New Borderland circuit against the retiring champion Marco Firenza and the
 "Black Hornets" team - Outriders in disguise whose real target is the Cavalry Command Nerve Center in Dome City
-(the fan "Claudia" who lures Fireball into a trap and April's rescue open the stage as a dialog scene). One lap of
-racing with guns (the Hornets fire back and drop mines), then the Hornets break away and the stage turns into a
-chase up the desert road after the Hornet leader (gap bar; he hits his booster when you get close, his escort drops
-back to block and shoot, he drops mines), and once you are on his tail he turns to fight: orbit + shots, charges,
-mine rings. All four Star Sheriffs ride in Fireball's buggy - it is always his car whichever hero was picked.
+(the fan "Claudia" who lures Fireball into a trap and April's rescue open the stage as a dialog scene). Three laps of
+racing with guns (every rival carries a small health bar; the Hornets fire back - sloppily - and drop mines, and a car
+just ahead of you drifts over to block the pass), then the Hornets break away from the finish and the stage turns into
+a chase up the desert road after the Hornet leader (gap bar; he hits his booster when you get close, his escort drops
+back to block and shoot, he drops mines). Once you are on his tail the fight is Chase H.Q.'s: he keeps racing up the
+road just ahead of you under a red target reticle, weaving out of your line, mines out the back, a rear gunner and the
+odd booster, while you shoot him and ram him from behind (a fast ram takes 4 off his bar); at zero he burns out, blows
+up and the victory scene follows. The car has its own damage meter (top left, 16 / 12 / 8 points by difficulty, spare
+cars beside it) instead of the hero HUD. All four Star Sheriffs ride in Fireball's buggy - it is always his car
+whichever hero was picked.
 
 `src/mode7.c` draws the floor per scanline into a streaming texture (affine floor, fog, a wrapping 1024x1024
 material map at 8 world units per cell with 32x32 mipmapped material textures sampled by world position, so the
@@ -51,7 +56,8 @@ for the field / Hornets / leader, and drawn floor materials, shots, mines and ex
 Controls: left/right steer · jump button or up accelerate · shoot button fire · aim button turbo (meter) ·
 down brake · Enter pause. Off the asphalt the car is slow; kerbs rattle; rocks and cacti are solid.
 Debug: `SABER_STAGE=2` starts there, `SABER_M7PHASE=1|2|3` skips to the race / pursuit / boss (`SABER_M7LAP=1`
-starts on lap 2 so the breakaway fires after 5 s, `SABER_M7BOSSHP=n` sets the leader's HP).
+starts on lap 2, `SABER_M7BOSSHP=n` sets the leader's HP, `SABER_M7AUTO=1` drives the circuit by itself, `SABER_KILL=n`
+wrecks the car at step n).
 
 ## Controls (as in the demo)
 
@@ -64,7 +70,7 @@ East/West shoot, shoulders aim, Start pause.
 `SABER_START=x` spawn at level x · `SABER_MENU=n` start in front-end state n · `SABER_SHOT=file.bmp,camx,steps`
 screenshot after N fixed steps and quit · `SABER_SCRIPT="60:R,3:RJ,40:"` scripted input (L R U D J S A P) ·
 `SABER_TRACE=1` per-frame player trace (+ spawn triggers at start, convoy spawn / dying / stuck-enemy diagnostics, every humanoid once a second, boss state every 10 frames; `=2` also prints humanoids within 40 px of either screen edge every frame) · `SABER_FUZZ=1` random input ·
-`SABER_HERO=n` hero 0..3 for a direct level start · `SABER_KILL=n` kill the player at step n · `SABER_BORED=s` seconds of idling before the bored animation (April) · `SABER_DEBUG=1` collision overlay from the start · `SABER_WINDOW=852x480` initial window size · **F1** collision overlay · **F2** free camera.
+`SABER_HERO=n` hero 0..3 for a direct level start · `SABER_LIVES=n` starting lives · `SABER_KILL=n` kill the player at step n · `SABER_BOSSHP=n` the horse boss's HP · `SABER_BORED=s` seconds of idling before the bored animation (April) · `SABER_DEBUG=1` collision overlay from the start · `SABER_WINDOW=852x480` initial window size · **F1** collision overlay · **F2** free camera.
 
 ## Comparing against the original
 

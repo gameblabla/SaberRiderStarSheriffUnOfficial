@@ -19,6 +19,7 @@ bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh)
     g->ren = ren; g->sw = sw; g->sh = sh;
     g->menu.difficulty = 1; g->menu.lives = 2; g->menu.continues = 3; g->menu.character = 1;   /* option defaults: NORMAL, 02, 03; Fireball */
     if (SDL_getenv("SABER_HERO")) g->menu.character = atoi(SDL_getenv("SABER_HERO")) & 3;   /* debug: 0 Saber 1 Fireball 2 April 3 Colt */
+    if (SDL_getenv("SABER_LIVES")) g->menu.lives = atoi(SDL_getenv("SABER_LIVES"));   /* debug: starting lives */
     g->stage = 1;
     if (SDL_getenv("SABER_STAGE")) { g->stage = atoi(SDL_getenv("SABER_STAGE")); if (g->stage == 2) return level_start(g); }   /* debug: straight into stage 2 */
     if (!SDL_getenv("SABER_MENU") && (SDL_getenv("SABER_START") || SDL_getenv("SABER_SCRIPT"))) return level_start(g);   /* debug: straight into the level */
@@ -294,7 +295,7 @@ void game_draw(Game *g)
         if (L->layers[i].is_tilemap) level_draw_layer(L, i, g->cam_x, g->cam_y, g->sw, g->sh);
         else {
             enemies_draw(&g->enemies, i, g->cam_x, g->cam_y);
-            if (i == g->player_layer) character_draw(&g->player.ch, g->cam_x, g->cam_y);
+            if (i == g->player_layer && g->state != 0xb) character_draw(&g->player.ch, g->cam_x, g->cam_y);   /* the last life is gone: no respawned hero standing there during the fade */
             bullets_draw(&g->player_bullets, i, g->cam_x, g->cam_y);
             bullets_draw(&g->enemy_bullets, i, g->cam_x, g->cam_y);
             effects_draw(&g->effects, i, g->cam_x, g->cam_y);
