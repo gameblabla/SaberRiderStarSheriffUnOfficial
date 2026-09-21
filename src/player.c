@@ -13,7 +13,11 @@ void player_spawn(Player *p, uint32_t crhc_id, float x, float y)
 void player_control(Player *p, const Input *in, float dt)
 {
     Character *c = &p->ch;
-    if (p->locked) { character_idle_aim(c); return; }
+    if (p->locked) {
+        p->want_fire = false; p->fire_cooldown = 0; c->flags &= ~CF_SHOOT;   /* cancel a shot in flight and snap out of the shoot pose at once */
+        character_idle_aim(c);
+        return;
+    }
     bool L = btn_down(in, BTN_LEFT), R = btn_down(in, BTN_RIGHT), U = btn_down(in, BTN_UP), D = btn_down(in, BTN_DOWN);
     if (L && R) L = R = false;
     if (U && D) U = D = false;
