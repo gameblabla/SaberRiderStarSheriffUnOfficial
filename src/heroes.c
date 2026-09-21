@@ -8,6 +8,7 @@
 #include <string.h>
 
 #define CRHC_APRIL 0x79260A58
+#define CRHC_SABER_TAG 0x53414245   /* 'SABE': arbitrary cblock cache id, unrelated to CRHC_DEFAULT below */
 
 static CBlock *april_sheet(void)
 {
@@ -23,10 +24,28 @@ static CBlock *april_sheet(void)
     return cb;
 }
 
+/* Saber's CRHC (0x8403195A, the game's "default" player id) already ships an animation table byte-identical to
+ * Fireball's own (see hero_apply below), so his sheet only has to fill Fireball's fixed 8x19 layout - no
+ * AnimPatch table, unlike April (../heroes/build_saber_engine_sheet.py). */
+static CBlock *saber_sheet(void)
+{
+    static CBlock *cb; static bool tried;
+    if (tried) return cb;
+    tried = true;
+    const char *path = asset_path("saber.png");
+    if (!path) { fprintf(stderr, "assets/saber.png not found: Saber Rider uses Fireball's sheet\n"); return NULL; }
+    int w, h; uint32_t *px = png_load_rgba(path, &w, &h);
+    if (!px) return NULL;
+    cb = cblock_from_rgba(CRHC_SABER_TAG, px, w, h, 64, 64);
+    free(px);
+    return cb;
+}
+
 bool hero_available(int character)
 {
     if (character == HERO_FIREBALL) return true;
     if (character == HERO_APRIL) return april_sheet() != NULL;
+    if (character == HERO_SABER) return saber_sheet() != NULL;
     return false;
 }
 
@@ -70,9 +89,27 @@ static void april_sfx(void)
     }
 }
 
+/* Saber's grunts (../heroes/voice/generate.py --char saber), same events as April's / Fireball's */
+static void saber_sfx(void)
+{
+    static const struct { int id; const char *files[3]; } G[] = {
+        { 2,  { "voice/saber_jump.wav" } },
+        { 3,  { "voice/saber_hurt1.wav", "voice/saber_hurt2.wav", "voice/saber_hurt3.wav" } },
+        { 4,  { "voice/saber_death1.wav", "voice/saber_death2.wav" } },
+        { 15, { "voice/saber_fall.wav" } },
+    };
+    for (size_t i = 0; i < sizeof G / sizeof *G; i++) {
+        const char *paths[3]; int n = 0;
+        for (int k = 0; k < 3 && G[i].files[k]; k++) { const char *p = asset_path(G[i].files[k]); if (p) paths[n++] = strdup(p); }
+        if (n) sfx_set_override(G[i].id, paths, n);
+        for (int k = 0; k < n; k++) free((char *)paths[k]);
+    }
+}
+
 void hero_select_sfx(int character)
 {
-    const char *p = character == HERO_APRIL ? asset_path("voice/april_ok.wav") : NULL;
+    const char *p = character == HERO_APRIL ? asset_path("voice/april_ok.wav")
+                   : character == HERO_SABER ? asset_path("voice/saber_ok.wav") : NULL;
     if (p) voice_play_file(p); else sfx_play(11, 0);
 }
 
@@ -84,6 +121,13 @@ bool hero_apply(Character *c)
 {
     if (c->crhc_id != CRHC_APRIL && c->crhc_id != CRHC_FIREBALL && c->crhc_id != CRHC_COLT && c->crhc_id != CRHC_DEFAULT) return false;   /* enemies */
     sfx_clear_overrides();         /* the player is re-created on every level start; Fireball keeps the pack's samples */
+    if (c->crhc_id == CRHC_DEFAULT) {
+        saber_sfx();
+        CBlock *cb = saber_sheet();
+        if (!cb) return false;
+        c->cb = cb; c->spr = NULL;   /* table is already Fireball's own layout: no anim/hurtbox patches needed */
+        return true;
+    }
     if (c->crhc_id != CRHC_APRIL) return false;
     april_sfx();
     CBlock *cb = april_sheet();
