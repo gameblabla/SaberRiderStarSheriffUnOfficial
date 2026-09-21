@@ -35,10 +35,10 @@
 enum { T_SAND, T_SAND2, T_ASPHALT, T_LINE, T_KERB_RED, T_KERB_WHITE, T_CHECKER, T_DIRT, T_SAND_DARK, T_DASH, T_SHOULDER, T_COUNT };
 
 /* ---- atlas ---- */
-enum { S_BUGGY, S_HORNET, S_LEADER, S_FIRENZA, S_RBLUE, S_RPURPLE, S_FIREBALL, S_CACTUS, S_ROCK_S, S_ROCK_B, S_MESA,
-       S_FLOOR, S_SHOT, S_ESHOT, S_EXPL, S_FLASH, S_MINE, S_GATE, S_SMOKE, S_CLAUDIA, S_COUNT };
-static const char *const SPR_NAMES[S_COUNT] = { "buggy", "hornet", "leader", "firenza", "racer_blue", "racer_purple", "fireball",
-    "cactus", "rock_small", "rock_big", "mesa", "floor", "shot", "eshot", "explosion", "flash", "mine", "gate", "smoke", "claudia" };
+enum { S_BUGGY, S_HORNET, S_LEADER, S_FIRENZA, S_RBLUE, S_RPURPLE, S_CACTUS, S_ROCK_S, S_ROCK_B, S_MESA,
+       S_FLOOR, S_SHOT, S_ESHOT, S_EXPL, S_FLASH, S_MINE, S_GATE, S_SMOKE, S_COUNT };
+static const char *const SPR_NAMES[S_COUNT] = { "buggy", "hornet", "leader", "firenza", "racer_blue", "racer_purple",
+    "cactus", "rock_small", "rock_big", "mesa", "floor", "shot", "eshot", "explosion", "flash", "mine", "gate", "smoke" };
 typedef struct { int x, y, w, h, frames; } Spr;
 
 /* ---- entities ---- */
@@ -161,12 +161,7 @@ static bool load_atlas(Mode7 *m)
             }
         }
     }
-    /* Claudia's avatar for the dialog system */
-    Spr *cl = &m->spr[S_CLAUDIA];
-    uint32_t *av = malloc((size_t)cl->w * cl->h * 4);
-    for (int yy = 0; yy < cl->h; yy++) memcpy(av + yy * cl->w, px + (size_t)(cl->y + yy) * w + cl->x, cl->w * 4);
-    sprite_from_rgba(namehash("dialog_avatar_claudia"), av, cl->w, cl->h, 1);
-    free(av); free(px);
+    free(px);
     return true;
 }
 
@@ -320,7 +315,7 @@ static const char *const SCRIPT_INTRO =
     "<|GREEN|>\n</dialog_avatar_fireball1/>\nNew Borderland... the All Galaxy Grand Prix. I haven't sat on a grid like this since Cavalry Command recruited me.\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_saber2/>\nEnjoy it, Fireball. It's Marco Firenza's last race, and the three of us are riding along - give us a good show.\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_april2/>\nKeep your eyes open. That Black Hornets team came out of nowhere and nobody has seen their faces.\n<<>>\n"
-    "<|PURPLE|>\n</dialog_avatar_claudia/>\nFireball! I'm Claudia - your biggest fan! Meet me behind the paddock after qualifying? Alone?\n<<>>\n"
+    "<|PURPLE|>\n</dialog_avatar_outrider/>\nFireball! I'm Claudia - your biggest fan! Meet me behind the paddock after qualifying? Alone?\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_fireball1/>\n...Sure. Hey, what's- OUTRIDERS! It's a trap!\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_april2/>\nFireball, get DOWN! ...You owe me one, hotshot. Now get back in that car - the race is about to start.\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_colt2/>\nThose Hornets are Outriders in disguise, pardner. Whatever they came for, it isn't the trophy.\n<<>>\n"
@@ -347,8 +342,8 @@ static void start_race(Mode7 *m)
     place_props_around_track(m);
     /* the grid: 8 cars, two abreast, behind the line */
     static const struct { int spr; float max; bool hornet; const char *name; } FIELD[N_RACERS] = {
-        { S_FIRENZA, 490, false, "FIRENZA" }, { S_HORNET, 470, true, "HORNET" }, { S_HORNET, 462, true, "HORNET" },
-        { S_RBLUE, 445, false, "VEGA" }, { S_HORNET, 455, true, "HORNET" }, { S_RPURPLE, 435, false, "KELLY" }, { S_RBLUE, 425, false, "DUNN" },
+        { S_FIRENZA, 640, false, "FIRENZA" }, { S_HORNET, 610, true, "HORNET" }, { S_HORNET, 595, true, "HORNET" },
+        { S_RBLUE, 570, false, "VEGA" }, { S_HORNET, 585, true, "HORNET" }, { S_RPURPLE, 555, false, "KELLY" }, { S_RBLUE, 540, false, "DUNN" },
     };
     for (int i = 0; i < N_RACERS; i++) {
         Ent *e = ent_new(m); if (!e) break;
@@ -954,13 +949,6 @@ static void render_player(Mode7 *m)
     uint8_t r = 255, g = 255, b = 255;
     if (m->hurt_t > 0 && ((int)(m->hurt_t * 20) & 1)) { r = 255; g = 90; b = 90; }
     float ang = m->spin_t > 0 ? m->spin_t * 720 : 0;
-    if (m->phase == PH_VICTORY && m->phase_t > 1.0f && m->speed <= 0) {
-        /* Fireball hops out and cheers next to the car */
-        draw_spr(m, S_BUGGY, 2, sx, sy, 1, 0, r, g, b, 255);
-        int f = (int)((m->phase_t - 1.0f) * 8) % m->spr[S_FIREBALL].frames;
-        draw_spr(m, S_FIREBALL, f, sx + 60, sy + 4, 1, 0, 255, 255, 255, 255);
-        return;
-    }
     draw_spr(m, S_BUGGY, frame, sx, sy, 1, ang, r, g, b, 255);
 }
 

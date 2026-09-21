@@ -5,7 +5,6 @@ Sources (all in the project root, none redistributed by the game):
   video.twimg.com_tweet_video_DXEYQnaXkAAXBY8.mp4   Fireball's buggy, rear view, 2x, green-keyed. The clip is a STEERING
                                                      set, not a loop: hard left, left, straight, right, hard right (+ a
                                                      near-duplicate of the last one, dropped)
-  video.twimg.com_tweet_video_DUaM4BaW0AAnRbO.mp4   Fireball rear view, 9 frames at 2x (victory hop)
   decoded/level1/06_Playfield_D8B018EE.png           level-1 cacti / rock spires (billboards)
 Recolours of the buggy give the Black Hornets, their leader, Marco Firenza and the field; the floor materials, shots,
 explosions, mines and the finish gate are drawn here.
@@ -128,16 +127,7 @@ def racer_purple(h, s, v):
     return (h, s, v)
 
 # ---------------------------------------------------------------- Fireball rear view (victory)
-def fireball_frames():
-    fr = frames_of("video.twimg.com_tweet_video_DUaM4BaW0AAnRbO.mp4")
-    res = [downscale2(*key_soft(f)) for f in fr]
-    ys, xs = [], []
-    for r in res:
-        yy, xx = np.where(r[:, :, 3] > 0); ys += [yy.min(), yy.max()]; xs += [xx.min(), xx.max()]
-    y0, y1, x0, x1 = min(ys), max(ys) + 1, min(xs), max(xs) + 1
-    return [r[y0:y1, x0:x1] for r in res]
 
-# ---------------------------------------------------------------- level-1 props
 def level_props():
     im = np.array(Image.open(os.path.join(ROOT, "decoded/level1/06_Playfield_D8B018EE.png")).convert("RGBA"))
     boxes = {"cactus": (65, 131, 91, 191), "rock_small": (353, 144, 381, 191), "rock_big": (0, 130, 64, 191), "mesa": (1252, 137, 1366, 191)}
@@ -268,17 +258,6 @@ def smoke_frames():
         out.append(np.array(img))
     return out
 
-def portrait_claudia():
-    """Claudia (the fan who lures Fireball): a small dialog avatar, 32x32, drawn in the game's avatar style"""
-    img = pil(32, 32); d = ImageDraw.Draw(img)
-    d.rectangle([0, 0, 31, 31], fill=(40, 30, 60, 255))
-    d.ellipse([7, 4, 25, 26], fill=(120, 70, 40, 255))      # hair
-    d.ellipse([10, 8, 22, 24], fill=(240, 200, 170, 255))    # face
-    d.rectangle([8, 22, 24, 31], fill=(180, 40, 90, 255))    # dress
-    d.point((13, 15), fill=(20, 20, 40, 255)); d.point((19, 15), fill=(20, 20, 40, 255))
-    d.line([(14, 20), (18, 20)], fill=(200, 60, 80, 255))
-    return np.array(img)
-
 # ---------------------------------------------------------------- atlas packing
 def main():
     entries = []  # (name, [frames], ox, oy)
@@ -287,7 +266,6 @@ def main():
     # the other cars get three steering poses: left, straight, right
     for name, fn in (("hornet", hornet), ("leader", leader), ("firenza", firenza), ("racer_blue", racer_blue), ("racer_purple", racer_purple)):
         entries.append((name, [recolour(bug[0], fn), recolour(bug[2], fn), recolour(bug[4], fn)]))
-    entries.append(("fireball", fireball_frames()))
     for n, im in level_props().items(): entries.append((n, [im]))
     entries.append(("floor", floor_tiles()))
     entries.append(("shot", [shot_sprite()]))
@@ -297,7 +275,6 @@ def main():
     entries.append(("mine", mine_sprite()))
     entries.append(("gate", [finish_gate()]))
     entries.append(("smoke", smoke_frames()))
-    entries.append(("claudia", [portrait_claudia()]))
 
     W = 1024; x = y = 0; rowh = 0; placed = []
     for name, frames in entries:
