@@ -473,7 +473,9 @@ static void player_drive(Mode7 *m, const Input *in, float dt, bool free_drive)
         turbo = !m->boost_locked && (m->turbo_on ? m->boost > 0.05f : m->boost > 0.6f);
     if (turbo) {
         vmax *= 1.35f; m->boost -= dt * 0.33f;
-        if (m->boost <= 0) { m->boost = 0; m->boost_locked = true; }   /* used up: locked out until halfway */
+        /* used up: locked out until halfway. The floor is 0.05 (the engage gate below), not 0: otherwise a held
+         * button hovers just under 0.05, flickering turbo without ever locking */
+        if (m->boost <= 0.05f) { m->boost = 0; m->boost_locked = true; }
     }
     else { m->boost = clampf(m->boost + dt * 0.08f, 0, 1); if (m->boost_locked && m->boost >= 0.5f) m->boost_locked = false; }
     if (turbo && !m->turbo_on) { sfx_play_file(asset_path("sfx/turbo_start.wav")); sfx_loop(asset_path("sfx/turbo_loop.wav")); }
