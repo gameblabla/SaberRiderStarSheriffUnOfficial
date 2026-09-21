@@ -351,8 +351,8 @@ static void start_race(Mode7 *m)
     place_props_around_track(m);
     /* the grid: 8 cars, two abreast, behind the line */
     static const struct { int spr; float max; bool hornet; const char *name; } FIELD[N_RACERS] = {
-        { S_FIRENZA, 660, false, "FIRENZA" }, { S_HORNET, 640, true, "HORNET" }, { S_HORNET, 625, true, "HORNET" },
-        { S_RBLUE, 600, false, "VEGA" }, { S_HORNET, 610, true, "HORNET" }, { S_RPURPLE, 585, false, "KELLY" }, { S_RBLUE, 570, false, "DUNN" },
+        { S_FIRENZA, 625, false, "FIRENZA" }, { S_HORNET, 605, true, "HORNET" }, { S_HORNET, 590, true, "HORNET" },
+        { S_RBLUE, 570, false, "VEGA" }, { S_HORNET, 575, true, "HORNET" }, { S_RPURPLE, 555, false, "KELLY" }, { S_RBLUE, 540, false, "DUNN" },
     };
     for (int i = 0; i < N_RACERS; i++) {
         Ent *e = ent_new(m); if (!e) break;
