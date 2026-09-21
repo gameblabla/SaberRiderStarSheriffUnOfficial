@@ -813,7 +813,18 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         coast.state[BTN_UP] = m->phase_t < 1.2f ? 0 : 1;
         player_drive(m, &coast, dt, false);
         update_racers(m, dt); update_ents(m, dt);
-        if (m->phase_t >= FINISH_DUR) { m->phase = PH_BREAKAWAY; m->phase_t = 0; dialog_open_script(&m->dlg, SCRIPT_BREAKAWAY); play_music(m, 14, true); }
+        if (m->phase_t >= FINISH_DUR) {
+            if (m->finish_rank <= 3) { m->phase = PH_BREAKAWAY; m->phase_t = 0; dialog_open_script(&m->dlg, SCRIPT_BREAKAWAY); play_music(m, 14, true); }
+            else if (m->lives <= 0) { m->phase = PH_GAMEOVER; m->phase_t = 0; music_set_volume(0.5f); }   /* must rank 3rd or better: no spares left */
+            else {   /* must rank 3rd or better: lose a life and start the race over from the beginning */
+                m->lives--;
+                start_race(m);
+                m->hp = m->max_hp; m->hurt_t = 0; m->spin_t = 0; m->boost = 1; m->speed = 0; m->turbo_on = false; m->shake = 0; m->tilt = 0; m->fire_cd = 0; m->turbo_t = 0;
+                m->phase = PH_COUNTDOWN; m->phase_t = 0; m->countdown = 3.99f;
+                play_music(m, 10, true);
+                set_msg(m, "QUALIFY 3RD OR BETTER", 3.0f);
+            }
+        }
         break; }
     case PH_BREAKAWAY: {
         Input coast = { 0 }; for (int b = 0; b < BTN_COUNT; b++) coast.state[b] = 1;   /* the car rolls on under the radio call */
@@ -1021,7 +1032,7 @@ static void render_player(Mode7 *m)
         int fr = (int)(m->turbo_t * 18) & 3;
         static const float NOZ[2][2] = { { 23, 21 }, { 60, 21 } };
         for (int k = 0; k < 2; k++) {
-            float fx = x0 + NOZ[k][0] + 5 + (steer_frame_shift(frame)), fy = y0 + NOZ[k][1] + 10;
+            float fx = x0 + NOZ[k][0] + 5 + (steer_frame_shift(frame)) - 8.0f, fy = y0 + NOZ[k][1] + 10;   /* -8px: the flames sat +8px right of the nozzles */
             draw_spr(m, S_TURBO, fr, fx, fy, 1, 0, 255, 255, 255, 255);
             draw_spr(m, S_TURBO, (fr + 2) & 3, fx, fy + 1, 1.4f, 0, 255, 255, 255, 110);   /* a soft halo behind it */
         }
@@ -1061,7 +1072,10 @@ static void render_finish(Mode7 *m, Font *f, Font *small)
     char buf[32]; int rk = m->finish_rank < 1 ? 1 : m->finish_rank > 8 ? 8 : m->finish_rank;
     snprintf(buf, sizeof buf, "%s PLACE", ORD[rk - 1]);
     if (t > 0.8f) font_draw(small, buf, bx + sw * 0.5f - font_text_width(small, buf) * 0.5f, y0 + 40, 255, 255, 255);
-    if (t > 1.6f && ((int)(t * 3) & 1)) { const char *w = "THE HORNETS ARE LEAVING THE COURSE!"; font_draw(small, w, sw * 0.5f - font_text_width(small, w) * 0.5f, 140, 255, 90, 90); }
+    if (t > 1.6f && ((int)(t * 3) & 1)) {
+        const char *w = rk <= 3 ? "THE HORNETS ARE LEAVING THE COURSE!" : "MUST FINISH 3RD OR BETTER!";
+        font_draw(small, w, sw * 0.5f - font_text_width(small, w) * 0.5f, 140, 255, 90, 90);
+    }
 }
 
 /* the Chase H.Q. target briefing: a black card, a blue console panel whose lines type in one by one with the
