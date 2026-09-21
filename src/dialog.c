@@ -18,8 +18,12 @@ static const uint8_t TEXTRGB[4][3] = { {255,255,255}, {255,232,208}, {224,232,25
 static int g_hero = HERO_FIREBALL;
 void dialog_set_hero(int character) { g_hero = character; }
 
-#define AVATAR_APRIL    0x7AB49CB5   /* dialog_avatar_april2 */
 #define AVATAR_FIREBALL 0x742F352A   /* dialog_avatar_fireball1 */
+/* the level-1 script addresses Fireball by name and the other three heroes talk to him: playing as one of them
+ * swaps the name and trades that hero's avatar (dialog_avatar_<hero>2) for Fireball's */
+static const struct { int hero; const char *name; uint32_t avatar; } HERO_SWAP[] = {
+    { HERO_SABER, "Saber Rider", 0x70719EF7 }, { HERO_APRIL, "April", 0x7AB49CB5 }, { HERO_COLT, "Colt", 0xE3E91860 },
+};
 
 static void replace_word(char *text, size_t cap, const char *from, const char *to)
 {
@@ -35,10 +39,11 @@ static void adapt_pages(Dialog *d)
 {
     for (int i = 0; i < d->npages; i++) {
         DialogPage *pg = &d->pages[i];
-        if (g_hero == HERO_APRIL) {
-            replace_word(pg->text, sizeof pg->text, "Fireball", "April");
-            if (pg->avatar_id == AVATAR_APRIL) pg->avatar_id = AVATAR_FIREBALL;
-            else if (pg->avatar_id == AVATAR_FIREBALL) pg->avatar_id = AVATAR_APRIL;
+        for (size_t k = 0; k < sizeof HERO_SWAP / sizeof *HERO_SWAP; k++) {
+            if (g_hero != HERO_SWAP[k].hero) continue;
+            replace_word(pg->text, sizeof pg->text, "Fireball", HERO_SWAP[k].name);
+            if (pg->avatar_id == HERO_SWAP[k].avatar) pg->avatar_id = AVATAR_FIREBALL;
+            else if (pg->avatar_id == AVATAR_FIREBALL) pg->avatar_id = HERO_SWAP[k].avatar;
         }
     }
 }

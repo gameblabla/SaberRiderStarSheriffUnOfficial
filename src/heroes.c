@@ -9,6 +9,7 @@
 
 #define CRHC_APRIL 0x79260A58
 #define CRHC_SABER_TAG 0x53414245   /* 'SABE': arbitrary cblock cache id, unrelated to CRHC_DEFAULT below */
+#define CRHC_COLT_TAG  0x434F4C54   /* 'COLT': likewise (Colt's CRHC points at A332AB60, a copy of Fireball's cblock) */
 
 static CBlock *april_sheet(void)
 {
@@ -41,11 +42,29 @@ static CBlock *saber_sheet(void)
     return cb;
 }
 
+/* Colt: a re-skin of Fireball's cblock (../heroes/build_colt_engine_sheet.py) - his CRHC (26818B85) already carries
+ * Fireball's table and points at a byte-identical copy of Fireball's sheet.  The run is Fireball's too (recoloured):
+ * his native clip run had a different stride and opened a hip gap under Fireball's aim torsos. */
+static CBlock *colt_sheet(void)
+{
+    static CBlock *cb; static bool tried;
+    if (tried) return cb;
+    tried = true;
+    const char *path = asset_path("colt.png");
+    if (!path) { fprintf(stderr, "assets/colt.png not found: Colt uses Fireball's sheet\n"); return NULL; }
+    int w, h; uint32_t *px = png_load_rgba(path, &w, &h);
+    if (!px) return NULL;
+    cb = cblock_from_rgba(CRHC_COLT_TAG, px, w, h, 64, 64);
+    free(px);
+    return cb;
+}
+
 bool hero_available(int character)
 {
     if (character == HERO_FIREBALL) return true;
     if (character == HERO_APRIL) return april_sheet() != NULL;
     if (character == HERO_SABER) return saber_sheet() != NULL;
+    if (character == HERO_COLT) return colt_sheet() != NULL;
     return false;
 }
 
@@ -133,6 +152,12 @@ bool hero_apply(Character *c)
         static const int8_t saber_bob[8] = { 0, 2, 4, 0, 2, 4 };
         memcpy(c->torso_bob, saber_bob, sizeof c->torso_bob);
         c->ov_sync = true;
+        return true;
+    }
+    if (c->crhc_id == CRHC_COLT) {
+        CBlock *cb = colt_sheet();
+        if (!cb) return false;
+        c->cb = cb; c->spr = NULL;   /* every cell incl. the run is Fireball's art recoloured: table, bob and overlays stay Fireball's */
         return true;
     }
     if (c->crhc_id != CRHC_APRIL) return false;
