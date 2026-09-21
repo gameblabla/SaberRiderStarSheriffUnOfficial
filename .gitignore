@@ -1,2 +1,4 @@
 build/
+obj/
 __pycache__/
+/saber_rider
