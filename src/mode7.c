@@ -1,7 +1,6 @@
 #include "mode7.h"
 #include "assets.h"
 #include "gfx.h"
-#include "level.h"
 #include "font.h"
 #include "audio.h"
 #include "dialog.h"
@@ -57,7 +56,7 @@ typedef struct {
 } Ent;
 #define MAX_ENT 200
 
-enum { PH_INTRO, PH_COUNTDOWN, PH_RACE, PH_FINISH, PH_BREAKAWAY, PH_BRIEF, PH_PURSUIT, PH_CAUGHT, PH_BOSS, PH_VICTORY, PH_DEAD, PH_GAMEOVER, PH_CLEARED };
+enum { PH_INTRO, PH_INSTRUCTIONS, PH_COUNTDOWN, PH_RACE, PH_FINISH, PH_BREAKAWAY, PH_BRIEF, PH_PURSUIT, PH_CAUGHT, PH_BOSS, PH_VICTORY, PH_DEAD, PH_GAMEOVER, PH_CLEARED };
 /* the chequered flag -> the Hornets' breakaway -> the Chase H.Q. style target briefing -> zoom into the pursuit */
 #define FINISH_DUR 3.2f
 #define BRIEF_TEXT_DUR 5.2f   /* the briefing's lines have typed in and held */
@@ -65,6 +64,8 @@ enum { PH_INTRO, PH_COUNTDOWN, PH_RACE, PH_FINISH, PH_BREAKAWAY, PH_BRIEF, PH_PU
 #define PURSUIT_FADE 1.1f     /* the desert fades in from white */
 #define CATCH_GAP 260.0f     /* the pursuit ends when the leader is this close */
 #define GAP_MAX 4200.0f      /* HUD gap bar full scale */
+#define INSTR_OPEN_DUR 0.5f   /* the controls card grows/fades in before it can be skipped */
+#define INSTR_MIN_DUR 2.2f    /* minimum time on screen even with no input, so it isn't a flash-frame */
 
 #define TRACK_N 1024
 #define N_RACERS 7
@@ -75,7 +76,7 @@ struct Mode7 {
     uint32_t tiles[T_COUNT][MIPS][TEX * TEX];   /* level L is (TEX >> L) square */
     uint8_t cells[MAPN * MAPN];
     SDL_Texture *floor_tex; uint32_t *floor_px; int floor_h;
-    Level horizon; bool horizon_ok;
+    SDL_Texture *sky_tex; int sky_w, sky_h; bool sky_ok;
     /* track */
     float tx[TRACK_N], ty[TRACK_N], tlen[TRACK_N], track_len;
     /* player */
@@ -170,6 +171,23 @@ static bool load_atlas(Mode7 *m)
             }
         }
     }
+    free(px);
+    return true;
+}
+
+/* the Mode-7 horizon: a dedicated 768x144 panorama (sky_mode7.png) authored to tile cleanly at its own width,
+ * unlike level 1's background layers (reused at first) which had dead columns and repeated in narrow, glitchy
+ * slices. One full steering turn pans exactly one copy of it by. */
+static bool load_sky(Mode7 *m)
+{
+    const char *png = asset_path("sky_mode7.png");
+    if (!png) { fprintf(stderr, "assets/sky_mode7.png missing\n"); return false; }
+    int w, h; uint32_t *px = png_load_rgba(png, &w, &h);
+    if (!px) return false;
+    m->sky_tex = SDL_CreateTexture(m->ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, w, h);
+    SDL_UpdateTexture(m->sky_tex, NULL, px, w * 4);
+    SDL_SetTextureScaleMode(m->sky_tex, SDL_SCALEMODE_NEAREST);
+    m->sky_w = w; m->sky_h = h;
     free(px);
     return true;
 }
@@ -327,8 +345,7 @@ static const char *const SCRIPT_INTRO =
     "<|PURPLE|>\n</dialog_avatar_outrider/>\nFireball! I'm Claudia - your biggest fan! Meet me behind the paddock after qualifying? Alone?\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_fireball1/>\n...Sure. Hey, what's- OUTRIDERS! It's a trap!\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_april2/>\nFireball, get DOWN! ...You owe me one, hotshot. Now get back in that car - the race is about to start.\n<<>>\n"
-    "<|GREEN|>\n</dialog_avatar_colt2/>\nThose Hornets are Outriders in disguise, pardner. Whatever they came for, it isn't the trophy.\n<<>>\n"
-    "<|BLUE|>\nSTEER left/right - ACCELERATE jump button or up - FIRE shoot button - TURBO aim button - BRAKE down. Three laps!\n<<>>\n";
+    "<|GREEN|>\n</dialog_avatar_colt2/>\nThose Hornets are Outriders in disguise, pardner. Whatever they came for, it isn't the trophy.\n<<>>\n";
 static const char *const SCRIPT_BREAKAWAY =
     "<|RED|>\n</dialog_avatar_april2/>\nThe Black Hornets are leaving the course! They're heading for Dome City - the Cavalry Command Nerve Center!\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_fireball1/>\nFirenza can keep his trophy. Hang on, everybody - I'm going after them!\n<<>>\n"
@@ -378,7 +395,7 @@ Mode7 *mode7_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives
     SDL_SetTextureScaleMode(m->floor_tex, SDL_SCALEMODE_NEAREST);
     m->ok = load_atlas(m);
     if (m->ok && m->spr[S_BUGGY].frames < 5) { fprintf(stderr, "mode7.png is stale (buggy needs 5 steering frames): rerun tools/build_mode7_assets.py\n"); m->ok = false; }
-    m->horizon_ok = level_load(&m->horizon, 0x12DAD1A7);   /* level 1's sky + mountain layers */
+    m->sky_ok = load_sky(m);
     m->difficulty = difficulty; m->lives = lives;
     m->max_hp = difficulty == 0 ? 16 : difficulty == 1 ? 12 : 8; m->hp = m->max_hp;   /* the car's damage meter: shots 1, mines / crashes 2 */
     m->boost = 1.0f; m->boost_locked = false; m->music_now = -1;
@@ -403,6 +420,7 @@ void mode7_destroy(Mode7 *m)
     sfx_loop(NULL);
     if (m->atlas) SDL_DestroyTexture(m->atlas);
     if (m->floor_tex) SDL_DestroyTexture(m->floor_tex);
+    if (m->sky_tex) SDL_DestroyTexture(m->sky_tex);
     free(m->floor_px); free(m);
 }
 
@@ -541,12 +559,12 @@ static void update_racers(Mode7 *m, float dt)
         float target = e->max_speed;
         if (gap > 2600) target *= 0.75f; else if (gap > 1200) target *= 0.86f; else if (gap < -900) target *= 1.12f;
         if (e->knock > 0) { e->knock -= dt; target *= 0.5f; }
-        if (m->phase == PH_COUNTDOWN || m->phase == PH_INTRO) target = 0;
+        if (m->phase == PH_COUNTDOWN || m->phase == PH_INTRO || m->phase == PH_INSTRUCTIONS) target = 0;
         if (m->phase == PH_FINISH || m->phase == PH_BREAKAWAY) target = e->hornet ? 760 : target * 0.8f;   /* the Hornets bolt, the field winds down */
         e->speed += (target - e->speed) * clampf(dt * (e->speed < target ? 1.6f : 2.5f), 0, 1);
         /* racing line wobble; a car just ahead of the player drifts over to block the pass. The grid holds still
          * (no line changes, no steering pose) until the lights go out */
-        bool grid = m->phase == PH_COUNTDOWN || m->phase == PH_INTRO;
+        bool grid = m->phase == PH_COUNTDOWN || m->phase == PH_INTRO || m->phase == PH_INSTRUCTIONS;
         if (!grid) {
             e->t -= dt;
             if (e->t <= 0) { e->t = 1.5f + frand(m) * 3; e->lat_target = (frand(m) - 0.5f) * 150; }
@@ -790,8 +808,13 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
     case PH_INTRO:
         if (m->intro_pending) { m->intro_pending = false; dialog_open_script(&m->dlg, SCRIPT_INTRO); }
         if (m->dlg.active) dialog_update(&m->dlg, in, dt);
-        else { m->phase = PH_COUNTDOWN; m->phase_t = 0; m->countdown = 3.99f; }
+        else { m->phase = PH_INSTRUCTIONS; m->phase_t = 0; }
         break;
+    case PH_INSTRUCTIONS: {
+        bool any = false; for (int b = 0; b < BTN_COUNT; b++) if (btn_pressed(in, b)) any = true;
+        if (any && m->phase_t >= INSTR_OPEN_DUR) m->phase_t = INSTR_MIN_DUR;   /* skip: jump straight to the close */
+        if (m->phase_t >= INSTR_MIN_DUR) { m->phase = PH_COUNTDOWN; m->phase_t = 0; m->countdown = 3.99f; }
+        break; }
     case PH_COUNTDOWN: {
         int before = (int)m->countdown; m->countdown -= dt; int after = (int)m->countdown;
         if (after != before) sfx_play(0, 0);
@@ -954,21 +977,18 @@ static void render_floor(Mode7 *m)
 
 static void render_horizon(Mode7 *m)
 {
-    /* level-1 sky + three mountain layers, scrolled by the heading (a full turn = one strip period) */
     SDL_SetRenderDrawColor(m->ren, 78, 160, 214, 255);
     SDL_FRect sky = { 0, 0, (float)m->sw, (float)(HORIZON + 1) }; SDL_RenderFillRect(m->ren, &sky);
-    if (!m->horizon_ok) return;
+    if (!m->sky_ok) return;
+    /* the panorama is scaled to fill the sky band exactly (no squash: both axes share one factor), then tiled at
+     * its own width - it was authored to loop there, so this is a clean wrap with none of the dead columns /
+     * narrow-slice repeats that reusing level 1's background layers had */
+    float sc = (float)(HORIZON + 1) / m->sky_h, tw = m->sky_w * sc;
     float turn = m->cam_heading / TWO_PI;
-    /* period must match each layer's actual painted width (976/7040/7040/7040px) or the strip repeats a narrow
-     * slice of the panorama instead of tiling the whole thing; speed is independent (a comfortable pan rate,
-     * not a full lap of the whole 7040px panorama per turn - that read as whipping past far too fast) */
-    const struct { const char *name; float period, speed; float oy; } LY[4] = {
-        { "SkyBG", 976, 976, 0 }, { "FarMountains", 7040, 1280, 44 }, { "Mountains", 7040, 1248, 44 }, { "NearMountains", 7040, 1280, 44 } };
-    for (int k = 0; k < 4; k++) {
-        for (int i = 0; i < m->horizon.nlayers; i++) {
-            if (strcmp(m->horizon.layers[i].name, LY[k].name)) continue;
-            level_draw_layer_strip(&m->horizon, i, turn * LY[k].speed * (k == 0 ? 0.5f : 1.0f) + k * 300, LY[k].oy, (int)LY[k].period, m->sw, HORIZON + 1);
-        }
+    float ox = fmodf(turn * tw, tw); if (ox < 0) ox += tw;
+    for (float x = -ox; x < m->sw; x += tw) {
+        SDL_FRect dst = { x, 0, tw, (float)(HORIZON + 1) };
+        SDL_RenderTexture(m->ren, m->sky_tex, NULL, &dst);
     }
 }
 
@@ -1200,6 +1220,44 @@ static void render_hud(Mode7 *m)
     }
 }
 
+/* the controls card: the grid scene dims behind it while the panel wipes open from the middle (matches
+ * render_brief's grow), sized off sw/sh so it reads the same in 16:9 and 4:3; any button skips it once open,
+ * and it times out on its own after INSTR_MIN_DUR so nothing can get stuck on it */
+static void render_instructions(Mode7 *m, Font *f, Font *small)
+{
+    float t = m->phase_t; int sw = m->sw, sh = m->sh;
+    float open = clampf(t / INSTR_OPEN_DUR, 0, 1); open = 1 - (1 - open) * (1 - open);
+    SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(m->ren, 0, 0, 0, (uint8_t)(140 * open));
+    SDL_FRect scrim = { 0, 0, (float)sw, (float)sh }; SDL_RenderFillRect(m->ren, &scrim);
+    static const struct { const char *label, *desc; } LINES[] = {
+        { "STEER", "Left / Right" }, { "ACCELERATE", "Jump button or Up" }, { "FIRE", "Shoot button" },
+        { "TURBO", "Aim button" }, { "BRAKE", "Down" },
+    };
+    int nl = (int)(sizeof LINES / sizeof *LINES);
+    float full_h = 34 + nl * 14 + 22;
+    float pw = (float)sw - 40, ph = full_h * open, px0 = 20, py0 = (sh - full_h) * 0.5f + (full_h - ph) * 0.5f;
+    SDL_SetRenderDrawColor(m->ren, 10, 18, 44, (uint8_t)(255 * open));
+    SDL_FRect panel = { px0, py0, pw, ph }; SDL_RenderFillRect(m->ren, &panel);
+    SDL_SetRenderDrawColor(m->ren, 60, 120, 220, (uint8_t)(255 * open));
+    SDL_FRect top = { px0, py0 - 2, pw, 2 }, bot = { px0, py0 + ph, pw, 2 };
+    SDL_RenderFillRect(m->ren, &top); SDL_RenderFillRect(m->ren, &bot);
+    if (open < 1 || !f || !small) return;
+    const char *title = "ALL GALAXY GRAND PRIX";
+    font_draw(f, title, px0 + (pw - font_text_width(f, title)) * 0.5f, py0 + 8, 255, 182, 0);
+    for (int i = 0; i < nl; i++) {
+        float ly = py0 + 30 + i * 14;
+        font_draw(small, LINES[i].label, px0 + 14, ly, 255, 224, 192);
+        font_draw(small, LINES[i].desc, px0 + 110, ly, 220, 230, 255);
+    }
+    const char *sub = "THREE LAPS!";
+    font_draw(small, sub, px0 + (pw - font_text_width(small, sub)) * 0.5f, py0 + full_h - 26, 255, 255, 255);
+    if (t >= INSTR_OPEN_DUR && ((int)(t * 4) & 1)) {
+        const char *skip = "PRESS A BUTTON TO SKIP";
+        font_draw(small, skip, px0 + (pw - font_text_width(small, skip)) * 0.5f, py0 + full_h - 12, 200, 200, 200);
+    }
+}
+
 void mode7_draw(Mode7 *m, bool scanlines)
 {
     if (!m->ok) return;
@@ -1210,6 +1268,7 @@ void mode7_draw(Mode7 *m, bool scanlines)
     render_player(m);
     render_hud(m);
     if (m->dlg.active) dialog_draw(&m->dlg, m->ren, m->sw, m->sh);
+    if (m->phase == PH_INSTRUCTIONS) { Font *f = font_get(0x4058897F), *small = font_get(0x12072E60); render_instructions(m, f, small); }
     if (m->white > 0) { SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(m->ren, 255, 255, 255, (uint8_t)(255 * m->white)); SDL_FRect q = { 0, 0, (float)m->sw, (float)m->sh }; SDL_RenderFillRect(m->ren, &q); }
     if (scanlines) {
         SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(m->ren, 0, 0, 0, 70);

@@ -50,7 +50,4 @@ typedef struct {
 
 bool level_load(Level *L, uint32_t id);
 void level_draw_layer(const Level *L, int layer, float cam_x, float cam_y, int screen_w, int screen_h);
-/* draw a tile layer as a horizontally repeating strip: columns wrap every period_px (<= the map width), the map's row 0
- * lands on screen row -oy. Used by the Mode-7 stage for the level-1 horizon layers. */
-void level_draw_layer_strip(const Level *L, int layer, float ox, float oy, int period_px, int screen_w, int screen_h);
 uint8_t level_cell(const Level *L, int cx, int cy);
