@@ -4,6 +4,7 @@
 #include "pack.h"
 #include "audio.h"
 #include "font.h"
+#include "assets.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -68,6 +69,7 @@ void menu_enter(Menu *m, int state)
     case MS_BRIEFING: m->dlg.active = false; music_play(2, true); break;
     case MS_CHARSEL: m->t = -0.25f; m->character = 1; music_play(1, true); break;
     case MS_GAMEOVER: m->dur = 3.0f; music_play(4, false); break;        /* FUN_0042d690 -> state 9 + music 4 */
+    case MS_CONTINUE: music_stop(); m->continue_now = false; break;      /* silence but the clock ticks */
     case MS_ACCOMPLISHED: m->dur = 10.0f; music_play(7, false); break;   /* state 0xf + music 7 */
     case MS_CREDITS: m->credits_page = 0; m->credits_t = 0; music_play(9, true); break;   /* FUN_004265a0: backer credits music */
     default: break;
@@ -179,6 +181,14 @@ void menu_update(Menu *m, const Input *in, float dt, int sw, SDL_Renderer *r)
         if (m->t > 2.0f) music_set_volume(3.0f - m->t);   /* FUN_00425e70(3 - t) while fading out */
         if (m->t > 2.9f) menu_enter(m, MS_SPLASH1);
         break;
+    case MS_CONTINUE: {   /* the count runs 20 -> 0, one per second; START / an action button takes the continue, 0 = GAME OVER */
+        float prev = m->t; m->t += dt;
+        if (m->t < 0.5f) break;   /* the screen fades in first */
+        int before = CONTINUE_FROM - (int)(prev - 0.5f), now = CONTINUE_FROM - (int)(m->t - 0.5f);
+        if (now != before && now >= 0) sfx_play(0, 0);
+        if (now < 0) { menu_enter(m, MS_GAMEOVER); break; }
+        if (confirm(in)) { sfx_play(8, 0); m->continue_now = true; }
+        break; }
     case MS_ACCOMPLISHED:   /* FUN_00429de0: 4 s, then a 1 s countdown to the splash (or the next stage) */
         m->t += dt;
         if (m->t > 5.0f) { if (m->more_stages) { m->more_stages = false; m->next_stage = true; music_stop(); } else menu_enter(m, MS_SPLASH1); }
@@ -344,6 +354,38 @@ static void draw_charsel(Menu *m, SDL_Renderer *r, int sw, int sh)
     }
 }
 
+/* CONTINUE? - white on black, the count in big digits shrinking away as the second runs out, the continues left
+ * under it. An optional assets/continue.png (any size, letterboxed to the screen) goes behind the text. */
+static void draw_continue(Menu *m, SDL_Renderer *r, int sw, int sh)
+{
+    fill(r, sw, sh, 0, 0, 0, 255);
+    static Sprite *bg; static bool bg_tried;
+    if (!bg_tried) {
+        bg_tried = true;
+        const char *p = asset_path("continue.png");
+        if (p) { int w, h; uint32_t *px = png_load_rgba(p, &w, &h); if (px) { bg = sprite_from_rgba(0xC0117100, px, w, h, 1); free(px); } }
+    }
+    if (bg) {
+        float s = fminf((float)sw / bg->w, (float)sh / bg->h), w = bg->w * s, h = bg->h * s;
+        sprite_draw_scaled(bg, 0, floorf((sw - w) * 0.5f), floorf((sh - h) * 0.5f), w, h);
+        fill(r, sw, sh, 0, 0, 0, 96);   /* keeps the text readable over it */
+    }
+    Font *f = font_get(0x4058897F), *small = font_get(0x12072E60);
+    if (!f || !small) return;
+    float t = m->t - 0.5f; if (t < 0) t = 0;
+    int count = CONTINUE_FROM - (int)t; if (count < 0) count = 0;
+    float frac = t - floorf(t);   /* the digit lands big and shrinks a touch over its second */
+    const char *title = "CONTINUE ?";
+    font_draw(f, title, floorf((sw - font_text_width(f, title)) * 0.5f), 48, 255, 255, 255);
+    char num[16]; snprintf(num, sizeof num, "%d", count);
+    float sc = 4.0f - 0.6f * frac, nw = font_text_width(f, num) * sc, nh = f->h * sc;
+    font_draw_scaled(f, num, floorf((sw - nw) * 0.5f), floorf(sh * 0.5f - nh * 0.5f + 8), sc, 255, 255, 255);
+    if (blink_on(0x1f, 20)) { const char *go = "PRESS START"; font_draw(small, go, floorf((sw - font_text_width(small, go)) * 0.5f), (float)(sh - 44), 255, 255, 255); }
+    char left[32]; snprintf(left, sizeof left, "CREDITS %02d", m->continues_left);
+    font_draw(small, left, floorf((sw - font_text_width(small, left)) * 0.5f), (float)(sh - 28), 200, 200, 200);
+    if (m->t < 0.5f) fill(r, sw, sh, 0, 0, 0, clamp255((1 - m->t * 2) * 255));
+}
+
 static void draw_credits(Menu *m, SDL_Renderer *r, int sw, int sh)
 {
     /* FUN_00427a60: title backdrop, half-size logo, EXIT, one [fade] block of the credits text at a time */
@@ -400,6 +442,7 @@ void menu_draw(Menu *m, SDL_Renderer *r, int sw, int sh)
     case MS_BRIEFING: draw_briefing(m, r, sw, sh); break;
     case MS_CHARSEL: draw_charsel(m, r, sw, sh); break;
     case MS_CREDITS: draw_credits(m, r, sw, sh); break;
+    case MS_CONTINUE: draw_continue(m, r, sw, sh); break;
     case MS_GAMEOVER: {   /* FUN_0042a310: Nemesis art + pulsing GAME OVER zoom in from 32x (period 3 s) under a black veil */
         fill(r, sw, sh, 0, 0, 0, 255);
         Sprite *bg = sprite_get(0x64981FC5), *s = sprite_get(0x24138418);

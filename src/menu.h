@@ -7,7 +7,9 @@
 #include "dialog.h"
 
 enum { MS_SPLASH0 = 0, MS_SPLASH1, MS_SPLASH2, MS_SPLASH3, MS_INTRO = 4, MS_MAIN = 5, MS_OPTIONS = 6, MS_BRIEFING = 7,
-       MS_CHARSEL = 8, MS_GAMEOVER = 9, MS_LEVEL = 10, MS_ACCOMPLISHED = 0xf, MS_CREDITS = 0x10 };
+       MS_CHARSEL = 8, MS_GAMEOVER = 9, MS_LEVEL = 10, MS_ACCOMPLISHED = 0xf, MS_CREDITS = 0x10,
+       MS_CONTINUE = 0x11 };   /* ours: the arcade CONTINUE? countdown before GAME OVER (the demo stored the option but never used it) */
+#define CONTINUE_FROM 20     /* the countdown starts here, one per second */
 
 enum { OPT_EXIT, OPT_LEVEL, OPT_PLAYER, OPT_CONTINUE, OPT_SCREEN, OPT_RATIO, OPT_FILTER, OPT_MUSIC, OPT_CREDITS, OPT_COUNT };
 enum { RATIO_WIDE = 0, RATIO_43 = -1, RATIO_STRETCH = 1 };
@@ -20,6 +22,8 @@ typedef struct {
     Video *video;
     Dialog dlg;                /* briefing text */
     bool start_level;          /* set when character select finished -> game starts the level */
+    bool continue_now;         /* CONTINUE? accepted: the game restarts the stage with fresh lives */
+    int continues_left;        /* shown on the CONTINUE? screen (the game keeps the count) */
     bool next_stage;           /* MISSION ACCOMPLISHED finished: the game decides whether another stage follows */
     bool more_stages;          /* set by the game while a stage follows: the result screen hands over instead of splashing */
     int idle_frames;           /* title attract timer */

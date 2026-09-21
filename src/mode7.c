@@ -357,11 +357,12 @@ static void start_race(Mode7 *m)
         Ent *e = ent_new(m); if (!e) break;
         e->kind = K_RACER; e->spr = FIELD[i].spr; e->max_speed = FIELD[i].max; e->hornet = FIELD[i].hornet; e->id = i;
         e->s = m->track_len - 60.0f * (i + 1) - 30; e->lat = (i & 1) ? 48 : -48; e->lat_target = e->lat; e->solid = true;
+        e->lap = -1;   /* the grid sits behind the line: progress (lap * track_len + s) is the distance past it, like the player's */
         e->hp = e->hp_max = (e->hornet ? 10 : 7) + 2 * m->difficulty;
         track_point(m, e->s, e->lat, &e->x, &e->y, &e->heading); e->speed = 0;
     }
     /* player last on the grid (right column) */
-    m->s = m->track_len - 60.0f * (N_RACERS + 1) - 30; m->lat = 48; m->lap = 0; m->progress = 0;
+    m->s = m->track_len - 60.0f * (N_RACERS + 1) - 30; m->lat = 48; m->lap = 0; m->progress = m->s - m->track_len;   /* behind the line: the first crossing is lap 1 */
     track_point(m, m->s, m->lat, &m->px, &m->py, &m->heading); m->cam_heading = m->heading; m->speed = 0; m->last_s = m->s;
     m->near_idx = -1; m->race_time = 0;
 }
@@ -387,10 +388,10 @@ Mode7 *mode7_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives
     m->intro_pending = true;
     if (SDL_getenv("SABER_M7PHASE")) {   /* debug: 1 race (no story), 2 pursuit, 3 boss, 4 the finish -> briefing */
         int ph = atoi(SDL_getenv("SABER_M7PHASE")); m->intro_pending = false;
-        if (ph == 1) { m->phase = PH_COUNTDOWN; m->countdown = 3.99f; if (SDL_getenv("SABER_M7LAP")) { m->lap = 1; m->progress = m->track_len + m->s; } }
+        if (ph == 1) { m->phase = PH_COUNTDOWN; m->countdown = 3.99f; if (SDL_getenv("SABER_M7LAP")) { m->lap = 1; m->progress = m->track_len + m->s; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_RACER) m->ents[i].lap = 1; } }
         else if (ph == 2) { m->phase = PH_PURSUIT; begin_pursuit(m); }
         else if (ph == 3) { begin_pursuit(m); m->phase = PH_BOSS; begin_boss(m); if (SDL_getenv("SABER_M7BOSSHP")) m->ents[m->boss_i].hp = (float)atof(SDL_getenv("SABER_M7BOSSHP")); }
-        else if (ph == 4) { m->phase = PH_RACE; m->lap = 2; m->progress = 2 * m->track_len + m->s - 200; m->last_s = m->s; m->speed = 500; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_RACER) { m->ents[i].lap = 2; m->ents[i].speed = 500; } }
+        else if (ph == 4) { m->phase = PH_RACE; m->lap = 2; m->progress = 2 * m->track_len + m->s; m->last_s = m->s; m->speed = 500; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_RACER) { m->ents[i].lap = 2; m->ents[i].speed = 500; } }   /* the grid, two laps in: 510 units to the flag */
     }
     return m;
 }
@@ -516,7 +517,7 @@ static void player_drive(Mode7 *m, const Input *in, float dt, bool free_drive)
         if (ds < -m->track_len * 0.5f) { ds += m->track_len; }
         else if (ds > m->track_len * 0.5f) { ds -= m->track_len; }
         m->progress += ds; m->last_s = s; m->s = s;
-        int lap = (int)floorf(m->progress / m->track_len);
+        int lap = (int)floorf(m->progress / m->track_len); if (lap < 0) lap = 0;   /* a lap counts under the gate (s = 0), not a track length after the grid */
         if (lap > m->lap) { m->lap = lap; set_msg(m, lap == 1 ? "LAP 2" : lap == 2 ? "FINAL LAP" : "FINISH", 2.0f); }
     }
 }
@@ -535,11 +536,15 @@ static void update_racers(Mode7 *m, float dt)
         if (m->phase == PH_COUNTDOWN || m->phase == PH_INTRO) target = 0;
         if (m->phase == PH_FINISH || m->phase == PH_BREAKAWAY) target = e->hornet ? 760 : target * 0.8f;   /* the Hornets bolt, the field winds down */
         e->speed += (target - e->speed) * clampf(dt * (e->speed < target ? 1.6f : 2.5f), 0, 1);
-        /* racing line wobble; a car just ahead of the player drifts over to block the pass */
-        e->t -= dt;
-        if (e->t <= 0) { e->t = 1.5f + frand(m) * 3; e->lat_target = (frand(m) - 0.5f) * 150; }
-        if (gap > 30 && gap < 320 && m->phase == PH_RACE) e->lat_target += (m->lat - e->lat_target) * clampf(dt * (e->hornet ? 1.6f : 0.8f), 0, 1);
-        e->lat += (e->lat_target - e->lat) * clampf(dt * 1.2f, 0, 1);
+        /* racing line wobble; a car just ahead of the player drifts over to block the pass. The grid holds still
+         * (no line changes, no steering pose) until the lights go out */
+        bool grid = m->phase == PH_COUNTDOWN || m->phase == PH_INTRO;
+        if (!grid) {
+            e->t -= dt;
+            if (e->t <= 0) { e->t = 1.5f + frand(m) * 3; e->lat_target = (frand(m) - 0.5f) * 150; }
+            if (gap > 30 && gap < 320 && m->phase == PH_RACE) e->lat_target += (m->lat - e->lat_target) * clampf(dt * (e->hornet ? 1.6f : 0.8f), 0, 1);
+            e->lat += (e->lat_target - e->lat) * clampf(dt * 1.2f, 0, 1);
+        } else { e->lat_target = e->lat; e->tilt = 0; }
         float prev_s = e->s; e->s += e->speed * dt;
         if (e->s >= m->track_len) { e->s -= m->track_len; e->lap++; }
         (void)prev_s;
@@ -705,6 +710,14 @@ static void update_ents(Mode7 *m, float dt)
     }
 }
 
+/* the placing: one more than the cars further past the start line than the player */
+static void standings(Mode7 *m)
+{
+    int ahead = 0;
+    for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_RACER && m->ents[i].lap * m->track_len + m->ents[i].s > m->progress) ahead++;
+    m->rank = ahead + 1;
+}
+
 /* ---------------------------------------------------------------- phases */
 /* the chase: the Hornet leader runs north up the desert road with the player on his tail; catch him to start the fight */
 static void begin_pursuit(Mode7 *m)
@@ -774,7 +787,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
     case PH_COUNTDOWN: {
         int before = (int)m->countdown; m->countdown -= dt; int after = (int)m->countdown;
         if (after != before) sfx_play(0, 0);
-        update_racers(m, dt);
+        update_racers(m, dt); standings(m);
         if (m->countdown <= 1.0f) { m->phase = PH_RACE; m->phase_t = 0; set_msg(m, "GO!", 1.0f); sfx_play(8, 0); }
         break; }
     case PH_RACE:
@@ -782,8 +795,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         player_drive(m, in, dt, false);
         if (SDL_getenv("SABER_TRACE") && (int)m->race_time != (int)(m->race_time - dt)) fprintf(stderr, "race t=%.0f lap=%d s=%.0f lat=%.0f v=%.0f rank=%d hp=%d turbo=%d boost=%.2f\n", m->race_time, m->lap, m->s, m->lat, m->speed, m->rank, m->hp, m->turbo_on, m->boost);
         update_racers(m, dt); update_ents(m, dt);
-        /* standings */
-        { int ahead = 0; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_RACER && m->ents[i].lap * m->track_len + m->ents[i].s > m->progress) ahead++; m->rank = ahead + 1; }
+        standings(m);
         if (m->lap >= 3) {   /* the chequered flag after three laps: the car coasts on under the FINISH banner while the
                               * Hornets bolt off the course */
             m->phase = PH_FINISH; m->phase_t = 0; m->finish_rank = m->rank; m->msg_t = 0; sfx_loop(NULL); m->turbo_on = false;
@@ -1062,7 +1074,8 @@ static void render_brief(Mode7 *m, Font *f, Font *small)
     SDL_SetRenderDrawColor(m->ren, 0, 0, 0, 255); SDL_FRect all = { 0, 0, (float)sw, (float)sh }; SDL_RenderFillRect(m->ren, &all);
     /* the panel wipes open from the middle in the first 0.3 s */
     float open = clampf(t / 0.3f, 0, 1); open = 1 - (1 - open) * (1 - open);
-    float ph = 150 * open, py = (sh - ph) * 0.5f;
+    bool narrow = sw < 400;   /* 4:3: no room beside the lines, so the panel grows and the target sits under them */
+    float ph = (narrow ? 200 : 150) * open, py = (sh - ph) * 0.5f;
     SDL_SetRenderDrawColor(m->ren, 10, 18, 44, 255); SDL_FRect panel = { 16, py, (float)(sw - 32), ph }; SDL_RenderFillRect(m->ren, &panel);
     SDL_SetRenderDrawColor(m->ren, 60, 120, 220, 255); SDL_FRect top = { 16, py - 2, (float)(sw - 32), 2 }, bot = { 16, py + ph, (float)(sw - 32), 2 }; SDL_RenderFillRect(m->ren, &top); SDL_RenderFillRect(m->ren, &bot);
     SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(m->ren, 60, 120, 220, 40);
@@ -1084,8 +1097,9 @@ static void render_brief(Mode7 *m, Font *f, Font *small)
     }
     /* the target: the leader's car in the reticle, then the zoom */
     float zt = clampf((t - BRIEF_TEXT_DUR) / BRIEF_ZOOM_DUR, 0, 1), zz = zt * zt * zt;
-    float cx = sw - 78 + (sw * 0.5f - (sw - 78)) * zt, cy = py + ph * 0.5f + 28 + (sh * 0.5f + 60 - (py + ph * 0.5f + 28)) * zt;
-    float sc = 1.6f + 14.0f * zz;
+    float sc0 = narrow ? 1.0f : 1.6f, cx0 = narrow ? sw - 80 : sw - 78, cy0 = narrow ? py + ph - 12 : py + ph * 0.5f + 28;
+    float cx = cx0 + (sw * 0.5f - cx0) * zt, cy = cy0 + (sh * 0.5f + 60 - cy0) * zt;
+    float sc = sc0 + 14.0f * zz;
     /* a pulsing red reticle around the car's silhouette, the scan bar rolling down it */
     Spr *ls = &m->spr[S_LEADER]; float hw = ls->w * sc * 0.5f + 6 + 2 * ((int)(t * 6) & 1), hh = ls->h * sc + 10;
     SDL_SetRenderDrawColor(m->ren, 60, 20, 30, 255); SDL_FRect bg = { cx - hw, cy - hh + 2, hw * 2, hh }; SDL_RenderFillRect(m->ren, &bg);
@@ -1114,12 +1128,14 @@ static void render_hud(Mode7 *m)
         snprintf(buf, sizeof buf, "x%d", m->lives);
         font_draw(small, buf, 30, 30, 255, 255, 255);
     }
-    /* turbo meter + speed */
-    bar(m->ren, 8, m->sh - 14, 60, 5, m->boost, 255, 182, 0);
-    font_draw(small, "TURBO", 8, (float)(m->sh - 26), 255, 182, 0);
-    snprintf(buf, sizeof buf, "%3d", (int)(fabsf(m->speed) * 0.6f));
-    font_draw(f, buf, (float)(m->sw - 8 - font_text_width(f, buf)), (float)(m->sh - 20), 255, 255, 255);
-    font_draw(small, "KM/H", (float)(m->sw - 12 - font_text_width(small, "KM/H")), (float)(m->sh - 30), 200, 200, 200);
+    /* turbo meter + speed (hidden under a dialog box, which sits on the same rows and covers them in 4:3) */
+    if (!m->dlg.active) {
+        bar(m->ren, 8, m->sh - 14, 60, 5, m->boost, 255, 182, 0);
+        font_draw(small, "TURBO", 8, (float)(m->sh - 26), 255, 182, 0);
+        snprintf(buf, sizeof buf, "%3d", (int)(fabsf(m->speed) * 0.6f));
+        font_draw(f, buf, (float)(m->sw - 8 - font_text_width(f, buf)), (float)(m->sh - 20), 255, 255, 255);
+        font_draw(small, "KM/H", (float)(m->sw - 12 - font_text_width(small, "KM/H")), (float)(m->sh - 30), 200, 200, 200);
+    }
     if (m->phase == PH_RACE || m->phase == PH_COUNTDOWN || m->phase == PH_FINISH || m->phase == PH_BREAKAWAY) {
         static const char *const ORD[] = { "1ST", "2ND", "3RD", "4TH", "5TH", "6TH", "7TH", "8TH" };
         snprintf(buf, sizeof buf, "LAP %d/3", m->lap + 1 > 3 ? 3 : m->lap + 1);

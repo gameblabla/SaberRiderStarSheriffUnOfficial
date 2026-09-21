@@ -15,6 +15,8 @@ Dependencies: SDL3, libvorbisfile, libavcodec/libswscale (FMV), CMake, a C11 com
     ./build/saber_rider /path/to/SaberRider/data
     ./build/saber_rider /path/to/SaberRider/data --level 2    # skip the front end: 1 the frontier town, 2 the Grand Prix
 
+After the last life a CONTINUE? screen counts 20 -> 0 (the CONTINUE option's credits, per run; START restarts the
+stage with the option's lives). An optional `assets/continue.png` goes behind its text (letterboxed to the screen).
 Every level opens with its title card (STAGE n, the level's name typed in over an amber band, then the level wipes in
 through venetian-blind strips while the music comes up; a button skips to the wipe).
 

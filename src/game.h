@@ -30,6 +30,7 @@ typedef struct {
     Menu menu; bool in_level;
     int stage;              /* 1 frontier town (LEVL), 2 the Mode-7 Grand Prix */
     int carry_lives;        /* lives left when stage 1 was cleared (-1: fresh start) */
+    int continues_left;     /* CONTINUE? credits left in this run (from the option at the start of a run) */
     Mode7 *mode7;
     float state_t;
     float level_t;               /* +0x64 in state 10: music fade-in timer */

@@ -22,7 +22,11 @@ bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh, int start_level)
     g->menu.difficulty = 1; g->menu.lives = 2; g->menu.continues = 3; g->menu.character = 1;   /* option defaults: NORMAL, 02, 03; Fireball */
     if (SDL_getenv("SABER_HERO")) g->menu.character = atoi(SDL_getenv("SABER_HERO")) & 3;   /* debug: 0 Saber 1 Fireball 2 April 3 Colt */
     if (SDL_getenv("SABER_LIVES")) g->menu.lives = atoi(SDL_getenv("SABER_LIVES"));   /* debug: starting lives */
-    g->stage = 1;
+    if (SDL_getenv("SABER_RATIO")) {   /* debug: start in a screen ratio (0 wide, -1 4:3, 1 stretch) */
+        g->menu.ratio = atoi(SDL_getenv("SABER_RATIO")); g->sw = g->menu.ratio == RATIO_WIDE ? 426 : 320;
+        SDL_SetRenderLogicalPresentation(ren, g->sw, g->sh, g->menu.ratio == RATIO_STRETCH ? SDL_LOGICAL_PRESENTATION_STRETCH : SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+    }
+    g->stage = 1; g->continues_left = g->menu.continues;
     if (start_level) { g->stage = start_level; return level_start(g); }   /* --level N: skip the front end */
     if (SDL_getenv("SABER_STAGE")) { g->stage = atoi(SDL_getenv("SABER_STAGE")); if (g->stage == 2) return level_start(g); }   /* debug: straight into stage 2 */
     if (!SDL_getenv("SABER_MENU") && (SDL_getenv("SABER_START") || SDL_getenv("SABER_SCRIPT"))) return level_start(g);   /* debug: straight into the level */
@@ -33,10 +37,10 @@ bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh, int start_level)
 static bool level_start(Game *g)
 {
     SDL_Renderer *ren = g->ren; int sw = g->sw, sh = g->sh;
-    Menu menu = g->menu; int stage = g->stage ? g->stage : 1; int carry = g->carry_lives;
+    Menu menu = g->menu; int stage = g->stage ? g->stage : 1; int carry = g->carry_lives, conts = g->continues_left;
     if (g->mode7) { mode7_destroy(g->mode7); g->mode7 = NULL; }
     memset(g, 0, sizeof *g);
-    g->ren = ren; g->sw = sw; g->sh = sh; g->menu = menu; g->in_level = true; g->stage = stage; g->carry_lives = carry;
+    g->ren = ren; g->sw = sw; g->sh = sh; g->menu = menu; g->in_level = true; g->stage = stage; g->carry_lives = carry; g->continues_left = conts;
     if (stage == 2) {   /* the Mode-7 Grand Prix: its own world, HUD and flow */
         g->mode7 = mode7_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives);
         if (g->mode7) title_start(g);
@@ -155,6 +159,13 @@ static void title_draw(Game *g)
     font_draw(small, sub, sw * 0.5f - font_text_width(small, sub) * 0.5f, cy + half_h - 12, (uint8_t)(200 * sf), (uint8_t)(200 * sf), (uint8_t)(210 * sf));
 }
 
+/* the last life is gone: CONTINUE? while credits remain (the option's count, per run), else GAME OVER */
+static void game_over(Game *g)
+{
+    if (g->continues_left > 0) { g->menu.continues_left = g->continues_left; menu_enter(&g->menu, MS_CONTINUE); }
+    else menu_enter(&g->menu, MS_GAMEOVER);
+}
+
 void game_event(Game *g, const SDL_Event *ev)
 {
     input_event(&g->in, ev);
@@ -186,7 +197,8 @@ void game_update(Game *g, float dt)
     input_update(&g->in);
     if (!g->in_level) {
         menu_update(&g->menu, &g->in, dt, g->sw, g->ren);
-        if (g->menu.start_level) { g->menu.start_level = false; g->stage = 1; g->carry_lives = 0; level_start(g); }   /* character select always starts stage 1 */
+        if (g->menu.start_level) { g->menu.start_level = false; g->stage = 1; g->carry_lives = 0; g->continues_left = g->menu.continues; level_start(g); }   /* character select always starts stage 1 */
+        if (g->menu.continue_now) { g->menu.continue_now = false; g->continues_left--; g->carry_lives = 0; level_start(g); }   /* CONTINUE? taken: the stage restarts with the option's lives */
         if (g->menu.next_stage) { g->menu.next_stage = false; if (g->stage == 2) level_start(g); }
         return;
     }
@@ -198,7 +210,7 @@ void game_update(Game *g, float dt)
             mode7_destroy(g->mode7); g->mode7 = NULL; g->in_level = false;
             dialog_set_hero(g->menu.character);
             if (res == 1) { g->stage = 3; menu_enter(&g->menu, MS_ACCOMPLISHED); }   /* the game ends after stage 2 */
-            else menu_enter(&g->menu, MS_GAMEOVER);
+            else game_over(g);
         }
         return;
     }
@@ -214,7 +226,7 @@ void game_update(Game *g, float dt)
     if (p->game_over && g->state == 10) { g->state = 0xb; g->state_t = 0; p->locked = true; }
     if (g->state == 0xb) {
         g->state_t += dt; float f = 2.0f * sinf(3.1415927f * g->state_t / 3.0f);
-        if (f >= 2.0f || g->state_t >= 1.5f) { g->in_level = false; menu_enter(&g->menu, MS_GAMEOVER); return; }
+        if (f >= 2.0f || g->state_t >= 1.5f) { g->in_level = false; game_over(g); return; }
         music_set_volume(2.0f - f);   /* the music fades with the screen (FUN_00425e70 every frame of the ramp) */
     }
     if (g->state == 0xe) {
