@@ -98,6 +98,7 @@ struct Mode7 {
     int music_now;
     bool intro_pending;        /* the intro dialog opens on the first update (after the level title card) */
     bool turbo_on; float turbo_t; int finish_rank;   /* turbo: lit last frame / flame animation clock; finish: the placing at the flag */
+    bool boost_locked;   /* turbo used up: no boost again until the meter recharges halfway */
     float white;               /* full-screen white veil alpha (the zoom into the pursuit) */
 };
 
@@ -380,7 +381,7 @@ Mode7 *mode7_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives
     m->horizon_ok = level_load(&m->horizon, 0x12DAD1A7);   /* level 1's sky + mountain layers */
     m->difficulty = difficulty; m->lives = lives;
     m->max_hp = difficulty == 0 ? 16 : difficulty == 1 ? 12 : 8; m->hp = m->max_hp;   /* the car's damage meter: shots 1, mines / crashes 2 */
-    m->boost = 1.0f; m->music_now = -1;
+    m->boost = 1.0f; m->boost_locked = false; m->music_now = -1;
     dialog_set_hero(HERO_FIREBALL);   /* the Grand Prix is Fireball's story whoever was picked: everyone rides in his buggy */
     start_race(m);
     m->phase = PH_INTRO; m->phase_t = 0;
@@ -466,11 +467,15 @@ static void player_drive(Mode7 *m, const Input *in, float dt, bool free_drive)
     uint8_t tile = cell_at(m, m->px, m->py);
     bool road = is_road(tile), rumble = is_rumble(tile);
     float vmax = road ? 470.0f : rumble ? 380.0f : 250.0f;
-    bool turbo = btn_down(in, BTN_AIM) && m->boost > 0.05f && m->spin_t <= 0 && phase_plays(m);
+    if (m->boost_locked && m->boost >= 0.5f) m->boost_locked = false;   /* recharged halfway: turbo usable again */
+    bool turbo = !m->boost_locked && btn_down(in, BTN_AIM) && m->boost > 0.05f && m->spin_t <= 0 && phase_plays(m);
     if (!free_drive && SDL_getenv("SABER_M7AUTO") && atoi(SDL_getenv("SABER_M7AUTO")) >= 2 && m->spin_t <= 0 && phase_plays(m))   /* debug: the auto-driver also uses the turbo */
-        turbo = m->turbo_on ? m->boost > 0.05f : m->boost > 0.6f;
-    if (turbo) { vmax *= 1.35f; m->boost -= dt * 0.33f; if (m->boost < 0) m->boost = 0; }
-    else m->boost = clampf(m->boost + dt * 0.08f, 0, 1);
+        turbo = !m->boost_locked && (m->turbo_on ? m->boost > 0.05f : m->boost > 0.6f);
+    if (turbo) {
+        vmax *= 1.35f; m->boost -= dt * 0.33f;
+        if (m->boost <= 0) { m->boost = 0; m->boost_locked = true; }   /* used up: locked out until halfway */
+    }
+    else { m->boost = clampf(m->boost + dt * 0.08f, 0, 1); if (m->boost_locked && m->boost >= 0.5f) m->boost_locked = false; }
     if (turbo && !m->turbo_on) { sfx_play_file(asset_path("sfx/turbo_start.wav")); sfx_loop(asset_path("sfx/turbo_loop.wav")); }
     else if (!turbo && m->turbo_on) sfx_loop(NULL);
     m->turbo_on = turbo; if (turbo) m->turbo_t += dt;
@@ -819,7 +824,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
             else {   /* must rank 3rd or better: lose a life and start the race over from the beginning */
                 m->lives--;
                 start_race(m);
-                m->hp = m->max_hp; m->hurt_t = 0; m->spin_t = 0; m->boost = 1; m->speed = 0; m->turbo_on = false; m->shake = 0; m->tilt = 0; m->fire_cd = 0; m->turbo_t = 0;
+                m->hp = m->max_hp; m->hurt_t = 0; m->spin_t = 0; m->boost = 1; m->boost_locked = false; m->speed = 0; m->turbo_on = false; m->shake = 0; m->tilt = 0; m->fire_cd = 0; m->turbo_t = 0;
                 m->phase = PH_COUNTDOWN; m->phase_t = 0; m->countdown = 3.99f;
                 play_music(m, 10, true);
                 set_msg(m, "QUALIFY 3RD OR BETTER", 3.0f);
@@ -892,7 +897,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         if (m->phase_t > 2.5f) {
             if (m->lives <= 0) { m->phase = PH_GAMEOVER; m->phase_t = 0; music_set_volume(0.5f); }
             else {
-                m->lives--; m->hp = m->max_hp; m->hurt_t = 2.0f; m->speed = 0; m->spin_t = 0; m->boost = 1;
+                m->lives--; m->hp = m->max_hp; m->hurt_t = 2.0f; m->speed = 0; m->spin_t = 0; m->boost = 1; m->boost_locked = false;
                 /* back onto the course / the road */
                 if (m->resume_phase == PH_BOSS) { Ent *b = &m->ents[m->boss_i]; m->px = WORLD * 0.5f; m->py = wrapf(b->y + 500); m->heading = m->cam_heading = -PI / 2; m->phase = PH_BOSS; b->t = 0; b->speed = 200; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_ESCORT || m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE; }
                 else if (m->resume_phase == PH_PURSUIT) { Ent *b = &m->ents[m->boss_i]; m->px = WORLD * 0.5f; m->py = wrapf(b->y + 1200); m->heading = m->cam_heading = -PI / 2; m->phase = PH_PURSUIT; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_ESCORT || m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE; }
@@ -1032,7 +1037,7 @@ static void render_player(Mode7 *m)
         int fr = (int)(m->turbo_t * 18) & 3;
         static const float NOZ[2][2] = { { 23, 21 }, { 60, 21 } };
         for (int k = 0; k < 2; k++) {
-            float fx = x0 + NOZ[k][0] + 5 + (steer_frame_shift(frame)) - 8.0f, fy = y0 + NOZ[k][1] + 10;   /* -8px: the flames sat +8px right of the nozzles */
+            float fx = x0 + NOZ[k][0] + 5 + (steer_frame_shift(frame)) - 6.0f, fy = y0 + NOZ[k][1] + 10;   /* -6px: the flames sat right of the nozzles */
             draw_spr(m, S_TURBO, fr, fx, fy, 1, 0, 255, 255, 255, 255);
             draw_spr(m, S_TURBO, (fr + 2) & 3, fx, fy + 1, 1.4f, 0, 255, 255, 255, 110);   /* a soft halo behind it */
         }
@@ -1144,7 +1149,8 @@ static void render_hud(Mode7 *m)
     }
     /* turbo meter + speed (hidden under a dialog box, which sits on the same rows and covers them in 4:3) */
     if (!m->dlg.active) {
-        bar(m->ren, 8, m->sh - 14, 60, 5, m->boost, 255, 182, 0);
+        if (m->boost_locked) bar(m->ren, 8, m->sh - 14, 60, 5, m->boost, 230, 50, 50);   /* used up: red until halfway */
+        else bar(m->ren, 8, m->sh - 14, 60, 5, m->boost, 255, 182, 0);
         font_draw(small, "TURBO", 8, (float)(m->sh - 26), 255, 182, 0);
         snprintf(buf, sizeof buf, "%3d", (int)(fabsf(m->speed) * 0.6f));
         font_draw(f, buf, (float)(m->sw - 8 - font_text_width(f, buf)), (float)(m->sh - 20), 255, 255, 255);
