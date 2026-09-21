@@ -127,8 +127,11 @@ bool hero_apply(Character *c)
         if (!cb) return false;
         c->cb = cb; c->spr = NULL;   /* table is already Fireball's own layout: no anim/hurtbox patches needed */
         /* but the run art is not Fireball's: the master's rows 10 / 11 are one figure cut at the hip per frame
-         * (like April's clip halves), so torso frame k only fits on legs frame k, and none of the legs bob */
-        c->torso_bob = false;
+         * (like April's clip halves), so torso frame k only fits on legs frame k; the figure bobs 0/2/4 px through
+         * the stride (heroes/build_saber_engine_sheet.py prints it), which the packer takes out of the torso cells
+         * so every torso overlay - run or aim / shot - follows the hip from here */
+        static const int8_t saber_bob[8] = { 0, 2, 4, 0, 2, 4 };
+        memcpy(c->torso_bob, saber_bob, sizeof c->torso_bob);
         c->ov_sync = true;
         return true;
     }
@@ -137,7 +140,7 @@ bool hero_apply(Character *c)
     CBlock *cb = april_sheet();
     if (!cb) return false;
     c->cb = cb; c->spr = NULL;
-    c->torso_bob = false;      /* Fireball's run legs bob 1 px on cells 2 and 5; April's do not */
+    memset(c->torso_bob, 0, sizeof c->torso_bob);   /* Fireball's run legs bob 1 px on cells 2 and 5; April's do not */
     c->ov_sync = true;         /* run torso frame k belongs on run legs frame k */
     c->walk_aim_ov = WALK_AIM_DIAG;   /* the run torso (clip pixels, gun held level) stays for level shots; up / down diagonals use the sheet's aim torsos over the clip legs */
     for (size_t i = 0; i < sizeof APRIL_ANIMS / sizeof *APRIL_ANIMS; i++) {

@@ -205,8 +205,8 @@ void game_update(Game *g, float dt)
     character_animate(c, dt);
     effects_update(&g->effects, dt);
     player_frame_end(p, dt);
-    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "cam=%.0f lock=%d st=%d aim=%d face=%d anim=%d frame=%d flags=%x coll=%x pos=%.1f,%.1f v=%.1f,%.1f in=%d%d%d%d%d%d%d\n",
-        g->cam_x, g->cam_locked, c->state, c->aim, c->facing, c->anim, c->frame, c->flags, c->coll, c->body.x, c->body.y, c->body.vx, c->body.vy,
+    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "cam=%.0f lock=%d st=%d aim=%d face=%d anim=%d frame=%d ov=%d ovf=%d flags=%x coll=%x pos=%.1f,%.1f v=%.1f,%.1f in=%d%d%d%d%d%d%d\n",
+        g->cam_x, g->cam_locked, c->state, c->aim, c->facing, c->anim, c->frame, c->overlay, c->ov_frame, c->flags, c->coll, c->body.x, c->body.y, c->body.vx, c->body.vy,
         g->in.state[0], g->in.state[1], g->in.state[2], g->in.state[3], g->in.state[4], g->in.state[5], g->in.state[6]);
 
     if (g->free_cam) {

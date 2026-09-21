@@ -45,7 +45,7 @@ typedef struct {
     float alert_t;
     float hit_t;
     bool walk_bob;              /* player walk cycle: torso follows the legs' 1 px bob (FUN_0041c530) */
-    bool torso_bob;             /* the sheet's run legs sit 1 px lower on cells 2 and 5 (Fireball's art) */
+    int8_t torso_bob[8];        /* px the hip drops on each run legs frame: every torso overlay rides it (Fireball's art: cells 2 and 5 sit 1 px lower) */
     uint8_t walk_aim_ov;        /* WALK_AIM_*: which aim / shoot torso overlays replace the run torso while walking */
     bool ov_sync;               /* a torso overlay with the legs' frame count and rate starts in phase with the legs (April: the run torso is the clip frames' upper half, so it must sit on its own legs frame) */
     int bored_anim[2];          /* L/R animation played once after idling for bored_time seconds (-1: none; April's stretch) */

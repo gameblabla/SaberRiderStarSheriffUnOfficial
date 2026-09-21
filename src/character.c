@@ -30,8 +30,13 @@ bool character_init(Character *c, uint32_t crhc_id, bool enemy)
         c->anim_flags[i] = rd32(d + 0xa24 + i * 4);
     }
     c->hp_max = rd32(d + 0xadc);
+    if (SDL_getenv("SABER_ANIMS"))   /* debug: dump the table */
+        for (int i = 0; i < CHAR_CRHC_ANIMS; i++)
+            fprintf(stderr, "crhc %08X anim %2d: cells %d-%d loop %d dt %.3f flags %x muzzle %.0f,%.0f\n", crhc_id, i, c->anims[i].first,
+                    c->anims[i].last, c->anims[i].loop, c->anims[i].frame_time, c->anims[i].flags, c->muzzle[i][0], c->muzzle[i][1]);
     { const PackEntry *se = packs_find(c->sprite_id); if (se && se->type == RES_SPRITE) c->spr = sprite_get(c->sprite_id); else c->cb = cblock_get(c->sprite_id); }
-    c->torso_bob = true;
+    static const int8_t fireball_bob[8] = { 0, 0, 1, 0, 0, 1 };
+    memcpy(c->torso_bob, fireball_bob, sizeof c->torso_bob);
     c->bored_anim[0] = c->bored_anim[1] = -1; c->walk_aim_ov = WALK_AIM_ALL; c->ov_sync = false;
     hero_apply(c);                 /* player heroes only: recreated sheets (April) replace the pack's cblock + patch the table */
     c->body.ox = c->box_ox; c->body.oy = c->box_oy; c->body.hx = c->box_hx; c->body.hy = c->box_hy;
@@ -241,7 +246,7 @@ void character_draw(const Character *c, float cam_x, float cam_y)
     draw_cell(c, c->frame, (int)(c->anims[c->anim].flags & 0xff), x, y);
     /* the torso is its own sprite object placed at the base offset (up/down aims, 1 px walk bob) */
     float oy = c->base_oy;
-    if (c->walk_bob && c->torso_bob && ((c->frame + 1 - (int)c->anims[c->anim].first) % 3) == 0) oy += 1.0f;   /* legs cells 2 and 5 sit 1 px lower */
+    if (c->walk_bob) { int k = c->frame - (int)c->anims[c->anim].first; if (k >= 0 && k < 8) oy += (float)c->torso_bob[k]; }   /* the hip drops with the legs frame */
     if (c->overlay) draw_cell(c, c->ov_frame, (int)(c->anims[c->overlay].flags & 0xff), x + c->base_ox, y + oy);
 }
 
