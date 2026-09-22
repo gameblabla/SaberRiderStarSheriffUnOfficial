@@ -70,6 +70,15 @@ static void load_background(Night *n)
     n->moon = load_sprite("stage3_red_moon.png", 0x4833000A);
 }
 
+static void load_static_art(Night *n)
+{
+    static const char *const names[STAGE3_STATIC_ART] = {
+        "stage3_static_mesa.png", "stage3_static_cactus.png", "stage3_static_scrub.png",
+        "stage3_static_fence.png", "stage3_static_wreck.png", "stage3_static_pad.png",
+    };
+    for (int i = 0; i < STAGE3_STATIC_ART; i++) n->static_art[i] = load_sprite(names[i], 0x48330020u + (uint32_t)i);
+}
+
 static void build_arena_collision(Night *n, Level *L)
 {
     size_t bytes = (size_t)L->cols * (size_t)L->rows;
@@ -153,6 +162,7 @@ void night_init(Night *n, Level *L, int difficulty)
     build_arena_collision(n, L);
     rearrange_tilemaps(n, L);
     load_background(n);
+    load_static_art(n);
     load_boss_art(n);
     n->boss_alive = true;
     n->boss_state = HYPER_READY;
@@ -395,6 +405,27 @@ void night_draw_background(Night *n, float cam_x, float cam_y, int sw, int sh)
         float mh = sh * 0.78f, mw = n->moon->w * mh / n->moon->h;
         float cx = sw * 0.64f - cam_x * 0.18f, cy = sh * 0.46f;
         sprite_draw_scaled(n->moon, 0, floorf(cx - mw * 0.5f), floorf(cy - mh * 0.5f), mw, mh);
+    }
+}
+
+typedef struct { int art; float x, w, h; } StaticProp;
+
+static const StaticProp STATIC_PROPS[] = {
+    { 0,  720, 170, 164 }, { 1,  430,  64, 150 }, { 2,  830,  86, 105 },
+    { 3, 1120, 138, 106 }, { 4, 1660, 170, 106 }, { 1, 1880,  66, 154 },
+    { 0, 2220, 160, 158 }, { 5, 2870, 142,  76 }, { 2, 3120,  92, 112 },
+    { 3, 3500, 132, 102 }, { 4, 4040, 175, 108 }, { 1, 4320,  66, 154 },
+    { 0, 4680, 174, 166 }, { 3, 5070, 138, 106 }, { 5, 5480, 146,  78 },
+    { 2, 5750,  92, 112 },
+};
+
+void night_draw_static(Night *n, float cam_x, float cam_y, int sw)
+{
+    for (size_t i = 0; i < sizeof STATIC_PROPS / sizeof STATIC_PROPS[0]; i++) {
+        const StaticProp *p = &STATIC_PROPS[i];
+        Sprite *s = p->art >= 0 && p->art < STAGE3_STATIC_ART ? n->static_art[p->art] : NULL;
+        if (!s || p->x + p->w < cam_x - 32 || p->x > cam_x + sw + 32) continue;
+        sprite_draw_scaled(s, 0, floorf(p->x - cam_x), floorf(216.0f - p->h - cam_y), p->w, p->h);
     }
 }
 

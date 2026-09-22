@@ -425,6 +425,7 @@ void game_draw(Game *g)
             } else level_draw_layer(L, i, g->cam_x, g->cam_y, g->sw, g->sh);
         }
         else {
+            if (g->night_on && i == g->player_layer) night_draw_static(&g->night, g->cam_x, g->cam_y, g->sw);
             enemies_draw(&g->enemies, i, g->cam_x, g->cam_y);
             if (g->night_on && i == g->player_layer) night_draw_boss(&g->night, g->ren, g->cam_x, g->cam_y);
             if (i == g->player_layer && g->state != 0xb) character_draw(&g->player.ch, g->cam_x, g->cam_y);   /* the last life is gone: no respawned hero standing there during the fade */

@@ -81,7 +81,9 @@ night color filter (`cblock_tint`). Stage 3 uses the generated `assets/stage3_ni
 `assets/stage3_red_moon.png` for a much darker, star-filled sky and single red moon behind those
 layers; there is no procedural SDL sky, moon, terrain or
 level-1 encounter/cutscene layer. The tilemap strips are reordered for the pass so the layout is
-visibly different while retaining the game's art language.
+visibly different while retaining the game's art language. Generated alpha scenery variants in
+`assets/stage3_static_*.png` add night mesas, cactus, scrub, fence, wreck and landing-pad fragments
+at fixed world positions; they are visual-only and do not alter collision or gameplay actors.
 
 The supplied Hyperjumper artwork in `assets/hyperjumper/` drives the boss: it alternates left-to-right
 and right-to-left boosted passes, fires aimed side shots from varied altitudes (low passes reward a
