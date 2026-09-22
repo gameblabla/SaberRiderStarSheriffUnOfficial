@@ -105,6 +105,11 @@ CBlock *cblock_from_rgba(uint32_t id, const uint32_t *px, int w, int h, int tw, 
 
 int cblock_ncells(const CBlock *c) { return c->frames * c->cols * c->rows; }
 
+void cblock_tint(const CBlock *c, uint8_t r, uint8_t g, uint8_t b)
+{
+    if (c && c->tex) SDL_SetTextureColorMod(c->tex, r, g, b);
+}
+
 void cblock_draw_tile(const CBlock *c, int t, float x, float y, bool flip)
 {
     if (t < 0 || t >= c->ntiles) return;

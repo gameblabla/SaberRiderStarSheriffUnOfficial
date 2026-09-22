@@ -5,6 +5,7 @@
 #include "font.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 
 /* player CRHC by selected hero (FUN_00424b20: DAT_007c5250[character - 1], so Fireball, April, Colt; Saber Rider
@@ -28,7 +29,7 @@ bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh, int start_level)
     }
     g->stage = 1; g->continues_left = g->menu.continues;
     if (start_level) { g->stage = start_level; return level_start(g); }   /* --level N: skip the front end */
-    if (SDL_getenv("SABER_STAGE")) { g->stage = atoi(SDL_getenv("SABER_STAGE")); if (g->stage == 2) return level_start(g); }   /* debug: straight into stage 2 */
+    if (SDL_getenv("SABER_STAGE")) { g->stage = atoi(SDL_getenv("SABER_STAGE")); if (g->stage == 2 || g->stage == 3) return level_start(g); }   /* debug: straight into stage 2/3 */
     if (!SDL_getenv("SABER_MENU") && (SDL_getenv("SABER_START") || SDL_getenv("SABER_SCRIPT"))) return level_start(g);   /* debug: straight into the level */
     menu_enter(&g->menu, SDL_getenv("SABER_MENU") ? atoi(SDL_getenv("SABER_MENU")) : MS_SPLASH0);
     return true;
@@ -38,6 +39,7 @@ static bool level_start(Game *g)
 {
     SDL_Renderer *ren = g->ren; int sw = g->sw, sh = g->sh;
     Menu menu = g->menu; int stage = g->stage ? g->stage : 1; int carry = g->carry_lives, conts = g->continues_left;
+    night_dispose(&g->night);
     if (g->mode7) { mode7_destroy(g->mode7); g->mode7 = NULL; }
     memset(g, 0, sizeof *g);
     g->ren = ren; g->sw = sw; g->sh = sh; g->menu = menu; g->in_level = true; g->stage = stage; g->carry_lives = carry; g->continues_left = conts;
@@ -50,17 +52,24 @@ static bool level_start(Game *g)
     uint32_t lvl = 0x12DAD1A7;
     if (t && !memcmp(t->data, "TLVL", 4)) lvl = t->data[8] | t->data[9] << 8 | t->data[10] << 16 | (uint32_t)t->data[11] << 24;
     if (!level_load(&g->level, lvl)) return false;
+    g->night_on = (stage == 3);
+    if (g->night_on) night_init(&g->night, &g->level, g->menu.difficulty);
     g->world.gx = 0; g->world.gy = 480.0f;
     g->world.world_min_x = 0; g->world.world_max_x = g->level.width;
     float px = 100, py = 155;
     for (int i = 0; i < g->level.nobjs; i++) if (g->level.objs[i].type == 0) { px = g->level.objs[i].x; py = g->level.objs[i].y; }
+    if (g->night_on) { px = g->night.start_x; py = g->night.start_y; }
     if (SDL_getenv("SABER_START")) px = (float)atof(SDL_getenv("SABER_START"));   /* debug */
     player_spawn(&g->player, (unsigned)(g->menu.character - 1) < 3 ? HERO_CRHC[g->menu.character - 1] : 0x8403195A, px, py);
-    g->player.lives = g->menu.lives; g->player.hp = g->player.max_hp = hearts_for(g->menu.difficulty);
+    /* stage 3 inherits the spares left over from the Grand Prix (a fresh --level 3 falls back to the option) */
+    g->player.lives = (stage == 3 && carry > 0) ? carry : g->menu.lives;
+    g->player.hp = g->player.max_hp = hearts_for(g->menu.difficulty);
     enemies_reset(&g->enemies);
     dialog_set_hero(g->menu.character);
     static const uint32_t DIALOG_TEXT[4] = { 0xC3B6D081, 0xC4B0D1BA, 0xC5AAD2B7, 0xC6A4D3AC };
-    for (int i = 0; i < g->level.nobjs; i++) {
+    /* Stage 3 is a clean boss arena: none of level 1's dialogs, stampede,
+     * convoy or horse triggers are reused. */
+    for (int i = 0; i < g->level.nobjs && !g->night_on; i++) {
         LevelObject *o = &g->level.objs[i];
         float hx = o->wp[0][0] * 0.5f, hy = o->wp[0][1] * 0.5f;   /* +0x0c/+0x10 = zone size for flow objects */
         if (o->type >= 1 && o->type <= 29 && o->type != 3 && o->type != 4) enemies_add_trigger(&g->enemies, o);
@@ -79,11 +88,17 @@ static bool level_start(Game *g)
     }
     g->state = 10;
     if (SDL_getenv("SABER_DEBUG")) g->debug_collision = true;   /* debug: collision overlay from the start */
-    music_play(5, true);
+    music_play(g->night_on ? 13 : 5, true);
     g->player_layer = 11;
     for (int i = 0; i < g->level.nlayers; i++) if (!strcmp(g->level.layers[i].name, "PlayerSprites")) g->player_layer = i;
     g->cam_x = px - sw / 2; if (g->cam_x < 0) g->cam_x = 0;
-    title_start(g);
+    if (stage == 3) {
+        /* Hyperjumper Pass starts in the arena: no narrative/title-card
+         * scene is inserted before the boss encounter. */
+        g->title_on = false;
+        g->level_t = 0.25f;
+        music_set_volume(1);
+    } else title_start(g);
     return true;
 }
 
@@ -93,18 +108,20 @@ static bool level_start(Game *g)
 #define TITLE_TEXT_T 0.9f    /* the band is open: the name starts typing */
 #define TITLE_WIPE_T 3.1f    /* the strips start opening */
 #define TITLE_END_T  4.3f
-static const struct { const char *no, *name, *sub; } TITLE[3] = {
+static const struct { const char *no, *name, *sub; } TITLE[4] = {
     { "", "", "" },
     { "STAGE 1", "THE FRONTIER TOWN", "OUTRIDERS IN THE STREETS" },
     { "STAGE 2", "THE ALL GALAXY GRAND PRIX", "NEW BORDERLAND CIRCUIT" },
+    { "STAGE 3", "HYPERJUMPER PASS", "OUTRIDER SKY RAID" },
 };
+static int title_idx(const Game *g) { return g->stage == 2 ? 2 : g->stage == 3 ? 3 : 1; }
 static void title_start(Game *g) { g->title_on = true; g->title_t = 0; music_set_volume(0); }
 static void title_update(Game *g, float dt)
 {
     float prev = g->title_t; g->title_t += dt;
     bool any = false; for (int b = 0; b < BTN_COUNT; b++) if (btn_pressed(&g->in, b)) any = true;
     if (any && g->title_t < TITLE_WIPE_T) g->title_t = TITLE_WIPE_T;   /* a button skips to the wipe */
-    const char *name = TITLE[g->stage == 2 ? 2 : 1].name; int len = (int)strlen(name);
+    const char *name = TITLE[title_idx(g)].name; int len = (int)strlen(name);
     int shown_prev = (int)((prev - TITLE_TEXT_T) * 22), shown = (int)((g->title_t - TITLE_TEXT_T) * 22);   /* 22 letters / s */
     if (shown > shown_prev && shown <= len && shown > 0 && name[shown - 1] != ' ') sfx_play(0, 0);   /* a tick per letter */
     if (g->title_t >= TITLE_WIPE_T) music_set_volume((g->title_t - TITLE_WIPE_T) / (TITLE_END_T - TITLE_WIPE_T));
@@ -144,7 +161,7 @@ static void title_draw(Game *g)
         for (float x = sw * 0.5f - half_w + off; x < sw * 0.5f + half_w; x += 16) { SDL_FRect m1 = { x, cy - half_h - 2, 6, 2 }, m2 = { x + 8, cy + half_h, 6, 2 }; SDL_RenderFillRect(g->ren, &m1); SDL_RenderFillRect(g->ren, &m2); }
     }
     if (!f || !small || t < TITLE_TEXT_T - 0.2f) return;
-    const char *no = TITLE[g->stage == 2 ? 2 : 1].no, *name = TITLE[g->stage == 2 ? 2 : 1].name, *sub = TITLE[g->stage == 2 ? 2 : 1].sub;
+    const char *no = TITLE[title_idx(g)].no, *name = TITLE[title_idx(g)].name, *sub = TITLE[title_idx(g)].sub;
     /* "STAGE n" slides in from the left over 0.2 s */
     float sl = SDL_clamp((t - (TITLE_TEXT_T - 0.2f)) / 0.2f, 0.0f, 1.0f); sl = 1 - (1 - sl) * (1 - sl);
     float x0 = sw * 0.5f - font_text_width(f, name) * 0.5f;
@@ -198,7 +215,7 @@ void game_update(Game *g, float dt)
         menu_update(&g->menu, &g->in, dt, g->sw, g->ren);
         if (g->menu.start_level) { g->menu.start_level = false; g->stage = 1; g->carry_lives = 0; g->continues_left = g->menu.continues; level_start(g); }   /* character select always starts stage 1 */
         if (g->menu.continue_now) { g->menu.continue_now = false; g->continues_left--; g->carry_lives = 0; level_start(g); }   /* CONTINUE? taken: the stage restarts with the option's lives */
-        if (g->menu.next_stage) { g->menu.next_stage = false; if (g->stage == 2) level_start(g); }
+        if (g->menu.next_stage) { g->menu.next_stage = false; level_start(g); }
         return;
     }
     if (g->title_on) { title_update(g, dt); return; }
@@ -206,9 +223,10 @@ void game_update(Game *g, float dt)
         mode7_update(g->mode7, &g->in, dt);
         int res = mode7_result(g->mode7);
         if (res) {
+            int lives = mode7_lives(g->mode7);
             mode7_destroy(g->mode7); g->mode7 = NULL; g->in_level = false;
             dialog_set_hero(g->menu.character);
-            if (res == 1) { g->stage = 3; menu_enter(&g->menu, MS_ACCOMPLISHED); }   /* the game ends after stage 2 */
+            if (res == 1) { g->stage = 3; g->carry_lives = lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); }   /* on to Hyperjumper Pass */
             else game_over(g);
         }
         return;
@@ -230,7 +248,11 @@ void game_update(Game *g, float dt)
     }
     if (g->state == 0xe) {
         g->state_t += dt; float f = g->state_t > 5.5f ? 2.1f * sinf((g->state_t - 5.5f) * 1.5707964f) : 0.0f;
-        if (f >= 2.0f) { g->in_level = false; g->stage = 2; g->carry_lives = g->player.lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return; }   /* the Grand Prix follows */
+        if (f >= 2.0f) {
+            g->in_level = false;
+            if (g->stage == 1) { g->stage = 2; g->carry_lives = g->player.lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return; }   /* the Grand Prix follows */
+            g->stage = 4; menu_enter(&g->menu, MS_ACCOMPLISHED); return;   /* the game ends after stage 3 */
+        }
         music_set_volume(2.0f - f);
     }
     bool cutscene_world = false;    /* state 0xd branches that still run the world (player not idle yet, timed holds) */
@@ -271,6 +293,7 @@ void game_update(Game *g, float dt)
     player_check_enemy_bullets(p, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh);
     g->world.world_min_x = g->cam_x;   /* GameLevel::update: physics world min = camera left edge */
     enemies_update(&g->enemies, p, &g->level, &g->world, &g->player_bullets, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh, dt);
+    if (g->night_on) night_update(&g->night, p, &g->player_bullets, &g->effects, g->cam_x, g->sw, g->sh, dt, g->state == 10);
     /* level-flow zones (FUN_00422d10 tail): exit, dialogs, camera stops, death zones */
     if (c->state != CS_DEAD && !p->locked) {
         float bx = c->body.x, by = c->body.y;
@@ -306,6 +329,7 @@ void game_update(Game *g, float dt)
     }
     if (g->enemies.cam_locked) g->cam_locked = true;
     if (g->enemies.boss_done && g->state == 10) { g->enemies.boss_done = false; g->state = 0xe; g->state_t = 0; p->locked = true; music_play(6, false); }
+    if (g->night_on && g->night.clear_ready && g->state == 10) { g->night.clear_ready = false; g->state = 0xe; g->state_t = 0; p->locked = true; music_play(6, false); }
     player_resolve(c, dt);
     if (g->cam_locked && c->body.vx > 0 && g->cam_x + g->sw - c->body.hx < c->body.x) c->body.vx = 0;
     physics_step(&g->world, &g->level, &c->body, dt);
@@ -381,18 +405,37 @@ void game_draw(Game *g)
     float shake = g->enemies.cam_shake ? (float)(rand() % 4) : 0.0f;
     float saved = g->cam_y; g->cam_y += shake;
     for (int i = 0; i < L->nlayers; i++) {
-        if (L->layers[i].is_tilemap) level_draw_layer(L, i, g->cam_x, g->cam_y, g->sw, g->sh);
+        if (L->layers[i].is_tilemap) {
+            if (g->night_on) {
+                const char *nm = L->layers[i].name;
+                CBlock *cb = L->layers[i].map ? L->layers[i].map->cb : NULL;
+                if (cb) {
+                    /* The whole level-1 tileset remains in use. The night
+                     * palette is applied around each layer, including SkyBG. */
+                    uint8_t r = 92, gr = 96, b = 158;
+                    if (strstr(nm, "Mountain")) { r = 62; gr = 70; b = 132; }
+                    else if (strstr(nm, "Sky")) { r = 70; gr = 84; b = 160; }
+                    else if (strstr(nm, "Foreground")) { r = 82; gr = 76; b = 126; }
+                    cblock_tint(cb, r, gr, b);
+                    level_draw_layer(L, i, g->cam_x, g->cam_y, g->sw, g->sh);
+                    cblock_tint(cb, 255, 255, 255);
+                }
+            } else level_draw_layer(L, i, g->cam_x, g->cam_y, g->sw, g->sh);
+        }
         else {
             enemies_draw(&g->enemies, i, g->cam_x, g->cam_y);
+            if (g->night_on && i == g->player_layer) night_draw_boss(&g->night, g->ren, g->cam_x, g->cam_y);
             if (i == g->player_layer && g->state != 0xb) character_draw(&g->player.ch, g->cam_x, g->cam_y);   /* the last life is gone: no respawned hero standing there during the fade */
             bullets_draw(&g->player_bullets, i, g->cam_x, g->cam_y);
             bullets_draw(&g->enemy_bullets, i, g->cam_x, g->cam_y);
+            if (g->night_on && i == g->player_layer) night_draw_projectiles(&g->night, g->ren, g->cam_x, g->cam_y);
             effects_draw(&g->effects, i, g->cam_x, g->cam_y);
         }
     }
     g->cam_y = saved;
     hud_draw(g->ren, g->menu.character, g->menu.difficulty, g->player.lives, g->player.hp, 0);
     if (g->state == 0xd) dialog_draw(&g->dialog, g->ren, g->sw, g->sh);
+    if (g->night_on) night_draw_banner(&g->night, g->ren, g->sw, g->sh);
     if (g->state == 0xc) {   /* pause: dim + blinking PAUSE sprite (B2143E42) */
         SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(g->ren, 0, 0, 0, 64);
         SDL_FRect q = { 0, 0, (float)g->sw, (float)g->sh }; SDL_RenderFillRect(g->ren, &q);
@@ -404,7 +447,8 @@ void game_draw(Game *g)
     if (g->state == 0xe || g->state == 0xb) {   /* fade out: the same sine ramps that end the states, minus 1 */
         float a = g->state == 0xb ? 2.0f * sinf(3.1415927f * g->state_t / 3.0f) - 1.0f
                                   : (g->state_t > 5.5f ? 2.1f * sinf((g->state_t - 5.5f) * 1.5707964f) - 1.0f : 0.0f);
-        if (a > 1) a = 1; if (a < 0) a = 0;
+        if (a > 1) a = 1;
+        if (a < 0) a = 0;
         SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(g->ren, g->state == 0xe ? 255 : 0, g->state == 0xe ? 255 : 0, g->state == 0xe ? 255 : 0, (uint8_t)(a * 255));
         SDL_FRect q = { 0, 0, (float)g->sw, (float)g->sh }; SDL_RenderFillRect(g->ren, &q);
     }

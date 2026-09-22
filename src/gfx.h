@@ -28,6 +28,9 @@ Sprite *sprite_get(uint32_t id);          /* cached */
 Sprite *sprite_from_blob(uint32_t id, const uint8_t *blob, uint32_t size);   /* decode a sprite blob not in a pack (fonts) */
 Sprite *sprite_from_rgba(uint32_t id, const uint32_t *px, int w, int h, int frames);   /* register our own RGBA image (frames side by side) under a resource id */
 int   cblock_ncells(const CBlock *c);
+/* night-stage recolor: tint a tile bank (SDL texture color mod; 255,255,255
+ * resets). The tint is texture state, so set it around a layer's draw. */
+void  cblock_tint(const CBlock *c, uint8_t r, uint8_t g, uint8_t b);
 /* draw tile t at x,y (screen space, integer) */
 void  cblock_draw_tile(const CBlock *c, int t, float x, float y, bool flip);
 /* draw a full frame (cols×rows cells) with its top-left at x,y */

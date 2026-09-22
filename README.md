@@ -13,12 +13,13 @@ Dependencies: SDL3, libvorbisfile, libavcodec/libswscale (FMV), CMake, a C11 com
     cmake -S . -B build -G Ninja
     cmake --build build
     ./build/saber_rider /path/to/SaberRider/data
-    ./build/saber_rider /path/to/SaberRider/data --level 2    # skip the front end: 1 the frontier town, 2 the Grand Prix
+    ./build/saber_rider /path/to/SaberRider/data --level 2    # skip the front end: 1 the frontier town, 2 the Grand Prix, 3 Hyperjumper Pass
 
 After the last life a CONTINUE? screen counts 20 -> 0 (the CONTINUE option's credits, per run; START restarts the
 stage with the option's lives). An optional `assets/continue.png` goes behind its text (letterboxed to the screen).
-Every level opens with its title card (STAGE n, the level's name typed in over an amber band, then the level wipes in
-through venetian-blind strips while the music comes up; a button skips to the wipe).
+Stages 1 and 2 open with their title card (STAGE n, the level's name typed in over an amber band, then the level
+wipes in through venetian-blind strips while the music comes up; a button skips to the wipe). Stage 3 starts directly
+in its arena.
 
 ## Playable heroes
 
@@ -71,6 +72,23 @@ before the flag (`SABER_M7LAP=1`
 starts on lap 2, `SABER_M7BOSSHP=n` sets the leader's HP, `SABER_M7AUTO=1` drives the circuit by itself, `SABER_KILL=n`
 wrecks the car at step n).
 
+## Stage 3 — "Hyperjumper Pass" (platformer boss arena)
+
+After the Grand Prix the game returns to the level-1 tile set, but the stage-3 arena owns a new
+collision route: broken landing pads, staggered platforms and pits replace the frontier-town run.
+The original tile banks are reused and every tilemap layer—including `SkyBG`—is drawn through a
+cool blue night color filter (`cblock_tint`); there is no procedural SDL sky, moon, terrain or
+level-1 encounter/cutscene layer. The tilemap strips are reordered for the pass so the layout is
+visibly different while retaining the game's art language.
+
+The supplied Hyperjumper artwork in `assets/hyperjumper/` drives the boss: it alternates left-to-right
+and right-to-left boosted passes, fires aimed side shots from varied altitudes (low passes reward a
+slide), then switches to a front-facing fan-volley phase. It has difficulty-scaled HP, hit flashes,
+projectile collisions and a clear/death state. Stage 3 starts directly in the arena with no horse
+patrol, galloping animation or level-1 story dialog.
+
+`SABER_STAGE=3` starts there, `SABER_START=x` spawns at level x.
+
 ## Controls (as in the demo)
 
 Arrows move · **W/A** jump · **S/D** shoot · hold **Q/E** aim (8 directions) · **Enter** pause/start ·
@@ -103,6 +121,7 @@ Original keys: arrows, A jump, S shoot, Return start/confirm, Escape quits.
 - `src/physics.c`, `src/character.c`, `src/player.c`, `src/enemies.c`, `src/bullets.c`, `src/effects.c` — gameplay (ports of `saber_game::*`)
 - `src/dialog.c`, `src/hud.c`, `src/menu.c`, `src/video.c`, `src/audio.c` — presentation
 - `src/mode7.c` — stage 2, the Mode-7 Grand Prix (our own design, see above)
+- `src/night.c` — stage 3, Hyperjumper Pass (see above)
 - `src/audio.c` mixes deliberately *unlike* the original: the demo's mixer (`FUN_00563900`) sums the music at vol/256
   and every sfx voice at unity into 16-bit and hard-clips at ±0x7fbc, and the material is mastered hot (most sfx and
   the music tracks peak at 0 dBFS or above), so a voice line over a gunshot clips. The port decodes the music in float,

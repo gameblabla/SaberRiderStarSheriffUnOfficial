@@ -15,3 +15,4 @@ void   mode7_update(Mode7 *m, const Input *in, float dt);
 void   mode7_draw(Mode7 *m, bool scanlines);
 /* 0 running, 1 stage cleared (after the victory scene), 2 game over */
 int    mode7_result(const Mode7 *m);
+int    mode7_lives(const Mode7 *m);   /* spare cars left (carried into stage 3) */
