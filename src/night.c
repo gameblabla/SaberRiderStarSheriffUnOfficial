@@ -99,7 +99,10 @@ static bool rearrange_layer(const char *name)
 
 static void rearrange_tilemaps(Night *n, Level *L)
 {
-    static const int ORDER[8] = { 4, 1, 6, 3, 7, 2, 5, 0 };
+    /* Keep the town-heavy strips out of the route. Source bands 0 and 1 carry
+     * the level-1 desert/rock language; repeating that palette gives stage 3
+     * an open badlands read instead of a row of storefronts. */
+    static const int ORDER[8] = { 0, 1, 1, 1, 0, 1, 1, 1 };
     for (int i = 0; i < L->nlayers; i++) {
         Layer *layer = &L->layers[i];
         if (!layer->is_tilemap || !layer->map) continue;
