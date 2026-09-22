@@ -64,6 +64,12 @@ static void load_boss_art(Night *n)
     n->projectile_front = load_sprite("hyperjumper/projectile_front.png", 0x48330008);
 }
 
+static void load_background(Night *n)
+{
+    n->sky = load_sprite("stage3_night_sky.png", 0x48330009);
+    n->moon = load_sprite("stage3_red_moon.png", 0x4833000A);
+}
+
 static void build_arena_collision(Night *n, Level *L)
 {
     size_t bytes = (size_t)L->cols * (size_t)L->rows;
@@ -146,6 +152,7 @@ void night_init(Night *n, Level *L, int difficulty)
     n->start_y = 170.0f;
     build_arena_collision(n, L);
     rearrange_tilemaps(n, L);
+    load_background(n);
     load_boss_art(n);
     n->boss_alive = true;
     n->boss_state = HYPER_READY;
@@ -373,6 +380,22 @@ void night_draw_boss(Night *n, SDL_Renderer *ren, float cam_x, float cam_y)
     SDL_FRect src = { 0, 0, (float)s->w, (float)s->h }, dst = { floorf(x - s->w * .5f), floorf(y - s->h * .5f), (float)s->w, (float)s->h };
     SDL_RenderTextureRotated(ren, s->tex, &src, &dst, 0, NULL, n->boss_dir > 0 ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
     SDL_SetTextureColorMod(s->tex, 255, 255, 255);
+}
+
+void night_draw_background(Night *n, float cam_x, float cam_y, int sw, int sh)
+{
+    if (!n->sky) return;
+    (void)cam_y;
+    float scale = (float)sh / n->sky->h;
+    float w = n->sky->w * scale;
+    if (w <= 0) return;
+    float x = -fmodf(cam_x * 0.18f + w * 0.20f, w);
+    for (; x < sw; x += w) sprite_draw_scaled(n->sky, 0, floorf(x), 0, w, (float)sh);
+    if (n->moon) {
+        float mh = sh * 0.78f, mw = n->moon->w * mh / n->moon->h;
+        float cx = sw * 0.64f - cam_x * 0.18f, cy = sh * 0.46f;
+        sprite_draw_scaled(n->moon, 0, floorf(cx - mw * 0.5f), floorf(cy - mh * 0.5f), mw, mh);
+    }
 }
 
 void night_draw_projectiles(Night *n, SDL_Renderer *ren, float cam_x, float cam_y)

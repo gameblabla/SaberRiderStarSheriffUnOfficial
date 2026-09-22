@@ -34,7 +34,8 @@ typedef struct {
     float arena_width;
     float start_x, start_y;
 
-    /* Boss art loaded from assets/hyperjumper/. */
+    /* Generated stage-3 sky/moon, then boss art loaded from assets/hyperjumper/. */
+    Sprite *sky, *moon;
     Sprite *side_normal, *side_boost, *side_fire1, *side_fire2;
     Sprite *front_idle, *front_fire, *projectile_diagonal, *projectile_front;
 
@@ -56,5 +57,6 @@ void night_update(Night *n, Player *pl, Bullets *pb, Effects *fx,
                   float cam_x, int sw, int sh, float dt, bool live);
 
 void night_draw_boss(Night *n, SDL_Renderer *ren, float cam_x, float cam_y);
+void night_draw_background(Night *n, float cam_x, float cam_y, int sw, int sh);
 void night_draw_projectiles(Night *n, SDL_Renderer *ren, float cam_x, float cam_y);
 void night_draw_banner(Night *n, SDL_Renderer *ren, int sw, int sh);

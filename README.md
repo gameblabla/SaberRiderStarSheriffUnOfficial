@@ -76,8 +76,10 @@ wrecks the car at step n).
 
 After the Grand Prix the game returns to the level-1 tile set, but the stage-3 arena owns a new
 collision route: broken landing pads, staggered platforms and pits replace the frontier-town run.
-The original tile banks are reused and every tilemap layer—including `SkyBG`—is drawn through a
-cool blue night color filter (`cblock_tint`); there is no procedural SDL sky, moon, terrain or
+The original desert tile banks are reused and the ground/rock layers are drawn through a cool blue
+night color filter (`cblock_tint`). Stage 3 uses the generated `assets/stage3_night_sky.png` and
+`assets/stage3_red_moon.png` for a much darker, star-filled sky and single red moon behind those
+layers; there is no procedural SDL sky, moon, terrain or
 level-1 encounter/cutscene layer. The tilemap strips are reordered for the pass so the layout is
 visibly different while retaining the game's art language.
 

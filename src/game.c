@@ -404,8 +404,10 @@ void game_draw(Game *g)
     Level *L = &g->level;
     float shake = g->enemies.cam_shake ? (float)(rand() % 4) : 0.0f;
     float saved = g->cam_y; g->cam_y += shake;
+    if (g->night_on && g->night.sky) night_draw_background(&g->night, g->cam_x, g->cam_y, g->sw, g->sh);
     for (int i = 0; i < L->nlayers; i++) {
         if (L->layers[i].is_tilemap) {
+            if (g->night_on && g->night.sky && !strcmp(L->layers[i].name, "SkyBG")) continue;
             if (g->night_on) {
                 const char *nm = L->layers[i].name;
                 CBlock *cb = L->layers[i].map ? L->layers[i].map->cb : NULL;
