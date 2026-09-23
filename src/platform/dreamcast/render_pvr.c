@@ -1,7 +1,7 @@
 /* platform/render.h on the Dreamcast's PowerVR through KOS direct rendering: every draw call of a frame is written
  * straight into the store queues and fired at the tile accelerator (pvr_dr_target / pvr_dr_commit, as in KOS's
  * sh4zam "Bruce's Balls" example), all of it in the translucent list with autosort off, so the PVR draws in
- * submission order exactly like a 2D painter. Each polygon needs its own PVR header.
+ * submission order exactly like a 2D painter. A header goes out only when the texture / blend / filter changes.
  *
  * Textures are converted from RGBA8888 to the smallest 16-bit format that keeps them intact (RGB565 when opaque,
  * ARGB1555 for cut-outs, ARGB4444 when they carry real translucency) and stored non-twiddled with a power-of-two
@@ -53,7 +53,11 @@ pvr_ptr_t rdc_vram_alloc(size_t bytes)
 }
 static void vram_free(pvr_ptr_t p, size_t bytes) { if (p) { pvr_mem_free(p); vram_used -= bytes; } }
 void rdc_vram_free(pvr_ptr_t p, size_t bytes) { vram_free(p, bytes); }
-void rdc_forget_header(void) { }
+/* the header sent last this frame, by contents: floor levels and FMV frames recompile theirs in place, and a
+ * freed page's memory can come back as another texture's header, so its address alone says nothing */
+static pvr_poly_hdr_t last_hdr __attribute__((aligned(32)));
+static bool have_last;
+void rdc_forget_header(void) { have_last = false; }
 
 static int pot(int n) { int p = 16; while (p < n) p <<= 1; return p; }
 
@@ -219,7 +223,7 @@ static pvr_poly_hdr_t col_hdr[3] __attribute__((aligned(32)));
 
 /* ------------------------------------------------------------------ frame, state, clipping */
 static bool in_frame;
-static int prims;
+static int prims, hdr_sent, hdr_asked;
 static struct { uint8_t r, g, b, a; RBlend blend; bool clip_on; RRect clip; bool vp_on; RRect vp; } st = { 255, 255, 255, 255, R_BLEND_NONE, false, { 0 }, false, { 0 } };
 static float clx0, cly0, clx1, cly1;   /* the effective clip in screen space */
 
@@ -253,7 +257,7 @@ void rdc_frame_begin(void)
     pvr_wait_ready();
     pvr_scene_begin();
     pvr_list_begin(PVR_LIST_TR_POLY);
-    in_frame = true; prims = 0;
+    in_frame = true; prims = hdr_sent = hdr_asked = 0; have_last = false;
     st.clip_on = st.vp_on = false; update_clip();
 }
 
@@ -266,11 +270,15 @@ void rdc_frame_end(void)
 }
 bool rdc_in_frame(void) { return in_frame; }
 int rdc_prims(void) { return prims; }
+void rdc_header_stats(int *sent, int *asked) { *sent = hdr_sent; *asked = hdr_asked; }
 
 /* ------------------------------------------------------------------ submission */
 void rdc_header(const pvr_poly_hdr_t *h)
 {
     if (!in_frame) return;
+    hdr_asked++;
+    if (have_last && !memcmp(&last_hdr, h, sizeof *h)) return;
+    last_hdr = *h; have_last = true; hdr_sent++;
     void *dst = pvr_dr_target();
     memcpy(dst, h, sizeof *h);
     pvr_dr_commit(dst);

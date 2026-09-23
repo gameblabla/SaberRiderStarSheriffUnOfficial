@@ -15,6 +15,7 @@ Ren *rdc_renderer(void);
 bool dc_reset_combo(void);
 size_t rdc_vram_used(void);
 int rdc_prims(void);
+void rdc_header_stats(int *sent, int *asked);
 
 static void report_memory(const char *when)
 {
@@ -61,9 +62,9 @@ int main(int argc, char **argv)
         app_draw();
         rdc_frame_end();
         if (now - last_report > 10000000000ull) {
-            Game *g = app_game();
-            printf("[state] level=%d stage=%d state=%d menu=%d title=%d draws=%d\n",
-                   g->in_level, g->stage, g->state, g->menu.state, g->title_on, rdc_prims());
+            Game *g = app_game(); int hs, ha; rdc_header_stats(&hs, &ha);
+            printf("[state] level=%d stage=%d state=%d menu=%d title=%d draws=%d headers=%d/%d\n",
+                   g->in_level, g->stage, g->state, g->menu.state, g->title_on, rdc_prims(), hs, ha);
             report_memory("run"); last_report = now;
         }
     }
