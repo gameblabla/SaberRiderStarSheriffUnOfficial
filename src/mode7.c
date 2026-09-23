@@ -82,7 +82,8 @@ struct Mode7 {
     /* player */
     float px, py, heading, speed, cam_heading, vx, vy;
     int hp, max_hp, lives, difficulty;
-    float boost, fire_cd, hurt_t, spin_t, bounce, anim_t, shake, tilt;
+    float boost, fire_cd, hurt_t, spin_t, spin_heading, bounce, anim_t, shake, tilt;
+    bool spin_restore;
     float s, lat; int lap, rank, near_idx; float progress, last_s;
     /* phase */
     int phase; float phase_t, countdown;
@@ -369,8 +370,8 @@ static void start_race(Mode7 *m)
     place_props_around_track(m);
     /* the grid: 8 cars, two abreast, behind the line */
     static const struct { int spr; float max; bool hornet; const char *name; } FIELD[N_RACERS] = {
-        { S_FIRENZA, 625, false, "FIRENZA" }, { S_HORNET, 605, true, "HORNET" }, { S_HORNET, 590, true, "HORNET" },
-        { S_RBLUE, 570, false, "VEGA" }, { S_HORNET, 575, true, "HORNET" }, { S_RPURPLE, 555, false, "KELLY" }, { S_RBLUE, 540, false, "DUNN" },
+        { S_FIRENZA, 575, false, "FIRENZA" }, { S_HORNET, 555, true, "HORNET" }, { S_HORNET, 540, true, "HORNET" },
+        { S_RBLUE, 525, false, "VEGA" }, { S_HORNET, 530, true, "HORNET" }, { S_RPURPLE, 510, false, "KELLY" }, { S_RBLUE, 500, false, "DUNN" },
     };
     for (int i = 0; i < N_RACERS; i++) {
         Ent *e = ent_new(m); if (!e) break;
@@ -386,7 +387,7 @@ static void start_race(Mode7 *m)
     m->near_idx = -1; m->race_time = 0;
 }
 
-Mode7 *mode7_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives)
+Mode7 *mode7_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives, bool resume_phase2)
 {
     Mode7 *m = calloc(1, sizeof *m);
     m->ren = ren; m->sw = sw; m->sh = sh; m->rng = 0xC0FFEE;
@@ -412,6 +413,7 @@ Mode7 *mode7_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives
         else if (ph == 3) { begin_pursuit(m); m->phase = PH_BOSS; begin_boss(m); if (SDL_getenv("SABER_M7BOSSHP")) m->ents[m->boss_i].hp = (float)atof(SDL_getenv("SABER_M7BOSSHP")); }
         else if (ph == 4) { m->phase = PH_RACE; m->lap = 2; m->progress = 2 * m->track_len + m->s; m->last_s = m->s; m->speed = 500; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_RACER) { m->ents[i].lap = 2; m->ents[i].speed = 500; } }   /* the grid, two laps in: 510 units to the flag */
     }
+    if (resume_phase2) { m->intro_pending = false; m->phase = PH_PURSUIT; m->phase_t = 0; begin_pursuit(m); }
     return m;
 }
 
@@ -427,6 +429,11 @@ void mode7_destroy(Mode7 *m)
 
 int mode7_result(const Mode7 *m) { return m->result; }
 int mode7_lives(const Mode7 *m) { return m->lives; }
+bool mode7_phase2_reached(const Mode7 *m)
+{
+    int phase = m->phase == PH_DEAD || m->phase == PH_GAMEOVER ? m->resume_phase : m->phase;
+    return phase == PH_PURSUIT || phase == PH_BOSS || phase == PH_VICTORY || phase == PH_CLEARED;
+}
 
 /* ---------------------------------------------------------------- combat helpers */
 static bool phase_plays(const Mode7 *m) { return m->phase == PH_RACE || m->phase == PH_PURSUIT || m->phase == PH_BOSS; }
@@ -515,7 +522,14 @@ static void player_drive(Mode7 *m, const Input *in, float dt, bool free_drive)
         float want = atan2f(dwrap(ay, m->py), dwrap(ax, m->px)), d = angdiff(want, m->heading);
         steer = d > 0.05f ? 1 : d < -0.05f ? -1 : 0; accel = true;
     }
-    if (m->spin_t > 0) { accel = false; m->spin_t -= dt; }
+    if (m->spin_t > 0) {
+        accel = false; m->spin_t -= dt;
+        if (m->spin_t <= 0 && m->spin_restore) {
+            m->heading = m->cam_heading = m->spin_heading;
+            m->spin_restore = false;
+            steer = 0;
+        }
+    }
     if (accel) m->speed += (turbo ? 520.0f : 300.0f) * dt;
     else m->speed -= 120.0f * dt;
     if (brake) m->speed -= 500.0f * dt;
@@ -626,7 +640,11 @@ static void update_ents(Mode7 *m, float dt)
         case K_MINE:
             e->t -= dt; e->anim += dt; e->frame = ((int)(e->anim * 4)) & 1;
             if (e->t <= 0) { e->kind = K_NONE; break; }
-            if (fabsf(dwrap(e->x, m->px)) < 26 && fabsf(dwrap(e->y, m->py)) < 26) { spawn_expl(m, e->x, e->y, 1.0f); e->kind = K_NONE; player_hurt(m, 2); m->speed *= 0.4f; m->spin_t = 0.6f; }
+            if (fabsf(dwrap(e->x, m->px)) < 26 && fabsf(dwrap(e->y, m->py)) < 26) {
+                spawn_expl(m, e->x, e->y, 1.0f); e->kind = K_NONE;
+                player_hurt(m, 2);
+                if (m->phase != PH_DEAD) { m->spin_heading = m->spin_restore ? m->spin_heading : m->heading; m->spin_restore = true; m->speed *= 0.4f; m->spin_t = 0.6f; }
+            }
             break;
         case K_PROP: {
             float dx = dwrap(m->px, e->x), dy = dwrap(m->py, e->y); float r = e->spr == S_CACTUS ? 18 : e->spr == S_MESA ? 70 : e->spr == S_ROCK_B ? 40 : 24;
@@ -751,6 +769,7 @@ static void begin_pursuit(Mode7 *m)
 {
     ents_clear(m, false);
     build_desert(m);
+    m->hp = m->max_hp; m->hurt_t = 0; m->spin_t = 0; m->spin_restore = false;
     m->px = WORLD * 0.5f; m->py = WORLD * 0.5f; m->heading = m->cam_heading = -PI / 2; m->speed = 200;
     m->pursuit_spawn_t = 2.5f; m->pursuit_t = 0;
     for (int i = 0; i < 160; i++) {
@@ -852,7 +871,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
             else {   /* must rank 3rd or better: lose a life and start the race over from the beginning */
                 m->lives--;
                 start_race(m);
-                m->hp = m->max_hp; m->hurt_t = 0; m->spin_t = 0; m->boost = 1; m->boost_locked = false; m->speed = 0; m->turbo_on = false; m->shake = 0; m->tilt = 0; m->fire_cd = 0; m->turbo_t = 0;
+                m->hp = m->max_hp; m->hurt_t = 0; m->spin_t = 0; m->spin_restore = false; m->boost = 1; m->boost_locked = false; m->speed = 0; m->turbo_on = false; m->shake = 0; m->tilt = 0; m->fire_cd = 0; m->turbo_t = 0;
                 m->phase = PH_COUNTDOWN; m->phase_t = 0; m->countdown = 3.99f;
                 play_music(m, 10, true);
                 set_msg(m, "QUALIFY 3RD OR BETTER", 3.0f);
@@ -924,7 +943,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         if (m->phase_t > 2.5f) {
             if (m->lives <= 0) { m->phase = PH_GAMEOVER; m->phase_t = 0; music_set_volume(0.5f); }
             else {
-                m->lives--; m->hp = m->max_hp; m->hurt_t = 2.0f; m->speed = 0; m->spin_t = 0; m->boost = 1; m->boost_locked = false;
+                m->lives--; m->hp = m->max_hp; m->hurt_t = 2.0f; m->speed = 0; m->spin_t = 0; m->spin_restore = false; m->boost = 1; m->boost_locked = false;
                 /* back onto the course / the road */
                 if (m->resume_phase == PH_BOSS) { Ent *b = &m->ents[m->boss_i]; m->px = WORLD * 0.5f; m->py = wrapf(b->y + 500); m->heading = m->cam_heading = -PI / 2; m->phase = PH_BOSS; b->t = 0; b->speed = 200; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_ESCORT || m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE; }
                 else if (m->resume_phase == PH_PURSUIT) { Ent *b = &m->ents[m->boss_i]; m->px = WORLD * 0.5f; m->py = wrapf(b->y + 1200); m->heading = m->cam_heading = -PI / 2; m->phase = PH_PURSUIT; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_ESCORT || m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE; }

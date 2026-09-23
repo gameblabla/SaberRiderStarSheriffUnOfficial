@@ -42,6 +42,7 @@ static bool level_start(Game *g)
 {
     SDL_Renderer *ren = g->ren; int sw = g->sw, sh = g->sh;
     Menu menu = g->menu; int stage = g->stage ? g->stage : 1; int carry = g->carry_lives, conts = g->continues_left;
+    bool mode7_phase2 = g->mode7_phase2;
     night_dispose(&g->night);
     forest_dispose(&g->forest);
     forest_dispose(&g->lab);
@@ -49,9 +50,9 @@ static bool level_start(Game *g)
     if (g->ramrod) { ramrod_destroy(g->ramrod); g->ramrod = NULL; }
     if (g->space) { space_destroy(g->space); g->space = NULL; }
     memset(g, 0, sizeof *g);
-    g->ren = ren; g->sw = sw; g->sh = sh; g->menu = menu; g->in_level = true; g->stage = stage; g->carry_lives = carry; g->continues_left = conts;
+    g->ren = ren; g->sw = sw; g->sh = sh; g->menu = menu; g->in_level = true; g->stage = stage; g->carry_lives = carry; g->continues_left = conts; g->mode7_phase2 = mode7_phase2;
     if (stage == 2) {   /* the Mode-7 Grand Prix: its own world, HUD and flow */
-        g->mode7 = mode7_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives);
+        g->mode7 = mode7_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives, mode7_phase2);
         if (g->mode7) title_start(g);
         return g->mode7 != NULL;
     }
@@ -270,8 +271,8 @@ void game_update(Game *g, float dt)
     input_update(&g->in);
     if (!g->in_level) {
         menu_update(&g->menu, &g->in, dt, g->sw, g->ren);
-        if (g->menu.start_level) { g->menu.start_level = false; g->stage = 1; g->carry_lives = 0; g->continues_left = g->menu.continues; level_start(g); }   /* character select always starts stage 1 */
-        if (g->menu.continue_now) { g->menu.continue_now = false; g->continues_left--; g->carry_lives = 0; level_start(g); }   /* CONTINUE? taken: the stage restarts with the option's lives */
+        if (g->menu.start_level) { g->menu.start_level = false; g->stage = 1; g->carry_lives = 0; g->continues_left = g->menu.continues; g->mode7_phase2 = false; level_start(g); }   /* character select always starts stage 1 */
+        if (g->menu.continue_now) { g->menu.continue_now = false; g->continues_left--; g->carry_lives = 0; level_start(g); }   /* CONTINUE? taken: fresh lives, at the stage-2 pursuit if reached */
         if (g->menu.next_stage) { g->menu.next_stage = false; level_start(g); }
         return;
     }
@@ -281,6 +282,7 @@ void game_update(Game *g, float dt)
         int res = mode7_result(g->mode7);
         if (res) {
             int lives = mode7_lives(g->mode7);
+            if (res == 2) g->mode7_phase2 = mode7_phase2_reached(g->mode7);
             mode7_destroy(g->mode7); g->mode7 = NULL; g->in_level = false;
             dialog_set_hero(g->menu.character);
             if (res == 1) { g->menu.cleared_stage = g->stage; g->stage = 3; g->carry_lives = lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); }   /* on to Hyperjumper Pass */

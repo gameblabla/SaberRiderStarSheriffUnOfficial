@@ -37,6 +37,7 @@ typedef struct {
                              * 7 stage 6's final phase (the space shooter; "STAGE 6" on screen) */
     int carry_lives;        /* lives left when stage 1 was cleared (-1: fresh start) */
     int continues_left;     /* CONTINUE? credits left in this run (from the option at the start of a run) */
+    bool mode7_phase2;      /* a stage-2 continue resumes at the pursuit */
     Mode7 *mode7;
     Ramrod *ramrod;              /* stage 6: Ramrod's cockpit (ramrod.c), its own world like the Grand Prix */
     Space *space;                /* stage 6's final phase (internally 7): Ramrod in cruiser mode vs the battle cruiser (space.c) */
