@@ -101,11 +101,13 @@ void level_draw_layer(const Level *L, int li, float cam_x, float cam_y, int sw, 
             if (wrap) { mx = ((cx % m->used_w) + m->used_w) % m->used_w; }
             else if (cx < 0 || cx >= m->w) continue;
             uint32_t v = m->cells[cy * m->w + mx];
+            bool flip = (v & 0x80000000u) != 0;   /* stage 3's mirrored scenes (night_level.c); never set in pack data */
+            v &= 0x7FFFFFFFu;
             if (!v) continue;
             int ci = (int)((v - 1) % (uint32_t)ncells);
             uint16_t t = cb->cells[ci];
             if (t == 0xFFFF) continue;
-            cblock_draw_tile(cb, t, floorf(cx * tw - ox), floorf(cy * th - oy), false);
+            cblock_draw_tile(cb, t, floorf(cx * tw - ox), floorf(cy * th - oy), flip);
         }
     }
 }

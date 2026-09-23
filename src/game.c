@@ -53,7 +53,7 @@ static bool level_start(Game *g)
     if (t && !memcmp(t->data, "TLVL", 4)) lvl = t->data[8] | t->data[9] << 8 | t->data[10] << 16 | (uint32_t)t->data[11] << 24;
     if (!level_load(&g->level, lvl)) return false;
     g->night_on = (stage == 3);
-    if (g->night_on) night_init(&g->night, &g->level, g->menu.difficulty);
+    if (g->night_on && !night_init(&g->night, &g->level, g->menu.difficulty)) return false;
     g->world.gx = 0; g->world.gy = 480.0f;
     g->world.world_min_x = 0; g->world.world_max_x = g->level.width;
     float px = 100, py = 155;
@@ -65,10 +65,17 @@ static bool level_start(Game *g)
     g->player.lives = (stage == 3 && carry > 0) ? carry : g->menu.lives;
     g->player.hp = g->player.max_hp = hearts_for(g->menu.difficulty);
     enemies_reset(&g->enemies);
+    g->player_layer = 11;
+    for (int i = 0; i < g->level.nlayers; i++) if (!strcmp(g->level.layers[i].name, "PlayerSprites")) g->player_layer = i;
     dialog_set_hero(g->menu.character);
     static const uint32_t DIALOG_TEXT[4] = { 0xC3B6D081, 0xC4B0D1BA, 0xC5AAD2B7, 0xC6A4D3AC };
-    /* Stage 3 is a clean boss arena: none of level 1's dialogs, stampede,
-     * convoy or horse triggers are reused. */
+    /* Stage 3 has its own route and enemy waves (night_level.c); none of level 1's dialogs, stampede,
+     * convoy, horse or flow objects are installed. */
+    if (g->night_on) {
+        LevelObject tr[64];
+        int n = stage3_triggers(tr, 64, g->player_layer);
+        for (int i = 0; i < n; i++) enemies_add_trigger(&g->enemies, &tr[i]);
+    }
     for (int i = 0; i < g->level.nobjs && !g->night_on; i++) {
         LevelObject *o = &g->level.objs[i];
         float hx = o->wp[0][0] * 0.5f, hy = o->wp[0][1] * 0.5f;   /* +0x0c/+0x10 = zone size for flow objects */
@@ -89,16 +96,8 @@ static bool level_start(Game *g)
     g->state = 10;
     if (SDL_getenv("SABER_DEBUG")) g->debug_collision = true;   /* debug: collision overlay from the start */
     music_play(g->night_on ? 13 : 5, true);
-    g->player_layer = 11;
-    for (int i = 0; i < g->level.nlayers; i++) if (!strcmp(g->level.layers[i].name, "PlayerSprites")) g->player_layer = i;
     g->cam_x = px - sw / 2; if (g->cam_x < 0) g->cam_x = 0;
-    if (stage == 3) {
-        /* Hyperjumper Pass starts in the arena: no narrative/title-card
-         * scene is inserted before the boss encounter. */
-        g->title_on = false;
-        g->level_t = 0.25f;
-        music_set_volume(1);
-    } else title_start(g);
+    title_start(g);
     return true;
 }
 
@@ -293,7 +292,10 @@ void game_update(Game *g, float dt)
     player_check_enemy_bullets(p, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh);
     g->world.world_min_x = g->cam_x;   /* GameLevel::update: physics world min = camera left edge */
     enemies_update(&g->enemies, p, &g->level, &g->world, &g->player_bullets, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh, dt);
-    if (g->night_on) night_update(&g->night, p, &g->player_bullets, &g->effects, g->cam_x, g->sw, g->sh, dt, g->state == 10);
+    if (g->night_on) {
+        night_update(&g->night, p, &g->player_bullets, &g->effects, &g->level, g->cam_x, g->sw, dt, g->state == 10);
+        if (g->night.boss_started) { g->enemies.spawner_enabled = false; g->cam_locked = true; }   /* the arena: no more waves, the camera stays */
+    }
     /* level-flow zones (FUN_00422d10 tail): exit, dialogs, camera stops, death zones */
     if (c->state != CS_DEAD && !p->locked) {
         float bx = c->body.x, by = c->body.y;
@@ -373,7 +375,7 @@ static void draw_collision(Game *g)
     SDL_FRect r = { b->x + b->ox - b->hx - g->cam_x, b->y + b->oy - b->hy - g->cam_y, b->hx * 2, b->hy * 2 };
     SDL_RenderRect(g->ren, &r);
     SDL_SetRenderDrawColor(g->ren, 255, 255, 0, 200);
-    for (int i = 0; i < L->nobjs; i++) {
+    for (int i = 0; i < L->nobjs && !g->night_on; i++) {
         LevelObject *o = &L->objs[i];
         SDL_FRect q = { o->x - g->cam_x - 2, (o->type >= 998 ? 20 : 8) + (o->type % 7) * 6.f, 4, 4 };
         SDL_RenderFillRect(g->ren, &q);
@@ -404,41 +406,31 @@ void game_draw(Game *g)
     Level *L = &g->level;
     float shake = g->enemies.cam_shake ? (float)(rand() % 4) : 0.0f;
     float saved = g->cam_y; g->cam_y += shake;
-    if (g->night_on && g->night.sky) night_draw_background(&g->night, g->cam_x, g->cam_y, g->sw, g->sh);
+    if (g->night_on) night_draw_background(&g->night, g->cam_x, g->sw, g->sh);   /* night sky + red moon, behind every layer */
     for (int i = 0; i < L->nlayers; i++) {
         if (L->layers[i].is_tilemap) {
-            if (g->night_on && g->night.sky && !strcmp(L->layers[i].name, "SkyBG")) continue;
-            if (g->night_on) {
-                const char *nm = L->layers[i].name;
-                CBlock *cb = L->layers[i].map ? L->layers[i].map->cb : NULL;
-                if (cb) {
-                    /* The whole level-1 tileset remains in use. The night
-                     * palette is applied around each layer, including SkyBG. */
-                    uint8_t r = 92, gr = 96, b = 158;
-                    if (strstr(nm, "Mountain")) { r = 62; gr = 70; b = 132; }
-                    else if (strstr(nm, "Sky")) { r = 70; gr = 84; b = 160; }
-                    else if (strstr(nm, "Foreground")) { r = 82; gr = 76; b = 126; }
-                    cblock_tint(cb, r, gr, b);
-                    level_draw_layer(L, i, g->cam_x, g->cam_y, g->sw, g->sh);
-                    cblock_tint(cb, 255, 255, 255);
-                }
+            CBlock *cb = L->layers[i].map ? L->layers[i].map->cb : NULL;
+            uint8_t r, gr, b;
+            if (g->night_on && cb) {   /* stage 3: every level-1 layer, in the night palette */
+                if (!night_layer_tint(&g->night, &L->layers[i], &r, &gr, &b)) continue;
+                cblock_tint(cb, r, gr, b);
+                level_draw_layer(L, i, g->cam_x, g->cam_y, g->sw, g->sh);
+                cblock_tint(cb, 255, 255, 255);
             } else level_draw_layer(L, i, g->cam_x, g->cam_y, g->sw, g->sh);
         }
         else {
-            if (g->night_on && i == g->player_layer) night_draw_static(&g->night, g->cam_x, g->cam_y, g->sw);
             enemies_draw(&g->enemies, i, g->cam_x, g->cam_y);
-            if (g->night_on && i == g->player_layer) night_draw_boss(&g->night, g->ren, g->cam_x, g->cam_y);
+            if (g->night_on) night_draw_layer(&g->night, g->ren, i, g->cam_x, g->cam_y);   /* Hyperjumper's passes use the level-1 boss layers */
             if (i == g->player_layer && g->state != 0xb) character_draw(&g->player.ch, g->cam_x, g->cam_y);   /* the last life is gone: no respawned hero standing there during the fade */
             bullets_draw(&g->player_bullets, i, g->cam_x, g->cam_y);
             bullets_draw(&g->enemy_bullets, i, g->cam_x, g->cam_y);
-            if (g->night_on && i == g->player_layer) night_draw_projectiles(&g->night, g->ren, g->cam_x, g->cam_y);
             effects_draw(&g->effects, i, g->cam_x, g->cam_y);
         }
     }
     g->cam_y = saved;
     hud_draw(g->ren, g->menu.character, g->menu.difficulty, g->player.lives, g->player.hp, 0);
     if (g->state == 0xd) dialog_draw(&g->dialog, g->ren, g->sw, g->sh);
-    if (g->night_on) night_draw_banner(&g->night, g->ren, g->sw, g->sh);
+    if (g->night_on) night_draw_hud(&g->night, g->ren, g->sw, g->sh);
     if (g->state == 0xc) {   /* pause: dim + blinking PAUSE sprite (B2143E42) */
         SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(g->ren, 0, 0, 0, 64);
         SDL_FRect q = { 0, 0, (float)g->sw, (float)g->sh }; SDL_RenderFillRect(g->ren, &q);

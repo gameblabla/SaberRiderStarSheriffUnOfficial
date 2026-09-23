@@ -1,59 +1,80 @@
 #include "night.h"
+
 #include "assets.h"
 #include "audio.h"
 #include "enemies.h"
 #include "font.h"
 #include "gfx.h"
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define PI 3.14159265358979323846f
-#define HYPER_SIDE_SPEED 300.0f
-#define HYPER_BOOST_SPEED 520.0f
-
-typedef struct { float x0, x1; int row; } Platform;
-
-/* A broken bridge / landing-pad rhythm, intentionally unlike the long flat
- * frontier-town run. World units are pixels; the source collision grid is 8px. */
-static const Platform PLATFORMS[] = {
-    { 560, 1040, 22 }, { 1320, 1810, 16 }, { 2050, 2440, 22 },
-    { 2600, 3230, 10 }, { 3420, 3880, 20 }, { 4070, 4520, 14 },
-    { 4760, 5280, 22 }, { 5500, 5940, 12 },
-};
-static const struct { float x0, x1; } PITS[] = {
-    { 1060, 1300 }, { 1840, 2030 }, { 3270, 3400 },
-    { 3890, 4060 }, { 5300, 5480 },
+/* the level-1 boss's samples and music (enemies.c update_boss / update_boss_rider) */
+enum {
+    SFX_ENGINE = 0x13,      /* boot / every pass */
+    SFX_GUN = 0x10,         /* the ship's gun */
+    SFX_PILOT_GUN = 0x12,   /* the rider's gun */
+    SFX_BLAST = 0x11,       /* wreck explosions */
+    SFX_DOWN = 0x15,        /* the wreck's big bang */
+    MUSIC_BOSS = 8,
 };
 
-static float clampf(float v, float lo, float hi)
-{
-    return v < lo ? lo : v > hi ? hi : v;
-}
+/* art geometry (assets/hyperjumper): side 130x108 drawn facing left, front 201x140 */
+#define SIDE_W 130
+#define SIDE_H 108
+#define FRONT_W 201
+#define FRONT_H 140
+#define SIDE_MUZZLE_X 70     /* hyperjumper_frame1_shooting: the pilot's gun (unflipped) */
+#define SIDE_MUZZLE_Y 54
+#define FRONT_MUZZLE_X 93    /* hyperjumper_firing_sprite */
+#define FRONT_MUZZLE_Y 45
 
-static bool in_range(float x, float x0, float x1)
-{
-    return x >= x0 && x < x1;
-}
+typedef struct { float x0, y0, x1, y1; } Box;
+/* sprite-local boxes (from the art's outline): the hull's hump, the hull, the keel hurt on
+ * contact; the pilot and the aerial only take shots */
+static const Box SIDE_HULL[] = { { 57, 44, 116, 56 }, { 14, 56, 122, 78 }, { 40, 78, 101, 98 } };
+static const Box SIDE_PILOT = { 76, 24, 108, 44 };
+static const Box FRONT_HULL[] = { { 6, 58, 195, 98 }, { 82, 28, 118, 124 } };
+
+#define HOVER_Y 66.0f        /* side hold: the keel clears a standing hero, a jump reaches it */
+#define FRONT_Y 56.0f
+#define DEATH_TIME 3.8f      /* kill(E, e, 0xed8) */
+
+static int rnd(int n) { return n > 0 ? rand() % n : 0; }
 
 static Sprite *load_sprite(const char *name, uint32_t id)
 {
     const char *path = asset_path(name);
-    if (!path) {
-        fprintf(stderr, "stage3: missing %s\n", name);
-        return NULL;
-    }
+    if (!path) { fprintf(stderr, "stage3: missing %s\n", name); return NULL; }
     int w = 0, h = 0;
     uint32_t *px = png_load_rgba(path, &w, &h);
-    if (!px) return NULL;
+    if (!px) { fprintf(stderr, "stage3: can't decode %s\n", name); return NULL; }
     Sprite *s = sprite_from_rgba(id, px, w, h, 1);
     free(px);
     return s;
 }
 
-static void load_boss_art(Night *n)
+void night_dispose(Night *n)
 {
+    stage3_world_free(&n->world);
+}
+
+bool night_init(Night *n, Level *L, int difficulty)
+{
+    memset(n, 0, sizeof *n);
+    if (!stage3_world_build(L, &n->world)) { fprintf(stderr, "stage3: can't build the route\n"); return false; }
+    n->difficulty = difficulty;
+    n->start_x = 100.0f; n->start_y = 155.0f;
+    n->far_layer = n->mid_layer = n->play_layer = -1;
+    for (int i = 0; i < L->nlayers; i++) {
+        if (!strcmp(L->layers[i].name, "Small Hyperjmpr")) n->far_layer = i;
+        else if (!strcmp(L->layers[i].name, "MidBGHyperjpr")) n->mid_layer = i;
+        else if (!strcmp(L->layers[i].name, "PlayerSprites")) n->play_layer = i;
+    }
+    n->sky = load_sprite("stage3/native/stage3_night_sky.png", 0x48330009);
+    n->moon = load_sprite("stage3/native/stage3_red_moon.png", 0x4833000A);
     n->side_normal = load_sprite("hyperjumper/side_normal.png", 0x48330001);
     n->side_boost = load_sprite("hyperjumper/side_boost.png", 0x48330002);
     n->side_fire1 = load_sprite("hyperjumper/side_fire1.png", 0x48330003);
@@ -62,400 +83,401 @@ static void load_boss_art(Night *n)
     n->front_fire = load_sprite("hyperjumper/front_fire.png", 0x48330006);
     n->projectile_diagonal = load_sprite("hyperjumper/projectile_diagonal.png", 0x48330007);
     n->projectile_front = load_sprite("hyperjumper/projectile_front.png", 0x48330008);
+    n->hp_max = n->hp = SDL_getenv("SABER_BOSSHP") ? atoi(SDL_getenv("SABER_BOSSHP"))   /* debug: SABER_BOSSHP=n */
+                      : difficulty == 0 ? 48 : difficulty == 1 ? 60 : 72;
+    n->state = HJ_DORMANT;
+    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "stage3: route %.0f px, boss hp %d\n", L->width, n->hp);
+    return true;
 }
 
-static void load_background(Night *n)
+/* ---- geometry ---- */
+static bool front_pose(const Night *n)
 {
-    n->sky = load_sprite("stage3_night_sky.png", 0x48330009);
-    n->moon = load_sprite("stage3_red_moon.png", 0x4833000A);
+    return n->state == HJ_FRONT_IN || n->state == HJ_FRONT_FIRE || n->state == HJ_FRONT_OUT ||
+           ((n->state == HJ_DYING || n->state == HJ_DONE) && n->death_front);
 }
 
-static void load_static_art(Night *n)
+static Box world_box(const Night *n, Box b)
 {
-    static const char *const names[STAGE3_STATIC_ART] = {
-        "stage3_static_mesa.png", "stage3_static_cactus.png", "stage3_static_scrub.png",
-        "stage3_static_fence.png", "stage3_static_wreck.png", "stage3_static_pad.png",
-    };
-    for (int i = 0; i < STAGE3_STATIC_ART; i++) n->static_art[i] = load_sprite(names[i], 0x48330020u + (uint32_t)i);
-}
-
-static void build_arena_collision(Night *n, Level *L)
-{
-    size_t bytes = (size_t)L->cols * (size_t)L->rows;
-    n->arena_collision = calloc(bytes, 1);
-    if (!n->arena_collision) return;
-
-    int ground_row = 26;
-    int max_col = (int)ceilf(n->arena_width / L->cellw);
-    if (max_col > L->cols) max_col = L->cols;
-    for (int c = 0; c < max_col; c++) {
-        float x = c * L->cellw + L->cellw * 0.5f;
-        bool pit = false;
-        for (size_t i = 0; i < sizeof PITS / sizeof PITS[0]; i++) if (in_range(x, PITS[i].x0, PITS[i].x1)) pit = true;
-        if (!pit) n->arena_collision[ground_row * L->cols + c] = 4;
+    if (front_pose(n)) {
+        float l = floorf(n->bx) - FRONT_W / 2, t = floorf(n->by) - FRONT_H / 2;
+        return (Box){ l + b.x0, t + b.y0, l + b.x1, t + b.y1 };
     }
-    for (size_t i = 0; i < sizeof PLATFORMS / sizeof PLATFORMS[0]; i++) {
-        const Platform *p = &PLATFORMS[i];
-        int c0 = (int)floorf(p->x0 / L->cellw), c1 = (int)ceilf(p->x1 / L->cellw);
-        for (int c = c0; c < c1 && c < L->cols; c++) if (c >= 0) n->arena_collision[p->row * L->cols + c] = 4;
-    }
-    L->collision = n->arena_collision;
-    L->width = n->arena_width;
-    L->height = 256.0f;
+    float l = floorf(n->bx) - SIDE_W / 2, t = floorf(n->by) - SIDE_H / 2;
+    if (n->dir > 0) { float x0 = SIDE_W - b.x1, x1 = SIDE_W - b.x0; b.x0 = x0; b.x1 = x1; }
+    return (Box){ l + b.x0, t + b.y0, l + b.x1, t + b.y1 };
 }
 
-static bool rearrange_layer(const char *name)
+static bool fighting(const Night *n)
 {
-    /* Leave only the repeating sky sequence in order. Every other layer gets
-     * the same level-1 tile bank, but its eight source strips are presented in
-     * a different sequence for the boss pass. */
-    return strcmp(name, "SkyBG") != 0;
+    return n->state >= HJ_SIDE_IN && n->state <= HJ_FRONT_OUT;
 }
 
-static void rearrange_tilemaps(Night *n, Level *L)
+static bool phase2(const Night *n) { return n->hp * 2 <= n->hp_max; }
+
+static void player_box(const Player *pl, Box *out)
 {
-    /* Keep the town-heavy strips out of the route. Source bands 0 and 1 carry
-     * the level-1 desert/rock language; repeating that palette gives stage 3
-     * an open badlands read instead of a row of storefronts. */
-    static const int ORDER[8] = { 0, 1, 1, 1, 0, 1, 1, 1 };
-    for (int i = 0; i < L->nlayers; i++) {
-        Layer *layer = &L->layers[i];
-        if (!layer->is_tilemap || !layer->map) continue;
-        TileMap *m = layer->map;
-        int mi = (int)(m - L->maps);
-        if (mi < 0 || mi >= LVL_MAX_LAYERS) continue;
-        size_t count = (size_t)m->w * (size_t)m->h;
-        uint32_t *cells = malloc(count * sizeof *cells);
-        if (!cells) continue;
-        n->map_cells[mi] = cells;
-        if (!rearrange_layer(layer->name)) {
-            memcpy(cells, m->cells, count * sizeof *cells);
-        } else {
-            int span = m->w / 8; if (span < 1) span = 1;
-            for (int r = 0; r < m->h; r++) for (int c = 0; c < m->w; c++) {
-                int band = (c / span) & 7;
-                int src = ORDER[band] * span + (c % span);
-                if (src >= m->w) src %= m->w;
-                cells[r * m->w + c] = m->cells[r * m->w + src];
-            }
-        }
-        m->cells = cells;
-    }
+    const Character *c = &pl->ch;
+    const HurtBox *h = &c->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0];
+    float cx = c->body.x + h->ox, cy = c->body.y + h->oy;
+    *out = (Box){ cx - h->hw, cy - h->hh, cx + h->hw, cy + h->hh };
 }
 
-void night_dispose(Night *n)
+static bool overlap(Box a, Box b) { return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1; }
+
+static void hurt_player(Player *pl, int dir)
 {
-    if (!n) return;
-    for (int i = 0; i < LVL_MAX_LAYERS; i++) { free(n->map_cells[i]); n->map_cells[i] = NULL; }
-    free(n->arena_collision);
-    n->arena_collision = NULL;
+    Character *c = &pl->ch;
+    if (c->state == CS_DEAD || (c->flags & CF_HIT)) return;
+    player_damage(pl, dir, 1);
 }
 
-void night_init(Night *n, Level *L, int difficulty)
-{
-    memset(n, 0, sizeof *n);
-    n->active = true;
-    n->difficulty = difficulty;
-    n->arena_width = 6200.0f;
-    n->start_x = 150.0f;
-    n->start_y = 170.0f;
-    build_arena_collision(n, L);
-    rearrange_tilemaps(n, L);
-    load_background(n);
-    load_static_art(n);
-    load_boss_art(n);
-    n->boss_alive = true;
-    n->boss_state = HYPER_READY;
-    n->boss_dir = 1;
-    n->state_t = 0.75f;
-    n->shot_t = 0.35f;
-    n->hp_max = n->hp = difficulty == 0 ? 18 : difficulty == 1 ? 24 : 30;
-    n->boss_x = -150.0f;
-    n->boss_y = 120.0f;
-    snprintf(n->msg, sizeof n->msg, "HYPERJUMPER INBOUND");
-    n->msg_t = 2.2f;
-    fprintf(stderr, "stage3: Hyperjumper Pass %.0fx%.0f hp=%d\n", n->arena_width, L->height, n->hp);
-}
-
-static void clear_shot(HyperjumperShot *s)
-{
-    s->alive = false;
-}
-
-static void spawn_shot(Night *n, float x, float y, float vx, float vy, bool front, float angle)
+/* ---- attacks ---- */
+static void spawn_shot(Night *n, float x, float y, float vx, float vy, bool front)
 {
     for (int i = 0; i < HYPERJUMPER_SHOTS; i++) {
         HyperjumperShot *s = &n->shots[i];
         if (s->alive) continue;
-        *s = (HyperjumperShot){ true, x, y, vx, vy, 4.0f, angle, front };
+        *s = (HyperjumperShot){ true, front, vx > 0, x, y, vx, vy };
         return;
     }
 }
 
-static void side_fire(Night *n, Player *pl)
+static void fire_side(Night *n)
 {
-    float px = pl->ch.body.x + pl->ch.body.ox;
-    float py = pl->ch.body.y + pl->ch.body.oy;
-    float sx = n->boss_x + n->boss_dir * 8.0f;
-    float sy = n->boss_y + 6.0f;
-    float dx = px - sx, dy = py - sy, d = sqrtf(dx * dx + dy * dy);
-    if (d < 1.0f) d = 1.0f;
-    float speed = 235.0f;
-    spawn_shot(n, sx, sy, dx / d * speed, dy / d * speed, false, atan2f(dy, dx) * 180.0f / PI + 90.0f);
-    sfx_play(7, 0);
+    /* the pilot's gun, down-left as drawn / down-right mirrored, at the level-1 boss laser speed */
+    float l = floorf(n->bx) - SIDE_W / 2, t = floorf(n->by) - SIDE_H / 2;
+    float mx = n->dir > 0 ? l + SIDE_W - SIDE_MUZZLE_X : l + SIDE_MUZZLE_X, my = t + SIDE_MUZZLE_Y;
+    float v = 333.3333f * 0.70710678f;
+    spawn_shot(n, mx, my, n->dir * v, v, false);
+    n->fire_anim = 0.16f;
+    sfx_play(SFX_GUN, 0);
 }
 
-static void front_fire(Night *n)
+static void fire_front(Night *n)
 {
-    float y = n->boss_y + 58.0f;
-    static const float FAN[] = { -105.0f, -52.0f, 0.0f, 52.0f, 105.0f };
-    for (size_t i = 0; i < sizeof FAN / sizeof FAN[0]; i++) {
-        float vx = FAN[i] * 0.56f;
-        float vy = 235.0f - fabsf(FAN[i]) * 0.14f;
-        spawn_shot(n, n->boss_x + FAN[i] * 0.42f, y, vx, vy, true, atan2f(vx, vy) * 180.0f / PI);
-    }
-    sfx_play(7, 0);
+    float l = floorf(n->bx) - FRONT_W / 2, t = floorf(n->by) - FRONT_H / 2;
+    spawn_shot(n, l + FRONT_MUZZLE_X, t + FRONT_MUZZLE_Y, 0, 300.0f, true);
+    n->fire_anim = 0.09f;
+    sfx_play(SFX_PILOT_GUN, 0);
 }
 
-static void begin_sweep(Night *n, float cam_x, int sw, int dir)
+static void set_state(Night *n, HyperState s)
 {
-    static const float ALTITUDE[] = { 166.0f, 103.0f, 141.0f, 82.0f };
-    n->boss_state = HYPER_SWEEP;
-    n->boss_dir = dir < 0 ? -1 : 1;
-    n->boss_x = n->boss_dir > 0 ? cam_x - 150.0f : cam_x + sw + 150.0f;
-    n->boss_y = ALTITUDE[n->passes % (int)(sizeof ALTITUDE / sizeof ALTITUDE[0])];
-    n->passes++;
-    n->boost_t = 0.55f;
-    n->shot_t = 0.28f;
-    n->state_t = 0;
-    sfx_play(13, 0);
+    n->state = s; n->st = 0;
+    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "stage3: hyperjumper state %d at %.0f,%.0f hp %d\n", s, n->bx, n->by, n->hp);
 }
 
-static bool crouched(const Player *pl)
+static void begin_side(Night *n, int dir)
 {
-    const Character *c = &pl->ch;
-    return c->state == CS_CROUCH || c->state == CS_SLIDE || (c->flags & CF_CROUCH) != 0;
+    set_state(n, HJ_SIDE_IN);
+    n->dir = dir;
+    n->bx = dir < 0 ? n->arena_x + n->sw + SIDE_W * 0.5f + 16 : n->arena_x - SIDE_W * 0.5f - 16;
+    n->by = HOVER_Y;
+    n->speed = 240.0f;
+    sfx_play(SFX_ENGINE, 0);
 }
 
-static void boss_damage(Night *n, Effects *fx, float x, float y, int layer)
+static float low_pass_y(void)
 {
-    n->hp--;
-    n->hit_flash = 0.12f;
-    sfx_play(14, 0);
-    AnimDef a = { 0, 0, 5, 0, 0.035f, 0 };
-    effects_spawn(fx, 0x8623249C, layer, &a, x, y, 8, 8, 0);
-    if (n->hp > 0) return;
-    n->boss_alive = false;
-    n->boss_state = HYPER_DEATH;
-    n->death_t = 2.0f;
-    n->white = 0.7f;
-    n->msg_t = 2.5f;
-    snprintf(n->msg, sizeof n->msg, "HYPERJUMPER DOWN");
-    sfx_play(5, 0);
-    sfx_play(6, 3);
+    /* The hero's hurtboxes sit on the feet: 46 px standing, 34 jumping, 24 crouched, 12 sliding.
+     * The keel passes 3 px over a slide; the hull's top is 69 px off the ground, under the
+     * 87 px jump, so a jump carries the hero over it too. */
+    return 208.0f - 12.0f - 3.0f - (98 - SIDE_H / 2);
 }
 
-static void update_shots(Night *n, Player *pl, float cam_x, int sw, int sh, float dt)
+static void begin_low(Night *n, int dir)
 {
-    Character *c = &pl->ch;
-    const HurtBox *h = &c->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0];
-    float px = c->body.x + h->ox, py = c->body.y + h->oy;
+    set_state(n, HJ_LOW_WARN);
+    n->dir = dir;
+    n->by = low_pass_y();
+    n->bx = dir > 0 ? n->arena_x - SIDE_W * 0.5f - 8 : n->arena_x + n->sw + SIDE_W * 0.5f + 8;
+    sfx_play(SFX_ENGINE, 0);
+}
+
+static void begin_front(Night *n, const Player *pl)
+{
+    set_state(n, HJ_FRONT_IN);
+    float lo = n->arena_x + FRONT_W * 0.5f - 12, hi = n->arena_x + n->sw - FRONT_W * 0.5f + 12;
+    float px = pl->ch.body.x;
+    n->bx = px < lo ? lo : px > hi ? hi : px;
+    n->by = -FRONT_H * 0.5f - 8;
+    n->burst = 0;
+    n->shot_t = 0.55f;
+    sfx_play(SFX_ENGINE, 0);
+}
+
+static void begin_death(Night *n)
+{
+    n->death_front = front_pose(n);   /* the wreck falls in the pose it was hit in */
+    set_state(n, HJ_DYING);
+    n->death_vy = 0; n->death_phase = 1;
+    for (int i = 0; i < HYPERJUMPER_SHOTS; i++) n->shots[i].alive = false;
+}
+
+static void hit_boss(Night *n, Effects *fx, float x, float y)
+{
+    if (--n->hp <= 0) { n->hp = 0; begin_death(n); return; }
+    n->hit_flash = 0.08f;
+    AnimDef a = { 0, 4, 8, 4, 0.03f, 0 };
+    effects_spawn(fx, 0x8623249C, n->play_layer, &a, x, y, 8, 8, 0);
+}
+
+static void update_shots(Night *n, Player *pl, Effects *fx, float dt)
+{
+    Box pb; player_box(pl, &pb);
     for (int i = 0; i < HYPERJUMPER_SHOTS; i++) {
         HyperjumperShot *s = &n->shots[i];
         if (!s->alive) continue;
-        s->x += s->vx * dt;
-        s->y += s->vy * dt;
-        s->ttl -= dt;
-        float r = s->front ? 5.0f : 6.0f;
-        if (c->state != CS_DEAD && !(c->flags & CF_HIT) && fabsf(px - s->x) <= h->hw + r && fabsf(py - s->y) <= h->hh + r) {
-            player_damage(pl, s->vx < 0 ? 0 : 4, 1);
-            clear_shot(s);
+        s->x += s->vx * dt; s->y += s->vy * dt;
+        float rx = s->front ? 3.0f : 4.0f, ry = s->front ? 6.0f : 4.0f;
+        Box sb = { s->x - rx, s->y - ry, s->x + rx, s->y + ry };
+        if (overlap(sb, pb) && pl->ch.state != CS_DEAD && !(pl->ch.flags & CF_HIT)) {
+            hurt_player(pl, s->front ? AIM_D : s->vx < 0 ? AIM_DL : AIM_DR);
+            s->alive = false;
             continue;
         }
-        float sx = s->x - cam_x, sy = s->y;
-        if (s->ttl <= 0 || sx < -30 || sx > sw + 30 || sy < -30 || sy > sh + 30) clear_shot(s);
+        if (s->y >= 206.0f) {   /* splashes on the ground */
+            AnimDef a = { 0, 0, 4, 0, 0.03f, 0 };
+            effects_spawn(fx, 0x8623249C, n->play_layer, &a, s->x, 204.0f, 8, 8, 0);
+            s->alive = false;
+            continue;
+        }
+        if (s->x < n->arena_x - 32 || s->x > n->arena_x + n->sw + 32) s->alive = false;
     }
 }
 
-static void boss_hit_test(Night *n, Player *pl, Bullets *pb, Effects *fx, int layer)
+static void boss_collisions(Night *n, Player *pl, Bullets *pb, Effects *fx)
 {
-    float hw = n->boss_state == HYPER_FRONT ? 85.0f : 66.0f;
-    float hh = n->boss_state == HYPER_FRONT ? 57.0f : 48.0f;
+    bool front = front_pose(n);
+    const Box *hull = front ? FRONT_HULL : SIDE_HULL;
+    int nh = front ? 2 : 3;
+    Box boxes[4];
+    for (int k = 0; k < nh; k++) boxes[k] = world_box(n, hull[k]);
+    int nb = nh;
+    if (!front) boxes[nb++] = world_box(n, SIDE_PILOT);
+
+    /* the hero's shots: the whole ship takes hits while it is on screen */
     for (int i = 0; i < pb->n; ) {
         Bullet *b = &pb->b[i];
-        if (b->kind != BK_PLAYER || fabsf(b->x - n->boss_x) > hw || fabsf(b->y - n->boss_y) > hh) { i++; continue; }
-        float hx = b->x, hy = b->y;
+        bool on_screen = b->x > n->arena_x + 2 && b->x < n->arena_x + n->sw - 2;
+        bool hit = false;
+        for (int k = 0; k < nb && on_screen && !hit; k++)
+            hit = b->x > boxes[k].x0 - 3 && b->x < boxes[k].x1 + 3 && b->y > boxes[k].y0 - 3 && b->y < boxes[k].y1 + 3;
+        if (!hit) { i++; continue; }
+        float x = b->x, y = b->y;
         pb->b[i] = pb->b[--pb->n];
-        boss_damage(n, fx, hx, hy, layer);
-        if (!n->boss_alive) return;
+        hit_boss(n, fx, x, y);
+        if (n->state == HJ_DYING) return;
     }
-    Character *c = &pl->ch;
-    const HurtBox *h = &c->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0];
-    float px = c->body.x + h->ox, py = c->body.y + h->oy;
-    bool near = fabsf(px - n->boss_x) < hw - 4 && fabsf(py - n->boss_y) < hh - 12;
-    if (near && n->body_hit_cd <= 0 && c->state != CS_DEAD) {
-        bool low_pass = n->boss_state == HYPER_SWEEP && n->boss_y > 150.0f;
-        if (!low_pass || !crouched(pl)) {
-            player_damage(pl, n->boss_dir > 0 ? 4 : 0, 1);
-            n->body_hit_cd = 0.8f;
-        }
-    }
+
+    /* ramming: hull and keel (the pilot and the aerial don't hurt) */
+    Box hb; player_box(pl, &hb);
+    for (int k = 0; k < nh; k++)
+        if (overlap(boxes[k], hb)) { hurt_player(pl, n->bx > (hb.x0 + hb.x1) * 0.5f ? AIM_L : AIM_R); break; }
 }
 
-void night_update(Night *n, Player *pl, Bullets *pb, Effects *fx,
-                  float cam_x, int sw, int sh, float dt, bool live)
+void night_update(Night *n, Player *pl, Bullets *pb, Effects *fx, const Level *L,
+                  float cam_x, int sw, float dt, bool live)
 {
-    n->t += dt;
-    if (n->msg_t > 0) n->msg_t -= dt;
-    if (n->white > 0) n->white -= dt * 1.5f;
     if (n->hit_flash > 0) n->hit_flash -= dt;
-    if (n->body_hit_cd > 0) n->body_hit_cd -= dt;
-    update_shots(n, pl, cam_x, sw, sh, dt);
+    if (n->fire_anim > 0) n->fire_anim -= dt;
     if (!live) return;
-    if (!n->boss_alive) {
-        if (n->boss_state == HYPER_DEATH) {
-            n->death_t -= dt;
-            if (n->death_t <= 0) n->clear_ready = true;
-        }
-        return;
-    }
-    boss_hit_test(n, pl, pb, fx, 11);
-    if (!n->boss_alive) return;
-
-    if (n->boss_state == HYPER_READY) {
-        n->state_t -= dt;
-        if (n->state_t <= 0) {
-            int dir = n->passes & 1 ? -1 : 1;
-            begin_sweep(n, cam_x, sw, dir);
-        }
-    } else if (n->boss_state == HYPER_SWEEP) {
-        n->state_t += dt;
-        n->boost_t -= dt;
-        float speed = n->boost_t > 0 ? HYPER_BOOST_SPEED : HYPER_SIDE_SPEED;
-        n->boss_x += n->boss_dir * speed * dt;
-        n->boss_y += sinf(n->state_t * 7.0f) * dt * (n->boss_y < 110 ? 8.0f : 4.0f);
-        n->shot_t -= dt;
-        if (n->shot_t <= 0 && n->boss_x > cam_x - 80 && n->boss_x < cam_x + sw + 80) {
-            side_fire(n, pl);
-            n->shot_t = n->boost_t > 0 ? 0.60f : 0.42f;
-        }
-        bool gone = n->boss_dir > 0 ? n->boss_x > cam_x + sw + 160 : n->boss_x < cam_x - 160;
-        if (gone) {
-            if (n->passes % 3 == 0) {
-                n->boss_state = HYPER_FRONT;
-                n->boss_x = cam_x + sw * 0.52f;
-                n->boss_y = 76.0f;
-                n->state_t = 0;
-                n->shot_t = 0.45f;
-                snprintf(n->msg, sizeof n->msg, "FRONTAL VOLLEY");
-                n->msg_t = 1.4f;
-            } else {
-                n->boss_state = HYPER_READY;
-                n->state_t = 0.42f;
+    n->st += dt;
+    if (n->state != HJ_DORMANT && n->state != HJ_DYING && n->state != HJ_DONE) update_shots(n, pl, fx, dt);
+    const float right = n->arena_x + n->sw;
+    bool p2 = phase2(n);
+    switch (n->state) {
+    case HJ_DORMANT:
+        /* the route's end: the camera has stopped on the open ground and the hero is out on it */
+        if (pl->ch.state != CS_DEAD && cam_x >= L->width - sw - 0.5f && pl->ch.body.x >= L->width - sw * 0.5f - 8.0f) {
+            n->boss_started = true;
+            n->arena_x = L->width - sw; n->sw = sw;
+            music_play(MUSIC_BOSS, true); sfx_play(SFX_ENGINE, 0);   /* boss phase 0: FUN_00412750 */
+            set_state(n, HJ_FAR_PASS);
+            n->dir = -1; n->bx = n->arena_x + sw + 40; n->by = 58;
+            if (SDL_getenv("SABER_TRACE")) {
+                const Character *c = &pl->ch;
+                for (int a = 0; a < CHAR_MAX_ANIMS; a++) if (c->hurt[a].hh > 0)
+                    fprintf(stderr, "stage3: hero anim %d hurt oy=%.0f hh=%.0f (top %.0f above the feet)\n", a, c->hurt[a].oy, c->hurt[a].hh,
+                            c->body.oy + c->body.hy - (c->hurt[a].oy - c->hurt[a].hh));
             }
         }
-    } else if (n->boss_state == HYPER_FRONT) {
-        n->state_t += dt;
-        n->boss_x = cam_x + sw * 0.52f + sinf(n->state_t * 2.2f) * 28.0f;
-        n->boss_y = 76.0f + sinf(n->state_t * 3.0f) * 5.0f;
+        break;
+    case HJ_FAR_PASS:     /* far behind the mesas, right to left (level 1: the far layer pass) */
+        n->bx -= 330.0f * dt;
+        if (n->bx < n->arena_x - 40) set_state(n, HJ_FAR_GAP);
+        break;
+    case HJ_FAR_GAP:
+        if (n->st >= 1.3f) { set_state(n, HJ_MID_PASS); n->dir = 1; n->bx = n->arena_x - 60; n->by = 44; sfx_play(SFX_ENGINE, 0); }
+        break;
+    case HJ_MID_PASS:     /* nearer, left to right, behind the play plane's rocks */
+        n->bx += 390.0f * dt;
+        n->by = 44 + sinf(n->st * 4.0f) * 3.0f;
+        if (n->bx > right + 60) set_state(n, HJ_MID_GAP);
+        break;
+    case HJ_MID_GAP:
+        if (n->st >= 1.0f) begin_side(n, -1);
+        break;
+    case HJ_SIDE_IN: {    /* flies in and settles over one half of the arena (level 1: centre +128 / -160) */
+        float target = n->arena_x + n->sw * 0.5f - n->dir * 96.0f;
+        float d = target - n->bx;
+        float sp = fabsf(d) * 2.8f; if (sp > 260.0f) sp = 260.0f; if (sp < 40.0f) sp = 40.0f;
+        if (fabsf(d) <= sp * dt) { n->bx = target; set_state(n, HJ_SIDE_HOLD); n->shot_t = 0.3f; }
+        else n->bx += (d > 0 ? 1 : -1) * sp * dt;
+        n->by = HOVER_Y + sinf(n->st * 3.0f) * 2.0f;
+        break; }
+    case HJ_SIDE_HOLD:    /* hovers, the pilot sprays the ground diagonally */
+        n->by = HOVER_Y + sinf(n->st * 3.0f) * 2.0f;
+        n->shot_t -= dt;
+        if (n->shot_t <= 0) { fire_side(n); n->shot_t = p2 ? 0.26f : 0.34f; }
+        if (n->st >= (p2 ? 2.1f : 1.7f)) { set_state(n, HJ_SIDE_OUT); n->speed = 60.0f; }
+        break;
+    case HJ_SIDE_OUT:     /* boosts away the way it faces */
+        n->speed += 520.0f * dt; if (n->speed > 400.0f) n->speed = 400.0f;
+        n->bx += n->dir * n->speed * dt;
+        n->by = HOVER_Y - n->st * 20.0f;
+        if (n->dir < 0 ? n->bx < n->arena_x - SIDE_W * 0.5f - 8 : n->bx > right + SIDE_W * 0.5f + 8) begin_low(n, -n->dir);
+        break;
+    case HJ_LOW_WARN: {   /* the nose shows at the edge, engine howling, before the ground run */
+        float peek = n->dir > 0 ? n->arena_x - SIDE_W * 0.5f + 30 : right + SIDE_W * 0.5f - 30;
+        n->bx += (peek - n->bx) * (dt * 8.0f > 1 ? 1 : dt * 8.0f);
+        if (n->st >= (n->difficulty == 2 ? 0.6f : 0.8f)) { set_state(n, HJ_LOW_PASS); n->speed = p2 ? 330.0f : 290.0f; }
+        break; }
+    case HJ_LOW_PASS:     /* jump over it or slide under it */
+        n->bx += n->dir * n->speed * dt;
+        if (n->dir > 0 ? n->bx > right + SIDE_W * 0.5f + 8 : n->bx < n->arena_x - SIDE_W * 0.5f - 8) begin_front(n, pl);
+        break;
+    case HJ_FRONT_IN:     /* drops in facing the hero */
+        n->by += 150.0f * dt;
+        if (n->by >= FRONT_Y) { n->by = FRONT_Y; set_state(n, HJ_FRONT_FIRE); }
+        break;
+    case HJ_FRONT_FIRE: { /* drifts after the hero, bursts of bolts straight down from the pilot's gun */
+        float lo = n->arena_x + FRONT_W * 0.5f - 12, hi = right - FRONT_W * 0.5f + 12;
+        float px = pl->ch.body.x; if (px < lo) px = lo; if (px > hi) px = hi;
+        float drift = (p2 ? 70.0f : 50.0f) * dt, d = px - n->bx;
+        n->bx += fabsf(d) <= drift ? d : (d > 0 ? drift : -drift);
+        n->by = FRONT_Y + sinf(n->st * 2.5f) * 3.0f;
         n->shot_t -= dt;
         if (n->shot_t <= 0) {
-            front_fire(n);
-            n->shot_t = n->difficulty == 0 ? 1.05f : n->difficulty == 1 ? 0.86f : 0.68f;
+            fire_front(n);
+            if (++n->burst < 3) n->shot_t = 0.16f;
+            else { n->burst = 0; n->shot_t = p2 ? 0.75f : 0.95f; }
         }
-        if (n->state_t > 3.2f) {
-            n->boss_state = HYPER_READY;
-            n->state_t = 0.35f;
+        if (n->st >= (p2 ? 5.0f : 4.2f)) set_state(n, HJ_FRONT_OUT);
+        break; }
+    case HJ_FRONT_OUT:
+        n->by -= 190.0f * dt;
+        if (n->by < -FRONT_H * 0.5f - 8) { n->cycle++; begin_side(n, (n->cycle & 1) ? 1 : -1); }
+        break;
+    case HJ_DYING:        /* level-1 boss state 9: the wreck drops, jitters and burns for 0xed8 ms */
+        n->death_vy += 480.0f * dt;
+        n->by += n->death_vy * dt;
+        n->bx += (float)rnd(180) / 60.0f - 153.0f / 60.0f;
+        if (rnd(10) >= 9) {
+            AnimDef a = { 0, 0, 11, 11, 0.025f, 0 };
+            effects_spawn(fx, 0x9C861FF3, n->play_layer, &a, n->bx - 40 + rnd(80), n->by - 30 + rnd(60), 32, 32, 0);
+            if (n->death_phase < 0x40 && (n->death_phase & 1)) sfx_play(SFX_BLAST, 0);
         }
+        if (n->death_phase == 8) sfx_play(SFX_DOWN, 0);
+        n->death_phase++;
+        if (n->st >= DEATH_TIME) { set_state(n, HJ_DONE); n->clear_ready = true; }
+        break;
+    case HJ_DONE:
+        break;
     }
+    if (fighting(n) && pl->ch.state != CS_DEAD) boss_collisions(n, pl, pb, fx);
 }
 
-void night_draw_boss(Night *n, SDL_Renderer *ren, float cam_x, float cam_y)
+/* ---- drawing ---- */
+bool night_layer_tint(const Night *n, const Layer *ly, uint8_t *r, uint8_t *g, uint8_t *b)
 {
-    float x = n->boss_x - cam_x, y = n->boss_y - cam_y;
-    if (n->boss_state == HYPER_DEATH) {
-        if (n->death_t <= 0) return;
-        float f = 1.0f - clampf(n->death_t / 2.0f, 0, 1);
-        if (n->side_normal) sprite_draw_rotated(n->side_normal, 0, x, y + f * 80.0f, 1.0f - f * .25f, f * 68.0f, 255, (uint8_t)(255 * (1 - f * .55f)));
-        return;
+    (void)n;
+    static const struct { const char *name; uint8_t r, g, b; } TINT[] = {
+        { "FarMountains", 58, 62, 118 }, { "Mountains", 66, 70, 130 }, { "NearMountains", 76, 80, 142 },
+        { "MidBG", 88, 90, 150 }, { "Cars MidBG", 88, 90, 150 },
+        { "Playfield", 112, 110, 168 }, { "Platforms", 116, 114, 172 }, { "Cars", 116, 114, 172 },
+        { "ForegroundStuff", 100, 98, 156 }, { "ForegroundStuf2", 52, 52, 92 },
+    };
+    if (!strcmp(ly->name, "SkyBG")) return false;   /* the night sky replaces it */
+    *r = 100; *g = 100; *b = 160;
+    for (size_t i = 0; i < sizeof TINT / sizeof TINT[0]; i++)
+        if (!strcmp(ly->name, TINT[i].name)) { *r = TINT[i].r; *g = TINT[i].g; *b = TINT[i].b; }
+    return true;
+}
+
+void night_draw_background(Night *n, float cam_x, int sw, int sh)
+{
+    (void)sh;
+    if (n->sky) {
+        int w = n->sky->w;
+        float x = -fmodf(floorf(cam_x * 0.05f), (float)w);
+        for (; x < sw; x += w) sprite_draw(n->sky, 0, x, 0, false);
     }
-    if (n->boss_state == HYPER_FRONT) {
-        Sprite *s = n->shot_t < 0.20f ? n->front_fire : n->front_idle;
-        if (s) sprite_draw_mod(s, 0, floorf(x - s->w * .5f), floorf(y - s->h * .5f), 255, n->hit_flash > 0 ? 240 : 255, n->hit_flash > 0 ? 240 : 255, 255);
-        return;
-    }
-    Sprite *s = n->boost_t > 0 ? n->side_boost : (n->shot_t > 0 && n->shot_t < .14f ? (((int)(n->t * 20) & 1) ? n->side_fire1 : n->side_fire2) : n->side_normal);
+    /* the moon hangs behind every tile layer, drifting a little over the whole route */
+    if (n->moon) sprite_draw(n->moon, 0, floorf(sw * 0.70f - cam_x * 0.02f), 22, false);
+}
+
+static void draw_sprite(SDL_Renderer *ren, const Sprite *s, float cx, float cy, float scale, bool flip,
+                        uint8_t r, uint8_t g, uint8_t b, float angle)
+{
     if (!s) return;
-    SDL_SetTextureColorMod(s->tex, 255, n->hit_flash > 0 ? 240 : 255, n->hit_flash > 0 ? 240 : 255);
-    SDL_FRect src = { 0, 0, (float)s->w, (float)s->h }, dst = { floorf(x - s->w * .5f), floorf(y - s->h * .5f), (float)s->w, (float)s->h };
-    SDL_RenderTextureRotated(ren, s->tex, &src, &dst, 0, NULL, n->boss_dir > 0 ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
+    SDL_FRect src = { 0, 0, (float)s->w, (float)s->h };
+    float w = roundf(s->w * scale), h = roundf(s->h * scale);
+    SDL_FRect dst = { floorf(cx) - floorf(w * 0.5f), floorf(cy) - floorf(h * 0.5f), w, h };
+    SDL_SetTextureColorMod(s->tex, r, g, b);
+    SDL_RenderTextureRotated(ren, s->tex, &src, &dst, angle, NULL, flip ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
     SDL_SetTextureColorMod(s->tex, 255, 255, 255);
 }
 
-void night_draw_background(Night *n, float cam_x, float cam_y, int sw, int sh)
+void night_draw_layer(Night *n, SDL_Renderer *ren, int layer, float cam_x, float cam_y)
 {
-    if (!n->sky) return;
-    (void)cam_y;
-    float scale = (float)sh / n->sky->h;
-    float w = n->sky->w * scale;
-    if (w <= 0) return;
-    float x = -fmodf(cam_x * 0.18f + w * 0.20f, w);
-    for (; x < sw; x += w) sprite_draw_scaled(n->sky, 0, floorf(x), 0, w, (float)sh);
-    if (n->moon) {
-        float mh = sh * 0.78f, mw = n->moon->w * mh / n->moon->h;
-        float cx = sw * 0.64f - cam_x * 0.18f, cy = sh * 0.46f;
-        sprite_draw_scaled(n->moon, 0, floorf(cx - mw * 0.5f), floorf(cy - mh * 0.5f), mw, mh);
+    float x = n->bx - cam_x, y = n->by - cam_y;
+    bool blink = ((int)(n->st * 30.0f)) & 1;
+    if (layer == n->far_layer && n->state == HJ_FAR_PASS)
+        draw_sprite(ren, blink ? n->side_boost : n->side_normal, x, y, 0.4f, n->dir > 0, 96, 96, 140, 0);
+    if (layer == n->mid_layer && n->state == HJ_MID_PASS)
+        draw_sprite(ren, blink ? n->side_boost : n->side_normal, x, y, 0.65f, n->dir > 0, 150, 150, 190, 0);
+    if (layer != n->play_layer) return;
+
+    if (fighting(n) || n->state == HJ_DYING) {
+        const Sprite *s;
+        float angle = 0;
+        uint8_t r = 255, g = 255, b = 255;
+        if (n->hit_flash > 0) { g = 150; b = 150; }
+        if (front_pose(n)) s = n->fire_anim > 0 ? n->front_fire : n->front_idle;
+        else if (n->fire_anim > 0) s = n->fire_anim > 0.09f ? n->side_fire1 : n->side_fire2;
+        else if (n->state == HJ_SIDE_OUT || n->state == HJ_LOW_PASS || (n->state == HJ_LOW_WARN && blink) ||
+                 (n->state == HJ_SIDE_IN && n->speed > 120.0f)) s = n->side_boost;
+        else s = n->side_normal;
+        if (n->state == HJ_DYING) {
+            angle = n->st * (n->death_front ? 6.0f : -12.0f);
+            uint8_t v = (uint8_t)(255 - 110 * (n->st / DEATH_TIME));
+            r = g = b = v;
+            if (((int)(n->st * 20)) & 1) { g = (uint8_t)(v * 0.6f); b = (uint8_t)(v * 0.5f); }
+        }
+        draw_sprite(ren, s, x, y, 1.0f, !front_pose(n) && n->dir > 0, r, g, b, angle);
     }
-}
-
-typedef struct { int art; float x, w, h; } StaticProp;
-
-static const StaticProp STATIC_PROPS[] = {
-    { 0,  720, 170, 164 }, { 1,  430,  64, 150 }, { 2,  830,  86, 105 },
-    { 3, 1120, 138, 106 }, { 4, 1660, 170, 106 }, { 1, 1880,  66, 154 },
-    { 0, 2220, 160, 158 }, { 5, 2870, 142,  76 }, { 2, 3120,  92, 112 },
-    { 3, 3500, 132, 102 }, { 4, 4040, 175, 108 }, { 1, 4320,  66, 154 },
-    { 0, 4680, 174, 166 }, { 3, 5070, 138, 106 }, { 5, 5480, 146,  78 },
-    { 2, 5750,  92, 112 },
-};
-
-void night_draw_static(Night *n, float cam_x, float cam_y, int sw)
-{
-    for (size_t i = 0; i < sizeof STATIC_PROPS / sizeof STATIC_PROPS[0]; i++) {
-        const StaticProp *p = &STATIC_PROPS[i];
-        Sprite *s = p->art >= 0 && p->art < STAGE3_STATIC_ART ? n->static_art[p->art] : NULL;
-        if (!s || p->x + p->w < cam_x - 32 || p->x > cam_x + sw + 32) continue;
-        sprite_draw_scaled(s, 0, floorf(p->x - cam_x), floorf(216.0f - p->h - cam_y), p->w, p->h);
-    }
-}
-
-void night_draw_projectiles(Night *n, SDL_Renderer *ren, float cam_x, float cam_y)
-{
     for (int i = 0; i < HYPERJUMPER_SHOTS; i++) {
         const HyperjumperShot *s = &n->shots[i];
         if (!s->alive) continue;
-        Sprite *spr = s->front ? n->projectile_front : n->projectile_diagonal;
-        if (spr) sprite_draw_rotated(spr, 0, s->x - cam_x, s->y - cam_y, 1.0f, s->angle, 255, 255);
+        const Sprite *spr = s->front ? n->projectile_front : n->projectile_diagonal;
+        draw_sprite(ren, spr, s->x - cam_x, s->y - cam_y, 1.0f, s->flip, 255, 255, 255, 0);
     }
 }
 
-void night_draw_banner(Night *n, SDL_Renderer *ren, int sw, int sh)
+void night_draw_hud(Night *n, SDL_Renderer *ren, int sw, int sh)
 {
-    (void)ren;
-    (void)sw;
     (void)sh;
-    if (n->boss_alive && n->hp < n->hp_max) {
-        Font *small = font_get(0x12072E60);
-        char hp[32];
-        snprintf(hp, sizeof hp, "HYPERJUMPER %02d/%02d", n->hp, n->hp_max);
-        if (small) font_draw(small, hp, 10, 8, 206, 220, 240);
-    }
-    if (n->msg_t > 0) {
-        Font *f = font_get(0x4058897F);
-        if (f) {
-            float w = (float)font_text_width(f, n->msg), x = sw * .5f - w * .5f;
-            font_draw(f, n->msg, x + 1, 102, 18, 17, 12);
-            font_draw(f, n->msg, x, 101, 244, 206, 100);
-        }
-    }
+    if (!n->boss_started || n->state < HJ_SIDE_IN || n->state >= HJ_DONE) return;
+    Font *f = font_get(0x12072E60);
+    float bw = 96, x = sw - bw - 10, y = 20;
+    if (f) font_draw(f, "HYPERJUMPER", (int)x, 8, 220, 226, 245);
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(ren, 10, 12, 30, 200);
+    SDL_FRect bg = { x - 1, y - 1, bw + 2, 7 };
+    SDL_RenderFillRect(ren, &bg);
+    SDL_SetRenderDrawColor(ren, 230, 50, 50, 255);
+    SDL_FRect fg = { x, y, bw * (float)n->hp / (float)n->hp_max, 5 };
+    SDL_RenderFillRect(ren, &fg);
 }

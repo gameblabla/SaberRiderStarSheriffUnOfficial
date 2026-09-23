@@ -17,9 +17,8 @@ Dependencies: SDL3, libvorbisfile, libavcodec/libswscale (FMV), CMake, a C11 com
 
 After the last life a CONTINUE? screen counts 20 -> 0 (the CONTINUE option's credits, per run; START restarts the
 stage with the option's lives). An optional `assets/continue.png` goes behind its text (letterboxed to the screen).
-Stages 1 and 2 open with their title card (STAGE n, the level's name typed in over an amber band, then the level
-wipes in through venetian-blind strips while the music comes up; a button skips to the wipe). Stage 3 starts directly
-in its arena.
+Every stage opens with its title card (STAGE n, the level's name typed in over an amber band, then the level
+wipes in through venetian-blind strips while the music comes up; a button skips to the wipe).
 
 ## Playable heroes
 
@@ -72,26 +71,38 @@ before the flag (`SABER_M7LAP=1`
 starts on lap 2, `SABER_M7BOSSHP=n` sets the leader's HP, `SABER_M7AUTO=1` drives the circuit by itself, `SABER_KILL=n`
 wrecks the car at step n).
 
-## Stage 3 — "Hyperjumper Pass" (platformer boss arena)
+## Stage 3 — "Hyperjumper Pass" (night desert route + boss)
 
-After the Grand Prix the game returns to the level-1 tile set, but the stage-3 arena owns a new
-collision route: broken landing pads, staggered platforms and pits replace the frontier-town run.
-The original desert tile banks are reused and the ground/rock layers are drawn through a cool blue
-night color filter (`cblock_tint`). Stage 3 uses the generated `assets/stage3_night_sky.png` and
-`assets/stage3_red_moon.png` for a much darker, star-filled sky and single red moon behind those
-layers; there is no procedural SDL sky, moon, terrain or
-level-1 encounter/cutscene layer. The tilemap strips are reordered for the pass so the layout is
-visibly different while retaining the game's art language. Generated alpha scenery variants in
-`assets/stage3_static_*.png` add night mesas, cactus, scrub, fence, wreck and landing-pad fragments
-at fixed world positions; they are visual-only and do not alter collision or gameplay actors.
+A new ~6600 px night run through the desert, built by `src/night_level.c` from whole scenes of the level-1
+tilemaps: the play plane (Playfield, Platforms, Cars, ForegroundStuff) and the collision grid are cut together
+on 16 px columns that no rock, car, pad or house crosses, and re-laid in a new order, some scenes mirrored
+(cells with bit 31 set draw flipped). The town and the ruined house are left out; the level-1 boss yard is not
+used. MidBG and Cars MidBG are rebuilt the same way in their own parallax space from their rock-only stretches,
+so no house shows in the distance. Every level-1 layer keeps its parallax and is drawn through a per-layer night
+palette (`night_layer_tint`), in front of `assets/stage3/native/stage3_night_sky.png` and the red moon, which is
+drawn right after the sky so it stays behind everything. The route: a pointed rock with a pad, a wreck, the
+signpost flats, the big rock wall with five pads, wrecks and a van, the wall again mirrored, a last wreck, then
+open ground for the arena. There are no pits, as in level 1.
 
-The supplied Hyperjumper artwork in `assets/hyperjumper/` drives the boss: it alternates left-to-right
-and right-to-left boosted passes, fires aimed side shots from varied altitudes (low passes reward a
-slide), then switches to a front-facing fan-volley phase. It has difficulty-scaled HP, hit flashes,
-projectile collisions and a clear/death state. Stage 3 starts directly in the arena with no horse
-patrol, galloping animation or level-1 story dialog.
+Enemies use the level-1 trigger objects (`stage3_triggers` feeds `enemies_add_trigger`): walkers, grunts and
+the grunt variant stream in from just outside either screen edge with random intervals; snipers and kneelers
+are placed on the pads, car roofs and the van 260+ px past a thin trigger, so they scroll into view instead of
+appearing. No level-1 dialog, horse, stampede or convoy object is installed.
 
-`SABER_STAGE=3` starts there, `SABER_START=x` spawns at level x.
+Hyperjumper (art in `assets/hyperjumper/`) waits until the camera stops at the end of the route, then enters
+like the level-1 boss with the same samples: the boss music and the engine boot (0x13), a small pass far behind
+the mesas (drawn in level-1's `Small Hyperjmpr` layer), another engine howl and a nearer pass (`MidBGHyperjpr`),
+then it flies in. Its round: settle over one half of the arena and fire the pilot's gun diagonally (down-left,
+down-right when mirrored) from the muzzle at (70,54) of the shooting frames, sound 0x10; boost out; show its nose
+at the edge and skim the ground (jump over the hull, or slide under the keel with down + jump); drop in front
+of the hero in its front pose and drift after them firing bursts of bolts straight down from (93,45), sound 0x12;
+rise away and repeat from the other side. Below half HP the holds and bursts get denser. Contact boxes follow
+the art's hull and keel; the whole ship takes shots. The wreck falls, jitters and burns for 0xed8 ms with the
+level-1 explosion sounds (0x11, 0x15), then the victory music plays and MISSION ACCOMPLISHED ends the game.
+HP 48 / 60 / 72 by difficulty.
+
+`SABER_STAGE=3` (or `--level 3`) starts there, `SABER_START=x` spawns at level x, `SABER_BOSSHP=n` sets the
+boss's HP (also the level-1 horse boss's).
 
 ## Controls (as in the demo)
 
@@ -104,7 +115,7 @@ East/West shoot, shoulders aim, Start pause.
 `SABER_START=x` spawn at level x · `SABER_MENU=n` start in front-end state n · `SABER_SHOT=file.bmp,camx,steps`
 screenshot after N fixed steps and quit · `SABER_SCRIPT="60:R,3:RJ,40:"` scripted input (L R U D J S A P) ·
 `SABER_TRACE=1` per-frame player trace (+ spawn triggers at start, convoy spawn / dying / stuck-enemy diagnostics, every humanoid once a second, boss state every 10 frames; `=2` also prints humanoids within 40 px of either screen edge every frame) · `SABER_FUZZ=1` random input ·
-`SABER_HERO=n` hero 0..3 for a direct level start · `SABER_LIVES=n` starting lives · `SABER_KILL=n` kill the player at step n · `SABER_BOSSHP=n` the horse boss's HP · `SABER_BORED=s` seconds of idling before the bored animation (April) · `SABER_DEBUG=1` collision overlay from the start · `SABER_WINDOW=852x480` initial window size · **F1** collision overlay · **F2** free camera.
+`SABER_HERO=n` hero 0..3 for a direct level start · `SABER_LIVES=n` starting lives · `SABER_KILL=n` kill the player at step n · `SABER_BOSSHP=n` the horse boss's / Hyperjumper's HP · `SABER_BORED=s` seconds of idling before the bored animation (April) · `SABER_DEBUG=1` collision overlay from the start · `SABER_WINDOW=852x480` initial window size · **F1** collision overlay · **F2** free camera.
 
 ## Comparing against the original
 
@@ -125,7 +136,7 @@ Original keys: arrows, A jump, S shoot, Return start/confirm, Escape quits.
 - `src/physics.c`, `src/character.c`, `src/player.c`, `src/enemies.c`, `src/bullets.c`, `src/effects.c` — gameplay (ports of `saber_game::*`)
 - `src/dialog.c`, `src/hud.c`, `src/menu.c`, `src/video.c`, `src/audio.c` — presentation
 - `src/mode7.c` — stage 2, the Mode-7 Grand Prix (our own design, see above)
-- `src/night.c` — stage 3, Hyperjumper Pass (see above)
+- `src/night.c`, `src/night_level.c` — stage 3, Hyperjumper Pass (see above)
 - `src/audio.c` mixes deliberately *unlike* the original: the demo's mixer (`FUN_00563900`) sums the music at vol/256
   and every sfx voice at unity into 16-bit and hard-clips at ±0x7fbc, and the material is mastered hot (most sfx and
   the music tracks peak at 0 dBFS or above), so a voice line over a gunshot clips. The port decodes the music in float,
