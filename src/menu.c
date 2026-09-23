@@ -423,6 +423,27 @@ static void draw_credits(Menu *m, SDL_Renderer *r, int sw, int sh)
     (void)r;
 }
 
+/* MISSION ACCOMPLISHED art per cleared stage and hero (assets/victory, the original 1672x941 paintings
+ * downscaled to 426x240); stage 2 (the Grand Prix) has one picture for everybody */
+static Sprite *victory_art(int stage, int character)
+{
+    static const char *const HERO[4] = { "saber", "fireball", "april", "colt" };
+    static Sprite *cache[5][4]; static bool tried[5][4];
+    if (stage < 1 || stage > 4) return NULL;
+    int h = stage == 2 ? 0 : character & 3;
+    if (!tried[stage][h]) {
+        tried[stage][h] = true;
+        char name[64];
+        if (stage == 2) snprintf(name, sizeof name, "victory/stage2.png");
+        else snprintf(name, sizeof name, "victory/stage%d_%s.png", stage, HERO[h]);
+        const char *path = asset_path(name); int w = 0, hh = 0;
+        uint32_t *px = path ? png_load_rgba(path, &w, &hh) : NULL;
+        if (px) { cache[stage][h] = sprite_from_rgba(0x56C70000u + (uint32_t)(stage * 4 + h), px, w, hh, 1); free(px); }
+        else fprintf(stderr, "victory: missing %s\n", name);
+    }
+    return cache[stage][h];
+}
+
 void menu_draw(Menu *m, SDL_Renderer *r, int sw, int sh)
 {
     switch (m->state) {
@@ -459,7 +480,8 @@ void menu_draw(Menu *m, SDL_Renderer *r, int sw, int sh)
                                * v = min(2.1 sin(pi|t|/2), 2)/2 under a black veil; t runs 0..4, then -1..0 zooms
                                * back out under a white veil (FUN_00429de0) */
         fill(r, sw, sh, 0, 0, 0, 255);
-        Sprite *bg = sprite_get(0xE963788C), *a = sprite_get(0xF6172502), *b = sprite_get(0xF629241D);
+        Sprite *bg = victory_art(m->cleared_stage, m->character), *a = sprite_get(0xF6172502), *b = sprite_get(0xF629241D);
+        if (!bg) bg = sprite_get(0xE963788C);   /* the demo's Fireball art when ours is missing */
         float t = m->t <= 4.0f ? m->t : m->t - 5.0f, v = 1.0f;
         if (t < 1.0f) { v = 2.1f * sinf(fabsf(t) * 1.5707964f); if (v > 2.0f) v = 2.0f; v *= 0.5f; }
         float sc = zoom_scale(v);

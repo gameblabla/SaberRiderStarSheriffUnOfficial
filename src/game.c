@@ -31,6 +31,7 @@ bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh, int start_level)
     if (start_level) { g->stage = start_level; return level_start(g); }   /* --level N: skip the front end */
     if (SDL_getenv("SABER_STAGE")) { g->stage = atoi(SDL_getenv("SABER_STAGE")); if (g->stage >= 2 && g->stage <= 4) return level_start(g); }   /* debug: straight into stage 2/3/4 */
     if (!SDL_getenv("SABER_MENU") && (SDL_getenv("SABER_START") || SDL_getenv("SABER_SCRIPT"))) return level_start(g);   /* debug: straight into the level */
+    if (SDL_getenv("SABER_CLEARED")) g->menu.cleared_stage = atoi(SDL_getenv("SABER_CLEARED"));   /* debug: SABER_MENU=15 art for that stage */
     menu_enter(&g->menu, SDL_getenv("SABER_MENU") ? atoi(SDL_getenv("SABER_MENU")) : MS_SPLASH0);
     return true;
 }
@@ -254,7 +255,7 @@ void game_update(Game *g, float dt)
             int lives = mode7_lives(g->mode7);
             mode7_destroy(g->mode7); g->mode7 = NULL; g->in_level = false;
             dialog_set_hero(g->menu.character);
-            if (res == 1) { g->stage = 3; g->carry_lives = lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); }   /* on to Hyperjumper Pass */
+            if (res == 1) { g->menu.cleared_stage = g->stage; g->stage = 3; g->carry_lives = lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); }   /* on to Hyperjumper Pass */
             else game_over(g);
         }
         return;
@@ -278,9 +279,9 @@ void game_update(Game *g, float dt)
         g->state_t += dt; float f = g->state_t > 5.5f ? 2.1f * sinf((g->state_t - 5.5f) * 1.5707964f) : 0.0f;
         if (f >= 2.0f) {
             g->in_level = false;
-            if (g->stage == 1) { g->stage = 2; g->carry_lives = g->player.lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return; }   /* the Grand Prix follows */
-            if (g->stage == 3) { g->stage = 4; g->carry_lives = g->player.lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return; }   /* on into the jungle */
-            g->stage = 5; g->menu.ending = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return;   /* the game ends after stage 4: the credits roll */
+            if (g->stage == 1) { g->menu.cleared_stage = g->stage; g->stage = 2; g->carry_lives = g->player.lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return; }   /* the Grand Prix follows */
+            if (g->stage == 3) { g->menu.cleared_stage = g->stage; g->stage = 4; g->carry_lives = g->player.lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return; }   /* on into the jungle */
+            g->menu.cleared_stage = g->stage; g->stage = 5; g->menu.ending = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return;   /* the game ends after stage 4: the credits roll */
         }
         music_set_volume(2.0f - f);
     }
