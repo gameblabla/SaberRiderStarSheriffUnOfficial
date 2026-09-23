@@ -90,10 +90,7 @@ static void avatar_load(void)
     static bool done;
     if (done) return;
     done = true;
-    const char *path = asset_path("dark_april_avatar.png"); int w, h;
-    uint32_t *px = path ? png_load_rgba(path, &w, &h) : NULL;
-    if (px) { sprite_from_rgba(namehash("dialog_avatar_darkapril"), px, w, h, 1); free(px); }
-    else fprintf(stderr, "assets/dark_april_avatar.png not found\n");
+    if (!sprite_from_png(namehash("dialog_avatar_darkapril"), asset_path("dark_april_avatar.png"), 0)) fprintf(stderr, "assets/dark_april_avatar.png not found\n");
 }
 
 static void mote(DarkApril *d, float x, float y, float vx, float vy, float life)

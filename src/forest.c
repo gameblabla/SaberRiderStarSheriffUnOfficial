@@ -30,11 +30,8 @@ static CBlock *load_sheet(const char *dir, const char *png, uint32_t id)
     char name[64]; snprintf(name, sizeof name, "%s/%s", dir, png);
     const char *path = asset_path(name);
     if (!path) { fprintf(stderr, "%s: missing %s\n", dir, name); return NULL; }
-    int w = 0, h = 0;
-    uint32_t *px = png_load_rgba(path, &w, &h);
-    if (!px) { fprintf(stderr, "%s: can't decode %s\n", dir, name); return NULL; }
-    CBlock *cb = cblock_from_rgba(id, px, w, h, 16, 16);
-    free(px);
+    CBlock *cb = cblock_from_png(id, path, 16, 16);
+    if (!cb) fprintf(stderr, "%s: can't decode %s\n", dir, name);
     return cb;
 }
 
@@ -89,10 +86,7 @@ bool forest_load(Forest *f, Level *L, const char *dir, const char *file, uint32_
     if (!r.ok || !f->collision) { fprintf(stderr, "%s: truncated %s\n", dir, file); forest_dispose(f); return false; }
 
     /* the shield sniper's frames (type 30, enemies.c; forest/sniper.py; stage 5 has them too) */
-    const char *sp = asset_path("forest/sniper.png");
-    int sw_ = 0, sh_ = 0; uint32_t *spx = sp ? png_load_rgba(sp, &sw_, &sh_) : NULL;
-    if (spx) { sprite_from_rgba(SHIELD_SNIPER_SPRITE, spx, sw_, sh_, sw_ / 64); free(spx); }
-    else fprintf(stderr, "stage4: missing forest/sniper.png\n");
+    if (!sprite_from_png(SHIELD_SNIPER_SPRITE, asset_path("forest/sniper.png"), 64)) fprintf(stderr, "stage4: missing forest/sniper.png\n");
 
     /* everything loaded: switch the level over (the other tile layers are hidden) */
     for (int i = 0; i < L->nlayers; i++) if (L->layers[i].is_tilemap) L->layers[i].map = NULL;

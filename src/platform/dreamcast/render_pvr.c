@@ -53,6 +53,11 @@ pvr_ptr_t rdc_vram_alloc(size_t bytes)
         if (!evict_hook || !evict_hook()) break;
     }
     printf("vram: out of texture memory (%u bytes wanted, %u free, %u in use)\n", (unsigned)bytes, (unsigned)pvr_mem_available(), (unsigned)vram_used);
+    static int dumped;
+    if (!dumped++) for (RTex *t = live_tex; t; t = t->next) {
+        size_t b = 0; for (int i = 0; i < t->npx * t->npy; i++) b += t->pages[i].bytes;
+        printf("  tex %08lX %dx%d %u KB\n", (unsigned long)t->tag, t->w, t->h, (unsigned)(b / 1024));
+    }
     return NULL;
 }
 static void vram_free(pvr_ptr_t p, size_t bytes) { if (p) { pvr_mem_free(p); vram_used -= bytes; } }

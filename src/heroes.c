@@ -19,10 +19,7 @@ static CBlock *april_sheet(void)
     tried = true;
     const char *path = asset_path("april.png");
     if (!path) { fprintf(stderr, "assets/april.png not found: April uses Fireball's sheet\n"); return NULL; }
-    int w, h; uint32_t *px = png_load_rgba(path, &w, &h);
-    if (!px) return NULL;
-    cb = cblock_from_rgba(CRHC_APRIL, px, w, h, 64, 64);
-    free(px);
+    cb = cblock_from_png(CRHC_APRIL, path, 64, 64);   /* evictable: the select screen no longer holds every sheet */
     return cb;
 }
 
@@ -36,10 +33,7 @@ static CBlock *saber_sheet(void)
     tried = true;
     const char *path = asset_path("saber.png");
     if (!path) { fprintf(stderr, "assets/saber.png not found: Saber Rider uses Fireball's sheet\n"); return NULL; }
-    int w, h; uint32_t *px = png_load_rgba(path, &w, &h);
-    if (!px) return NULL;
-    cb = cblock_from_rgba(CRHC_SABER_TAG, px, w, h, 64, 64);
-    free(px);
+    cb = cblock_from_png(CRHC_SABER_TAG, path, 64, 64);   /* evictable: the select screen no longer holds every sheet */
     return cb;
 }
 
@@ -53,20 +47,20 @@ static CBlock *colt_sheet(void)
     tried = true;
     const char *path = asset_path("colt.png");
     if (!path) { fprintf(stderr, "assets/colt.png not found: Colt uses Fireball's sheet\n"); return NULL; }
-    int w, h; uint32_t *px = png_load_rgba(path, &w, &h);
-    if (!px) return NULL;
-    cb = cblock_from_rgba(CRHC_COLT_TAG, px, w, h, 64, 64);
-    free(px);
+    cb = cblock_from_png(CRHC_COLT_TAG, path, 64, 64);   /* evictable: the select screen no longer holds every sheet */
     return cb;
 }
 
 bool hero_available(int character)
 {
     if (character == HERO_FIREBALL) return true;
-    if (character == HERO_APRIL) return april_sheet() != NULL;
-    if (character == HERO_SABER) return saber_sheet() != NULL;
-    if (character == HERO_COLT) return colt_sheet() != NULL;
-    return false;
+    /* only whether the sheet ships: decoding all three here (the select screen asks every frame) filled the
+     * Dreamcast's texture memory before the level had loaded */
+    static const char *const sheet[4] = { "saber.png", NULL, "april.png", "colt.png" };
+    static int8_t ships[4];   /* 0 = not looked yet, 1 = yes, -1 = no */
+    if ((unsigned)character >= 4 || !sheet[character]) return false;
+    if (!ships[character]) ships[character] = asset_path(sheet[character]) ? 1 : -1;
+    return ships[character] > 0;
 }
 
 const char *hero_name(int character)

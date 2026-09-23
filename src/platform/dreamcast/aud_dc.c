@@ -111,6 +111,7 @@ AudSample *aud_sample_file(const char *path) { return path ? find(0, path) : NUL
 
 /* ---- streams for long samples and loops ---- */
 static uint8_t silence[STREAM_BUF] __attribute__((aligned(32)));
+static uint8_t pad[NSTREAM][STREAM_BUF] __attribute__((aligned(32)));   /* a sample's padded last chunk */
 static struct {
     snd_stream_hnd_t h; AudSample *smp; size_t pos; bool loop, active, draining; uint64_t end_ms; unsigned gen; int vol;
 } strm[NSTREAM];
@@ -119,7 +120,7 @@ static void *stream_cb(snd_stream_hnd_t hnd, int req, int *got)
 {
     for (int i = 0; i < NSTREAM; i++) {
         if (strm[i].h != hnd) continue;
-        if (!strm[i].active || strm[i].draining || !strm[i].smp || !strm[i].smp->adpcm) { *got = req; return silence; }
+        if (!strm[i].active || strm[i].draining || !strm[i].smp || !strm[i].smp->adpcm || !strm[i].smp->bytes) { *got = req; return silence; }
         AudSample *s = strm[i].smp;
         if (strm[i].pos >= s->bytes) {
             if (strm[i].loop) strm[i].pos = 0;
@@ -129,10 +130,21 @@ static void *stream_cb(snd_stream_hnd_t hnd, int req, int *got)
                 *got = req; return silence;
             }
         }
-        size_t n = s->bytes - strm[i].pos; if (n > (size_t)req) n = (size_t)req;
-        void *p = s->adpcm + strm[i].pos; strm[i].pos += n;
-        *got = (int)n;
-        return p;
+        size_t n = s->bytes - strm[i].pos;
+        if (n >= (size_t)req) { void *p = s->adpcm + strm[i].pos; strm[i].pos += (size_t)req; *got = req; return p; }
+        /* the tail: KOS writes each chunk at the running offset in sound RAM, so a short chunk (not whole 32-byte
+         * blocks) misaligned every later DMA of that stream - g2_dma refused them and it went silent for good. So the
+         * request is always filled: a loop carries on from its start, a one-shot with silence */
+        size_t want = (size_t)req < STREAM_BUF ? (size_t)req : STREAM_BUF, done = 0;
+        while (done < want) {
+            size_t k = s->bytes - strm[i].pos; if (k > want - done) k = want - done;
+            memcpy(pad[i] + done, s->adpcm + strm[i].pos, k); done += k; strm[i].pos += k;
+            if (strm[i].pos < s->bytes) continue;
+            if (!strm[i].loop) { memset(pad[i] + done, 0, want - done); done = want; }
+            else strm[i].pos = 0;
+        }
+        *got = (int)want;
+        return pad[i];
     }
     *got = 0; return NULL;
 }

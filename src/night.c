@@ -67,11 +67,8 @@ static Sprite *load_sprite(const char *name, uint32_t id)
 {
     const char *path = asset_path(name);
     if (!path) { fprintf(stderr, "stage3: missing %s\n", name); return NULL; }
-    int w = 0, h = 0;
-    uint32_t *px = png_load_rgba(path, &w, &h);
-    if (!px) { fprintf(stderr, "stage3: can't decode %s\n", name); return NULL; }
-    Sprite *s = sprite_from_rgba(id, px, w, h, 1);
-    free(px);
+    Sprite *s = sprite_from_png(id, path, 0);
+    if (!s) fprintf(stderr, "stage3: can't decode %s\n", name);
     return s;
 }
 

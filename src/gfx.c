@@ -2,6 +2,7 @@
 #include "pack.h"
 #include "lzo1z.h"
 #include "platform/plat.h"
+#include "assets.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -127,11 +128,26 @@ CBlock *cblock_from_rgba(uint32_t id, const uint32_t *px, int w, int h, int tw, 
     return c;
 }
 
+CBlock *cblock_from_png(uint32_t id, const char *path, int tw, int th)
+{
+    for (int i = 0; i < g_ncb; i++) if (g_cb[i].id == id) return &g_cb[i];
+    int w, h; uint32_t *px = path ? png_load_rgba(path, &w, &h) : NULL;
+    if (!px) return NULL;
+    CBlock *c = cblock_from_rgba(id, px, w, h, tw, th);
+    free(px);
+    if (c) c->file = strdup(path);
+    return c;
+}
+
 RTex *cblock_tex(const CBlock *cc)
 {
     if (!cc) return NULL;
     CBlock *c = (CBlock *)cc;
     if (!c->tex && c->from_pack) cblock_build(c, false);
+    else if (!c->tex && c->file) {
+        int w, h; uint32_t *px = png_load_rgba(c->file, &w, &h);
+        if (px) { c->tex = make_tex(c->id, w, h, px); free(px); }
+    }
     c->last_used = g_frame;
     return c->tex;
 }
@@ -233,6 +249,17 @@ Sprite *sprite_from_rgba(uint32_t id, const uint32_t *px, int w, int h, int fram
     return s;
 }
 
+Sprite *sprite_from_png(uint32_t id, const char *path, int frame_w)
+{
+    for (int i = 0; i < g_nspr; i++) if (g_spr[i].id == id) return &g_spr[i];
+    int w, h; uint32_t *px = path ? png_load_rgba(path, &w, &h) : NULL;
+    if (!px) return NULL;
+    Sprite *s = sprite_from_rgba(id, px, w, h, frame_w > 0 && w >= frame_w ? w / frame_w : 1);
+    free(px);
+    if (s) s->file = strdup(path);
+    return s;
+}
+
 Sprite *sprite_get(uint32_t id)
 {
     for (int i = 0; i < g_nspr; i++) if (g_spr[i].id == id) return &g_spr[i];
@@ -256,17 +283,20 @@ RTex *sprite_tex(const Sprite *cs)
 #ifdef PLAT_LOW_MEMORY
         packs_release(s->id);
 #endif
+    } else if (!s->tex && s->file) {
+        int w, h; uint32_t *px = png_load_rgba(s->file, &w, &h);
+        if (px) { s->tex = make_tex(s->id, w, h, px); free(px); }
     }
     s->last_used = g_frame;
     return s->tex;
 }
 
-/* ---- memory pressure: drop the pack texture drawn longest ago (not in this frame or the one being rendered) ---- */
+/* ---- memory pressure: drop the pack (or PNG) texture drawn longest ago (not in this frame or the one being rendered) ---- */
 static bool evict_one(void)
 {
     uint32_t best = g_frame - 1; RTex **victim = NULL;
-    for (int i = 0; i < g_nspr; i++) if (g_spr[i].from_pack && g_spr[i].tex && g_spr[i].last_used < best) { best = g_spr[i].last_used; victim = &g_spr[i].tex; }
-    for (int i = 0; i < g_ncb; i++) if (g_cb[i].from_pack && g_cb[i].tex && g_cb[i].last_used < best) { best = g_cb[i].last_used; victim = &g_cb[i].tex; }
+    for (int i = 0; i < g_nspr; i++) if ((g_spr[i].from_pack || g_spr[i].file) && g_spr[i].tex && g_spr[i].last_used < best) { best = g_spr[i].last_used; victim = &g_spr[i].tex; }
+    for (int i = 0; i < g_ncb; i++) if ((g_cb[i].from_pack || g_cb[i].file) && g_cb[i].tex && g_cb[i].last_used < best) { best = g_cb[i].last_used; victim = &g_cb[i].tex; }
     if (!victim) return false;
     rtex_destroy(*victim); *victim = NULL;
     return true;

@@ -368,7 +368,7 @@ static void draw_continue(Menu *m, Ren *r, int sw, int sh)
     if (!bg_tried) {
         bg_tried = true;
         const char *p = asset_path("continue.png");
-        if (p) { int w, h; uint32_t *px = png_load_rgba(p, &w, &h); if (px) { bg = sprite_from_rgba(0xC0117100, px, w, h, 1); free(px); } }
+        if (p) bg = sprite_from_png(0xC0117100, p, 0);
     }
     if (bg) {
         float s = fminf((float)sw / bg->w, (float)sh / bg->h), w = bg->w * s, h = bg->h * s;
@@ -440,10 +440,8 @@ static Sprite *victory_art(int stage, int character)
         else if (stage == 6) snprintf(name, sizeof name, "victory/stage6.png");
         else if (stage == 7) snprintf(name, sizeof name, "victory/stage7.png");   /* stage 6's final phase */
         else snprintf(name, sizeof name, "victory/stage%d_%s.png", stage, HERO[h]);
-        const char *path = asset_path(name); int w = 0, hh = 0;
-        uint32_t *px = path ? png_load_rgba(path, &w, &hh) : NULL;
-        if (px) { cache[stage][h] = sprite_from_rgba(0x56C70000u + (uint32_t)(stage * 4 + h), px, w, hh, 1); free(px); }
-        else fprintf(stderr, "victory: missing %s\n", name);
+        cache[stage][h] = sprite_from_png(0x56C70000u + (uint32_t)(stage * 4 + h), asset_path(name), 0);
+        if (!cache[stage][h]) fprintf(stderr, "victory: missing %s\n", name);
     }
     return cache[stage][h];
 }

@@ -14,6 +14,7 @@ typedef struct {
     RTex *tex;           /* tile sheet, TILES_PER_ROW tiles wide; NULL while evicted (cblock_tex brings it back) */
     int sheet_cols;
     bool from_pack;      /* can be rebuilt from its pack block (so its texture may be evicted) */
+    const char *file;    /* or from this PNG (cblock_from_png), likewise evictable */
     uint32_t last_used;  /* gfx frame of the last draw */
 } CBlock;
 
@@ -22,6 +23,7 @@ typedef struct Sprite {
     int w, h, frames;
     RTex *tex;           /* frames laid out horizontally, each POT-padded frame cropped to w×h; NULL while evicted */
     bool from_pack;
+    const char *file;    /* the PNG it can be rebuilt from (sprite_from_png), so it may be evicted like a pack one */
     uint32_t last_used;
 } Sprite;
 
@@ -34,9 +36,12 @@ RTex *cblock_tex(const CBlock *c);
 CBlock *cblock_get(uint32_t id);          /* cached */
 /* a cblock made of our own RGBA sheet: one frame of (w/tw) x (h/th) cells, cell i = tile i (recreated heroes) */
 CBlock *cblock_from_rgba(uint32_t id, const uint32_t *px, int w, int h, int tw, int th);
+/* the same from a PNG file, kept by path so its texture can be dropped under memory pressure and decoded again */
+CBlock *cblock_from_png(uint32_t id, const char *path, int tw, int th);
 Sprite *sprite_get(uint32_t id);          /* cached */
 Sprite *sprite_from_blob(uint32_t id, const uint8_t *blob, uint32_t size);   /* decode a sprite blob not in a pack (fonts) */
 Sprite *sprite_from_rgba(uint32_t id, const uint32_t *px, int w, int h, int frames);   /* register our own RGBA image (frames side by side) under a resource id */
+Sprite *sprite_from_png(uint32_t id, const char *path, int frame_w);  /* the same from a PNG, evictable (frame_w 0 = one frame) */
 int   cblock_ncells(const CBlock *c);
 /* night-stage recolor: tint a tile bank (SDL texture color mod; 255,255,255
  * resets). The tint is texture state, so set it around a layer's draw. */
