@@ -100,10 +100,14 @@ static const char *const SCRIPT_AFTER2 =
     "<|GREEN|>\n</dialog_avatar_saber2/>\nThat red one fought like a veteran. Fireball, how is Ramrod holding up?\n<<>>\n"
     "<|GREEN|>\n</dialog_avatar_fireball1/>\nDented, not beaten. April, patch what you can.\n<<>>\n"
     "<|RED|>\n</dialog_avatar_april2/>\nRerouting power... Oh no. A command mech is leading the next group - and it's twice their size!\n<<>>\n";
+/* the bridge into the final phase (space.c): the Renegades were dropped from orbit, and the ship that dropped them is
+ * running for a dimension jump to fetch the rest of the fleet */
 static const char *const SCRIPT_OUTRO =
-    "<|PURPLE|>\n</dialog_avatar_outrider/>\nEnjoy it, Star Sheriffs... we were only the vanguard. The ground will shake when the Renegade comes for your outpost.\n<<>>\n"
-    "<|GREEN|>\n</dialog_avatar_saber2/>\nThe town is safe - for now. Ramrod, hold the line. Whatever comes over that ridge, we'll be waiting.\n<<>>\n"
-    "<|GREEN|>\n</dialog_avatar_fireball1/>\nYou heard the man. Nobody rides into Yuma past us.\n<<>>\n";
+    "<|PURPLE|>\n</dialog_avatar_outrider/>\nEnjoy it, Star Sheriffs... we were only the vanguard. Our battle cruiser is already breaking orbit - and it's coming back with the whole fleet!\n<<>>\n"
+    "<|RED|>\n</dialog_avatar_april2/>\nHe's not bluffing! Long-range scan: an Outrider battle cruiser, climbing out of Yuma's orbit. It's heading for a dimension jump point!\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_saber2/>\nIf it makes that jump, it brings Nemesis a fleet. We stop it before it gets there - in space.\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_colt2/>\nChasin' a battleship through a minefield? Partner, I thought you'd never ask.\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_fireball1/>\nEveryone strap in. Ramrod - back to CRUISER MODE! Full thrust!\n<<>>\n";
 static const char *const *const SCRIPT_BETWEEN[N_WAVES] = { &SCRIPT_AFTER1, &SCRIPT_AFTER2, NULL };
 
 enum { PH_INTRO, PH_STRIDE, PH_INSTR, PH_WAVE_IN, PH_FIGHT, PH_WAVE_CLEAR, PH_RADIO, PH_DOWN, PH_GAMEOVER, PH_OUTRO, PH_CLEARED };

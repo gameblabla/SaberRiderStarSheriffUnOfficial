@@ -31,7 +31,7 @@ bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh, int start_level)
     }
     g->stage = 1; g->continues_left = g->menu.continues;
     if (start_level) { g->stage = start_level; return level_start(g); }   /* --level N: skip the front end */
-    if (SDL_getenv("SABER_STAGE")) { g->stage = atoi(SDL_getenv("SABER_STAGE")); if (g->stage >= 2 && g->stage <= 6) return level_start(g); }   /* debug: straight into stage 2..6 */
+    if (SDL_getenv("SABER_STAGE")) { g->stage = atoi(SDL_getenv("SABER_STAGE")); if (g->stage >= 2 && g->stage <= 7) return level_start(g); }   /* debug: straight into stage 2..6 (7 = stage 6's final phase) */
     if (!SDL_getenv("SABER_MENU") && (SDL_getenv("SABER_START") || SDL_getenv("SABER_SCRIPT"))) return level_start(g);   /* debug: straight into the level */
     if (SDL_getenv("SABER_CLEARED")) g->menu.cleared_stage = atoi(SDL_getenv("SABER_CLEARED"));   /* debug: SABER_MENU=15 art for that stage */
     menu_enter(&g->menu, SDL_getenv("SABER_MENU") ? atoi(SDL_getenv("SABER_MENU")) : MS_SPLASH0);
@@ -47,6 +47,7 @@ static bool level_start(Game *g)
     forest_dispose(&g->lab);
     if (g->mode7) { mode7_destroy(g->mode7); g->mode7 = NULL; }
     if (g->ramrod) { ramrod_destroy(g->ramrod); g->ramrod = NULL; }
+    if (g->space) { space_destroy(g->space); g->space = NULL; }
     memset(g, 0, sizeof *g);
     g->ren = ren; g->sw = sw; g->sh = sh; g->menu = menu; g->in_level = true; g->stage = stage; g->carry_lives = carry; g->continues_left = conts;
     if (stage == 2) {   /* the Mode-7 Grand Prix: its own world, HUD and flow */
@@ -58,6 +59,11 @@ static bool level_start(Game *g)
         g->ramrod = ramrod_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives);
         if (g->ramrod) title_start(g);
         return g->ramrod != NULL;
+    }
+    if (stage == 7) {   /* straight on from the mechs: Ramrod in cruiser mode after the battle cruiser */
+        g->space = space_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives);
+        if (g->space) title_start(g);
+        return g->space != NULL;
     }
     const PackEntry *t = packs_find(0x119090BF);
     uint32_t lvl = 0x12DAD1A7;
@@ -146,7 +152,7 @@ static bool level_start(Game *g)
 #define TITLE_TEXT_T 0.9f    /* the band is open: the name starts typing */
 #define TITLE_WIPE_T 3.1f    /* the strips start opening */
 #define TITLE_END_T  4.3f
-static const struct { const char *no, *name, *sub; } TITLE[7] = {
+static const struct { const char *no, *name, *sub; } TITLE[8] = {
     { "", "", "" },
     { "STAGE 1", "THE FRONTIER TOWN", "OUTRIDERS IN THE STREETS" },
     { "STAGE 2", "THE ALL GALAXY GRAND PRIX", "NEW BORDERLAND CIRCUIT" },
@@ -154,8 +160,9 @@ static const struct { const char *no, *name, *sub; } TITLE[7] = {
     { "STAGE 4", "THE RED PALM JUNGLE", "OUTRIDER WATCHTOWERS" },
     { "STAGE 5", "THE CAVERN LABORATORY", "OUTRIDER HIDEOUT" },
     { "STAGE 6", "POWER STRIDE", "RENEGADES AT THE YUMA OUTPOST" },
+    { "STAGE 6 - FINAL PHASE", "THE BATTLE CRUISER", "OUTRIDER SPACE" },
 };
-static int title_idx(const Game *g) { return g->stage >= 2 && g->stage <= 6 ? g->stage : 1; }
+static int title_idx(const Game *g) { return g->stage >= 2 && g->stage <= 7 ? g->stage : 1; }
 static void title_start(Game *g) { g->title_on = true; g->title_t = 0; music_set_volume(0); }
 static void title_update(Game *g, float dt)
 {
@@ -288,7 +295,19 @@ void game_update(Game *g, float dt)
             int lives = ramrod_lives(g->ramrod);
             ramrod_destroy(g->ramrod); g->ramrod = NULL; g->in_level = false;
             dialog_set_hero(g->menu.character);
-            if (res == 1) { g->menu.cleared_stage = g->stage; g->stage = 7; g->carry_lives = lives; g->menu.ending = true; menu_enter(&g->menu, MS_ACCOMPLISHED); }   /* phase 1 is where the game ends for now: the credits roll */
+            if (res == 1) { g->stage = 7; g->carry_lives = lives; level_start(g); }   /* no result screen: the outro's radio scene leads straight into the final phase */
+            else game_over(g);
+        }
+        return;
+    }
+    if (g->space) {
+        space_update(g->space, &g->in, dt);
+        int res = space_result(g->space);
+        if (res) {
+            int lives = space_lives(g->space);
+            space_destroy(g->space); g->space = NULL; g->in_level = false;
+            dialog_set_hero(g->menu.character);
+            if (res == 1) { g->menu.cleared_stage = 7; g->stage = 8; g->carry_lives = lives; g->menu.ending = true; menu_enter(&g->menu, MS_ACCOMPLISHED); }   /* the last battle: the credits roll */
             else game_over(g);
         }
         return;
@@ -523,6 +542,7 @@ void game_draw(Game *g)
     if (!g->in_level) { menu_draw(&g->menu, g->ren, g->sw, g->sh); draw_scanlines(g); return; }
     if (g->mode7) { mode7_draw(g->mode7, menu_scanlines(&g->menu)); if (g->title_on) title_draw(g); return; }
     if (g->ramrod) { ramrod_draw(g->ramrod, menu_scanlines(&g->menu)); if (g->title_on) title_draw(g); return; }
+    if (g->space) { space_draw(g->space, menu_scanlines(&g->menu)); if (g->title_on) title_draw(g); return; }
     Level *L = &g->level;
     float shake = g->enemies.cam_shake ? (float)(rand() % 4) : 0.0f;
     float saved = g->cam_y; g->cam_y += shake;

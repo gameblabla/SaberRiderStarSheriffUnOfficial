@@ -73,6 +73,7 @@ int main(int argc, char **argv)
         Uint64 now = SDL_GetTicksNS();
         acc += (now - prev) / 1e9; prev = now;
         if (acc > 0.25) acc = 0.25;
+        if (SDL_getenv("SABER_FAST")) acc = step * atoi(SDL_getenv("SABER_FAST"));   /* debug: n fixed steps per drawn frame (long headless runs) */
         while (acc >= step) {
             if (script) {
                 if (script_n == 0 && *script) {

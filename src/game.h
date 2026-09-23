@@ -8,6 +8,7 @@
 #include "menu.h"
 #include "mode7.h"
 #include "ramrod.h"
+#include "space.h"
 #include "night.h"
 #include "forest.h"
 #include "darkapril.h"
@@ -32,11 +33,13 @@ typedef struct {
     struct { float cx, cy, hx, hy, rx, ry; } deathzones[8]; int ndeath;       /* type 3 */
     int state;              /* 10 playing, 0xd dialog, 0xe level clear, 0xb game over, 0xc pause */
     Menu menu; bool in_level;
-    int stage;              /* 1 frontier town (LEVL), 2 the Mode-7 Grand Prix, 3 Hyperjumper Pass, 4 the jungle, 5 the cave lab, 6 Ramrod */
+    int stage;              /* 1 frontier town (LEVL), 2 the Mode-7 Grand Prix, 3 Hyperjumper Pass, 4 the jungle, 5 the cave lab, 6 Ramrod,
+                             * 7 stage 6's final phase (the space shooter; "STAGE 6" on screen) */
     int carry_lives;        /* lives left when stage 1 was cleared (-1: fresh start) */
     int continues_left;     /* CONTINUE? credits left in this run (from the option at the start of a run) */
     Mode7 *mode7;
     Ramrod *ramrod;              /* stage 6: Ramrod's cockpit (ramrod.c), its own world like the Grand Prix */
+    Space *space;                /* stage 6's final phase (internally 7): Ramrod in cruiser mode vs the battle cruiser (space.c) */
     Night night; bool night_on;   /* stage 3: night-tinted level-1 tilemap + Hyperjumper */
     Forest forest; bool forest_on; /* stage 4: the rebuilt forest tile layers over the level-1 layer slots */
     bool forest_outro_done;      /* stage 4: the win's radio scene already shown */
