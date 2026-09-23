@@ -48,8 +48,8 @@ typedef struct {
     int dir;                    /* -1 flying/facing left (art as drawn), +1 right (mirrored) */
     int cycle;                  /* attack round: sides and passes alternate */
     int hp, hp_max;
-    float hit_flash, fire_anim, shot_t;
-    int burst;
+    float hit_flash;
+    bool shooting; float fire_t;   /* gun cycle: running this step, time to the next shot */
     float death_vy; int death_phase; bool death_front;
     bool boss_started, clear_ready;
     HyperjumperShot shots[HYPERJUMPER_SHOTS];

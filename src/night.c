@@ -41,6 +41,8 @@ static const Box FRONT_HULL[] = { { 6, 58, 195, 98 }, { 82, 28, 118, 124 } };
 #define HOVER_Y 66.0f        /* side hold: the keel clears a standing hero, a jump reaches it */
 #define FRONT_Y 56.0f
 #define DEATH_TIME 3.8f      /* kill(E, e, 0xed8) */
+#define FIRE_PERIOD 0.2f     /* the level-1 boss gun's cooldown (boss_fire: gun_cd = 0.2) */
+#define SIDE_SPEED 140.0f    /* the level-1 boss flying in to its hold spot */
 
 static int rnd(int n) { return n > 0 ? rand() % n : 0; }
 
@@ -150,7 +152,6 @@ static void fire_side(Night *n)
     float mx = n->dir > 0 ? l + SIDE_W - SIDE_MUZZLE_X : l + SIDE_MUZZLE_X, my = t + SIDE_MUZZLE_Y;
     float v = 333.3333f * 0.70710678f;
     spawn_shot(n, mx, my, n->dir * v, v, false);
-    n->fire_anim = 0.16f;
     sfx_play(SFX_GUN, 0);
 }
 
@@ -158,9 +159,20 @@ static void fire_front(Night *n)
 {
     float l = floorf(n->bx) - FRONT_W / 2, t = floorf(n->by) - FRONT_H / 2;
     spawn_shot(n, l + FRONT_MUZZLE_X, t + FRONT_MUZZLE_Y, 0, 300.0f, true);
-    n->fire_anim = 0.09f;
     sfx_play(SFX_PILOT_GUN, 0);
 }
+
+/* The shooting animation cycles frame 1 (muzzle flash) and frame 2, 0.1 s each; the shot leaves at
+ * the start of frame 1, so the ship fires every 0.2 s like the level-1 boss. was: shooting last step. */
+static void gun_cycle(Night *n, float dt, bool front, bool was)
+{
+    if (!was) n->fire_t = 0;
+    n->shooting = true;
+    if (n->fire_t <= 1e-4f) { if (front) fire_front(n); else fire_side(n); n->fire_t += FIRE_PERIOD; }
+    n->fire_t -= dt;
+}
+
+static bool flash_frame(const Night *n) { return n->shooting && FIRE_PERIOD - n->fire_t < FIRE_PERIOD * 0.5f; }
 
 static void set_state(Night *n, HyperState s)
 {
@@ -174,7 +186,7 @@ static void begin_side(Night *n, int dir)
     n->dir = dir;
     n->bx = dir < 0 ? n->arena_x + n->sw + SIDE_W * 0.5f + 16 : n->arena_x - SIDE_W * 0.5f - 16;
     n->by = HOVER_Y;
-    n->speed = 240.0f;
+    n->speed = SIDE_SPEED;
     sfx_play(SFX_ENGINE, 0);
 }
 
@@ -202,8 +214,6 @@ static void begin_front(Night *n, const Player *pl)
     float px = pl->ch.body.x;
     n->bx = px < lo ? lo : px > hi ? hi : px;
     n->by = -FRONT_H * 0.5f - 8;
-    n->burst = 0;
-    n->shot_t = 0.55f;
     sfx_play(SFX_ENGINE, 0);
 }
 
@@ -281,8 +291,9 @@ void night_update(Night *n, Player *pl, Bullets *pb, Effects *fx, const Level *L
                   float cam_x, int sw, float dt, bool live)
 {
     if (n->hit_flash > 0) n->hit_flash -= dt;
-    if (n->fire_anim > 0) n->fire_anim -= dt;
     if (!live) return;
+    bool was_shooting = n->shooting;
+    n->shooting = false;
     n->st += dt;
     if (n->state != HJ_DORMANT && n->state != HJ_DYING && n->state != HJ_DONE) update_shots(n, pl, fx, dt);
     const float right = n->arena_x + n->sw;
@@ -319,19 +330,19 @@ void night_update(Night *n, Player *pl, Bullets *pb, Effects *fx, const Level *L
     case HJ_MID_GAP:
         if (n->st >= 1.0f) begin_side(n, -1);
         break;
-    case HJ_SIDE_IN: {    /* flies in and settles over one half of the arena (level 1: centre +128 / -160) */
+    case HJ_SIDE_IN: {    /* flies in at 140 px/s to one half of the arena, firing once its gun is on
+                           * screen (level 1: boss state 1 shoots on the way to centre +128 / -160) */
         float target = n->arena_x + n->sw * 0.5f - n->dir * 96.0f;
         float d = target - n->bx;
-        float sp = fabsf(d) * 2.8f; if (sp > 260.0f) sp = 260.0f; if (sp < 40.0f) sp = 40.0f;
-        if (fabsf(d) <= sp * dt) { n->bx = target; set_state(n, HJ_SIDE_HOLD); n->shot_t = 0.3f; }
-        else n->bx += (d > 0 ? 1 : -1) * sp * dt;
+        if (fabsf(d) <= SIDE_SPEED * dt) { n->bx = target; set_state(n, HJ_SIDE_HOLD); }
+        else n->bx += (d > 0 ? 1 : -1) * SIDE_SPEED * dt;
         n->by = HOVER_Y + sinf(n->st * 3.0f) * 2.0f;
+        if (n->bx > n->arena_x + 8 && n->bx < right - 8) gun_cycle(n, dt, false, was_shooting);
         break; }
-    case HJ_SIDE_HOLD:    /* hovers, the pilot sprays the ground diagonally */
+    case HJ_SIDE_HOLD:    /* hovers and keeps spraying the ground diagonally for 0x50 frames */
         n->by = HOVER_Y + sinf(n->st * 3.0f) * 2.0f;
-        n->shot_t -= dt;
-        if (n->shot_t <= 0) { fire_side(n); n->shot_t = p2 ? 0.26f : 0.34f; }
-        if (n->st >= (p2 ? 2.1f : 1.7f)) { set_state(n, HJ_SIDE_OUT); n->speed = 60.0f; }
+        gun_cycle(n, dt, false, was_shooting);
+        if (n->st >= (p2 ? 1.8f : 80.0f / 60.0f)) { set_state(n, HJ_SIDE_OUT); n->speed = SIDE_SPEED; }
         break;
     case HJ_SIDE_OUT:     /* boosts away the way it faces */
         n->speed += 520.0f * dt; if (n->speed > 400.0f) n->speed = 400.0f;
@@ -358,12 +369,9 @@ void night_update(Night *n, Player *pl, Bullets *pb, Effects *fx, const Level *L
         float drift = (p2 ? 70.0f : 50.0f) * dt, d = px - n->bx;
         n->bx += fabsf(d) <= drift ? d : (d > 0 ? drift : -drift);
         n->by = FRONT_Y + sinf(n->st * 2.5f) * 3.0f;
-        n->shot_t -= dt;
-        if (n->shot_t <= 0) {
-            fire_front(n);
-            if (++n->burst < 3) n->shot_t = 0.16f;
-            else { n->burst = 0; n->shot_t = p2 ? 0.75f : 0.95f; }
-        }
+        /* the pilot's gun at the same 0.2 s rate, in 1.2 s bursts with a breather between them
+         * (the level-1 rider also holds fire for part of each round) */
+        if (n->st > 0.35f && fmodf(n->st - 0.35f, p2 ? 1.55f : 1.7f) < 1.2f) gun_cycle(n, dt, true, was_shooting);
         if (n->st >= (p2 ? 5.0f : 4.2f)) set_state(n, HJ_FRONT_OUT);
         break; }
     case HJ_FRONT_OUT:
@@ -445,10 +453,10 @@ void night_draw_layer(Night *n, SDL_Renderer *ren, int layer, float cam_x, float
         float angle = 0;
         uint8_t r = 255, g = 255, b = 255;
         if (n->hit_flash > 0) { g = 150; b = 150; }
-        if (front_pose(n)) s = n->fire_anim > 0 ? n->front_fire : n->front_idle;
-        else if (n->fire_anim > 0) s = n->fire_anim > 0.09f ? n->side_fire1 : n->side_fire2;
+        if (front_pose(n)) s = flash_frame(n) ? n->front_fire : n->front_idle;
+        else if (n->shooting) s = flash_frame(n) ? n->side_fire1 : n->side_fire2;   /* the shooting cycle */
         else if (n->state == HJ_SIDE_OUT || n->state == HJ_LOW_PASS || (n->state == HJ_LOW_WARN && blink) ||
-                 (n->state == HJ_SIDE_IN && n->speed > 120.0f)) s = n->side_boost;
+                 n->state == HJ_SIDE_IN) s = n->side_boost;
         else s = n->side_normal;
         if (n->state == HJ_DYING) {
             angle = n->st * (n->death_front ? 6.0f : -12.0f);

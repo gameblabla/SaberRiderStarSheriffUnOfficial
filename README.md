@@ -92,11 +92,14 @@ appearing. No level-1 dialog, horse, stampede or convoy object is installed.
 Hyperjumper (art in `assets/hyperjumper/`) waits until the camera stops at the end of the route, then enters
 like the level-1 boss with the same samples: the boss music and the engine boot (0x13), a small pass far behind
 the mesas (drawn in level-1's `Small Hyperjmpr` layer), another engine howl and a nearer pass (`MidBGHyperjpr`),
-then it flies in. Its round: settle over one half of the arena and fire the pilot's gun diagonally (down-left,
-down-right when mirrored) from the muzzle at (70,54) of the shooting frames, sound 0x10; boost out; show its nose
-at the edge and skim the ground (jump over the hull, or slide under the keel with down + jump); drop in front
-of the hero in its front pose and drift after them firing bursts of bolts straight down from (93,45), sound 0x12;
-rise away and repeat from the other side. Below half HP the holds and bursts get denser. Contact boxes follow
+then it flies in. Its round: fly in at 140 px/s to one half of the arena and hold there for 0x50 frames, firing
+the pilot's gun diagonally (down-left, down-right when mirrored) from the muzzle at (70,54), sound 0x10; boost out;
+show its nose at the edge and skim the ground (jump over the hull, or slide under the keel with down + jump); drop
+in front of the hero in its front pose and drift after them firing bolts straight down from (93,45) in 1.2 s
+bursts, sound 0x12; rise away and repeat from the other side. Whenever it shoots it runs its shooting cycle,
+frame 1 (muzzle flash, the shot leaves) then frame 2, 0.1 s each, so it fires every 0.2 s like the level-1 boss's
+gun (`frame1_shooting` / `shooting_frame2_shoot` from the side, `firing_sprite` / `idle_sprite` from the front).
+Below half HP it holds longer and pauses less between bursts. Contact boxes follow
 the art's hull and keel; the whole ship takes shots. The wreck falls, jitters and burns for 0xed8 ms with the
 level-1 explosion sounds (0x11, 0x15), then the victory music plays and MISSION ACCOMPLISHED ends the game.
 HP 48 / 60 / 72 by difficulty.
