@@ -27,17 +27,7 @@ static void report_memory(const char *when)
 int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
-    vid_set_mode(DM_640x480, PM_RGB565);
-    pvr_init_params_t params = {
-        .opb_sizes = { PVR_BINSIZE_0, PVR_BINSIZE_0, PVR_BINSIZE_32, PVR_BINSIZE_0, PVR_BINSIZE_0 },   /* everything is in the translucent list */
-        .vertex_buf_size = 512 * 1024,
-        .dma_enabled = 0,
-        .fsaa_enabled = 0,
-        .autosort_disabled = 1,       /* draw in submission order, like the 2D renderer it replaces */
-        .opb_overflow_count = 2,
-    };
-    pvr_init(&params);
-    pvr_set_bg_color(0, 0, 0);
+    dc_video_init();
     rdc_init();
     fs_chdir("/cd");
     report_memory("boot");
@@ -61,6 +51,7 @@ int main(int argc, char **argv)
         rdc_frame_begin();
         app_draw();
         rdc_frame_end();
+        dc_video_update();
         if (now - last_report > 10000000000ull) {
             Game *g = app_game(); int hs, ha; rdc_header_stats(&hs, &ha);
             printf("[state] level=%d stage=%d state=%d menu=%d title=%d draws=%d headers=%d/%d\n",

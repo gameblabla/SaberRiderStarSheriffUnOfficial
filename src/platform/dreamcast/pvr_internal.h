@@ -36,3 +36,10 @@ pvr_ptr_t rdc_vram_alloc(size_t bytes);
 void rdc_vram_free(pvr_ptr_t p, size_t bytes);
 /* forget the header sent last (its memory is going away) */
 void rdc_forget_header(void);
+/* around a PVR re-initialisation (display mode switch): copy the textures out of VRAM / back into the new pool */
+bool rdc_vram_park(void);
+void rdc_vram_unpark(void);
+
+/* display modes (plat_dc.c): the boot mode + pvr_init, and a SCREEN change carried out between frames */
+void dc_video_init(void);
+void dc_video_update(void);

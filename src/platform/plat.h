@@ -22,12 +22,15 @@ const char *plat_base_path(void);
 /* where the demo's .pck files are when no path is given */
 const char *plat_default_data_dir(void);
 
-/* the logical screen: sw x sh game pixels. ratio: 0 wide (426x240), -1 4:3 (320x240), 1 stretched to the display.
- * screen: the SCREEN option (0 fullscreen, n = a window n+1 times the game size); ignored where meaningless. */
+/* the logical screen: sw x sh game pixels. ratio: 0 wide (426x240, plat_wide_width), -1 4:3 (320x240), 1 stretched to the display.
+ * screen: the SCREEN option (0 fullscreen, n = a window n+1 times the game size; Dreamcast: 0 640x480, 1 832x480 on VGA);
+ * -1 keeps the current one. */
 void plat_apply_screen(Ren *r, int sw, int sh, int ratio, int screen);
-/* the SCREEN option's choices and their label ("FULL 852x480", "WINDOWED x2", "TV") */
+/* the SCREEN option's choices and their label ("FULL 852x480", "WINDOWED x2", "VGA 832x480") */
 int  plat_screen_modes(void);
 void plat_screen_label(int screen, char *buf, size_t n);
+/* the WIDE ratio's logical width on that SCREEN choice: 426 (852x480 halved), 416 where the display is 832x480 */
+int  plat_wide_width(int screen);
 /* the ratio a fresh start uses (menu RATIO option) */
 int  plat_default_ratio(void);
 

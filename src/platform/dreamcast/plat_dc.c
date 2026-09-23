@@ -37,27 +37,112 @@ uint64_t plat_ticks_ms(void) { return timer_ms_gettime64(); }
 const char *plat_base_path(void) { return "/cd/"; }
 const char *plat_default_data_dir(void) { return "/cd/data"; }
 int plat_default_ratio(void) { return -1; }   /* 4:3: 320x240 doubled to 640x480, every pixel exact */
-int plat_screen_modes(void) { return 1; }
-void plat_screen_label(int screen, char *buf, size_t n)
+
+/* ---- display modes. SCREEN 0: KOS's 640x480. SCREEN 1 (VGA cable only): 832x480 at 60 Hz, the CVT reduced-blanking v2
+ * timing of the 960x704_Dreamcast sample's STARTUP_832x480_VGA_CVT_RBv2, set through vid_set_mode_ex instead of poking
+ * the video registers behind KOS's back; a 416x240 wide screen doubles into it exactly. A switch re-initialises the PVR
+ * (its tile buffers are sized from the mode), so it waits for the end of a frame: dc_video_update. */
+static const pvr_init_params_t PVR_PARAMS = {
+    .opb_sizes = { PVR_BINSIZE_0, PVR_BINSIZE_0, PVR_BINSIZE_32, PVR_BINSIZE_0, PVR_BINSIZE_0 },   /* everything is in the translucent list */
+    .vertex_buf_size = 512 * 1024,
+    .dma_enabled = 0,
+    .fsaa_enabled = 0,
+    .autosort_disabled = 1,       /* draw in submission order, like the 2D renderer it replaces */
+    .opb_overflow_count = 2,
+};
+
+/* 909 clocks x 495 lines at the 27 MHz VGA pixel clock = 60.0 Hz; total-1 values, as KOS's own mode table has them */
+static const vid_mode_t MODE_832x480 = {
+    .width = 832, .height = 480, .flags = 0, .cable_type = CT_VGA, .pm = PM_RGB565,
+    .scanlines = 494, .clocks = 908,
+    .bitmapx = 69, .bitmapy = 14,
+    .scanint1 = 14, .scanint2 = 247,          /* vblank irq lines 14 / 494 (KOS doubles scanint2 on VGA) */
+    .borderx1 = 69, .borderx2 = 901,
+    .bordery1 = 14, .bordery2 = 494,
+    .fb_curr = 0, .fb_count = 1, .fb_size = 832 * 480 * 2,
+};
+/* the two timing registers vid_set_mode_ex leaves alone (they keep the boot ROM's 640x480 values) */
+#define REG_SYNC_WIDTH 0x00e0                 /* SPG_WIDTH: hsync / vsync / equalising / broad sync widths */
+#define SYNC_WIDTH_832 0x01f6d81e             /* 7, 877, vsync 8 lines, hsync 31 clocks */
+#define HPOS_IRQ_832   0x03850000             /* hblank irq at clock 901 */
+static uint32_t boot_sync_width, boot_hpos_irq;
+static int cur_screen, want_screen = -1;
+static struct { int sw, sh, ratio; } view_args = { 320, 240, -1 };
+static void apply_view(void);
+
+static void set_mode(int screen)
 {
-    (void)screen;
-    int c = vid_check_cable();
-    snprintf(buf, n, "%s", c == CT_VGA ? "VGA 640x480" : c == CT_RGB ? "RGB 640x480" : "TV 640x480");
+    vid_set_enabled(false);
+    if (screen == 1) {
+        vid_mode_t m = MODE_832x480;          /* vid_set_mode_ex edits its argument */
+        PVR_SET(REG_SYNC_WIDTH, SYNC_WIDTH_832); PVR_SET(PVR_HPOS_IRQ, HPOS_IRQ_832);
+        vid_set_mode_ex(&m);
+    } else {
+        PVR_SET(REG_SYNC_WIDTH, boot_sync_width); PVR_SET(PVR_HPOS_IRQ, boot_hpos_irq);
+        vid_set_mode(DM_640x480, PM_RGB565);
+    }
+    cur_screen = screen;
 }
 
-void plat_apply_screen(Ren *r, int sw, int sh, int ratio, int screen)
+void dc_video_init(void)
 {
-    (void)r; (void)screen;
+    boot_sync_width = PVR_GET(REG_SYNC_WIDTH); boot_hpos_irq = PVR_GET(PVR_HPOS_IRQ);
+    set_mode(0);
+    pvr_init(&PVR_PARAMS);
+    pvr_set_bg_color(0, 0, 0);
+}
+
+/* between frames: carry out a SCREEN change asked for by plat_apply_screen */
+void dc_video_update(void)
+{
+    if (want_screen < 0 || want_screen == cur_screen) { want_screen = -1; return; }
+    int screen = want_screen; want_screen = -1;
+    pvr_wait_ready(); pvr_wait_render_done(); /* the last scene is rendered, nothing reads VRAM any more */
+    if (!rdc_vram_park()) { apply_view(); return; }
+    pvr_shutdown();
+    set_mode(screen);
+    if (vid_mode->width != (screen == 1 ? 832 : 640)) { printf("video: mode %d refused, back to 640x480\n", screen); set_mode(0); }
+    pvr_init(&PVR_PARAMS);
+    pvr_set_bg_color(0, 0, 0);
+    rdc_vram_unpark();
+    printf("video: %dx%d\n", vid_mode->width, vid_mode->height);
+    apply_view();
+}
+
+int plat_screen_modes(void) { return vid_check_cable() == CT_VGA ? 2 : 1; }
+int plat_wide_width(int screen) { return screen == 1 ? 416 : 426; }
+void plat_screen_label(int screen, char *buf, size_t n)
+{
+    int c = vid_check_cable();
+    if (screen == 1) snprintf(buf, n, "VGA 832x480");
+    else snprintf(buf, n, "%s", c == CT_VGA ? "VGA 640x480" : c == CT_RGB ? "RGB 640x480" : "TV 640x480");
+}
+
+/* the logical screen -> the display that is up now */
+static void apply_view(void)
+{
+    int sw = view_args.sw, sh = view_args.sh;
+    float dw = vid_mode->width, dh = vid_mode->height;
     pvr_view.lw = sw; pvr_view.lh = sh;
-    if (ratio == 1) { pvr_view.sx = 640.0f / sw; pvr_view.sy = 480.0f / sh; pvr_view.ox = pvr_view.oy = 0; }   /* stretched */
-    else {   /* the largest scale that fits, centred (4:3: exactly 2x; wide: 1.5x letterboxed) */
-        float s = 640.0f / sw < 480.0f / sh ? 640.0f / sw : 480.0f / sh;
+    if (view_args.ratio == 1) { pvr_view.sx = dw / sw; pvr_view.sy = dh / sh; pvr_view.ox = pvr_view.oy = 0; }   /* stretched */
+    else {   /* the largest scale that fits, centred (4:3: exactly 2x; wide: 2x in 832x480, 1.5x letterboxed in 640x480) */
+        float s = dw / sw < dh / sh ? dw / sw : dh / sh;
         if (s >= 2.0f) s = (float)(int)s; else if (s > 1.5f) s = 1.5f;
         pvr_view.sx = pvr_view.sy = s;
-        pvr_view.ox = (640.0f - sw * s) * 0.5f; pvr_view.oy = (480.0f - sh * s) * 0.5f;
+        pvr_view.ox = (dw - sw * s) * 0.5f; pvr_view.oy = (dh - sh * s) * 0.5f;
     }
     extern void rdc_view_changed(void);
     rdc_view_changed();
+}
+
+/* screen < 0: keep the display mode. A new mode (and the view for it) waits for the end of the frame being drawn
+ * (dc_video_update), or is set right away outside one (a SABER_SCREEN start, before anything is in VRAM). */
+void plat_apply_screen(Ren *r, int sw, int sh, int ratio, int screen)
+{
+    (void)r;
+    view_args.sw = sw; view_args.sh = sh; view_args.ratio = ratio;
+    if (screen >= 0 && screen != cur_screen) { want_screen = screen; if (!rdc_in_frame()) dc_video_update(); }
+    else apply_view();
 }
 
 uint32_t *plat_image_load_rgba(const char *path, int *w, int *h)

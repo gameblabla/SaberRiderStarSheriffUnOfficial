@@ -27,7 +27,11 @@ bool game_init(Game *g, Ren *ren, int sw, int sh, int start_level)
     if (plat_getenv("SABER_LIVES")) g->menu.lives = atoi(plat_getenv("SABER_LIVES"));   /* debug: starting lives */
     g->menu.ratio = plat_default_ratio();
     if (plat_getenv("SABER_RATIO")) g->menu.ratio = atoi(plat_getenv("SABER_RATIO"));   /* debug: start in a screen ratio (0 wide, -1 4:3, 1 stretch) */
-    if (g->menu.ratio != RATIO_WIDE) { g->sw = 320; plat_apply_screen(ren, g->sw, g->sh, g->menu.ratio, -1); }
+    if (plat_getenv("SABER_SCREEN")) g->menu.screen = atoi(plat_getenv("SABER_SCREEN"));   /* debug: start on a SCREEN choice (Dreamcast 1: 832x480) */
+    if (g->menu.ratio != RATIO_WIDE || g->menu.screen) {
+        g->sw = g->menu.ratio == RATIO_WIDE ? plat_wide_width(g->menu.screen) : 320;
+        plat_apply_screen(ren, g->sw, g->sh, g->menu.ratio, g->menu.screen ? g->menu.screen : -1);
+    }
     g->stage = 1; g->continues_left = g->menu.continues;
     if (start_level) { g->stage = start_level; return level_start(g); }   /* --level N: skip the front end */
     if (plat_getenv("SABER_STAGE")) { g->stage = atoi(plat_getenv("SABER_STAGE")); if (g->stage >= 2 && g->stage <= 7) return level_start(g); }   /* debug: straight into stage 2..6 (7 = stage 6's final phase) */
@@ -568,7 +572,7 @@ void game_draw(Game *g)
 {
     if (g->menu.apply_screen_mode && !g->in_level) {
         g->menu.apply_screen_mode = false;
-        g->sw = g->menu.ratio == RATIO_WIDE ? 426 : 320;
+        g->sw = g->menu.ratio == RATIO_WIDE ? plat_wide_width(g->menu.screen) : 320;
         plat_apply_screen(g->ren, g->sw, g->sh, g->menu.ratio, g->menu.screen);
     }
     if (!g->in_level) { menu_draw(&g->menu, g->ren, g->sw, g->sh); draw_scanlines(g); return; }

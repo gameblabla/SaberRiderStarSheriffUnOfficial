@@ -47,6 +47,15 @@ triggers aim, and Start pauses. A+B+X+Y+Start resets to the console menu.
 For developer runs, put `NAME=value` lines such as `SABER_STAGE=3` in
 `build/dc/stage/saber.env`, then rebuild the ISO/CDI from that stage directory.
 
+With a VGA cable, OPTIONS > SCREEN also offers `VGA 832x480`. This is the
+CVT-RBv2 timing (909x495 at 27 MHz, 60 Hz) from
+`../Dreamcast/960x704_Dreamcast` (`STARTUP_832x480_VGA_CVT_RBv2`), set with
+KOS's `vid_set_mode_ex`. The only registers KOS doesn't cover are the sync
+widths and the hblank IRQ position. There WIDE is 416x240, doubled exactly, and
+4:3 is pillarboxed at 2x. Switching the mode re-initialises the PVR between
+frames. Textures the packs can't reload are copied to RAM around the switch.
+`SABER_SCREEN=1` starts in this mode.
+
 After the last life a CONTINUE? screen counts 20 -> 0 (the CONTINUE option's credits, per run; START restarts the
 stage with the option's lives). An optional `assets/continue.png` goes behind its text (letterboxed to the screen).
 Every stage opens with its title card (STAGE n, the level's name typed in over an amber band, then the level

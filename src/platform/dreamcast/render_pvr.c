@@ -6,7 +6,8 @@
  * Textures are converted from RGBA8888 to the smallest 16-bit format that keeps them intact (RGB565 when opaque,
  * ARGB1555 for cut-outs, ARGB4444 when they carry real translucency) and stored non-twiddled with a power-of-two
  * row length, only as many rows as the image has. Anything wider or taller than 1024 is split into pages.
- * The logical screen (426x240 wide / 320x240 4:3) is scaled to 640x480 (plat_apply_screen). */
+ * The logical screen (426x240 wide / 320x240 4:3, 416x240 in the 832x480 mode) is scaled to the display (plat_apply_screen).
+ * A display mode switch re-initialises the PVR, which wipes VRAM: the textures are parked in RAM around it (rdc_vram_park). */
 #include "pvr_internal.h"
 #include <sh4zam/shz_sh4zam.h>
 #include <stdio.h>
@@ -29,13 +30,16 @@ typedef struct {
     int x0, y0, w, h;              /* the part of the image this page holds */
     int tw, th;                    /* power-of-two size given to the PVR */
     uint8_t have;                  /* bit b*2+l: hdr[b][l] valid */
+    void *parked;                  /* the page's VRAM, copied out while the PVR is re-initialised */
 } Page;
 
 struct RTex {
     int w, h; uint32_t fmt; bool streaming;
     int npx, npy; Page *pages;
     uint8_t r, g, b, a; RBlend blend; RScale scale; uint32_t tag;
+    struct RTex *prev, *next;      /* every live texture (live_tex) */
 };
+static RTex *live_tex;
 
 static bool (*evict_hook)(void);
 void r_set_evict_hook(bool (*hook)(void)) { evict_hook = hook; }
@@ -123,7 +127,7 @@ static void upload_page(RTex *t, Page *pg, Src *src)
 
 static void free_pages(RTex *t)
 {
-    for (int i = 0; i < t->npx * t->npy; i++) vram_free(t->pages[i].mem, t->pages[i].bytes);
+    for (int i = 0; i < t->npx * t->npy; i++) { vram_free(t->pages[i].mem, t->pages[i].bytes); free(t->pages[i].parked); }
     free(t->pages); t->pages = NULL;
 }
 
@@ -151,6 +155,7 @@ static RTex *create(int w, int h, bool streaming, Src *src)
         if (!pg->mem) { free_pages(t); free(t); return NULL; }
     }
     if (src) for (int i = 0; i < t->npx * t->npy; i++) upload_page(t, &t->pages[i], src);
+    t->next = live_tex; if (live_tex) live_tex->prev = t; live_tex = t;
     return t;
 }
 
@@ -178,7 +183,49 @@ void rtex_update(RTex *t, const uint32_t *px, int pitch)
     Src src = { .px = px, .pitch = pitch, .w = t->w, .h = t->h };
     for (int i = 0; i < t->npx * t->npy; i++) upload_page(t, &t->pages[i], &src);
 }
-void rtex_destroy(RTex *t) { if (!t) return; free_pages(t); free(t); }
+void rtex_destroy(RTex *t)
+{
+    if (!t) return;
+    if (t->prev) t->prev->next = t->next; else live_tex = t->next;
+    if (t->next) t->next->prev = t->prev;
+    free_pages(t); free(t);
+}
+
+/* ------------------------------------------------------------------ display mode switches */
+/* Before pvr_shutdown: drop what the game can reload from its packs, copy the rest of the textures to RAM. False
+ * (nothing changed) when VRAM holds something that is not a texture (an FMV frame, a Mode-7 floor) or RAM runs out. */
+bool rdc_vram_park(void)
+{
+    while (evict_hook && evict_hook()) {}
+    size_t bytes = 0;
+    for (RTex *t = live_tex; t; t = t->next) for (int i = 0; i < t->npx * t->npy; i++) bytes += t->pages[i].bytes;
+    if (bytes != vram_used) { printf("video: %u bytes of VRAM are not textures, mode not switched\n", (unsigned)(vram_used - bytes)); return false; }
+    for (RTex *t = live_tex; t; t = t->next) for (int i = 0; i < t->npx * t->npy; i++) {
+        Page *pg = &t->pages[i];
+        if (!(pg->parked = memalign(32, pg->bytes))) {
+            printf("video: no RAM to park %u KB of textures, mode not switched\n", (unsigned)(bytes / 1024));
+            for (RTex *u = live_tex; u; u = u->next) for (int j = 0; j < u->npx * u->npy; j++) { free(u->pages[j].parked); u->pages[j].parked = NULL; }
+            return false;
+        }
+        memcpy(pg->parked, pg->mem, pg->bytes);
+    }
+    for (RTex *t = live_tex; t; t = t->next) for (int i = 0; i < t->npx * t->npy; i++) { t->pages[i].mem = NULL; t->pages[i].have = 0; }
+    vram_used = 0; have_last = false;   /* pvr_shutdown gives the whole texture pool back */
+    printf("video: parked %u KB of textures\n", (unsigned)(bytes / 1024));
+    return true;
+}
+
+/* after pvr_init: the parked textures go back into the new texture pool */
+void rdc_vram_unpark(void)
+{
+    for (RTex *t = live_tex; t; t = t->next) for (int i = 0; i < t->npx * t->npy; i++) {
+        Page *pg = &t->pages[i];
+        if (!pg->parked) continue;
+        if ((pg->mem = rdc_vram_alloc(pg->bytes))) pvr_txr_load(pg->parked, pg->mem, pg->bytes);
+        free(pg->parked); pg->parked = NULL;
+    }
+}
+
 void rtex_size(const RTex *t, int *w, int *h) { *w = t ? t->w : 0; *h = t ? t->h : 0; }
 void rtex_set_color_mod(RTex *t, uint8_t r, uint8_t g, uint8_t b) { if (t) { t->r = r; t->g = g; t->b = b; } }
 void rtex_set_alpha_mod(RTex *t, uint8_t a) { if (t) t->a = a; }
@@ -393,7 +440,7 @@ void r_clear(Ren *r)
 {
     (void)r;
     if (prims == 0) pvr_set_bg_color(st.r / 255.0f, st.g / 255.0f, st.b / 255.0f);
-    else { RBlend b = st.blend; st.blend = R_BLEND_NONE; fill_screen_quad(0, 0, 640, 480); st.blend = b; }
+    else { RBlend b = st.blend; st.blend = R_BLEND_NONE; fill_screen_quad(0, 0, vid_mode->width, vid_mode->height); st.blend = b; }
 }
 
 void r_fill_rect(Ren *r, const RFRect *q)
