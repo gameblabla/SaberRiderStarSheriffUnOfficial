@@ -242,6 +242,37 @@ motes, the outro scene plays and MISSION ACCOMPLISHED follows. With **April** as
 SABER_START=6540` goes straight to her, `SABER_DARKHP=n` sets her HP, `SABER_NODARK=1` ends the stage after the
 first boss as before. There is no stage 5 victory painting yet: `assets/victory/stage5_<hero>.png` is used when present.
 
+## Stage 6 — "Power Stride" (phase 1: Ramrod's cockpit)
+
+Stage 5's MISSION ACCOMPLISHED now continues into stage 6, and the credits roll after it. The stage is its own world,
+like the Grand Prix (`src/ramrod.c`). It is first person from Ramrod's cockpit in robot mode, on the Yuma desert
+outside the frontier outpost (the series pilot "Star Sheriff Round-Up": Outrider Renegade battle robots marching on
+the town). The Mode-7 floor sits under a 360° panorama, the Outrider mechs are scaled sprites, and the cockpit
+overlay goes on top.
+
+- **Controls:** Left/Right turn, Up/Down walk, Aim + Left/Right sidestep.
+- **Guns:** hold Shoot for the shoulder guns. They alternate sides, lock onto a mech near the reticle and overheat.
+- **Punch:** Jump punches, alternating fists (the DC881 clip's arm, mirrored for the right fist). Punching a mech while
+  it winds up stagger-counters it, and a punch also swats plasma out of the air.
+- **Enemies:**
+  - They charge the cannon with a glow before firing plasma. You can sidestep it or shoot it down.
+  - The glowing-red fist is the punch tell. The swing's direction locks at the wind-up, so a sidestep dodges it.
+  - Mechs outside the view show as chevrons at the screen edge and as blips on the left monitor's radar. The right
+    monitor shows armour, gun heat, the wave, the mechs left and your spares.
+- **Waves:** three: 4 grunts, then 6 with red heavies (3-shot volleys that lead you), then 8 with the gold command
+  mech.
+- **Between waves:** a radio scene, and April repairs the armour.
+- **Losing:** a spare restarts the wave.
+- **Music:** track 16, then 8 for the last wave.
+
+Art comes from `../ramrod/` (README there): the cockpit, sky and punch arm from the DC881 clip, and the mech from the
+CO26 mock-up, part-animated like the 3DS prototype's. Phase 2 (the giant Renegade the outro announces) is not built
+yet.
+
+Debug: `SABER_STAGE=6` (or `--level 6`) starts there, `SABER_R6WAVE=n` goes straight to wave n without the story,
+`SABER_R6BOT=1` plays it on autopilot (for flow and balance runs), `SABER_R6GOD=1` takes no damage, and `SABER_TRACE=1`
+prints the wave state every second and each hit taken (`r6 hurt`).
+
 ## Controls (as in the demo)
 
 Arrows move · **W/A** jump · **S/D** shoot · hold **Q/E** aim (8 directions) · **Enter** pause/start ·

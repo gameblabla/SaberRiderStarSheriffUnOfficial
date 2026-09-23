@@ -428,13 +428,14 @@ static void draw_credits(Menu *m, SDL_Renderer *r, int sw, int sh)
 static Sprite *victory_art(int stage, int character)
 {
     static const char *const HERO[4] = { "saber", "fireball", "april", "colt" };
-    static Sprite *cache[6][4]; static bool tried[6][4];
-    if (stage < 1 || stage > 5) return NULL;   /* stage 5 has none yet: victory/stage5_<hero>.png is picked up when there */
-    int h = stage == 2 ? 0 : character & 3;
+    static Sprite *cache[7][4]; static bool tried[7][4];
+    if (stage < 1 || stage > 6) return NULL;   /* stage 5 has none yet: victory/stage5_<hero>.png is picked up when there */
+    int h = stage == 2 || stage == 6 ? 0 : character & 3;   /* the Grand Prix and Ramrod are the whole crew's */
     if (!tried[stage][h]) {
         tried[stage][h] = true;
         char name[64];
         if (stage == 2) snprintf(name, sizeof name, "victory/stage2.png");
+        else if (stage == 6) snprintf(name, sizeof name, "victory/stage6.png");
         else snprintf(name, sizeof name, "victory/stage%d_%s.png", stage, HERO[h]);
         const char *path = asset_path(name); int w = 0, hh = 0;
         uint32_t *px = path ? png_load_rgba(path, &w, &hh) : NULL;

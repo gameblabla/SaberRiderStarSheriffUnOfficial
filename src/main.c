@@ -18,7 +18,7 @@ static void usage(const char *exe)
 {
     fprintf(stderr, "usage: %s [data_dir] [--level N]\n"
                     "  data_dir    the demo's data/ folder with the .pck packs (default SaberRider/data)\n"
-                    "  --level N   skip the front end and start at level N (1 the frontier town, 2 the All Galaxy Grand Prix, 3 Hyperjumper Pass, 4 the Red Palm Jungle)\n", exe);
+                    "  --level N   skip the front end and start at level N (1 the frontier town, 2 the All Galaxy Grand Prix, 3 Hyperjumper Pass, 4 the Red Palm Jungle, 5 the cave lab, 6 Ramrod)\n", exe);
 }
 
 int main(int argc, char **argv)
@@ -26,8 +26,8 @@ int main(int argc, char **argv)
     const char *data_dir = "SaberRider/data"; int start_level = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--level") || !strcmp(argv[i], "-l")) {
-            if (i + 1 >= argc || (start_level = atoi(argv[++i])) < 1 || start_level > 4) { usage(argv[0]); return 2; }
-        } else if (!strncmp(argv[i], "--level=", 8)) { start_level = atoi(argv[i] + 8); if (start_level < 1 || start_level > 4) { usage(argv[0]); return 2; } }
+            if (i + 1 >= argc || (start_level = atoi(argv[++i])) < 1 || start_level > 6) { usage(argv[0]); return 2; }
+        } else if (!strncmp(argv[i], "--level=", 8)) { start_level = atoi(argv[i] + 8); if (start_level < 1 || start_level > 6) { usage(argv[0]); return 2; } }
         else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) { usage(argv[0]); return 0; }
         else if (argv[i][0] == '-' && argv[i][1]) { fprintf(stderr, "unknown option %s\n", argv[i]); usage(argv[0]); return 2; }
         else data_dir = argv[i];
