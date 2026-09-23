@@ -5,7 +5,6 @@
  * room screen) or under its own overlays. Pack videos are /cd/video/<ID>.dcmv, our clips the same path as the
  * clip with a .dcmv extension. */
 #include "../../video.h"
-#include "../../audio.h"
 #include "pvr_internal.h"
 #include "dcfmv/dcfmv.h"
 #include <stdio.h>
@@ -19,7 +18,7 @@ struct Video {
     float u0, v0, u1, v1;
     int w, h;                  /* content size */
     kthread_t *worker; volatile bool quit;
-    bool finished, owns_music, started, audio_ready;
+    bool finished, started, audio_ready;
 };
 
 static void *worker(void *p)
@@ -31,7 +30,7 @@ static void *worker(void *p)
 
 static int pot(int n) { int p = 8; while (p < n) p <<= 1; return p; }
 
-static Video *open_path(const char *path, bool is_pack_video)
+static Video *open_path(const char *path)
 {
     file_t probe = fs_open(path, O_RDONLY);
     if (probe < 0) { printf("video: %s missing\n", path); return NULL; }
@@ -75,8 +74,7 @@ static Video *open_path(const char *path, bool is_pack_video)
         else {
             v->audio_ready = true;
             dcfmv_set_audio_volume(v->fmv, 204);   /* the core's voice bus level (0.8) */
-            /* a pack video with a music soundtrack (the intro) replaced the menu music on the PC: stop it here too */
-            if (is_pack_video) { music_stop(); v->owns_music = true; }
+            /* the menu stops its music before the intro; the briefing's voice-only video plays over it, as on the PC */
         }
     }
     /* the first frames synchronously, the rest by the worker */
@@ -103,7 +101,7 @@ Video *video_open(Ren *r, uint32_t id)
 {
     (void)r;
     char path[64]; snprintf(path, sizeof path, "/cd/video/%08lX.dcmv", (unsigned long)id);
-    return open_path(path, true);
+    return open_path(path);
 }
 
 Video *video_open_file(Ren *r, const char *path, float fps)
@@ -113,7 +111,7 @@ Video *video_open_file(Ren *r, const char *path, float fps)
     char p[256]; snprintf(p, sizeof p, "%s", path);
     char *dot = strrchr(p, '.'); if (dot) *dot = 0;
     strncat(p, ".dcmv", sizeof p - strlen(p) - 1);
-    return open_path(p, false);
+    return open_path(p);
 }
 
 bool video_update(Video *v, float dt)

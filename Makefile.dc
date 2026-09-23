@@ -16,7 +16,7 @@ $(error KOS_SH4_PRECISION is '$(KOS_SH4_PRECISION)'; set it to -m4-single-only i
 endif
 # KOS_CFLAGS brings -O3 -ffast-math; the game keeps IEEE infinities out of fast-math's way
 CFLAGS  := -std=gnu11 -Isrc $(DEFS) -MMD -MP -fno-finite-math-only -Wno-unused-parameter -Wno-misleading-indentation -Wno-format
-LIBS    := -lADX -lsh4zam -lstb_image -lm
+LIBS    := -lADX -lsh4zam -lstb_image -lm -Wl,--wrap=snd_stream_shutdown   # see aud_dc.c
 DATA    ?= ../SaberRider/data
 
 .PHONY: all clean disc repack

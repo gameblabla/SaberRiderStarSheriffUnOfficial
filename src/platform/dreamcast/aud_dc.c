@@ -196,6 +196,17 @@ static void apply_music_vol(void)
     int v = vol_of(music_gain);
     if (v != music_vol) { snd_stream_volume(shnd, v); music_vol = v; }
 }
+/* libADX's driver thread ends with snd_stream_shutdown(), which would destroy every stream (our two, a video's) and
+ * hand their handles to the next track; the link wraps it (Makefile.dc: --wrap) so it only tells us the thread is done.
+ * The stream system lives from aud_init to aud_shutdown. */
+static volatile unsigned adx_drv_exits;
+void __real_snd_stream_shutdown(void);
+void __wrap_snd_stream_shutdown(void) { adx_drv_exits++; }
+
+/* wait (up to ms) for cond, letting libADX's threads run */
+#define WAIT_FOR(cond, ms) do { uint64_t t_end_ = timer_ms_gettime64() + (ms); \
+                                while (!(cond) && timer_ms_gettime64() < t_end_) thd_sleep(1); } while (0)
+
 bool aud_music_play(uint32_t id, bool loop)
 {
     aud_music_stop();
@@ -204,7 +215,20 @@ bool aud_music_play(uint32_t id, bool loop)
     music_on = true; music_paused = false; music_vol = -1;
     return true;
 }
-void aud_music_stop(void) { if (music_on) { adx_stop(); music_on = false; } }
+void aud_music_stop(void)
+{
+    if (!music_on) return;
+    music_on = false;
+    /* a stop right after a start (the briefing's music, then its video) raced libADX: its driver thread, still starting
+     * its stream, set STREAMING over the stop's DONE and adx_stop spun forever. So let the driver come up first, and
+     * after the stop wait for it to release its stream before anyone allocates another */
+    if (music_paused) { adx_resume(); music_paused = false; }
+    WAIT_FOR(snddrv.dec_status == SNDDEC_STATUS_STREAMING && snddrv.drv_status == SNDDRV_STATUS_STREAMING, 1000);
+    unsigned exits = adx_drv_exits;
+    bool driver = snddrv.drv_status != SNDDRV_STATUS_NULL;
+    adx_stop();
+    if (driver) WAIT_FOR(adx_drv_exits != exits, 500);
+}
 void aud_music_gain(float g) { music_gain = g; }
 void aud_music_pause(bool pause)
 {
@@ -241,5 +265,5 @@ void aud_shutdown(void)
     aud_music_stop();
     for (int i = 0; i < NSTREAM; i++) if (strm[i].h != SND_STREAM_INVALID) { snd_stream_stop(strm[i].h); snd_stream_destroy(strm[i].h); }
     snd_sfx_unload_all();
-    snd_stream_shutdown();
+    __real_snd_stream_shutdown();
 }
