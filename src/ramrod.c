@@ -1028,9 +1028,13 @@ static void render_monitors(Ramrod *r)
         font_draw(small, "ARM", st.x + 2, st.y + 1, 255, blink ? 80 : 210, blink ? 80 : 120);
         font_draw(small, r->overheated ? "HOT" : "GUN", st.x + 2, st.y + 11, 255, r->overheated ? 80 : 210, r->overheated ? 60 : 120);
     }
-    bar(ren, st.x + 24, st.y + 3, 26, 5, ar, ar > 0.5f ? 90 : ar > 0.25f ? 240 : 250, ar > 0.5f ? 220 : ar > 0.25f ? 190 : 60, 60);
-    if (r->hurt_t > 0 && ((int)(r->hurt_t * 20) & 1)) bar(ren, st.x + 24, st.y + 3, 26, 5, 1, 255, 255, 255);
-    bar(ren, st.x + 24, st.y + 13, 26, 5, r->heat, r->overheated ? 255 : 255, r->overheated ? 60 : 160 - (uint8_t)(100 * r->heat), 40);
+    /* the bars start past the widest label so they never run into the text */
+    float lw = 20;
+    if (small) { const char *L[3] = { "ARM", "GUN", "HOT" }; for (int i = 0; i < 3; i++) { float w = (float)font_text_width(small, L[i]); if (w > lw) lw = w; } }
+    float bx = st.x + 2 + lw + 3, bw = st.x + st.w - 2 - bx;
+    bar(ren, bx, st.y + 3, bw, 5, ar, ar > 0.5f ? 90 : ar > 0.25f ? 240 : 250, ar > 0.5f ? 220 : ar > 0.25f ? 190 : 60, 60);
+    if (r->hurt_t > 0 && ((int)(r->hurt_t * 20) & 1)) bar(ren, bx, st.y + 3, bw, 5, 1, 255, 255, 255);
+    bar(ren, bx, st.y + 13, bw, 5, r->heat, r->overheated ? 255 : 255, r->overheated ? 60 : 160 - (uint8_t)(100 * r->heat), 40);
     if (small) {
         char buf[32]; int left = WAVES[r->wave].n - r->spawned + alive_mechs(r);
         for (int i = 0; i < MAX_MECH; i++) if (r->mech[i].st == M_DYING) left--;
