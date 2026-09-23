@@ -13,7 +13,7 @@ static const uint32_t TYPE_CRHC[28] = {
     0x20C6FAEF, 0xECC992CB, 0x72B53EF8, 0x925534E2, 0x916137ED, 0x906D3698, 0xF5975DCF, 0xF4A55EDE,
     0xF4A25ED9, 0xF3B05E28, 0x0DB9F0E0, 0xD39700C4 };
 
-static uint32_t crhc_for_type(int t) { return (t >= 2 && t <= 29) ? TYPE_CRHC[t - 2] : (t == 30 || t == 31) ? 0xD39700C4 : 0x02A38AFB; }   /* 30/31: the shield sniper stands on the sniper's body */
+static uint32_t crhc_for_type(int t) { return (t >= 2 && t <= 29) ? TYPE_CRHC[t - 2] : (t >= 30 && t <= 32) ? 0xD39700C4 : 0x02A38AFB; }   /* 30/31: the shield sniper stands on the sniper's body, 32 the stalker */
 static float sh_feet(const Enemy *e);
 static int rnd(int n) { return n > 0 ? rand() % n : 0; }   /* FUN_0040cf30(0, n) -> [0,n) */
 
@@ -138,6 +138,7 @@ Enemy *enemy_spawn(Enemies *E, const Trigger *t, float x, float y, const Level *
     case 28: cls = EC_CUTSCENE; break;
     case 29: cls = EC_END; break;
     case 30: case 31: cls = EC_SHIELD; break;
+    case 32: cls = EC_STALKER; break;
     default:
         if (type >= 12 && type <= 23) cls = EC_PROP + (type - 12);
         else if (type >= 24 && type <= 27) cls = EC_STAMPEDE + (type - 24);
@@ -154,9 +155,10 @@ Enemy *enemy_spawn(Enemies *E, const Trigger *t, float x, float y, const Level *
     if (fall_in) b->vy -= 166.6667f;
     e->ch.state = CS_AIR;
     (void)sh;
-    e->variant = (type == 5 || type == 7 || type == 9 || type == 29);
-    if (cls == EC_GRUNT || cls == EC_GRUNT_B || cls == EC_SNIPER || cls == EC_SNIPER_B || cls == EC_KNEELER || cls == EC_KNEELER_B || cls == EC_END) e->gun_alive = true;
-    if (cls == EC_WALKER || cls == EC_GRUNT || cls == EC_GRUNT_B) {
+    e->variant = (type == 5 || type == 7 || type == 9 || type == 29 || type == 32);
+    if (cls == EC_GRUNT || cls == EC_GRUNT_B || cls == EC_SNIPER || cls == EC_SNIPER_B || cls == EC_KNEELER || cls == EC_KNEELER_B || cls == EC_END || cls == EC_STALKER) e->gun_alive = true;
+    if (cls == EC_STALKER) e->ft = (float)rnd(81);   /* its own spacing: a spot shifted up to +-8 px, a level stand-off 80..160 px */
+    if (cls == EC_WALKER || cls == EC_GRUNT || cls == EC_GRUNT_B || cls == EC_STALKER) {
         e->ch.facing = E->px <= b->x ? 0 : 1;
         face_and_probe(e, e->ch.facing == 1, L, W, cam_x, sw);
         snap_to_ground(e, L, W);
@@ -410,6 +412,67 @@ static void update_sniper(Enemies *E, Enemy *e, Player *pl, const Level *L, cons
             }
         }
         c->speed = t;
+    }
+    humanoid_tail(E, e, pl, pb, cam_x, sw, dt, false);
+}
+
+/* ours, stage 4's finale: the blue Outrider (type 32, the sniper's body) runs in from off screen like a grunt, then
+ * takes a firing line on the hero and shoots like a sniper. With the hero up on a tower deck the line is 45 degrees:
+ * it stands where the up-diagonal from its muzzle crosses his middle (the muzzle's rise = its run); with the hero on
+ * the ground it stops 80..160 px short of him and fires level. It re-picks the spot only while he stands (not in a
+ * jump) and walks over when he leaves the line. st 0 = walking to t0, 1 = aiming; t1 = time to the next shot;
+ * dir = the aim for t0. */
+#define STALK_MZ_X 17.8f   /* the sniper body's 45-degree-up muzzle from the body centre (UR; UL mirrored) */
+#define STALK_MZ_Y 20.0f
+static float stalk_spot(const Enemies *E, const Enemy *e, float cam_x, int sw, int *aim)
+{
+    const Body *b = &e->ch.body;
+    float lo = cam_x + 24.0f, hi = cam_x + sw - 24.0f;
+    float rise = (b->y - STALK_MZ_Y) - E->phcy;
+    if (rise > 24.0f) {                                      /* he is up high: the diagonal spot nearer to us */
+        float d = rise + STALK_MZ_X + (e->ft / 80.0f * 16.0f - 8.0f);
+        float l = E->phcx - d, r = E->phcx + d;              /* from the left it fires up-right */
+        bool okl = l >= lo, okr = r <= hi;
+        if (okl || okr) {
+            bool left = okl && (!okr || fabsf(b->x - l) <= fabsf(b->x - r));
+            *aim = left ? AIM_UR : AIM_UL; return left ? l : r;
+        }
+    }
+    float gap = 80.0f + e->ft;                               /* level with him */
+    bool left = b->x < E->phcx;
+    float x = E->phcx + (left ? -gap : gap);
+    if (x < lo || x > hi) { left = !left; x = E->phcx + (left ? -gap : gap); }
+    if (x < lo) x = lo;
+    if (x > hi) x = hi;
+    float cur = b->x - E->phcx;                              /* already in the band on that side: stay */
+    if ((left ? -cur : cur) >= 70.0f && (left ? -cur : cur) <= 170.0f && b->x >= lo && b->x <= hi) x = b->x;
+    *aim = x < E->phcx ? AIM_R : AIM_L;
+    return x;
+}
+
+static void update_stalker(Enemies *E, Enemy *e, Player *pl, Bullets *pb, Bullets *eb, Effects *fx, float cam_x, int sw, float dt)
+{
+    Character *c = &e->ch; Body *b = &c->body;
+    character_sync_ground(c);
+    bool grounded = (c->coll & COLL_DOWN) != 0;
+    if (grounded && (pl->ch.coll & COLL_DOWN) && pl->ch.state != CS_DEAD && !(c->flags & CF_SHOOT)) {
+        int aim; float x = stalk_spot(E, e, cam_x, sw, &aim);
+        if (e->st == 0 || fabsf(x - b->x) > 10.0f || aim != e->dir) { e->t0 = x; e->dir = (uint8_t)aim; if (fabsf(x - b->x) > 3.0f) e->st = 0; }
+    }
+    if (e->st == 0 && grounded) {
+        if (fabsf(b->x - e->t0) <= 3.0f && b->x > cam_x + 8.0f && b->x < cam_x + sw - 8.0f) {
+            e->st = 1; e->t1 = 0.35f + rnd(10) * 0.02f;      /* at the spot: raise the rifle, settle, then fire */
+        } else {
+            c->speed = 110.0f;
+            if (e->t0 < b->x) character_move_left(c, 0); else character_move_right(c, 4);
+        }
+    }
+    if (e->st == 1) {
+        character_aim(c, e->dir); character_aim_stand(c);
+        if ((e->t1 -= dt) <= 0 && b->x > cam_x && b->x < cam_x + sw && pl->ch.state != CS_DEAD && character_request_shoot(c)) {
+            enemy_fire(e, eb, fx, c->muzzle_x, c->muzzle_y);
+            e->t1 = 0.8f + rnd(25) * 0.03f;
+        }
     }
     humanoid_tail(E, e, pl, pb, cam_x, sw, dt, false);
 }
@@ -877,6 +940,7 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
             case EC_BUGGY: update_horse(E, e, pl, cam_x, sw, dt); break;
             case EC_CUTSCENE: update_cutscene_outrider(E, e, cam_x, sw, dt); break;
             case EC_SHIELD: update_shield(E, e, pl, pb, eb, fx, cam_x, sw, dt); break;
+            case EC_STALKER: update_stalker(E, e, pl, pb, eb, fx, cam_x, sw, dt); break;
             case EC_HORSEBOSS: if (e->variant == 99) update_boss_rider(E, e, eb, cam_x, sw, dt); else update_boss(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt); break;
             case EC_STAMPEDE: case EC_STAMPEDE + 1: case EC_STAMPEDE + 2: case EC_STAMPEDE + 3: update_stampede(E, e, cam_x, sw); break;
             case EC_PROP: case EC_PROP + 1: case EC_PROP + 2: case EC_PROP + 3: case EC_PROP + 4: case EC_PROP + 5:

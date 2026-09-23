@@ -30,13 +30,14 @@ typedef struct {
     struct { float cx, cy, hx, hy, rx, ry; } deathzones[8]; int ndeath;       /* type 3 */
     int state;              /* 10 playing, 0xd dialog, 0xe level clear, 0xb game over, 0xc pause */
     Menu menu; bool in_level;
-    int stage;              /* 1 frontier town (LEVL), 2 the Mode-7 Grand Prix, 3 Hyperjumper Pass */
+    int stage;              /* 1 frontier town (LEVL), 2 the Mode-7 Grand Prix, 3 Hyperjumper Pass, 4 the jungle, 5 the cave lab */
     int carry_lives;        /* lives left when stage 1 was cleared (-1: fresh start) */
     int continues_left;     /* CONTINUE? credits left in this run (from the option at the start of a run) */
     Mode7 *mode7;
     Night night; bool night_on;   /* stage 3: night-tinted level-1 tilemap + Hyperjumper */
     Forest forest; bool forest_on; /* stage 4: the rebuilt forest tile layers over the level-1 layer slots */
     bool forest_outro_done;      /* stage 4: the win's radio scene already shown */
+    Forest lab; bool lab_on;     /* stage 5: the cave lab (assets/lab, ../lab/compose.py) in the same form; level 1's boss */
     bool walk_in;                /* stages 3/4 open with the hero walking in from off screen to walk_stop_x, then walk_script */
     float walk_stop_x; const char *walk_script;
     bool night_taunt_done, night_outro_done;   /* stage 3: the story scenes already shown */

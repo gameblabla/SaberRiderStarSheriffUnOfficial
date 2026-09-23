@@ -22,10 +22,9 @@
 
 #define FOREST_MAX_LAYERS 12
 #define FOREST_MAX_TRIGGERS 64
-#define FINALE_WARPS 8
 
 /* The end of the stage (no exit): once the camera stops on the clearing it stays there and the Outriders come at the
- * hero - running in from both edges and materialising out of the Vapor Zone on the ground - for FINALE_ONSLAUGHT_T
+ * hero - running in from both edges, off screen - for FINALE_ONSLAUGHT_T
  * seconds; then Hyperjumper comes back (stage 3's fight) while fewer of them keep coming. Once it is down nobody
  * new arrives, and the stage is won when the last Outrider on the field is gone. */
 enum { FF_WAIT, FF_ONSLAUGHT, FF_BOSS, FF_MOPUP, FF_WON };
@@ -33,9 +32,7 @@ typedef struct {
     int state; float t;
     float arena_x; int sw;
     int tr0, ntr_onslaught, ntr;          /* its edge streams in Enemies.tr: the onslaught's, then the boss round's */
-    float warp_t;                         /* time to the next warp-in */
     bool scene_ambush;                    /* set when the finale starts: the game opens FOREST_SCRIPT_AMBUSH */
-    struct { bool on; float x, t; int type; } warp[FINALE_WARPS];
 } ForestFinale;
 
 typedef struct {
@@ -49,6 +46,8 @@ typedef struct {
 
 /* Rebuilds L in place from assets/forest/forest.lvl; on failure nothing in L is changed. */
 bool forest_init(Forest *f, Level *L);
+/* the same from assets/<dir>/<file> (stage 5: "lab", "lab.lvl", ../lab/compose.py); sheet_ids = cblock ids base */
+bool forest_load(Forest *f, Level *L, const char *dir, const char *file, uint32_t sheet_ids);
 void forest_dispose(Forest *f);
 /* the stage's enemy triggers (fed to enemies_add_trigger), put on the player's sprite layer */
 int forest_triggers(const Forest *f, LevelObject *out, int max, int player_layer);

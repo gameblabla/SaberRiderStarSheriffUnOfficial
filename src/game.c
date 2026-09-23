@@ -29,7 +29,7 @@ bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh, int start_level)
     }
     g->stage = 1; g->continues_left = g->menu.continues;
     if (start_level) { g->stage = start_level; return level_start(g); }   /* --level N: skip the front end */
-    if (SDL_getenv("SABER_STAGE")) { g->stage = atoi(SDL_getenv("SABER_STAGE")); if (g->stage >= 2 && g->stage <= 4) return level_start(g); }   /* debug: straight into stage 2/3/4 */
+    if (SDL_getenv("SABER_STAGE")) { g->stage = atoi(SDL_getenv("SABER_STAGE")); if (g->stage >= 2 && g->stage <= 5) return level_start(g); }   /* debug: straight into stage 2..5 */
     if (!SDL_getenv("SABER_MENU") && (SDL_getenv("SABER_START") || SDL_getenv("SABER_SCRIPT"))) return level_start(g);   /* debug: straight into the level */
     if (SDL_getenv("SABER_CLEARED")) g->menu.cleared_stage = atoi(SDL_getenv("SABER_CLEARED"));   /* debug: SABER_MENU=15 art for that stage */
     menu_enter(&g->menu, SDL_getenv("SABER_MENU") ? atoi(SDL_getenv("SABER_MENU")) : MS_SPLASH0);
@@ -42,6 +42,7 @@ static bool level_start(Game *g)
     Menu menu = g->menu; int stage = g->stage ? g->stage : 1; int carry = g->carry_lives, conts = g->continues_left;
     night_dispose(&g->night);
     forest_dispose(&g->forest);
+    forest_dispose(&g->lab);
     if (g->mode7) { mode7_destroy(g->mode7); g->mode7 = NULL; }
     memset(g, 0, sizeof *g);
     g->ren = ren; g->sw = sw; g->sh = sh; g->menu = menu; g->in_level = true; g->stage = stage; g->carry_lives = carry; g->continues_left = conts;
@@ -59,12 +60,15 @@ static bool level_start(Game *g)
     g->forest_on = (stage == 4);
     if (g->forest_on && !forest_init(&g->forest, &g->level)) return false;
     if (g->forest_on) { memset(&g->night, 0, sizeof g->night); g->night.manual = true; night_boss_load(&g->night, &g->level, g->menu.difficulty); }   /* Hyperjumper returns in the finale */
+    g->lab_on = (stage == 5);
+    if (g->lab_on && !forest_load(&g->lab, &g->level, "lab", "lab.lvl", 0x4C420000u)) return false;
     g->world.gx = 0; g->world.gy = 480.0f;
     g->world.world_min_x = 0; g->world.world_max_x = g->level.width;
     float px = 100, py = 155;
     for (int i = 0; i < g->level.nobjs; i++) if (g->level.objs[i].type == 0) { px = g->level.objs[i].x; py = g->level.objs[i].y; }
     if (g->night_on) { px = g->night.start_x; py = g->night.start_y; }
     if (g->forest_on) { px = g->forest.start_x; py = g->forest.start_y; }
+    if (g->lab_on) { px = g->lab.start_x; py = g->lab.start_y; }
     g->walk_in = (g->night_on || g->forest_on) && !SDL_getenv("SABER_START");   /* stages 3 and 4 open with the hero walking in from the left */
     if (g->walk_in && g->night_on) { g->walk_stop_x = g->night.intro_stop_x; g->walk_script = NIGHT_SCRIPT_INTRO; }
     if (g->walk_in && g->forest_on) { px = FOREST_INTRO_CAM - 40.0f; g->walk_stop_x = FOREST_INTRO_STOP; g->walk_script = FOREST_SCRIPT_INTRO; }
@@ -95,7 +99,13 @@ static bool level_start(Game *g)
         int n = forest_triggers(&g->forest, tr, FOREST_MAX_TRIGGERS, g->player_layer);
         for (int i = 0; i < n; i++) enemies_add_trigger(&g->enemies, &tr[i]);
     }
-    for (int i = 0; i < g->level.nobjs && !g->night_on && !g->forest_on; i++) {
+    if (g->lab_on) {   /* stage 5: its own waves (lab.lvl) and, for now, level 1's boss at the end (on its far pass layer) */
+        LevelObject tr[FOREST_MAX_TRIGGERS];
+        int n = forest_triggers(&g->lab, tr, FOREST_MAX_TRIGGERS, g->player_layer), far = 4;
+        for (int i = 0; i < g->level.nlayers; i++) if (!strcmp(g->level.layers[i].name, "Small Hyperjmpr")) far = i;
+        for (int i = 0; i < n; i++) { if (tr[i].type == 10) tr[i].layer = (uint32_t)far; enemies_add_trigger(&g->enemies, &tr[i]); }
+    }
+    for (int i = 0; i < g->level.nobjs && !g->night_on && !g->forest_on && !g->lab_on; i++) {
         LevelObject *o = &g->level.objs[i];
         float hx = o->wp[0][0] * 0.5f, hy = o->wp[0][1] * 0.5f;   /* +0x0c/+0x10 = zone size for flow objects */
         if (o->type >= 1 && o->type <= 29 && o->type != 3 && o->type != 4) enemies_add_trigger(&g->enemies, o);
@@ -114,7 +124,7 @@ static bool level_start(Game *g)
     }
     g->state = 10;
     if (SDL_getenv("SABER_DEBUG")) g->debug_collision = true;   /* debug: collision overlay from the start */
-    music_play(g->night_on ? 13 : g->forest_on ? 15 : 5, true);
+    music_play(g->night_on ? 13 : g->forest_on ? 15 : g->lab_on ? 14 : 5, true);
     g->cam_x = px - sw / 2; if (g->cam_x < 0) g->cam_x = 0;
     if (g->walk_in) g->cam_x = g->night_on ? NIGHT_INTRO_CAM : FOREST_INTRO_CAM;
     title_start(g);
@@ -127,14 +137,15 @@ static bool level_start(Game *g)
 #define TITLE_TEXT_T 0.9f    /* the band is open: the name starts typing */
 #define TITLE_WIPE_T 3.1f    /* the strips start opening */
 #define TITLE_END_T  4.3f
-static const struct { const char *no, *name, *sub; } TITLE[5] = {
+static const struct { const char *no, *name, *sub; } TITLE[6] = {
     { "", "", "" },
     { "STAGE 1", "THE FRONTIER TOWN", "OUTRIDERS IN THE STREETS" },
     { "STAGE 2", "THE ALL GALAXY GRAND PRIX", "NEW BORDERLAND CIRCUIT" },
     { "STAGE 3", "HYPERJUMPER PASS", "OUTRIDER SKY RAID" },
     { "STAGE 4", "THE RED PALM JUNGLE", "OUTRIDER WATCHTOWERS" },
+    { "STAGE 5", "THE CAVERN LABORATORY", "OUTRIDER HIDEOUT" },
 };
-static int title_idx(const Game *g) { return g->stage >= 2 && g->stage <= 4 ? g->stage : 1; }
+static int title_idx(const Game *g) { return g->stage >= 2 && g->stage <= 5 ? g->stage : 1; }
 static void title_start(Game *g) { g->title_on = true; g->title_t = 0; music_set_volume(0); }
 static void title_update(Game *g, float dt)
 {
@@ -281,7 +292,8 @@ void game_update(Game *g, float dt)
             g->in_level = false;
             if (g->stage == 1) { g->menu.cleared_stage = g->stage; g->stage = 2; g->carry_lives = g->player.lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return; }   /* the Grand Prix follows */
             if (g->stage == 3) { g->menu.cleared_stage = g->stage; g->stage = 4; g->carry_lives = g->player.lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return; }   /* on into the jungle */
-            g->menu.cleared_stage = g->stage; g->stage = 5; g->menu.ending = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return;   /* the game ends after stage 4: the credits roll */
+            if (g->stage == 4) { g->menu.cleared_stage = g->stage; g->stage = 5; g->carry_lives = g->player.lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return; }   /* down into the cave lab */
+            g->menu.cleared_stage = g->stage; g->stage = 6; g->menu.ending = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return;   /* the game ends after stage 5: the credits roll */
         }
         music_set_volume(2.0f - f);
     }

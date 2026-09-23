@@ -175,10 +175,13 @@ Type 31 is the same man dormant: he holds his fire and the hero's shots fly thro
 There is no exit: the stage ends in the clearing, the last screen, which has a tower near its right edge (floor 72
 px up like the others, so a jump reaches it from the flat) with one dormant shield sniper (type 31) in its cabin and nobody else.
 When the camera stops there (the hero still a good way short of the tower) it stays, and the finale starts (`forest_finale_update` in `src/forest.c`). For 24 s
-Outriders run in from both edges and materialise on the ground: their own vaporise frames played backwards, then
-they are there. The blue ones only warp in, as snipers (type 7, half of the warp-ins): they stand and aim in all eight
-directions, so a hero camping on the arena tower's deck gets shot at 45 degrees (in stage 4 a sniper aims up once the
-hero is 40+ px above, quantised; level 1's rule is more than 48, which leaves a deck 72 px up at flat fire). Then Hyperjumper comes back with stage 3's whole fight (`night_boss_load` / `night_boss_summon`),
+Outriders run in from both edges, off screen (edge streams only; nobody appears out of thin air). The blue ones are
+stalkers (type 32, `EC_STALKER`, the sniper's body): they run in like the grunts, then take a firing line on the hero
+and shoot like a sniper. With the hero up on a tower deck they stop where the 45-degree line from the muzzle crosses
+his middle (the muzzle's rise = its run; the spot nearer to them that is on screen), with him on the ground 80..160 px
+short and fire level; they walk to a new spot when he leaves the line (re-picked only while he stands, not mid-jump).
+The route's own type-7 snipers aim up in stage 4 once the hero is 40+ px above, quantised (`Enemies.aim_decks`; level
+1's rule is more than 48, which leaves a deck 72 px up at flat fire). Then Hyperjumper comes back with stage 3's whole fight (`night_boss_load` / `night_boss_summon`),
 and fewer Outriders keep coming. Once it goes down nobody new arrives; the stage, and the game, is won when the last
 Outrider on the field is gone. The boss music (track 8) runs from the moment the camera locks until the end. A radio
 scene opens the ambush (an Outrider taunt, April, the hero; every page fits one box, `SABER_DLGCHECK=1` logs how
@@ -199,6 +202,20 @@ watchtowers along the jungle are what jams it, and Ramrod can't land under the c
 
 `SABER_STAGE=4` (or `--level 4`) starts there. Stage 3's MISSION ACCOMPLISHED now continues into stage 4 with the
 spare lives carried over.
+
+## Stage 5 — "The Cavern Laboratory" (cave + lab route)
+
+Rebuilt from three pixel-sharp screenshots (a cave with a scaffold, and two shots of a lab that turned out to be one
+continuous stretch of wall) by `../lab/` (see its README): the shots are inverted to their native 320x240 pixels,
+cut into pieces (cliffs, cavern, props, wall modules, pillars, railing, the dirt and walkway strips) and laid out by
+`../lab/compose.py` into `assets/lab/lab.lvl` + one 16x16 tile sheet per layer, the stage 4 format, loaded by the same
+loader (`forest_load`). Layers: SkyBG = the cavern (0.2), Mountains = orange cliffs (0.5), MidBG = the lab walls (1.0;
+open where the cave shows through), Playfield = the ground and props. The route opens in the cave, alternates lab
+stretches (monitors and consoles) with caves, and ends in the hall with the big windows. No pits; one-way decks on the
+scaffold roofs and rubble piles. The boss is, provisionally, level 1's (a type-10 trigger at the end, put on the
+`Small Hyperjmpr` layer so its far pass shows over the cliffs and through the hall's gaps and its near pass flies
+inside the hall). Music track 14 (otherwise unused). `SABER_STAGE=5` starts there; stage 4's MISSION ACCOMPLISHED
+now continues into stage 5, and the credits roll after stage 5.
 
 ## Controls (as in the demo)
 
@@ -233,7 +250,8 @@ Original keys: arrows, A jump, S shoot, Return start/confirm, Escape quits.
 - `src/dialog.c`, `src/hud.c`, `src/menu.c`, `src/video.c`, `src/audio.c` — presentation
 - `src/mode7.c` — stage 2, the Mode-7 Grand Prix (our own design, see above)
 - `src/night.c`, `src/night_level.c` — stage 3, Hyperjumper Pass (see above)
-- `src/forest.c` — stage 4, the Red Palm Jungle: loads `assets/forest/forest.lvl` (built by `../forest/`) into the level-1 layer slots
+- `src/forest.c` — stage 4, the Red Palm Jungle: loads `assets/forest/forest.lvl` (built by `../forest/`) into the level-1 layer slots;
+  `forest_load` loads stage 5's `assets/lab/lab.lvl` (built by `../lab/`) the same way
 - `src/audio.c` mixes deliberately *unlike* the original: the demo's mixer (`FUN_00563900`) sums the music at vol/256
   and every sfx voice at unity into 16-bit and hard-clips at ±0x7fbc, and the material is mastered hot (most sfx and
   the music tracks peak at 0 dBFS or above), so a voice line over a gunshot clips. The port decodes the music in float,

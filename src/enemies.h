@@ -13,7 +13,8 @@ enum EnemyClass {   /* dispatch ids used by FUN_0041f240 */
     EC_NONE = 0, EC_WALKER = 1, EC_GRUNT = 2, EC_GRUNT_B = 3, EC_SNIPER = 4, EC_SNIPER_B = 5,
     EC_KNEELER = 6, EC_KNEELER_B = 7, EC_HORSEBOSS = 8, EC_BUGGY = 9,
     EC_PROP = 10 /* ..21 */, EC_STAMPEDE = 22 /* ..25 */, EC_CUTSCENE = 26, EC_END = 27,
-    EC_SHIELD = 28   /* ours: stage 4's Outrider behind a riot shield (type 30; 31 = dormant until woken) */
+    EC_SHIELD = 28,  /* ours: stage 4's Outrider behind a riot shield (type 30; 31 = dormant until woken) */
+    EC_STALKER = 29  /* ours: stage 4's finale, a blue Outrider (type 32) that runs in and takes a firing line on the hero */
 };
 
 #define SHIELD_SNIPER_SPRITE 0x534E5052u   /* assets/forest/sniper.png, registered by forest_init */
