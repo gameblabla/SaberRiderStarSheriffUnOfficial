@@ -37,7 +37,9 @@ typedef struct {
     Night night; bool night_on;   /* stage 3: night-tinted level-1 tilemap + Hyperjumper */
     Forest forest; bool forest_on; /* stage 4: the rebuilt forest tile layers over the level-1 layer slots */
     bool forest_outro_done;      /* stage 4: the win's radio scene already shown */
-    bool night_intro, night_taunt_done, night_outro_done;   /* stage 3: the hero walking in / the story scenes already shown */
+    bool walk_in;                /* stages 3/4 open with the hero walking in from off screen to walk_stop_x, then walk_script */
+    float walk_stop_x; const char *walk_script;
+    bool night_taunt_done, night_outro_done;   /* stage 3: the story scenes already shown */
     float state_t;
     float level_t;               /* +0x64 in state 10: music fade-in timer */
     uint32_t dialog_text; float dialog_t;

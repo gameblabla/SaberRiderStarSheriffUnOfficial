@@ -390,7 +390,7 @@ static void update_sniper(Enemies *E, Enemy *e, Player *pl, const Level *L, cons
             int want;
             float newt;
             if (dyq < dx || dx > 16.0f) {
-                float th = below ? 24.0f : 48.0f;
+                float th = below ? 24.0f : E->aim_decks ? 40.0f : 48.0f;
                 if (th < dyq || (dx > 0.1f && dyq / dx > 2.0f)) want = below ? (b->x <= px ? AIM_DR : AIM_DL) : (b->x <= px ? AIM_UR : AIM_UL);
                 else want = b->x <= px ? AIM_R : AIM_L;
                 newt = 0.01f;

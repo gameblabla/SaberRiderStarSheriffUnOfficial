@@ -176,7 +176,9 @@ There is no exit: the stage ends in the clearing, the last screen, which has a t
 px up like the others, so a jump reaches it from the flat) with one dormant shield sniper (type 31) in its cabin and nobody else.
 When the camera stops there (the hero still a good way short of the tower) it stays, and the finale starts (`forest_finale_update` in `src/forest.c`). For 24 s
 Outriders run in from both edges and materialise on the ground: their own vaporise frames played backwards, then
-they are there. Then Hyperjumper comes back with stage 3's whole fight (`night_boss_load` / `night_boss_summon`),
+they are there. The blue ones only warp in, as snipers (type 7, half of the warp-ins): they stand and aim in all eight
+directions, so a hero camping on the arena tower's deck gets shot at 45 degrees (in stage 4 a sniper aims up once the
+hero is 40+ px above, quantised; level 1's rule is more than 48, which leaves a deck 72 px up at flat fire). Then Hyperjumper comes back with stage 3's whole fight (`night_boss_load` / `night_boss_summon`),
 and fewer Outriders keep coming. Once it goes down nobody new arrives; the stage, and the game, is won when the last
 Outrider on the field is gone. The boss music (track 8) runs from the moment the camera locks until the end. A radio
 scene opens the ambush (an Outrider taunt, April, the hero; every page fits one box, `SABER_DLGCHECK=1` logs how
@@ -186,6 +188,14 @@ shooting. Nothing on screen counts down to Hyperjumper (the player isn't told he
 bar shows, then OUTRIDERS LEFT n. He, his shots and his blasts are drawn over the cabin walls (ForegroundStuff), so he
 flies in front of the towers. After the win: an outro radio scene, the victory
 jingle (music 6), MISSION ACCOMPLISHED (music 7), and since this is the game's end, the credits roll, then the title.
+
+It opens like stage 3 (the same walk-in code, `Game.walk_in`): after the title card the camera sits 48 px into the
+route, the hero walks in from off screen and stops at x 144, short of the first wave's zone (x 200), and a radio scene
+(`FOREST_SCRIPT_INTRO` in `src/forest.c`) sets up the story. It is the morning after Hyperjumper Pass: the garbled
+distress call Ramrod caught on the way home came from the ranger station on Tropicus, the dinosaur reserve the
+Outriders raid in the series ("Oh Boy! Dinosaurs!", where the ranger's call also gets through half jammed). The
+watchtowers along the jungle are what jams it, and Ramrod can't land under the canopy, so the hero goes in on foot
+(April, Colt, Saber, then the hero; nothing hints at the boss). `SABER_START` skips the walk-in.
 
 `SABER_STAGE=4` (or `--level 4`) starts there. Stage 3's MISSION ACCOMPLISHED now continues into stage 4 with the
 spare lives carried over.

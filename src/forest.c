@@ -124,9 +124,19 @@ bool forest_on_deck(const Level *L, float x, float feet_y)
 /* ---- the finale ---- */
 #define FINALE_ONSLAUGHT_T 24.0f
 
-/* Story: after the Grand Prix and Hyperjumper Pass, the jungle is where the Outriders' watchtowers stand. The last
- * clearing is a trap, and what comes out of the Vapor Zone for it is a rebuilt Hyperjumper. */
+/* Story: the morning after Hyperjumper Pass. On the way home Ramrod caught a garbled distress call from the ranger
+ * station on Tropicus, the dinosaur reserve the Outriders raid in the series ("Oh Boy! Dinosaurs!": the ranger's
+ * call gets through half jammed). Here the jamming comes from Outrider watchtowers strung along the Red Palm Jungle,
+ * and Ramrod can't set down under the canopy, so the hero is dropped at the jungle's edge and walks in. The intro
+ * doesn't hint at a boss (the quiet stretch before the clearing does that): the last clearing is a trap, and what
+ * comes out of the Vapor Zone for it is a rebuilt Hyperjumper. */
 /* every page fits one box (4 wrapped lines, whichever hero's name is swapped in: SABER_DLGCHECK) */
+const char *const FOREST_SCRIPT_INTRO =
+    "<|GREEN|>\n</dialog_avatar_april2/>\nFireball, that garbled distress call we caught after the pass came from the ranger station on Tropicus.\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_colt2/>\nThe dinosaur reserve? Reckon the Outriders are rustling big game for Nemesis again, pardner.\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_saber2/>\nThey've raised watchtowers all over this jungle to jam the ranger's signal - and our scanners.\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_april2/>\nRamrod can't land under this canopy, so you're on foot again. Knock out those towers and we'll find the ranger.\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_fireball1/>\nSo much for going home. Keep Ramrod's engines warm - this is one jungle safari I'll make quick.\n<<>>\n";
 const char *const FOREST_SCRIPT_AMBUSH =
     "<|PURPLE|>\n</dialog_avatar_outrider/>\nEnd of the line, Star Sheriff! Every Outrider in the jungle is coming, and worse from the Vapor Zone!\n<<>>\n"
     "<|RED|>\n</dialog_avatar_april2/>\nFireball, they're phasing in all around you! Hold them off until Ramrod gets through the canopy!\n<<>>\n"
@@ -173,7 +183,7 @@ static void warp_begin(ForestFinale *F, Effects *fx, const Player *pl, int type,
         x = F->arena_x + 40 + rnd(F->sw - 80);
         if (fabsf(x - px) > 80) break;
     }
-    uint32_t sheet = type == 1 ? 0x827CB6B8 : type == 5 ? 0x6338F34D : 0x9DA6D8D5;
+    uint32_t sheet = type == 1 ? 0x827CB6B8 : (type == 5 || type == 7) ? 0x6338F34D : 0x9DA6D8D5;   /* 5 and 7: the blue body */
     int first = type == 1 ? 23 : 59, last = type == 1 ? 18 : 54;
     AnimDef a = { 0, first, last, last, 0.0667f, 0 };
     Effect *ef = effects_spawn(fx, sheet, layer, &a, x, 176, 32, 32, 0);
@@ -215,7 +225,8 @@ bool forest_finale_update(Forest *f, Enemies *E, Night *hj, Effects *fx, const L
         F->tr0 = E->ntr;
         add_stream(E, F->arena_x, (float)sw, 2, R_EDGE, R_EDGE, 2100, 300, layer);    /* gunmen running in from the right */
         add_stream(E, F->arena_x, (float)sw, 1, L_EDGE, R_EDGE, 2500, 1400, layer);   /* chargers from both sides */
-        add_stream(E, F->arena_x, (float)sw, 5, L_EDGE, R_EDGE, 3300, 2600, layer);
+        /* no blue runners (type 5 only fires level): the blue Outriders warp in as snipers (type 7, below), which aim
+           in all 8 directions like the blue ones on the route - 45 degrees up is what reaches a hero on the deck */
         F->ntr_onslaught = E->ntr - F->tr0;
         add_stream(E, F->arena_x, (float)sw, 1, R_EDGE, L_EDGE, 3400, 0, layer);      /* the boss round: thinner */
         add_stream(E, F->arena_x, (float)sw, 2, L_EDGE, R_EDGE, 4600, 0, layer);
@@ -230,7 +241,7 @@ bool forest_finale_update(Forest *f, Enemies *E, Night *hj, Effects *fx, const L
         int cap = boss ? 5 : 8;                    /* bodies on the field at once (the tower gunman and the snipers count) */
         E->spawner_enabled = on_field(E) < cap;
         if ((F->warp_t -= dt) <= 0 && on_field(E) < cap && alive) {
-            static const int TYPES[4] = { 2, 1, 5, 2 };
+            static const int TYPES[4] = { 2, 1, 7, 7 };   /* half of them blue snipers: they stand and aim anywhere */
             warp_begin(F, fx, pl, TYPES[rnd(4)], layer);
             F->warp_t = boss ? 4.5f + rnd(40) * 0.05f : 2.2f + rnd(30) * 0.05f;
         }

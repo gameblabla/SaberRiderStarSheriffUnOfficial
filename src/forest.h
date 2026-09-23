@@ -55,8 +55,12 @@ int forest_triggers(const Forest *f, LevelObject *out, int max, int player_layer
 /* feet at (x, feet_y) up on a tower deck (at or above its one-way floor cells): the hero is drawn behind the rail
  * there, in the cabin like the gunmen; below a deck (jumping up through it) he stays in front of the planks */
 bool forest_on_deck(const Level *L, float x, float feet_y);
-/* radio scenes (dialog_open_script format, written for Fireball like stage 3's): the ambush springing, the win */
-extern const char *const FOREST_SCRIPT_AMBUSH, *const FOREST_SCRIPT_OUTRO;
+/* radio scenes (dialog_open_script format, written for Fireball like stage 3's): the drop-off, the ambush springing, the win */
+extern const char *const FOREST_SCRIPT_INTRO, *const FOREST_SCRIPT_AMBUSH, *const FOREST_SCRIPT_OUTRO;
+/* the opening, as in stage 3: the camera starts here, the hero off screen to its left walks in to INTRO_STOP, just short
+ * of the first wave's zone (x 200), then FOREST_SCRIPT_INTRO */
+#define FOREST_INTRO_CAM 48.0f
+#define FOREST_INTRO_STOP (FOREST_INTRO_CAM + 96.0f)
 
 /* the finale, every live step after enemies_update; true once it is won. hj = Hyperjumper (night_boss_load'ed,
  * manual). While it runs the camera stays put (fin.state != FF_WAIT). */

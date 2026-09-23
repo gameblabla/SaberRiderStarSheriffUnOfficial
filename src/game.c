@@ -64,7 +64,9 @@ static bool level_start(Game *g)
     for (int i = 0; i < g->level.nobjs; i++) if (g->level.objs[i].type == 0) { px = g->level.objs[i].x; py = g->level.objs[i].y; }
     if (g->night_on) { px = g->night.start_x; py = g->night.start_y; }
     if (g->forest_on) { px = g->forest.start_x; py = g->forest.start_y; }
-    g->night_intro = g->night_on && !SDL_getenv("SABER_START");   /* stage 3 opens with the hero walking in from the left */
+    g->walk_in = (g->night_on || g->forest_on) && !SDL_getenv("SABER_START");   /* stages 3 and 4 open with the hero walking in from the left */
+    if (g->walk_in && g->night_on) { g->walk_stop_x = g->night.intro_stop_x; g->walk_script = NIGHT_SCRIPT_INTRO; }
+    if (g->walk_in && g->forest_on) { px = FOREST_INTRO_CAM - 40.0f; g->walk_stop_x = FOREST_INTRO_STOP; g->walk_script = FOREST_SCRIPT_INTRO; }
     if (SDL_getenv("SABER_START")) px = (float)atof(SDL_getenv("SABER_START"));   /* debug */
     player_spawn(&g->player, (unsigned)(g->menu.character - 1) < 3 ? HERO_CRHC[g->menu.character - 1] : 0x8403195A, px, py);
     /* stages 3 and 4 inherit the spares left over from the stage before (a fresh --level 3/4 falls back to the option) */
@@ -77,6 +79,7 @@ static bool level_start(Game *g)
     if (g->forest_on)   /* the cabin walls: a tower sniper's shots and aimed-down rifle go over them */
         for (int i = g->player_layer + 1; i < g->level.nlayers; i++) if (!strcmp(g->level.layers[i].name, "ForegroundStuff")) { g->enemies.front_layer = i; break; }
     if (g->forest_on && g->enemies.front_layer >= 0) g->night.fx_layer = g->enemies.front_layer;   /* Hyperjumper's flashes and blasts over the towers too */
+    g->enemies.aim_decks = g->forest_on;
     dialog_set_hero(g->menu.character);
     static const uint32_t DIALOG_TEXT[4] = { 0xC3B6D081, 0xC4B0D1BA, 0xC5AAD2B7, 0xC6A4D3AC };
     /* Stage 3 has its own route and enemy waves (night_level.c); none of level 1's dialogs, stampede,
@@ -112,7 +115,7 @@ static bool level_start(Game *g)
     if (SDL_getenv("SABER_DEBUG")) g->debug_collision = true;   /* debug: collision overlay from the start */
     music_play(g->night_on ? 13 : g->forest_on ? 15 : 5, true);
     g->cam_x = px - sw / 2; if (g->cam_x < 0) g->cam_x = 0;
-    if (g->night_intro) g->cam_x = NIGHT_INTRO_CAM;
+    if (g->walk_in) g->cam_x = g->night_on ? NIGHT_INTRO_CAM : FOREST_INTRO_CAM;
     title_start(g);
     return true;
 }
@@ -316,19 +319,19 @@ void game_update(Game *g, float dt)
     /* order as in GameLevel::update: controls -> (spawner, enemies) -> physics -> bullets -> camera */
     if (c->state == CS_DEAD) { c->coll = c->body.coll; player_death_update(p, dt, g->level.height, &g->cam_x, g->sw); }
     else {
-        /* stage 3's opening: the hero walks in from off screen on a held "right", then the radio scene */
+        /* stages 3 and 4 open with the hero walking in from off screen on a held "right", then the radio scene */
         Input walk = { 0 };
-        if (g->night_intro && g->state == 10) {
+        if (g->walk_in && g->state == 10) {
             for (int b = 0; b < BTN_COUNT; b++) walk.state[b] = 1;
-            if (c->body.x < g->night.intro_stop_x) walk.state[BTN_RIGHT] = 0;
-            else { g->night_intro = false; open_scene(g, NIGHT_SCRIPT_INTRO); }
+            if (c->body.x < g->walk_stop_x) walk.state[BTN_RIGHT] = 0;
+            else { g->walk_in = false; open_scene(g, g->walk_script); }
         }
         character_sync_ground(c); player_death_update(p, dt, g->level.height, &g->cam_x, g->sw);
-        player_control(p, g->night_intro ? &walk : &g->in, dt);
+        player_control(p, g->walk_in ? &walk : &g->in, dt);
     }
     player_try_fire(p, &g->player_bullets, &g->effects, g->player_layer);
     player_check_enemy_bullets(p, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh);
-    g->world.world_min_x = g->night_intro ? 0 : g->cam_x;   /* GameLevel::update: physics world min = camera left edge (not while walking in) */
+    g->world.world_min_x = g->walk_in ? 0 : g->cam_x;   /* GameLevel::update: physics world min = camera left edge (not while walking in) */
     enemies_update(&g->enemies, p, &g->level, &g->world, &g->player_bullets, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh, dt);
     if (g->night_on) {
         night_update(&g->night, p, &g->player_bullets, &g->effects, &g->level, g->cam_x, g->sw, dt, g->state == 10);

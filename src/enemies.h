@@ -57,6 +57,8 @@ typedef struct {
     int frame, tick;
     int difficulty;                  /* stage 4's shield: shots it takes */
     bool shield_wake;                /* stage 4's finale: the dormant shield snipers join in */
+    bool aim_decks;                  /* stage 4: a sniper aims 45 degrees up at a hero on a tower deck (72 px up: 48 once
+                                        quantised, which level 1's "more than 48" leaves flat) */
     int front_layer;                 /* stage 4: the cabin wall layer; a tower sniper's shots and aimed-down rifle are
                                         drawn with it (enemies_draw_front), in front of the planks; -1 = none */
     Trigger tr[MAX_TRIGGERS]; int ntr;
