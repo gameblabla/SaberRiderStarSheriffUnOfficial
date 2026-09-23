@@ -25,9 +25,10 @@ void effects_update(Effects *fx, float dt)
         Effect *e = &fx->e[i];
         if (!e->alive) continue;
         e->t += dt;
+        bool rev = e->anim.first > e->anim.last;   /* first > last: played backwards (stage 4's warp-ins) */
         while (e->t >= e->anim.frame_time) {
             e->t -= e->anim.frame_time;
-            if (e->frame < e->anim.last) e->frame++;
+            if (rev ? e->frame > e->anim.last : e->frame < e->anim.last) e->frame += rev ? -1 : 1;
             else { e->alive = false; break; }     /* one-shot: dies after the last frame */
         }
     }
@@ -46,9 +47,9 @@ void effects_draw(const Effects *fx, int layer, float cam_x, float cam_y)
                 SDL_FRect src = { (float)(f * e->spr->w), 0, (float)e->spr->w, (float)e->spr->h };
                 SDL_FRect dst = { x, y, (float)e->spr->w, (float)e->spr->h };
                 SDL_RenderTextureRotated(SDL_GetRendererFromTexture(e->spr->tex), e->spr->tex, &src, &dst, -e->angle * 180.0 / 3.14159265, NULL, SDL_FLIP_NONE);
-            } else sprite_draw(e->spr, f, x, y, false);
+            } else sprite_draw(e->spr, f, x, y, e->flip);
         } else if (e->cb) {
-            int ci = e->frame; if (ci >= 0 && ci < cblock_ncells(e->cb) && e->cb->cells[ci] != 0xFFFF) cblock_draw_tile(e->cb, e->cb->cells[ci], x, y, false);
+            int ci = e->frame; if (ci >= 0 && ci < cblock_ncells(e->cb) && e->cb->cells[ci] != 0xFFFF) cblock_draw_tile(e->cb, e->cb->cells[ci], x, y, e->flip);
         }
     }
 }

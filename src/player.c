@@ -22,8 +22,9 @@ void player_control(Player *p, const Input *in, float dt)
     if (L && R) L = R = false;
     if (U && D) U = D = false;
 
+    if (p->fire_hold && !btn_down(in, BTN_SHOOT)) p->fire_hold = false;
     p->want_fire = false;
-    if (btn_down(in, BTN_SHOOT)) {
+    if (btn_down(in, BTN_SHOOT) && !p->fire_hold) {
         if (character_request_shoot(c)) p->want_fire = true;
     }
     if (btn_down(in, BTN_AIM) && !(c->flags & CF_IN_JUMP)) {

@@ -1,5 +1,6 @@
 #include "bullets.h"
 #include "audio.h"
+#include "physics.h"
 #include <math.h>
 #include <string.h>
 
@@ -64,7 +65,8 @@ void bullets_update(Bullets *bs, const Level *L, Effects *fx, float dt, float ca
                     float px = (c - 1) * hxs + x0;
                     float py = (k * 16.0f + (y0 - ny)) * (r * 0.5f) + y0;
                     int cx = (int)floorf(px / cw), cy = (int)floorf(py / ch);
-                    if (level_cell(L, cx, cy) == 15) {
+                    uint8_t cell = level_cell(L, cx, cy);
+                    if (cell == 15 || (cell & COLL_RAMP)) {   /* solid, or stage 4's ramp ground */
                         hit = true;
                         if (b->kind == BK_GRENADE) {
                             sfx_play(14, 0);

@@ -147,7 +147,10 @@ void menu_update(Menu *m, const Input *in, float dt, int sw, SDL_Renderer *r)
         int pages = 1; if (e) for (uint32_t i = 0; i + 6 <= e->size; i++) if (!memcmp(e->data + i, "[fade]", 6)) pages++;
         m->credits_t += dt;
         if (m->credits_t >= 3.5f) { m->credits_t = 0; m->credits_page++; }
-        if (m->credits_page >= pages || confirm(in)) menu_enter(m, MS_OPTIONS);
+        if (m->credits_page >= pages || confirm(in)) {
+            if (m->ending) { m->ending = false; menu_enter(m, MS_SPLASH1); }   /* the game's end: back round to the title */
+            else menu_enter(m, MS_OPTIONS);
+        }
         break; }
     case MS_BRIEFING: {
         /* FUN_00429050: text plays; START (or an action button once the text is complete) closes the box, then the
@@ -191,7 +194,7 @@ void menu_update(Menu *m, const Input *in, float dt, int sw, SDL_Renderer *r)
         break; }
     case MS_ACCOMPLISHED:   /* FUN_00429de0: 4 s, then a 1 s countdown to the splash (or the next stage) */
         m->t += dt;
-        if (m->t > 5.0f) { if (m->more_stages) { m->more_stages = false; m->next_stage = true; music_stop(); } else menu_enter(m, MS_SPLASH1); }
+        if (m->t > 5.0f) { if (m->more_stages) { m->more_stages = false; m->next_stage = true; music_stop(); } else menu_enter(m, m->ending ? MS_CREDITS : MS_SPLASH1); }
         break;
     default: break;
     }

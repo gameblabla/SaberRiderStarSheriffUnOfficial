@@ -29,7 +29,7 @@ bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh, int start_level)
     }
     g->stage = 1; g->continues_left = g->menu.continues;
     if (start_level) { g->stage = start_level; return level_start(g); }   /* --level N: skip the front end */
-    if (SDL_getenv("SABER_STAGE")) { g->stage = atoi(SDL_getenv("SABER_STAGE")); if (g->stage == 2 || g->stage == 3) return level_start(g); }   /* debug: straight into stage 2/3 */
+    if (SDL_getenv("SABER_STAGE")) { g->stage = atoi(SDL_getenv("SABER_STAGE")); if (g->stage >= 2 && g->stage <= 4) return level_start(g); }   /* debug: straight into stage 2/3/4 */
     if (!SDL_getenv("SABER_MENU") && (SDL_getenv("SABER_START") || SDL_getenv("SABER_SCRIPT"))) return level_start(g);   /* debug: straight into the level */
     menu_enter(&g->menu, SDL_getenv("SABER_MENU") ? atoi(SDL_getenv("SABER_MENU")) : MS_SPLASH0);
     return true;
@@ -40,6 +40,7 @@ static bool level_start(Game *g)
     SDL_Renderer *ren = g->ren; int sw = g->sw, sh = g->sh;
     Menu menu = g->menu; int stage = g->stage ? g->stage : 1; int carry = g->carry_lives, conts = g->continues_left;
     night_dispose(&g->night);
+    forest_dispose(&g->forest);
     if (g->mode7) { mode7_destroy(g->mode7); g->mode7 = NULL; }
     memset(g, 0, sizeof *g);
     g->ren = ren; g->sw = sw; g->sh = sh; g->menu = menu; g->in_level = true; g->stage = stage; g->carry_lives = carry; g->continues_left = conts;
@@ -54,19 +55,28 @@ static bool level_start(Game *g)
     if (!level_load(&g->level, lvl)) return false;
     g->night_on = (stage == 3);
     if (g->night_on && !night_init(&g->night, &g->level, g->menu.difficulty)) return false;
+    g->forest_on = (stage == 4);
+    if (g->forest_on && !forest_init(&g->forest, &g->level)) return false;
+    if (g->forest_on) { memset(&g->night, 0, sizeof g->night); g->night.manual = true; night_boss_load(&g->night, &g->level, g->menu.difficulty); }   /* Hyperjumper returns in the finale */
     g->world.gx = 0; g->world.gy = 480.0f;
     g->world.world_min_x = 0; g->world.world_max_x = g->level.width;
     float px = 100, py = 155;
     for (int i = 0; i < g->level.nobjs; i++) if (g->level.objs[i].type == 0) { px = g->level.objs[i].x; py = g->level.objs[i].y; }
     if (g->night_on) { px = g->night.start_x; py = g->night.start_y; }
+    if (g->forest_on) { px = g->forest.start_x; py = g->forest.start_y; }
+    g->night_intro = g->night_on && !SDL_getenv("SABER_START");   /* stage 3 opens with the hero walking in from the left */
     if (SDL_getenv("SABER_START")) px = (float)atof(SDL_getenv("SABER_START"));   /* debug */
     player_spawn(&g->player, (unsigned)(g->menu.character - 1) < 3 ? HERO_CRHC[g->menu.character - 1] : 0x8403195A, px, py);
-    /* stage 3 inherits the spares left over from the Grand Prix (a fresh --level 3 falls back to the option) */
-    g->player.lives = (stage == 3 && carry > 0) ? carry : g->menu.lives;
+    /* stages 3 and 4 inherit the spares left over from the stage before (a fresh --level 3/4 falls back to the option) */
+    g->player.lives = (stage >= 3 && carry > 0) ? carry : g->menu.lives;
     g->player.hp = g->player.max_hp = hearts_for(g->menu.difficulty);
     enemies_reset(&g->enemies);
+    g->enemies.difficulty = g->menu.difficulty;
     g->player_layer = 11;
     for (int i = 0; i < g->level.nlayers; i++) if (!strcmp(g->level.layers[i].name, "PlayerSprites")) g->player_layer = i;
+    if (g->forest_on)   /* the cabin walls: a tower sniper's shots and aimed-down rifle go over them */
+        for (int i = g->player_layer + 1; i < g->level.nlayers; i++) if (!strcmp(g->level.layers[i].name, "ForegroundStuff")) { g->enemies.front_layer = i; break; }
+    if (g->forest_on && g->enemies.front_layer >= 0) g->night.fx_layer = g->enemies.front_layer;   /* Hyperjumper's flashes and blasts over the towers too */
     dialog_set_hero(g->menu.character);
     static const uint32_t DIALOG_TEXT[4] = { 0xC3B6D081, 0xC4B0D1BA, 0xC5AAD2B7, 0xC6A4D3AC };
     /* Stage 3 has its own route and enemy waves (night_level.c); none of level 1's dialogs, stampede,
@@ -76,7 +86,12 @@ static bool level_start(Game *g)
         int n = stage3_triggers(tr, 64, g->player_layer);
         for (int i = 0; i < n; i++) enemies_add_trigger(&g->enemies, &tr[i]);
     }
-    for (int i = 0; i < g->level.nobjs && !g->night_on; i++) {
+    if (g->forest_on) {   /* stage 4: its own waves (forest.lvl); no exit, the clearing's finale ends it (forest.c) */
+        LevelObject tr[FOREST_MAX_TRIGGERS];
+        int n = forest_triggers(&g->forest, tr, FOREST_MAX_TRIGGERS, g->player_layer);
+        for (int i = 0; i < n; i++) enemies_add_trigger(&g->enemies, &tr[i]);
+    }
+    for (int i = 0; i < g->level.nobjs && !g->night_on && !g->forest_on; i++) {
         LevelObject *o = &g->level.objs[i];
         float hx = o->wp[0][0] * 0.5f, hy = o->wp[0][1] * 0.5f;   /* +0x0c/+0x10 = zone size for flow objects */
         if (o->type >= 1 && o->type <= 29 && o->type != 3 && o->type != 4) enemies_add_trigger(&g->enemies, o);
@@ -95,8 +110,9 @@ static bool level_start(Game *g)
     }
     g->state = 10;
     if (SDL_getenv("SABER_DEBUG")) g->debug_collision = true;   /* debug: collision overlay from the start */
-    music_play(g->night_on ? 13 : 5, true);
+    music_play(g->night_on ? 13 : g->forest_on ? 15 : 5, true);
     g->cam_x = px - sw / 2; if (g->cam_x < 0) g->cam_x = 0;
+    if (g->night_intro) g->cam_x = NIGHT_INTRO_CAM;
     title_start(g);
     return true;
 }
@@ -107,13 +123,14 @@ static bool level_start(Game *g)
 #define TITLE_TEXT_T 0.9f    /* the band is open: the name starts typing */
 #define TITLE_WIPE_T 3.1f    /* the strips start opening */
 #define TITLE_END_T  4.3f
-static const struct { const char *no, *name, *sub; } TITLE[4] = {
+static const struct { const char *no, *name, *sub; } TITLE[5] = {
     { "", "", "" },
     { "STAGE 1", "THE FRONTIER TOWN", "OUTRIDERS IN THE STREETS" },
     { "STAGE 2", "THE ALL GALAXY GRAND PRIX", "NEW BORDERLAND CIRCUIT" },
     { "STAGE 3", "HYPERJUMPER PASS", "OUTRIDER SKY RAID" },
+    { "STAGE 4", "THE RED PALM JUNGLE", "OUTRIDER WATCHTOWERS" },
 };
-static int title_idx(const Game *g) { return g->stage == 2 ? 2 : g->stage == 3 ? 3 : 1; }
+static int title_idx(const Game *g) { return g->stage >= 2 && g->stage <= 4 ? g->stage : 1; }
 static void title_start(Game *g) { g->title_on = true; g->title_t = 0; music_set_volume(0); }
 static void title_update(Game *g, float dt)
 {
@@ -207,6 +224,15 @@ static void camera_follow(Game *g, bool allow_left)
     g->cam_x = camc - half;
 }
 
+/* a story scene from one of our own scripts: state 0xd without a focus point (the hero stops, the box opens,
+ * control comes back when it closes) */
+static void open_scene(Game *g, const char *script)
+{
+    if (!dialog_open_script(&g->dialog, script)) return;
+    g->state = 0xd; g->dlg_phase = 0; g->player.locked = true;
+    g->dlg_focus_x = g->dlg_focus_y = 0; g->dlg_t_before = g->dlg_t_after = 0;
+}
+
 void game_update(Game *g, float dt)
 {
     input_update(&g->in);
@@ -250,7 +276,8 @@ void game_update(Game *g, float dt)
         if (f >= 2.0f) {
             g->in_level = false;
             if (g->stage == 1) { g->stage = 2; g->carry_lives = g->player.lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return; }   /* the Grand Prix follows */
-            g->stage = 4; menu_enter(&g->menu, MS_ACCOMPLISHED); return;   /* the game ends after stage 3 */
+            if (g->stage == 3) { g->stage = 4; g->carry_lives = g->player.lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return; }   /* on into the jungle */
+            g->stage = 5; g->menu.ending = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return;   /* the game ends after stage 4: the credits roll */
         }
         music_set_volume(2.0f - f);
     }
@@ -278,6 +305,7 @@ void game_update(Game *g, float dt)
             if (g->dialog.active) dialog_update(&g->dialog, &g->in, dt);
             else { g->state = 10; p->locked = false; }
         }
+        p->fire_hold = true;   /* no shots in a dialogue, nor from the button that closed it */
         if (!cutscene_world) {
             character_animate(c, dt); effects_update(&g->effects, dt);
             for (int i = 0; i < MAX_ENEMIES; i++) if (g->enemies.e[i].cls) character_animate(&g->enemies.e[i].ch, dt);
@@ -287,14 +315,38 @@ void game_update(Game *g, float dt)
 
     /* order as in GameLevel::update: controls -> (spawner, enemies) -> physics -> bullets -> camera */
     if (c->state == CS_DEAD) { c->coll = c->body.coll; player_death_update(p, dt, g->level.height, &g->cam_x, g->sw); }
-    else { character_sync_ground(c); player_death_update(p, dt, g->level.height, &g->cam_x, g->sw); player_control(p, &g->in, dt); }
+    else {
+        /* stage 3's opening: the hero walks in from off screen on a held "right", then the radio scene */
+        Input walk = { 0 };
+        if (g->night_intro && g->state == 10) {
+            for (int b = 0; b < BTN_COUNT; b++) walk.state[b] = 1;
+            if (c->body.x < g->night.intro_stop_x) walk.state[BTN_RIGHT] = 0;
+            else { g->night_intro = false; open_scene(g, NIGHT_SCRIPT_INTRO); }
+        }
+        character_sync_ground(c); player_death_update(p, dt, g->level.height, &g->cam_x, g->sw);
+        player_control(p, g->night_intro ? &walk : &g->in, dt);
+    }
     player_try_fire(p, &g->player_bullets, &g->effects, g->player_layer);
     player_check_enemy_bullets(p, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh);
-    g->world.world_min_x = g->cam_x;   /* GameLevel::update: physics world min = camera left edge */
+    g->world.world_min_x = g->night_intro ? 0 : g->cam_x;   /* GameLevel::update: physics world min = camera left edge (not while walking in) */
     enemies_update(&g->enemies, p, &g->level, &g->world, &g->player_bullets, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh, dt);
     if (g->night_on) {
         night_update(&g->night, p, &g->player_bullets, &g->effects, &g->level, g->cam_x, g->sw, dt, g->state == 10);
         if (g->night.boss_started) { g->enemies.spawner_enabled = false; g->cam_locked = true; }   /* the arena: no more waves, the camera stays */
+        if (g->state == 10 && !g->night_taunt_done && !g->night.boss_started && c->state != CS_DEAD && c->body.x >= NIGHT_TAUNT_X) {
+            g->night_taunt_done = true; open_scene(g, NIGHT_SCRIPT_TAUNT);   /* the pass patrol calls Hyperjumper in */
+        }
+    }
+    if (g->forest_on && g->state == 10) {
+        bool won = forest_finale_update(&g->forest, &g->enemies, &g->night, &g->effects, &g->level, &g->world, p, g->cam_x, g->sw, g->sh, g->player_layer, dt);
+        if (g->forest.fin.state != FF_WAIT) {   /* the clearing: the camera stays (a respawn at its left edge would nudge it) */
+            g->cam_locked = true; g->cam_x = g->forest.fin.arena_x;
+            if (p->respawn_x < g->cam_x + 16.0f) p->respawn_x = g->cam_x + 16.0f;
+        }
+        night_update(&g->night, p, &g->player_bullets, &g->effects, &g->level, g->cam_x, g->sw, dt, true);
+        if (g->forest.fin.scene_ambush && g->state == 10) { g->forest.fin.scene_ambush = false; open_scene(g, FOREST_SCRIPT_AMBUSH); }
+        else if (won && c->state != CS_DEAD && !g->forest_outro_done) { g->forest_outro_done = true; open_scene(g, FOREST_SCRIPT_OUTRO); }   /* the radio, then the win */
+        else if (won && c->state != CS_DEAD && g->forest_outro_done) { g->state = 0xe; g->state_t = 0; p->locked = true; music_play(6, false); }
     }
     /* level-flow zones (FUN_00422d10 tail): exit, dialogs, camera stops, death zones */
     if (c->state != CS_DEAD && !p->locked) {
@@ -331,7 +383,8 @@ void game_update(Game *g, float dt)
     }
     if (g->enemies.cam_locked) g->cam_locked = true;
     if (g->enemies.boss_done && g->state == 10) { g->enemies.boss_done = false; g->state = 0xe; g->state_t = 0; p->locked = true; music_play(6, false); }
-    if (g->night_on && g->night.clear_ready && g->state == 10) { g->night.clear_ready = false; g->state = 0xe; g->state_t = 0; p->locked = true; music_play(6, false); }
+    if (g->night_on && g->night.clear_ready && g->state == 10 && !g->night_outro_done && c->state != CS_DEAD) { g->night_outro_done = true; open_scene(g, NIGHT_SCRIPT_OUTRO); }
+    if (g->night_on && g->night.clear_ready && g->state == 10 && g->night_outro_done) { g->night.clear_ready = false; g->state = 0xe; g->state_t = 0; p->locked = true; music_play(6, false); }
     player_resolve(c, dt);
     if (g->cam_locked && c->body.vx > 0 && g->cam_x + g->sw - c->body.hx < c->body.x) c->body.vx = 0;
     physics_step(&g->world, &g->level, &c->body, dt);
@@ -375,7 +428,7 @@ static void draw_collision(Game *g)
     SDL_FRect r = { b->x + b->ox - b->hx - g->cam_x, b->y + b->oy - b->hy - g->cam_y, b->hx * 2, b->hy * 2 };
     SDL_RenderRect(g->ren, &r);
     SDL_SetRenderDrawColor(g->ren, 255, 255, 0, 200);
-    for (int i = 0; i < L->nobjs && !g->night_on; i++) {
+    for (int i = 0; i < L->nobjs && !g->night_on && !g->forest_on; i++) {
         LevelObject *o = &L->objs[i];
         SDL_FRect q = { o->x - g->cam_x - 2, (o->type >= 998 ? 20 : 8) + (o->type % 7) * 6.f, 4, 4 };
         SDL_RenderFillRect(g->ren, &q);
@@ -407,6 +460,9 @@ void game_draw(Game *g)
     float shake = g->enemies.cam_shake ? (float)(rand() % 4) : 0.0f;
     float saved = g->cam_y; g->cam_y += shake;
     if (g->night_on) night_draw_background(&g->night, g->cam_x, g->sw, g->sh);   /* night sky + red moon, behind every layer */
+    bool hero_drawn = false;
+    const Body *hb = &g->player.ch.body;
+    bool in_cabin = g->forest_on && forest_on_deck(L, hb->x, hb->y + hb->oy + hb->hy);
     for (int i = 0; i < L->nlayers; i++) {
         if (L->layers[i].is_tilemap) {
             CBlock *cb = L->layers[i].map ? L->layers[i].map->cb : NULL;
@@ -417,20 +473,38 @@ void game_draw(Game *g)
                 level_draw_layer(L, i, g->cam_x, g->cam_y, g->sw, g->sh);
                 cblock_tint(cb, 255, 255, 255);
             } else level_draw_layer(L, i, g->cam_x, g->cam_y, g->sw, g->sh);
+            /* stage 4: Hyperjumper flies over the towers, not behind their walls */
+            if (g->forest_on && i == g->enemies.front_layer) night_draw_layer(&g->night, g->ren, g->night.play_layer, g->cam_x, g->cam_y);
+            /* stage 4: the tower railings hide the gunmen in the cabins, and the hero too once he is up on a deck;
+               jumping up through one from below he stays in front (half a hero behind a plank, the rest in front
+               of the tower, read as the sprite being cut) */
+            if (g->forest_on && !hero_drawn && i > g->player_layer && !strcmp(L->layers[i].name, "ForegroundStuff")) {
+                if (g->state != 0xb) character_draw(&g->player.ch, g->cam_x, g->cam_y);
+                hero_drawn = true;
+            }
+            if (i == g->enemies.front_layer) {   /* stage 4: a tower sniper's rifle over his cabin wall, his shots and flash */
+                enemies_draw_front(&g->enemies, g->cam_x, g->cam_y);
+                bullets_draw(&g->enemy_bullets, i, g->cam_x, g->cam_y);
+                effects_draw(&g->effects, i, g->cam_x, g->cam_y);
+            }
         }
         else {
             enemies_draw(&g->enemies, i, g->cam_x, g->cam_y);
-            if (g->night_on) night_draw_layer(&g->night, g->ren, i, g->cam_x, g->cam_y);   /* Hyperjumper's passes use the level-1 boss layers */
-            if (i == g->player_layer && g->state != 0xb) character_draw(&g->player.ch, g->cam_x, g->cam_y);   /* the last life is gone: no respawned hero standing there during the fade */
+            if (g->night_on || (g->forest_on && (i != g->night.play_layer || g->enemies.front_layer < 0)))
+                night_draw_layer(&g->night, g->ren, i, g->cam_x, g->cam_y);   /* Hyperjumper's passes use the level-1 boss layers */
+            if (i == g->player_layer && (!g->forest_on || in_cabin) && g->state != 0xb) character_draw(&g->player.ch, g->cam_x, g->cam_y);
+            if (i == g->player_layer && in_cabin) hero_drawn = true;   /* the last life is gone: no respawned hero standing there during the fade */
             bullets_draw(&g->player_bullets, i, g->cam_x, g->cam_y);
             bullets_draw(&g->enemy_bullets, i, g->cam_x, g->cam_y);
             effects_draw(&g->effects, i, g->cam_x, g->cam_y);
         }
     }
+    if (g->forest_on && !hero_drawn && g->state != 0xb) character_draw(&g->player.ch, g->cam_x, g->cam_y);
     g->cam_y = saved;
     hud_draw(g->ren, g->menu.character, g->menu.difficulty, g->player.lives, g->player.hp, 0);
     if (g->state == 0xd) dialog_draw(&g->dialog, g->ren, g->sw, g->sh);
-    if (g->night_on) night_draw_hud(&g->night, g->ren, g->sw, g->sh);
+    if (g->night_on || g->forest_on) night_draw_hud(&g->night, g->ren, g->sw, g->sh);
+    if (g->forest_on && g->state != 0xd) forest_finale_draw_hud(&g->forest, &g->enemies, &g->night, g->ren, g->sw);
     if (g->state == 0xc) {   /* pause: dim + blinking PAUSE sprite (B2143E42) */
         SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(g->ren, 0, 0, 0, 64);
         SDL_FRect q = { 0, 0, (float)g->sw, (float)g->sh }; SDL_RenderFillRect(g->ren, &q);

@@ -44,6 +44,23 @@ static const Box FRONT_HULL[] = { { 6, 58, 195, 98 }, { 82, 28, 118, 124 } };
 #define FIRE_PERIOD 0.2f     /* the level-1 boss gun's cooldown (boss_fire: gun_cd = 0.2) */
 #define SIDE_SPEED 140.0f    /* the level-1 boss flying in to its hold spot */
 
+/* Story: the same day as the frontier town and the Grand Prix. On the flight home Ramrod picks up Outriders
+ * jumping in from the Vapor Zone at the end of a desert pass - the scout who got away in the frontier town
+ * ("I need to report this") made his report. Ramrod can't land in the rocks, so the hero goes in on foot. */
+const char *const NIGHT_SCRIPT_INTRO =
+    "<|GREEN|>\n</dialog_avatar_april2/>\nRamrod to Fireball. Our trip home just got cancelled - Outriders are jumping in from the Vapor Zone at the far end of this pass.\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_fireball1/>\nAt this hour? We ran the Black Hornets off the road this afternoon! Don't those phantoms ever sleep?\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_colt2/>\nNight's when they like to ride, pardner. Reckon that scout who got away from the frontier town made his report.\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_saber2/>\nRamrod can't set down in these rocks, so it's up to you on foot. Commander Eagle wants this raid stopped before it reaches the settlements.\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_fireball1/>\nThen let's send them back to the Vapor Zone - one Outrider at a time.\n<<>>\n";
+const char *const NIGHT_SCRIPT_TAUNT =
+    "<|PURPLE|>\n</dialog_avatar_outrider/>\nThe Star Sheriffs AGAIN?! First the frontier town, then the Grand Prix... Hyperjumper, this is the pass patrol - blast that Star Sheriff!\n<<>>\n"
+    "<|RED|>\n</dialog_avatar_april2/>\nFireball, Ramrod's scanners just went wild! Something big is coming out of the Vapor Zone - right on top of you!\n<<>>\n";
+const char *const NIGHT_SCRIPT_OUTRO =
+    "<|GREEN|>\n</dialog_avatar_saber2/>\nScratch one Hyperjumper. That raid won't reach the settlements tonight - well done, Fireball.\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_colt2/>\nNemesis is gonna be sore about this one. Ramrod's coming in to pick you up, pardner.\n<<>>\n"
+    "<|GREEN|>\n</dialog_avatar_fireball1/>\nJust another night on the New Frontier. Now can we PLEASE go home?\n<<>>\n";
+
 static int rnd(int n) { return n > 0 ? rand() % n : 0; }
 
 static Sprite *load_sprite(const char *name, uint32_t id)
@@ -67,16 +84,25 @@ bool night_init(Night *n, Level *L, int difficulty)
 {
     memset(n, 0, sizeof *n);
     if (!stage3_world_build(L, &n->world)) { fprintf(stderr, "stage3: can't build the route\n"); return false; }
+    n->start_x = NIGHT_INTRO_CAM - 40.0f; n->start_y = 155.0f;   /* off screen: the hero walks in (game.c) */
+    n->intro_stop_x = NIGHT_INTRO_CAM + 96.0f;   /* just short of the first wave's zone (x 160) */
+    n->sky = load_sprite("stage3/native/stage3_night_sky.png", 0x48330009);
+    n->moon = load_sprite("stage3/native/stage3_red_moon.png", 0x4833000A);
+    night_boss_load(n, L, difficulty);
+    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "stage3: route %.0f px, boss hp %d\n", L->width, n->hp);
+    return true;
+}
+
+void night_boss_load(Night *n, const Level *L, int difficulty)
+{
     n->difficulty = difficulty;
-    n->start_x = 100.0f; n->start_y = 155.0f;
     n->far_layer = n->mid_layer = n->play_layer = -1;
     for (int i = 0; i < L->nlayers; i++) {
         if (!strcmp(L->layers[i].name, "Small Hyperjmpr")) n->far_layer = i;
         else if (!strcmp(L->layers[i].name, "MidBGHyperjpr")) n->mid_layer = i;
         else if (!strcmp(L->layers[i].name, "PlayerSprites")) n->play_layer = i;
     }
-    n->sky = load_sprite("stage3/native/stage3_night_sky.png", 0x48330009);
-    n->moon = load_sprite("stage3/native/stage3_red_moon.png", 0x4833000A);
+    n->fx_layer = n->play_layer;
     n->side_normal = load_sprite("hyperjumper/side_normal.png", 0x48330001);
     n->side_boost = load_sprite("hyperjumper/side_boost.png", 0x48330002);
     n->side_fire1 = load_sprite("hyperjumper/side_fire1.png", 0x48330003);
@@ -88,8 +114,6 @@ bool night_init(Night *n, Level *L, int difficulty)
     n->hp_max = n->hp = SDL_getenv("SABER_BOSSHP") ? atoi(SDL_getenv("SABER_BOSSHP"))   /* debug: SABER_BOSSHP=n */
                       : difficulty == 0 ? 48 : difficulty == 1 ? 60 : 72;
     n->state = HJ_DORMANT;
-    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "stage3: route %.0f px, boss hp %d\n", L->width, n->hp);
-    return true;
 }
 
 /* ---- geometry ---- */
@@ -230,7 +254,7 @@ static void hit_boss(Night *n, Effects *fx, float x, float y)
     if (--n->hp <= 0) { n->hp = 0; begin_death(n); return; }
     n->hit_flash = 0.08f;
     AnimDef a = { 0, 4, 8, 4, 0.03f, 0 };
-    effects_spawn(fx, 0x8623249C, n->play_layer, &a, x, y, 8, 8, 0);
+    effects_spawn(fx, 0x8623249C, n->fx_layer, &a, x, y, 8, 8, 0);
 }
 
 static void update_shots(Night *n, Player *pl, Effects *fx, float dt)
@@ -249,7 +273,7 @@ static void update_shots(Night *n, Player *pl, Effects *fx, float dt)
         }
         if (s->y >= 206.0f) {   /* splashes on the ground */
             AnimDef a = { 0, 0, 4, 0, 0.03f, 0 };
-            effects_spawn(fx, 0x8623249C, n->play_layer, &a, s->x, 204.0f, 8, 8, 0);
+            effects_spawn(fx, 0x8623249C, n->fx_layer, &a, s->x, 204.0f, 8, 8, 0);
             s->alive = false;
             continue;
         }
@@ -300,20 +324,9 @@ void night_update(Night *n, Player *pl, Bullets *pb, Effects *fx, const Level *L
     bool p2 = phase2(n);
     switch (n->state) {
     case HJ_DORMANT:
-        /* the route's end: the camera has stopped on the open ground and the hero is out on it */
-        if (pl->ch.state != CS_DEAD && cam_x >= L->width - sw - 0.5f && pl->ch.body.x >= L->width - sw * 0.5f - 8.0f) {
-            n->boss_started = true;
-            n->arena_x = L->width - sw; n->sw = sw;
-            music_play(MUSIC_BOSS, true); sfx_play(SFX_ENGINE, 0);   /* boss phase 0: FUN_00412750 */
-            set_state(n, HJ_FAR_PASS);
-            n->dir = -1; n->bx = n->arena_x + sw + 40; n->by = 58;
-            if (SDL_getenv("SABER_TRACE")) {
-                const Character *c = &pl->ch;
-                for (int a = 0; a < CHAR_MAX_ANIMS; a++) if (c->hurt[a].hh > 0)
-                    fprintf(stderr, "stage3: hero anim %d hurt oy=%.0f hh=%.0f (top %.0f above the feet)\n", a, c->hurt[a].oy, c->hurt[a].hh,
-                            c->body.oy + c->body.hy - (c->hurt[a].oy - c->hurt[a].hh));
-            }
-        }
+        /* the route's end: the camera has stopped on the open ground and the hero is out on it (stage 4 calls it in) */
+        if (!n->manual && pl->ch.state != CS_DEAD && cam_x >= L->width - sw - 0.5f && pl->ch.body.x >= L->width - sw * 0.5f - 8.0f)
+            night_boss_summon(n, L->width - sw, sw);
         break;
     case HJ_FAR_PASS:     /* far behind the mesas, right to left (level 1: the far layer pass) */
         n->bx -= 330.0f * dt;
@@ -384,7 +397,7 @@ void night_update(Night *n, Player *pl, Bullets *pb, Effects *fx, const Level *L
         n->bx += (float)rnd(180) / 60.0f - 153.0f / 60.0f;
         if (rnd(10) >= 9) {
             AnimDef a = { 0, 0, 11, 11, 0.025f, 0 };
-            effects_spawn(fx, 0x9C861FF3, n->play_layer, &a, n->bx - 40 + rnd(80), n->by - 30 + rnd(60), 32, 32, 0);
+            effects_spawn(fx, 0x9C861FF3, n->fx_layer, &a, n->bx - 40 + rnd(80), n->by - 30 + rnd(60), 32, 32, 0);
             if (n->death_phase < 0x40 && (n->death_phase & 1)) sfx_play(SFX_BLAST, 0);
         }
         if (n->death_phase == 8) sfx_play(SFX_DOWN, 0);
@@ -395,6 +408,17 @@ void night_update(Night *n, Player *pl, Bullets *pb, Effects *fx, const Level *L
         break;
     }
     if (fighting(n) && pl->ch.state != CS_DEAD) boss_collisions(n, pl, pb, fx);
+}
+
+void night_boss_summon(Night *n, float arena_x, int sw)
+{
+    if (n->state != HJ_DORMANT) return;
+    n->boss_started = true;
+    n->arena_x = arena_x; n->sw = sw;
+    if (!n->manual) music_play(MUSIC_BOSS, true);   /* stage 4's finale already runs the boss music */
+    sfx_play(SFX_ENGINE, 0);   /* boss phase 0: FUN_00412750 */
+    set_state(n, HJ_FAR_PASS);
+    n->dir = -1; n->bx = n->arena_x + sw + 40; n->by = 58;
 }
 
 /* ---- drawing ---- */

@@ -12,6 +12,7 @@ typedef struct {
     int lives;
     bool game_over;
     bool locked;             /* +0xc08: controls disabled (cutscene/death) */
+    bool fire_hold;          /* set through a dialogue: no shot until the shoot button (used to page it) is let go */
     int hp, max_hp;          /* hearts: 4 / 2 / 0 by difficulty (DAT_00ac9be0[1]) */
 } Player;
 void player_spawn(Player *p, uint32_t crhc_id, float x, float y);

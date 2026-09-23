@@ -7,6 +7,8 @@
 
 enum { PHYS_IGNORE_DOWN = 1, PHYS_IGNORE_LEFT = 2, PHYS_IGNORE_UP = 4, PHYS_IGNORE_RIGHT = 8, PHYS_NO_GRAVITY = 0x10 };
 enum { COLL_DOWN = 1, COLL_LEFT = 2, COLL_UP = 4, COLL_RIGHT = 8 };
+/* cell bit 0x10: ramp ground (with 4, filled from the surface down): bodies walk up and down its 8 px steps */
+enum { COLL_RAMP = 0x10 };
 
 typedef struct {
     float x, y;          /* transform position (sprite center) */

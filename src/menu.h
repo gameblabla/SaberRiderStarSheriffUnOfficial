@@ -26,6 +26,7 @@ typedef struct {
     int continues_left;        /* shown on the CONTINUE? screen (the game keeps the count) */
     bool next_stage;           /* MISSION ACCOMPLISHED finished: the game decides whether another stage follows */
     bool more_stages;          /* set by the game while a stage follows: the result screen hands over instead of splashing */
+    bool ending;               /* the last stage is won: MISSION ACCOMPLISHED rolls the credits, then the splash */
     int idle_frames;           /* title attract timer */
     float angle;               /* rotating background (DAT_00ac9a88 / DAT_00ac9a8c) */
     int credits_page; float credits_t;

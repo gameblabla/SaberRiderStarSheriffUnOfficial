@@ -64,12 +64,28 @@ void physics_step(const PhysicsWorld *w, const Level *L, Body *b, float dt)
         for (int c = c0; c <= last; c++) {
             uint8_t v = level_cell(L, c, row);
             if ((v & 4) && overlap(nx, ny, hx, hy, c, row, cw, ch)) {
+                /* ramp ground (bit 0x10, stage 4's slopes; never set in the pack data): walking into a
+                 * higher ramp column climbs onto its top (up to 2 cells) instead of sinking into it */
+                if (v & COLL_RAMP) {
+                    int top = row;
+                    for (int cc = c0; cc <= last; cc++)
+                        for (int k = 1; k <= 2 && (level_cell(L, cc, row - k) & (COLL_RAMP | 4)) == (COLL_RAMP | 4); k++)
+                            if (row - k < top) { top = row - k; v = level_cell(L, cc, top); }
+                    row = top;
+                }
                 coll |= COLL_DOWN; if (vy >= 0) vy = 0;
                 ny = row * ch + (1.0f - hy);     /* rests 1px into the floor, like the original */
                 gtile = v;
                 break;
             }
         }
+        /* walking down a ramp: stay on it rather than falling a step at a time */
+        if (!(coll & COLL_DOWN) && (b->coll & COLL_DOWN) && (b->ground_tile & COLL_RAMP))
+            for (int c = c0; c <= last; c++)
+                if ((level_cell(L, c, row + 1) & (COLL_RAMP | 4)) == (COLL_RAMP | 4)) {
+                    coll |= COLL_DOWN; vy = 0; ny = (row + 1) * ch + (1.0f - hy); gtile = level_cell(L, c, row + 1);
+                    break;
+                }
     }
     b->x = nx - b->ox; b->y = ny - b->oy;
     b->vx = vx; b->vy = vy; b->coll = coll; b->ground_tile = gtile;

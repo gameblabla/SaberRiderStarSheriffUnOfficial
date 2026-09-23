@@ -13,7 +13,7 @@ Dependencies: SDL3, libvorbisfile, libavcodec/libswscale (FMV), CMake, a C11 com
     cmake -S . -B build -G Ninja
     cmake --build build
     ./build/saber_rider /path/to/SaberRider/data
-    ./build/saber_rider /path/to/SaberRider/data --level 2    # skip the front end: 1 the frontier town, 2 the Grand Prix, 3 Hyperjumper Pass
+    ./build/saber_rider /path/to/SaberRider/data --level 2    # skip the front end: 1 the frontier town, 2 the Grand Prix, 3 Hyperjumper Pass, 4 the Red Palm Jungle
 
 After the last life a CONTINUE? screen counts 20 -> 0 (the CONTINUE option's credits, per run; START restarts the
 stage with the option's lives). An optional `assets/continue.png` goes behind its text (letterboxed to the screen).
@@ -86,6 +86,17 @@ level-1 layer keeps its parallax and is drawn through a per-layer night palette 
 `assets/stage3/native/stage3_night_sky.png` and the red moon, which is drawn right after the sky so it stays behind
 everything.
 
+The stage opens after its title card with the camera 48 px into the route: the hero spawns off screen at the left
+edge, walks in on a held "right" (controls locked, the physics' world-min lifted to 0 for the walk) and stops at
+x 144, just short of the first wave. Then a radio scene (`NIGHT_SCRIPT_INTRO` in `src/night.c`, dialog state 0xd
+without a focus point) sets up the story. It is the same day as stages 1 and 2: on the flight home after the Grand Prix,
+Ramrod picks up Outriders jumping in from the Vapor Zone at the end of the pass. The scout who got away in the
+frontier town ("I need to report this") made his report. Ramrod can't land in the rocks, so the hero goes in on foot
+for Commander Eagle. At x 6480, on the open ground, the pass patrol calls Hyperjumper in (`NIGHT_SCRIPT_TAUNT`) before the
+boss entrance. After the wreck burns out, Saber, Colt and the hero close the night (`NIGHT_SCRIPT_OUTRO`) before
+MISSION ACCOMPLISHED. The scripts are written for Fireball and go through dialog.c's hero swap like the level-1 ones.
+`SABER_START` skips the walk-in.
+
 Enemies use the level-1 trigger objects (`stage3_triggers` feeds `enemies_add_trigger`): walkers, grunts and
 the grunt variant stream in from just outside either screen edge (often from behind) with random intervals;
 snipers and kneelers are placed on the top pads, the peak bridge, all three wreck roofs and the wall's pads, 260+ px
@@ -104,11 +115,80 @@ frame 1 (muzzle flash, the shot leaves) then frame 2, 0.1 s each, so it fires ev
 gun (`frame1_shooting` / `shooting_frame2_shoot` from the side, `firing_sprite` / `idle_sprite` from the front).
 Below half HP it holds longer and pauses less between bursts. Contact boxes follow
 the art's hull and keel; the whole ship takes shots. The wreck falls, jitters and burns for 0xed8 ms with the
-level-1 explosion sounds (0x11, 0x15), then the victory music plays and MISSION ACCOMPLISHED ends the game.
+level-1 explosion sounds (0x11, 0x15), then the victory music plays and MISSION ACCOMPLISHED leads on to stage 4.
 HP 48 / 60 / 72 by difficulty.
 
 `SABER_STAGE=3` (or `--level 3`) starts there, `SABER_START=x` spawns at level x, `SABER_BOSSHP=n` sets the
 boss's HP (also the level-1 horse boss's).
+
+## Stage 4 — "The Red Palm Jungle" (forest route)
+
+The forest level the team showed in 2018 but never shipped, rebuilt from what survives of it: two 640x480 JPEG
+screenshots (`DRvsPO2X0AUhRlG.jpg`, q85, and `SaberRiderScreenshot.2018.03-1.jpg`, q95 - both an exact 2x nearest
+upscale of the 320x240 game screen) and the jungle behind Colt in the `DVCvLIf` clip. The tools are in `../forest/`
+(run in this order):
+
+1. `dejpeg.py train|infer` - a U-Net that inverts "2x nearest -> JPEG (the files' own IJG tables, 4:2:0) -> decode",
+   trained for 30 min on frames composited from the level-1 layers and sprites (hue / channel augmented) with the
+   targets on the ARGB1555 grid. On held-out frames 95.5 % (q85) / 98.9 % (q95) of the pixels come out within one
+   5-bit step (exact: 61 / 77 %, the 2x2 mean gets 59 / 73 %).
+2. `segment.py` - front / back split per object (palms, tower, ground, the foreground fern) inside hand-drawn
+   regions, seeded by material colour rules in Lab plus scribbles and settled by a random walker; HUD, characters and
+   shots are junk boxes.
+3. `extract.py` - the elements: the sky (inpainted from its own pixels), the canopy strip, the far fern band (from
+   the columns nothing stands in front of), two whole tree trunks, the ground "skin" (every clean column of flat
+   ground straightened around the surface: grass tips, path, fringe, dirt top), the dirt, two palms, the watchtower
+   (the sniper removed, beam and railing continued through), the dark foreground fern. Exemplar inpainting and
+   quilting (`synth.py`) copy pixels, never blend, so every colour stays one of the art's.
+4. `compose.py` - the route and the engine data: `assets/forest/forest.lvl` + one tile sheet per layer.
+
+Both screenshots stand on the same three ground tiers (feet at y 176 / 192 / 208, on the 8 px collision grid), so
+the route is a height profile over those tiers joined by slopes, with the skin following it column by column. The
+layers take over level-1 slots (`src/forest.c`), six of them behind the play plane: SkyBG = the sky (0.03),
+FarMountains = hazy blue crowns (0.10), Mountains = slim hazy trunks under a hazy canopy (0.20),
+NearMountains = whole trunks under the full-colour canopy (0.32), MidBG = the lavender fern hedge (drawn by
+`../forest/hedge.py`, 0.48), Cars MidBG
+= a darker, lower row of it (0.66); then Playfield = palms, towers and ground, ForegroundStuff = the cabins' front walls (the
+tower art's plank band, rows 43..69: drawn over whoever stands on a cabin floor, so a gunman, the tower sniper or the
+hero shows from the waist up; a hero below a deck, jumping up through it, is drawn after it so a plank never cuts
+the sprite in half, `forest_on_deck`), ForegroundStuf2 = dark
+ferns (1.2). Ground is ramp collision (`COLL_RAMP` 0x10 with the floor bit, filled down: bodies walk up and down its
+8 px steps, shots stop on it; level 1 never sets the bit); tower cabin floors are one-way, at the bottom of the
+front wall (art row 67; 72 px up, the clearing's 56). Enemies are level-1 trigger objects stored in the file: grunt / walker streams, snipers
+and kneelers on the ground, a kneeler in every tower cabin, shield snipers along the route, then nothing for
+the last ~1000 px before the clearing, a quiet stretch that warns of what is coming. 6464 px, music track 15.
+
+The shield sniper (trigger type 30, `EC_SHIELD` in `src/enemies.c`) comes from the clip
+`video.twimg.com_tweet_video_DjLVT71WwAULtEg.mp4` (`../forest/sniper.py` -> `assets/forest/sniper.png`): an
+exact 4x blow-up of a 64x64 sprite, keyed off its blue backdrop and the red ground line. The clip is the shield
+burning away, so frame 0 is his idle pose; he has no run or death frames. He stands facing the hero, fires level
+rifle shots (down at 45 degrees from a tower at a hero on the ground ahead), and turns round when the hero stays behind him. His shield takes 4 / 6 / 8 hits (by difficulty)
+from the front, then burns away (clip frames 1..7). His head above it and his back are open, so a jumping shot,
+a shot down from a tower, or one from behind drops him with the shield still up. He dies like the Outriders
+do (their frames 54..59: knocked back, red, then cyan, then vapour), with frames generated from his own art.
+For the shots down from a tower he has an aimed-down pose (sheet frames 20..34), the one in the 2018 screenshot of
+the first tower, which is too blurred to lift: it is redrawn from the clip's own legs, head and rifle (sheared to 45
+degrees) with hand-painted arms. In a cabin his rifle, his shots and the muzzle flash are drawn again over the front
+wall (`enemies_draw_front`, the ForegroundStuff layer), as in the screenshot.
+Type 31 is the same man dormant: he holds his fire and the hero's shots fly through him until `Enemies.shield_wake`.
+
+There is no exit: the stage ends in the clearing, the last screen, which has a tower near its right edge (floor 72
+px up like the others, so a jump reaches it from the flat) with one dormant shield sniper (type 31) in its cabin and nobody else.
+When the camera stops there (the hero still a good way short of the tower) it stays, and the finale starts (`forest_finale_update` in `src/forest.c`). For 24 s
+Outriders run in from both edges and materialise on the ground: their own vaporise frames played backwards, then
+they are there. Then Hyperjumper comes back with stage 3's whole fight (`night_boss_load` / `night_boss_summon`),
+and fewer Outriders keep coming. Once it goes down nobody new arrives; the stage, and the game, is won when the last
+Outrider on the field is gone. The boss music (track 8) runs from the moment the camera locks until the end. A radio
+scene opens the ambush (an Outrider taunt, April, the hero; every page fits one box, `SABER_DLGCHECK=1` logs how
+each wraps). As in every dialogue, the hero can't fire while it is up, nor until the shoot button that paged it is
+let go (`Player.fire_hold`; stage 2's buggy has the same hold). 0.9 s after it the tower sniper wakes and starts
+shooting. Nothing on screen counts down to Hyperjumper (the player isn't told he is coming); once he is here his own
+bar shows, then OUTRIDERS LEFT n. He, his shots and his blasts are drawn over the cabin walls (ForegroundStuff), so he
+flies in front of the towers. After the win: an outro radio scene, the victory
+jingle (music 6), MISSION ACCOMPLISHED (music 7), and since this is the game's end, the credits roll, then the title.
+
+`SABER_STAGE=4` (or `--level 4`) starts there. Stage 3's MISSION ACCOMPLISHED now continues into stage 4 with the
+spare lives carried over.
 
 ## Controls (as in the demo)
 
@@ -143,6 +223,7 @@ Original keys: arrows, A jump, S shoot, Return start/confirm, Escape quits.
 - `src/dialog.c`, `src/hud.c`, `src/menu.c`, `src/video.c`, `src/audio.c` — presentation
 - `src/mode7.c` — stage 2, the Mode-7 Grand Prix (our own design, see above)
 - `src/night.c`, `src/night_level.c` — stage 3, Hyperjumper Pass (see above)
+- `src/forest.c` — stage 4, the Red Palm Jungle: loads `assets/forest/forest.lvl` (built by `../forest/`) into the level-1 layer slots
 - `src/audio.c` mixes deliberately *unlike* the original: the demo's mixer (`FUN_00563900`) sums the music at vol/256
   and every sfx voice at unity into 16-bit and hard-clips at ±0x7fbc, and the material is mastered hot (most sfx and
   the music tracks peak at 0 dBFS or above), so a voice line over a gunshot clips. The port decodes the music in float,

@@ -87,6 +87,7 @@ struct Mode7 {
     /* phase */
     int phase; float phase_t, countdown;
     Dialog dlg; bool paused; int result;
+    bool fire_hold;            /* set through a dialogue: no shot until the shoot button (used to page it) is let go */
     Ent ents[MAX_ENT];
     /* pursuit */
     float gap, pursuit_spawn_t, pursuit_t;
@@ -533,7 +534,7 @@ static void player_drive(Mode7 *m, const Input *in, float dt, bool free_drive)
     m->anim_t += fabsf(m->speed) * dt * 0.02f;
     if (rumble) m->bounce = 1.5f * ((int)(m->anim_t * 8) & 1); else m->bounce = (!road && m->speed > 100) ? (float)((int)(m->anim_t * 6) & 1) : 0;
     if (m->fire_cd > 0) m->fire_cd -= dt;
-    if (btn_down(in, BTN_SHOOT) && m->fire_cd <= 0 && m->spin_t <= 0) {
+    if (btn_down(in, BTN_SHOOT) && m->fire_cd <= 0 && m->spin_t <= 0 && !m->fire_hold) {
         m->fire_cd = 0.16f; sfx_play(1, 0);
         fire_shot(m, m->px + cosf(m->heading) * 20, m->py + sinf(m->heading) * 20, m->heading, 1500.0f + fabsf(m->speed), true, 14);
     }
@@ -803,6 +804,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
     if (m->shake > 0) m->shake -= dt;
     if (m->ram_cd > 0) m->ram_cd -= dt;
     Input idle = { 0 }; for (int b = 0; b < BTN_COUNT; b++) idle.state[b] = 1;
+    if (m->dlg.active) m->fire_hold = true; else if (!btn_down(in, BTN_SHOOT)) m->fire_hold = false;
 
     switch (m->phase) {
     case PH_INTRO:

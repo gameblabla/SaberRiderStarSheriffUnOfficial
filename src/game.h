@@ -8,6 +8,7 @@
 #include "menu.h"
 #include "mode7.h"
 #include "night.h"
+#include "forest.h"
 
 typedef struct {
     SDL_Renderer *ren;
@@ -34,6 +35,9 @@ typedef struct {
     int continues_left;     /* CONTINUE? credits left in this run (from the option at the start of a run) */
     Mode7 *mode7;
     Night night; bool night_on;   /* stage 3: night-tinted level-1 tilemap + Hyperjumper */
+    Forest forest; bool forest_on; /* stage 4: the rebuilt forest tile layers over the level-1 layer slots */
+    bool forest_outro_done;      /* stage 4: the win's radio scene already shown */
+    bool night_intro, night_taunt_done, night_outro_done;   /* stage 3: the hero walking in / the story scenes already shown */
     float state_t;
     float level_t;               /* +0x64 in state 10: music fade-in timer */
     uint32_t dialog_text; float dialog_t;

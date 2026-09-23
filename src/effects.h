@@ -12,6 +12,7 @@ typedef struct {
     int layer;
     const float *follow_x, *follow_y;   /* optional parent position */
     float fx0, fy0;
+    bool flip;                          /* mirrored (set after spawning) */
 } Effect;
 
 typedef struct { Effect e[MAX_EFFECTS]; } Effects;

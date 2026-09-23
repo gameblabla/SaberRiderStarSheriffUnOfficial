@@ -187,6 +187,7 @@ static void paginate(Dialog *d)
     if (!f) return;
     for (int i = 0; i < d->npages; i++) {
         char lines[DLG_WRAP_MAX][80]; int n = wrap(f, d->pages[i].text, 250 - 16, lines, DLG_WRAP_MAX);
+        if (SDL_getenv("SABER_DLGCHECK")) fprintf(stderr, "dialog: page %d wraps to %d lines%s\n", i, n, n > DLG_MAX_LINES ? " (SPLIT)" : "");   /* debug: scripts should fit one box a page */
         if (n <= DLG_MAX_LINES || d->npages == DLG_MAX_PAGES) continue;
         memmove(&d->pages[i + 2], &d->pages[i + 1], sizeof(DialogPage) * (d->npages - i - 1));
         d->npages++;

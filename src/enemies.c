@@ -13,10 +13,11 @@ static const uint32_t TYPE_CRHC[28] = {
     0x20C6FAEF, 0xECC992CB, 0x72B53EF8, 0x925534E2, 0x916137ED, 0x906D3698, 0xF5975DCF, 0xF4A55EDE,
     0xF4A25ED9, 0xF3B05E28, 0x0DB9F0E0, 0xD39700C4 };
 
-static uint32_t crhc_for_type(int t) { return (t >= 2 && t <= 29) ? TYPE_CRHC[t - 2] : 0x02A38AFB; }
+static uint32_t crhc_for_type(int t) { return (t >= 2 && t <= 29) ? TYPE_CRHC[t - 2] : (t == 30 || t == 31) ? 0xD39700C4 : 0x02A38AFB; }   /* 30/31: the shield sniper stands on the sniper's body */
+static float sh_feet(const Enemy *e);
 static int rnd(int n) { return n > 0 ? rand() % n : 0; }   /* FUN_0040cf30(0, n) -> [0,n) */
 
-void enemies_reset(Enemies *E) { memset(E, 0, sizeof *E); E->spawner_enabled = true; }
+void enemies_reset(Enemies *E) { memset(E, 0, sizeof *E); E->spawner_enabled = true; E->front_layer = -1; }
 
 void enemies_add_trigger(Enemies *E, const LevelObject *o)   /* FUN_00421070 + FUN_004211b0 */
 {
@@ -136,6 +137,7 @@ Enemy *enemy_spawn(Enemies *E, const Trigger *t, float x, float y, const Level *
     case 11: cls = EC_BUGGY; break;
     case 28: cls = EC_CUTSCENE; break;
     case 29: cls = EC_END; break;
+    case 30: case 31: cls = EC_SHIELD; break;
     default:
         if (type >= 12 && type <= 23) cls = EC_PROP + (type - 12);
         else if (type >= 24 && type <= 27) cls = EC_STAMPEDE + (type - 24);
@@ -167,6 +169,14 @@ Enemy *enemy_spawn(Enemies *E, const Trigger *t, float x, float y, const Level *
         b->x = x; b->y = y; b->flags = 0x0f | PHYS_NO_GRAVITY;
         e->hp = SDL_getenv("SABER_BOSSHP") ? atoi(SDL_getenv("SABER_BOSSHP")) : 0x42; e->link = -1; e->ch.state = CS_FALL; e->ch.facing = 0; e->ch.aim = AIM_L;   /* debug: SABER_BOSSHP=n */
         E->boss_phase = 0;
+    } else if (cls == EC_SHIELD) {
+        e->ch.facing = E->px <= b->x ? 0 : 1;
+        snap_to_ground(e, L, W);
+        e->hp = E->difficulty == 0 ? 4 : E->difficulty == 1 ? 6 : 8;   /* shots the shield takes */
+        e->t0 = 0.9f + rnd(30) * 0.02f;                                 /* first shot once on screen */
+        e->dormant = type == 31;
+        int cx = (int)floorf(b->x / L->cellw), cy = (int)floorf((sh_feet(e) + 1.0f) / L->cellh);
+        e->on_deck = L->collision && cx >= 0 && cx < L->cols && cy >= 0 && cy < L->rows && L->collision[cy * L->cols + cx] == 4;   /* one-way floor, no ramp */
     } else if (cls == EC_CUTSCENE) {
         snap_to_ground(e, L, W);
         e->ch.facing = 0; e->ch.state = CS_IDLE; e->ch.aim = AIM_L;
@@ -681,6 +691,154 @@ static void update_boss_rider(Enemies *E, Enemy *e, Bullets *eb, float cam_x, in
     character_resolve(c, dt);
 }
 
+/* ---- stage 4: the Outrider behind a riot shield (type 30, art from forest/sniper.py) ----
+ * Stands its ground facing the hero and fires level rifle shots. The shield soaks up shots from the front until it
+ * burns away (sheet frames 1..7); the head above it and the back are open, so a jumping shot, a shot down from a
+ * tower deck or one from behind drops him with the shield still up. A hero behind him for a moment makes him turn
+ * round. Dies like the Outriders (knocked back, red, cyan, vapour: sheet 8..13 without the shield, 14..19 with it).
+ * Up in a tower with the hero on the ground ahead he aims 45 degrees down (sheet 20 with the shield, 21 without, 23..34
+ * the deaths from it) and the rifle, its shots and the flash are drawn over the cabin's front wall (sheet 22).
+ * st 0 shield up, 1 burning away (t1 = time), 2 no shield; t0 = time to the next shot; ft = time the hero is behind. */
+#define SH_AX 24.0f        /* body.x in the art (the torso's middle), art facing right */
+#define SH_FEET 52.0f      /* the feet rest on this art row */
+static const float SH_BODY[4] = { 14, 9, 35, 53 };      /* art boxes x0, y0, x1, y1 */
+static const float SH_SHIELD[4] = { 35, 15, 53, 57 };
+#define SH_MUZZLE_DX 28.0f      /* level shot: from the muzzle, art (52, 20) */
+#define SH_MUZZLE_DY 32.0f
+#define SH_DOWN_DX 18.0f        /* aimed down: the muzzle at art (41, 43) */
+#define SH_DOWN_DY 9.0f
+#define SH_BREAK_FRAME 0.1f      /* the clip's rate */
+#define SH_DEATH_FRAME 0.0667f   /* the Outriders' death anim (0x32/0x33) rate */
+
+static float sh_feet(const Enemy *e) { const Body *b = &e->ch.body; return b->y + b->oy + b->hy; }
+static void sh_box(const Enemy *e, const float a[4], float o[4])
+{
+    float x = e->ch.body.x, f = sh_feet(e);
+    if (e->ch.facing == 1) { o[0] = x + a[0] - SH_AX; o[2] = x + a[2] - SH_AX; }
+    else { o[0] = x - (a[2] - SH_AX); o[2] = x - (a[0] - SH_AX); }
+    o[1] = f + a[1] - SH_FEET; o[3] = f + a[3] - SH_FEET;
+}
+static bool sh_shield_up(const Enemy *e) { return e->st == 0 || (e->st == 1 && e->t1 < 3 * SH_BREAK_FRAME); }   /* the panel is gone from frame 4 */
+
+static void update_shield(Enemies *E, Enemy *e, Player *pl, Bullets *pb, Bullets *eb, Effects *fx, float cam_x, int sw, float dt)
+{
+    Character *c = &e->ch; Body *b = &c->body;
+    Character *p = &pl->ch;
+    b->vx = 0;
+    if (e->flash > 0) e->flash -= dt;
+    /* type 31 (the finale's tower): stands there, no shots, and the hero's shots fly through him until woken */
+    if (e->dormant) {
+        if (!E->shield_wake) return;
+        e->dormant = false; e->t0 = 0.6f + rnd(20) * 0.02f;
+    }
+    if (e->st == 1 && (e->t1 += dt) >= 6 * SH_BREAK_FRAME) e->st = 2;
+    /* turns to a hero who got behind him */
+    bool behind = c->facing == 1 ? E->phcx < b->x - 6.0f : E->phcx > b->x + 6.0f;
+    if (behind && p->state != CS_DEAD) { if ((e->ft += dt) > 0.9f) { c->facing ^= 1; e->ft = 0; } } else e->ft = 0;
+    /* up on a tower deck with the hero down on the ground ahead: the rifle points down at 45 degrees (not while the
+       shield burns: those frames are the level pose) */
+    {
+        float y = sh_feet(e) - SH_MUZZLE_DY, dy = E->phcy - y, dx = c->facing ? E->phcx - (b->x + SH_MUZZLE_DX) : b->x - SH_MUZZLE_DX - E->phcx;
+        e->aim_down = e->st != 1 && !behind && p->state != CS_DEAD && dy > 32.0f && dx > dy * 0.5f && dx < dy * 2.5f;
+    }
+    /* the rifle: level shots at 0.2 s cooldown pace, a long pause between them; not while the shield burns */
+    bool on_screen = b->x > cam_x + 16.0f && b->x < cam_x + sw - 16.0f;
+    if (on_screen && !behind && e->st != 1 && p->state != CS_DEAD && (e->t0 -= dt) <= 0) {
+        bool down = e->aim_down;
+        float x = b->x + (c->facing ? 1 : -1) * (down ? SH_DOWN_DX : SH_MUZZLE_DX), y = sh_feet(e) - (down ? SH_DOWN_DY : SH_MUZZLE_DY);
+        int layer = e->on_deck && E->front_layer >= 0 ? E->front_layer : e->layer;   /* over the cabin wall */
+        AnimDef fl = { 0, 0, 3, 0, 0.05f, 0 };
+        Effect *ef = effects_spawn(fx, 0xD85FB68A, layer, &fl, x, y, 8, 8, (c->facing ? 0 : 3.1415927f) + (down ? (c->facing ? -0.7853982f : 0.7853982f) : 0));
+        if (ef) { ef->follow_x = &b->x; ef->follow_y = &b->y; ef->fx0 = b->x; ef->fy0 = b->y; }
+        bullets_spawn(eb, BK_ENEMY, layer, x, y, down ? (c->facing ? AIM_DR : AIM_DL) : c->facing ? AIM_R : AIM_L, 200.0f);
+        sfx_play(7, 0);
+        e->t0 = 1.4f + rnd(40) * 0.02f - E->difficulty * 0.2f;
+    }
+    float bx[4], sx[4]; sh_box(e, SH_BODY, bx); sh_box(e, SH_SHIELD, sx);
+    int knock = 0; bool die = false;
+    /* the hero's shots: from the front (or straight down) the shield takes them first */
+    for (int i = 0; i < pb->n; i++) {
+        Bullet *bl = &pb->b[i];
+        float r = bl->kind == BK_GRENADE ? 8.0f : 5.0f;
+        float scr = bl->x - cam_x; if (scr <= 8.0f || scr >= sw) continue;
+        int d = bl->dir & 7;
+        bool leftward = (1u << d) & 0x83u, front = d == AIM_U || d == AIM_D || (c->facing == 1 ? leftward : !leftward && d != AIM_U);
+        bool on_shield = sh_shield_up(e) && front && bl->x + r > sx[0] && bl->x - r < sx[2] && bl->y + r > sx[1] && bl->y - r < sx[3];
+        bool on_body = bl->x + r > bx[0] && bl->x - r < bx[2] && bl->y + r > bx[1] && bl->y - r < bx[3];
+        if (!on_shield && !on_body) continue;
+        float hx = bl->x, hy = bl->y;
+        pb->b[i] = pb->b[--pb->n];
+        if (on_shield) {
+            AnimDef a = { 0, 4, 8, 4, 0.03f, 0 };
+            effects_spawn(fx, 0x8623249C, e->layer, &a, hx, hy, 8, 8, 0);
+            e->flash = 0.08f;
+            if (e->st == 0 && --e->hp <= 0) { e->st = 1; e->t1 = 0; sfx_play(0x11, 0); }
+            else sfx_play(14, 0);
+        } else {
+            knock = leftward ? -1 : (d == AIM_U || d == AIM_D) ? (c->facing ? -1 : 1) : 1;
+            die = true;
+        }
+        break;
+    }
+    /* contact: the hero's slide bowls him over from behind or once the shield is gone; otherwise it hurts */
+    if (!die) {
+        float x0 = fminf(bx[0], sh_shield_up(e) ? sx[0] : bx[0]), x1 = fmaxf(bx[2], sh_shield_up(e) ? sx[2] : bx[2]);
+        if (fabsf(E->phcx - (x0 + x1) * 0.5f) <= E->phx + (x1 - x0) * 0.5f && fabsf(E->phcy - (bx[1] + bx[3]) * 0.5f) <= E->phy + (bx[3] - bx[1]) * 0.5f) {
+            if (p->state == CS_SLIDE && (behind || !sh_shield_up(e))) { die = true; knock = p->facing == 0 ? -1 : 1; }
+            else if (!(p->flags & CF_HIT) && p->state != CS_DEAD) player_damage(pl, c->facing == 0 ? 0 : 4, 1);
+        }
+    }
+    if (b->y - b->hy > E->death_floor) die = true;
+    if (die) {
+        c->state = CS_DEAD; b->vx = knock * 102.0f;
+        if (e->st == 1) e->st = sh_shield_up(e) ? 0 : 2;   /* the death set with or without the panel */
+        sfx_play(5, 0); sfx_play(6, 3);
+        kill(E, e, 0x19f);
+    }
+}
+
+static void draw_shield(const Enemy *e, float cam_x, float cam_y)
+{
+    static Sprite *spr;
+    if (!spr) spr = sprite_get(SHIELD_SNIPER_SPRITE);
+    if (!spr) return;
+    const Character *c = &e->ch;
+    int frame;
+    if (e->dying) { int k = (int)((0.415f - e->death_t) / SH_DEATH_FRAME); frame = (e->aim_down ? (e->st == 0 ? 29 : 23) : (e->st == 0 ? 14 : 8)) + (k < 0 ? 0 : k > 5 ? 5 : k); }
+    else if (e->st == 1) { int k = 1 + (int)(e->t1 / SH_BREAK_FRAME); frame = k > 7 ? 7 : k; }
+    else if (e->aim_down) frame = e->st == 2 ? 21 : 20;
+    else frame = e->st == 2 ? 7 : 0;
+    float x = floorf(c->body.x - cam_x) - (c->facing ? SH_AX : 63.0f - SH_AX), y = floorf(sh_feet(e) - cam_y) - SH_FEET;
+    bool flash = e->flash > 0 && !e->dying;
+    if (flash) SDL_SetTextureColorMod(spr->tex, 255, 170, 170);
+    /* in a tower cabin the shield's foot (it reaches 5 px below his feet) would show through the gaps under the
+       front wall's bottom beam: nothing below the feet */
+    SDL_Renderer *ren = e->on_deck ? SDL_GetRendererFromTexture(spr->tex) : NULL;
+    SDL_Rect clip = { -64, -64, 4096, (int)(y + SH_FEET) + 64 + 1 };
+    if (ren) SDL_SetRenderClipRect(ren, &clip);
+    sprite_draw(spr, frame, x, y, c->facing == 0);
+    if (ren) SDL_SetRenderClipRect(ren, NULL);
+    if (flash) SDL_SetTextureColorMod(spr->tex, 255, 255, 255);
+}
+
+/* stage 4, after the cabin walls: a tower sniper's rifle aimed down reaches over his cabin's front wall */
+void enemies_draw_front(const Enemies *E, float cam_x, float cam_y)
+{
+    static Sprite *spr;
+    if (!spr) spr = sprite_get(SHIELD_SNIPER_SPRITE);
+    if (!spr) return;
+    for (int i = 0; i < MAX_ENEMIES; i++) {
+        const Enemy *e = &E->e[i];
+        if (e->cls != EC_SHIELD || !e->on_deck || !e->aim_down || e->dying) continue;
+        const Character *c = &e->ch;
+        float x = floorf(c->body.x - cam_x) - (c->facing ? SH_AX : 63.0f - SH_AX), y = floorf(sh_feet(e) - cam_y) - SH_FEET;
+        bool flash = e->flash > 0;
+        if (flash) SDL_SetTextureColorMod(spr->tex, 255, 170, 170);
+        sprite_draw(spr, 22, x, y, c->facing == 0);
+        if (flash) SDL_SetTextureColorMod(spr->tex, 255, 255, 255);
+    }
+}
+
 static void update_generic(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, float cam_x, int sw, float dt)
 {
     /* placeholder for classes not yet ported: stand, take hits like a walker */
@@ -718,6 +876,7 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
             case EC_KNEELER: case EC_KNEELER_B: case EC_END: update_kneeler(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt); break;
             case EC_BUGGY: update_horse(E, e, pl, cam_x, sw, dt); break;
             case EC_CUTSCENE: update_cutscene_outrider(E, e, cam_x, sw, dt); break;
+            case EC_SHIELD: update_shield(E, e, pl, pb, eb, fx, cam_x, sw, dt); break;
             case EC_HORSEBOSS: if (e->variant == 99) update_boss_rider(E, e, eb, cam_x, sw, dt); else update_boss(E, e, pl, L, W, pb, eb, fx, cam_x, sw, dt); break;
             case EC_STAMPEDE: case EC_STAMPEDE + 1: case EC_STAMPEDE + 2: case EC_STAMPEDE + 3: update_stampede(E, e, cam_x, sw); break;
             case EC_PROP: case EC_PROP + 1: case EC_PROP + 2: case EC_PROP + 3: case EC_PROP + 4: case EC_PROP + 5:
@@ -743,7 +902,8 @@ void enemies_draw(const Enemies *E, int layer, float cam_x, float cam_y)
     for (int i = 0; i < MAX_ENEMIES; i++) {
         const Enemy *e = &E->e[i];
         if (!e->cls || e->layer != layer) continue;
-        character_draw(&e->ch, cam_x, cam_y);
+        if (e->cls == EC_SHIELD) draw_shield(e, cam_x, cam_y);
+        else character_draw(&e->ch, cam_x, cam_y);
     }
 }
 
