@@ -66,6 +66,25 @@ stage with the option's lives). An optional `assets/continue.png` goes behind it
 Every stage opens with its title card (STAGE n, the level's name typed in over an amber band, then the level
 wipes in through venetian-blind strips while the music comes up; a button skips to the wipe).
 
+## Release packages
+
+    tools/release.sh [--linux] [--dc] [--full-disc] [path/to/SaberRider/data]
+
+The script writes two separate zips to `release/`:
+
+- `saber_rider-linux-x86_64-<date>-<commit>.zip` has the stripped SDL3 build and
+  `saber_rider.sh`, which runs it with the bundled `lib/`. It also has `assets/`
+  and all six demo packs in `data/`, including `video.pck`. glibc, X11/Wayland,
+  GL and the sound server come from the user's system.
+- `saber_rider-dreamcast-<date>-<commit>.zip` has `saber_rider.cdi` and a
+  README.
+
+The Dreamcast part sources `$KOS_ENV` (default
+`/opt/toolchains/dc/kos/environ.sh`). It repacks `build/dc` when that disc was
+already built; otherwise, or with `--full-disc`, it builds the whole disc. It
+refuses to run while `build/dc/stage/saber.env` exists, because that file holds
+debug switches.
+
 ## Playable heroes
 
 Fireball (the demo's hero, from the packs) and **April** (our reconstruction: `assets/april.png`, built from the
