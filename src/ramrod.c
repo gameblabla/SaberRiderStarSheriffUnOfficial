@@ -1045,20 +1045,33 @@ static void render_instructions(Ramrod *r, Font *f, Font *small)
         { "GUNS", "Shoot button (they overheat)" }, { "PUNCH", "Jump button - close range" },
     };
     int nl = (int)(sizeof LINES / sizeof *LINES);
-    float full_h = 34 + nl * 14 + 22, pw = (float)sw - 40, ph = full_h * open, x0 = 20, y0 = (sh - full_h) * 0.5f + (full_h - ph) * 0.5f;
+    /* 4:3 has no room for the wide layout: the panel widens to the edges and descriptions / the tip wrap */
+    bool narrow = sw < 400;
+    float x0 = narrow ? 8 : 20, pw = (float)sw - 2 * x0, lx = narrow ? 8 : 14, dx = 104;
+    const char *sub = "PUNCH A MECH AS IT WINDS UP TO COUNTER";
+    char desc[8][3][96], subl[3][96]; int dn[8], sn = 1;
+    if (small) {
+        if (narrow) { dx = 0; for (int i = 0; i < nl; i++) dx = fmaxf(dx, (float)font_text_width(small, LINES[i].label)); dx += lx + 10; }
+        for (int i = 0; i < nl; i++) dn[i] = font_wrap(small, LINES[i].desc, pw - dx - 6, desc[i], 3);
+        sn = font_wrap(small, sub, pw - 12, subl, 3);
+    } else for (int i = 0; i < nl; i++) dn[i] = 1;
+    float rows_h = 0; for (int i = 0; i < nl; i++) rows_h += 14 + (dn[i] - 1) * 9;
+    float full_h = 30 + rows_h + 4 + sn * 10 + 12, ph = full_h * open, y0 = (sh - full_h) * 0.5f + (full_h - ph) * 0.5f;
     r_set_draw_color(r->ren, 10, 18, 44, (uint8_t)(255 * open)); RFRect panel = { x0, y0, pw, ph }; r_fill_rect(r->ren, &panel);
     r_set_draw_color(r->ren, 60, 120, 220, (uint8_t)(255 * open));
     RFRect top = { x0, y0 - 2, pw, 2 }, bot = { x0, y0 + ph, pw, 2 }; r_fill_rect(r->ren, &top); r_fill_rect(r->ren, &bot);
     if (open < 1 || !f || !small) return;
     const char *title = "RAMROD - ROBOT MODE";
     font_draw(f, title, x0 + (pw - font_text_width(f, title)) * 0.5f, y0 + 8, 255, 182, 0);
+    float y = y0 + 30;
     for (int i = 0; i < nl; i++) {
-        font_draw(small, LINES[i].label, x0 + 14, y0 + 30 + i * 14, 255, 224, 192);
-        font_draw(small, LINES[i].desc, x0 + (sw < 400 ? 84 : 104), y0 + 30 + i * 14, 220, 230, 255);
+        font_draw(small, LINES[i].label, x0 + lx, y, 255, 224, 192);
+        for (int k = 0; k < dn[i]; k++) font_draw(small, desc[i][k], x0 + dx, y + k * 9, 220, 230, 255);
+        y += 14 + (dn[i] - 1) * 9;
     }
-    const char *sub = "PUNCH A MECH AS IT WINDS UP TO COUNTER";
-    font_draw(small, sub, x0 + (pw - font_text_width(small, sub)) * 0.5f, y0 + full_h - 26, 255, 255, 255);
-    if (t >= INSTR_OPEN && ((int)(t * 4) & 1)) { const char *s = "PRESS A BUTTON"; font_draw(small, s, x0 + (pw - font_text_width(small, s)) * 0.5f, y0 + full_h - 12, 200, 200, 200); }
+    y += 4;
+    for (int k = 0; k < sn; k++, y += 10) font_draw(small, subl[k], x0 + (pw - font_text_width(small, subl[k])) * 0.5f, y, 255, 255, 255);
+    if (t >= INSTR_OPEN && ((int)(t * 4) & 1)) { const char *s = "PRESS A BUTTON"; font_draw(small, s, x0 + (pw - font_text_width(small, s)) * 0.5f, y, 200, 200, 200); }
 }
 
 static void center_text(Ramrod *r, Font *f, const char *s, float y, uint8_t R, uint8_t G, uint8_t B)

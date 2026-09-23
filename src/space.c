@@ -1317,21 +1317,6 @@ static void render_hud(Space *s, Font *small)
     }
 }
 
-static int wrap_text(Font *f, const char *text, float width, char out[][96], int max)
-{
-    int n = 0; char line[96] = ""; const char *p = text;
-    while (*p && n < max) {
-        const char *e = p; while (*e && *e != ' ') e++;
-        char word[64]; int wl = (int)(e - p); if (wl > 63) wl = 63; memcpy(word, p, (size_t)wl); word[wl] = 0;
-        char trial[96]; bool fits = snprintf(trial, sizeof trial, "%s%s%s", line, line[0] ? " " : "", word) < (int)sizeof trial;
-        if (line[0] && (!fits || font_text_width(f, trial) > width)) { snprintf(out[n++], 96, "%s", line); snprintf(line, sizeof line, "%s", word); }
-        else memcpy(line, trial, sizeof line);
-        p = *e ? e + 1 : e;
-    }
-    if (line[0] && n < max) snprintf(out[n++], 96, "%s", line);
-    return n;
-}
-
 static void render_radio(Space *s, Font *small)
 {
     if (s->radio_now < 0 || !small || s->dlg.active) return;
@@ -1343,7 +1328,7 @@ static void render_radio(Space *s, Font *small)
     rect(s->ren, x0, y0, w, 1, 90, 160, 255, 255);
     Sprite *av = sprite_get(namehash(r->avatar));
     if (av) sprite_draw(av, 0, x0 + 1, y0 - 3, false);
-    char lines[3][96]; int n = wrap_text(small, r->text, w - 40, lines, 3);
+    char lines[3][96]; int n = font_wrap(small, r->text, w - 40, lines, 3);
     int shown = (int)(t * 60);
     for (int i = 0; i < n; i++) {
         int l = (int)strlen(lines[i]);
@@ -1364,19 +1349,32 @@ static void render_instructions(Space *s, Font *f, Font *small)
         { "PICK UP", "P power  S shield  B torpedo" },
     };
     int nl = (int)(sizeof LINES / sizeof *LINES);
-    float full_h = 34 + nl * 14 + 22, pw = (float)sw - 40, ph = full_h * open, x0 = 20, y0 = (sh - full_h) * 0.5f + (full_h - ph) * 0.5f;
+    /* 4:3 has no room for the wide layout: the panel widens to the edges and descriptions / the goal wrap */
+    bool narrow = sw < 400;
+    float x0 = narrow ? 8 : 20, pw = (float)sw - 2 * x0, lx = narrow ? 8 : 14, dx = 96;
+    const char *sub = "CATCH THE OUTRIDER BATTLE CRUISER";
+    char desc[8][3][96], subl[3][96]; int dn[8], sn = 1;
+    if (small) {
+        if (narrow) { dx = 0; for (int i = 0; i < nl; i++) dx = fmaxf(dx, (float)font_text_width(small, LINES[i].label)); dx += lx + 10; }
+        for (int i = 0; i < nl; i++) dn[i] = font_wrap(small, LINES[i].desc, pw - dx - 6, desc[i], 3);
+        sn = font_wrap(small, sub, pw - 12, subl, 3);
+    } else for (int i = 0; i < nl; i++) dn[i] = 1;
+    float rows_h = 0; for (int i = 0; i < nl; i++) rows_h += 14 + (dn[i] - 1) * 9;
+    float full_h = 30 + rows_h + 4 + sn * 10 + 12, ph = full_h * open, y0 = (sh - full_h) * 0.5f + (full_h - ph) * 0.5f;
     rect(s->ren, x0, y0, pw, ph, 10, 18, 44, (uint8_t)(255 * open));
     rect(s->ren, x0, y0 - 2, pw, 2, 60, 120, 220, (uint8_t)(255 * open)); rect(s->ren, x0, y0 + ph, pw, 2, 60, 120, 220, (uint8_t)(255 * open));
     if (open < 1 || !f || !small) return;
     const char *title = "RAMROD - CRUISER MODE";
     font_draw(f, title, x0 + (pw - font_text_width(f, title)) * 0.5f, y0 + 8, 255, 182, 0);
+    float y = y0 + 30;
     for (int i = 0; i < nl; i++) {
-        font_draw(small, LINES[i].label, x0 + 14, y0 + 30 + i * 14, 255, 224, 192);
-        font_draw(small, LINES[i].desc, x0 + (sw < 400 ? 76 : 96), y0 + 30 + i * 14, 220, 230, 255);
+        font_draw(small, LINES[i].label, x0 + lx, y, 255, 224, 192);
+        for (int k = 0; k < dn[i]; k++) font_draw(small, desc[i][k], x0 + dx, y + k * 9, 220, 230, 255);
+        y += 14 + (dn[i] - 1) * 9;
     }
-    const char *sub = "CATCH THE OUTRIDER BATTLE CRUISER";
-    font_draw(small, sub, x0 + (pw - font_text_width(small, sub)) * 0.5f, y0 + full_h - 26, 255, 255, 255);
-    if (t >= INSTR_OPEN && ((int)(t * 4) & 1)) { const char *m = "PRESS A BUTTON"; font_draw(small, m, x0 + (pw - font_text_width(small, m)) * 0.5f, y0 + full_h - 12, 200, 200, 200); }
+    y += 4;
+    for (int k = 0; k < sn; k++, y += 10) font_draw(small, subl[k], x0 + (pw - font_text_width(small, subl[k])) * 0.5f, y, 255, 255, 255);
+    if (t >= INSTR_OPEN && ((int)(t * 4) & 1)) { const char *m = "PRESS A BUTTON"; font_draw(small, m, x0 + (pw - font_text_width(small, m)) * 0.5f, y, 200, 200, 200); }
 }
 
 void space_draw(Space *s, bool scanlines)

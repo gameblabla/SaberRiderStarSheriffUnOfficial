@@ -70,3 +70,18 @@ void font_draw_scaled(const Font *f, const char *s, float x, float y, float scal
     }
     rtex_set_color_mod(sprite_tex(f->spr), 255, 255, 255);
 }
+
+int font_wrap(const Font *f, const char *text, float width, char out[][96], int max)
+{
+    int n = 0; char line[96] = ""; const char *p = text;
+    while (*p && n < max) {
+        const char *e = p; while (*e && *e != ' ') e++;
+        char word[64]; int wl = (int)(e - p); if (wl > 63) wl = 63; memcpy(word, p, (size_t)wl); word[wl] = 0;
+        char trial[96]; bool fits = snprintf(trial, sizeof trial, "%s%s%s", line, line[0] ? " " : "", word) < (int)sizeof trial;
+        if (line[0] && (!fits || font_text_width(f, trial) > width)) { snprintf(out[n++], 96, "%s", line); snprintf(line, sizeof line, "%s", word); }
+        else memcpy(line, trial, sizeof line);
+        p = *e ? e + 1 : e;
+    }
+    if (line[0] && n < max) snprintf(out[n++], 96, "%s", line);
+    return n;
+}
