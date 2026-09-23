@@ -82,8 +82,7 @@ struct Mode7 {
     /* player */
     float px, py, heading, speed, cam_heading, vx, vy;
     int hp, max_hp, lives, difficulty;
-    float boost, fire_cd, hurt_t, spin_t, spin_heading, bounce, anim_t, shake, tilt;
-    bool spin_restore;
+    float boost, fire_cd, hurt_t, spin_t, spin_dur, spin_heading, bounce, anim_t, shake, tilt;
     float s, lat; int lap, rank, near_idx; float progress, last_s;
     /* phase */
     int phase; float phase_t, countdown;
@@ -489,6 +488,13 @@ static void spawn_escorts(Mode7 *m, int n)
 }
 
 /* ---------------------------------------------------------------- update: the player's car */
+/* a hit spins the buggy once round; a second hit mid-spin restarts the turn but keeps the original heading */
+static void start_spin(Mode7 *m, float dur)
+{
+    if (m->spin_dur <= 0) m->spin_heading = m->heading;
+    m->spin_t = m->spin_dur = dur;
+}
+
 static void player_drive(Mode7 *m, const Input *in, float dt, bool free_drive)
 {
     uint8_t tile = cell_at(m, m->px, m->py);
@@ -522,14 +528,7 @@ static void player_drive(Mode7 *m, const Input *in, float dt, bool free_drive)
         float want = atan2f(dwrap(ay, m->py), dwrap(ax, m->px)), d = angdiff(want, m->heading);
         steer = d > 0.05f ? 1 : d < -0.05f ? -1 : 0; accel = true;
     }
-    if (m->spin_t > 0) {
-        accel = false; m->spin_t -= dt;
-        if (m->spin_t <= 0 && m->spin_restore) {
-            m->heading = m->cam_heading = m->spin_heading;
-            m->spin_restore = false;
-            steer = 0;
-        }
-    }
+    if (m->spin_t > 0) { accel = false; m->spin_t -= dt; if (m->spin_t < 0) m->spin_t = 0; }
     if (accel) m->speed += (turbo ? 520.0f : 300.0f) * dt;
     else m->speed -= 120.0f * dt;
     if (brake) m->speed -= 500.0f * dt;
@@ -540,7 +539,11 @@ static void player_drive(Mode7 *m, const Input *in, float dt, bool free_drive)
     if (!road && !rumble) turn *= 0.85f;
     m->heading += turn * dt;
     m->tilt += (steer * 7.0f - m->tilt) * clampf(dt * 8, 0, 1);
-    if (m->spin_t > 0) m->heading += 6.0f * dt;
+    if (m->spin_dur > 0) {   /* a spin-out: the car fishtails and settles back on the heading it had when hit */
+        float p = 1 - m->spin_t / m->spin_dur;
+        m->heading = m->spin_heading + 0.45f * sinf(TWO_PI * p) * (1 - p);
+        if (m->spin_t <= 0) { m->heading = m->spin_heading; m->spin_dur = 0; }
+    }
     m->vx = cosf(m->heading) * m->speed; m->vy = sinf(m->heading) * m->speed;
     m->px = wrapf(m->px + m->vx * dt); m->py = wrapf(m->py + m->vy * dt);
     /* camera heading lags a touch behind the car for the drifting feel */
@@ -643,7 +646,7 @@ static void update_ents(Mode7 *m, float dt)
             if (fabsf(dwrap(e->x, m->px)) < 26 && fabsf(dwrap(e->y, m->py)) < 26) {
                 spawn_expl(m, e->x, e->y, 1.0f); e->kind = K_NONE;
                 player_hurt(m, 2);
-                if (m->phase != PH_DEAD) { m->spin_heading = m->spin_restore ? m->spin_heading : m->heading; m->spin_restore = true; m->speed *= 0.4f; m->spin_t = 0.6f; }
+                if (m->phase != PH_DEAD) { m->speed *= 0.4f; start_spin(m, 0.6f); }
             }
             break;
         case K_PROP: {
@@ -652,7 +655,7 @@ static void update_ents(Mode7 *m, float dt)
             if (d < r + 16) {
                 float nx = dx / (d > 1 ? d : 1), ny = dy / (d > 1 ? d : 1);
                 m->px = wrapf(e->x + nx * (r + 17)); m->py = wrapf(e->y + ny * (r + 17));
-                if (m->speed > 150 && m->hurt_t <= 0) { player_hurt(m, 2); m->spin_t = 0.5f; }
+                if (m->speed > 150 && m->hurt_t <= 0) { player_hurt(m, 2); start_spin(m, 0.5f); }
                 m->speed = -fabsf(m->speed) * 0.35f - 40; m->shake = 0.2f;   /* bounce off */
             }
             break; }
@@ -769,7 +772,7 @@ static void begin_pursuit(Mode7 *m)
 {
     ents_clear(m, false);
     build_desert(m);
-    m->hp = m->max_hp; m->hurt_t = 0; m->spin_t = 0; m->spin_restore = false;
+    m->hp = m->max_hp; m->hurt_t = 0; m->spin_t = 0; m->spin_dur = 0;
     m->px = WORLD * 0.5f; m->py = WORLD * 0.5f; m->heading = m->cam_heading = -PI / 2; m->speed = 200;
     m->pursuit_spawn_t = 2.5f; m->pursuit_t = 0;
     for (int i = 0; i < 160; i++) {
@@ -871,7 +874,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
             else {   /* must rank 3rd or better: lose a life and start the race over from the beginning */
                 m->lives--;
                 start_race(m);
-                m->hp = m->max_hp; m->hurt_t = 0; m->spin_t = 0; m->spin_restore = false; m->boost = 1; m->boost_locked = false; m->speed = 0; m->turbo_on = false; m->shake = 0; m->tilt = 0; m->fire_cd = 0; m->turbo_t = 0;
+                m->hp = m->max_hp; m->hurt_t = 0; m->spin_t = 0; m->spin_dur = 0; m->boost = 1; m->boost_locked = false; m->speed = 0; m->turbo_on = false; m->shake = 0; m->tilt = 0; m->fire_cd = 0; m->turbo_t = 0;
                 m->phase = PH_COUNTDOWN; m->phase_t = 0; m->countdown = 3.99f;
                 play_music(m, 10, true);
                 set_msg(m, "QUALIFY 3RD OR BETTER", 3.0f);
@@ -943,7 +946,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         if (m->phase_t > 2.5f) {
             if (m->lives <= 0) { m->phase = PH_GAMEOVER; m->phase_t = 0; music_set_volume(0.5f); }
             else {
-                m->lives--; m->hp = m->max_hp; m->hurt_t = 2.0f; m->speed = 0; m->spin_t = 0; m->spin_restore = false; m->boost = 1; m->boost_locked = false;
+                m->lives--; m->hp = m->max_hp; m->hurt_t = 2.0f; m->speed = 0; m->spin_t = 0; m->spin_dur = 0; m->boost = 1; m->boost_locked = false;
                 /* back onto the course / the road */
                 if (m->resume_phase == PH_BOSS) { Ent *b = &m->ents[m->boss_i]; m->px = WORLD * 0.5f; m->py = wrapf(b->y + 500); m->heading = m->cam_heading = -PI / 2; m->phase = PH_BOSS; b->t = 0; b->speed = 200; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_ESCORT || m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE; }
                 else if (m->resume_phase == PH_PURSUIT) { Ent *b = &m->ents[m->boss_i]; m->px = WORLD * 0.5f; m->py = wrapf(b->y + 1200); m->heading = m->cam_heading = -PI / 2; m->phase = PH_PURSUIT; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_ESCORT || m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE; }
@@ -1076,7 +1079,8 @@ static void render_player(Mode7 *m)
     int frame = m->tilt < -5 ? 0 : m->tilt < -1.5f ? 1 : m->tilt <= 1.5f ? 2 : m->tilt <= 5 ? 3 : 4;
     uint8_t r = 255, g = 255, b = 255;
     if (m->hurt_t > 0 && ((int)(m->hurt_t * 20) & 1)) { r = 255; g = 90; b = 90; }
-    float ang = m->spin_t > 0 ? m->spin_t * 720 : 0;
+    float ang = 0;
+    if (m->spin_dur > 0) { float p = 1 - m->spin_t / m->spin_dur; ang = 360 * p * (2 - p); }   /* one whole turn, easing out: 0 and 360 are the same pose */
     draw_spr(m, S_BUGGY, frame, sx, sy, 1, ang, r, g, b, 255);
     if (m->turbo_on && ang == 0) {   /* the afterburner: a flame over each exhaust nozzle (10x10 at (23,21) and (60,21) of the sprite) */
         Spr *bs = &m->spr[S_BUGGY]; float x0 = floorf(sx - bs->w * 0.5f), y0 = floorf(sy - bs->h);
