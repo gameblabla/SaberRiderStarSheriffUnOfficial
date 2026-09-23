@@ -10,5 +10,8 @@ enum { HERO_SABER = 0, HERO_FIREBALL = 1, HERO_APRIL = 2, HERO_COLT = 3 };
 bool hero_available(int character);          /* selectable on the character select screen */
 /* after character_init parsed the CRHC: swap in the recreated sheet + animation table changes; false = keep Fireball's */
 bool hero_apply(Character *c);
+/* true while a hero's body is made for someone other than the player (stage 5's Dark April): hero_apply leaves the
+ * player's grunt overrides alone */
+void hero_quiet(bool quiet);
 const char *hero_name(int character);
 void hero_select_sfx(int character);         /* the team's "OK!" on the character select screen */

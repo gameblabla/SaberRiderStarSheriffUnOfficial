@@ -46,7 +46,7 @@ void player_control(Player *p, const Input *in, float dt)
         else if (D) character_down(c);
         else character_idle_aim(c);
     }
-    if (btn_pressed(in, BTN_JUMP)) { uint8_t st = c->state; character_jump(c); if (c->state != st) sfx_play(2, 0); }
+    if (btn_pressed(in, BTN_JUMP)) { uint8_t st = c->state; character_jump(c); if (c->state != st && !p->quiet) sfx_play(2, 0); }
 }
 
 static const float AIM_ANGLE[8] = { 3.1415927f, 2.3561945f, 1.5707964f, 0.7853982f, 0, 5.4977871f, 4.712389f, 3.9269908f };

@@ -137,12 +137,15 @@ void hero_select_sfx(int character)
 #define CRHC_COLT     0x26818B85
 #define CRHC_DEFAULT  0x8403195A
 
+static bool g_quiet;
+void hero_quiet(bool quiet) { g_quiet = quiet; }
+
 bool hero_apply(Character *c)
 {
     if (c->crhc_id != CRHC_APRIL && c->crhc_id != CRHC_FIREBALL && c->crhc_id != CRHC_COLT && c->crhc_id != CRHC_DEFAULT) return false;   /* enemies */
-    sfx_clear_overrides();         /* the player is re-created on every level start; Fireball keeps the pack's samples */
+    if (!g_quiet) sfx_clear_overrides();   /* the player is re-created on every level start; Fireball keeps the pack's samples */
     if (c->crhc_id == CRHC_DEFAULT) {
-        saber_sfx();
+        if (!g_quiet) saber_sfx();
         CBlock *cb = saber_sheet();
         if (!cb) return false;
         c->cb = cb; c->spr = NULL;   /* table is already Fireball's own layout: no anim/hurtbox patches needed */
@@ -162,7 +165,7 @@ bool hero_apply(Character *c)
         return true;
     }
     if (c->crhc_id != CRHC_APRIL) return false;
-    april_sfx();
+    if (!g_quiet) april_sfx();
     CBlock *cb = april_sheet();
     if (!cb) return false;
     c->cb = cb; c->spr = NULL;

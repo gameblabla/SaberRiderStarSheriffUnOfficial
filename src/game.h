@@ -9,6 +9,7 @@
 #include "mode7.h"
 #include "night.h"
 #include "forest.h"
+#include "darkapril.h"
 
 typedef struct {
     SDL_Renderer *ren;
@@ -38,7 +39,8 @@ typedef struct {
     Forest forest; bool forest_on; /* stage 4: the rebuilt forest tile layers over the level-1 layer slots */
     bool forest_outro_done;      /* stage 4: the win's radio scene already shown */
     Forest lab; bool lab_on;     /* stage 5: the cave lab (assets/lab, ../lab/compose.py) in the same form; level 1's boss */
-    bool walk_in;                /* stages 3/4 open with the hero walking in from off screen to walk_stop_x, then walk_script */
+    DarkApril dark;              /* stage 5: the second boss, after level 1's (darkapril.c) */
+    bool walk_in;                /* stages 3/4/5 open with the hero walking in from off screen to walk_stop_x, then walk_script */
     float walk_stop_x; const char *walk_script;
     bool night_taunt_done, night_outro_done;   /* stage 3: the story scenes already shown */
     float state_t;

@@ -980,7 +980,7 @@ void player_check_enemy_bullets(Player *pl, Bullets *eb, Effects *fx, float cam_
     float cx = c->body.x + h->ox, cy = c->body.y + h->oy;
     for (int i = 0; i < eb->n; i++) {
         Bullet *bl = &eb->b[i];
-        float r = bl->kind == BK_GRENADE ? 8.0f : 5.0f;
+        float r = bl->kind == BK_GRENADE ? 8.0f : bl->dark ? 3.0f : 5.0f;   /* Dark April's shots: thin, a crouch ducks them (darkapril.c SHOT_R) */
         if (fabsf(cx - bl->x) > r + h->hw || fabsf(cy - bl->y) > r + h->hh) continue;
         float sx = bl->x - cam_x, sy = bl->y; if (sx <= 8.0f || sx >= sw || sy <= 4.0f || sy >= sh - 4.0f) continue;
         int d = bl->dir;

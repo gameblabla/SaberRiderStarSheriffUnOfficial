@@ -32,8 +32,9 @@ bool character_init(Character *c, uint32_t crhc_id, bool enemy)
     c->hp_max = rd32(d + 0xadc);
     if (SDL_getenv("SABER_ANIMS"))   /* debug: dump the table */
         for (int i = 0; i < CHAR_CRHC_ANIMS; i++)
-            fprintf(stderr, "crhc %08X anim %2d: cells %d-%d loop %d dt %.3f flags %x muzzle %.0f,%.0f\n", crhc_id, i, c->anims[i].first,
-                    c->anims[i].last, c->anims[i].loop, c->anims[i].frame_time, c->anims[i].flags, c->muzzle[i][0], c->muzzle[i][1]);
+            fprintf(stderr, "crhc %08X anim %2d: cells %d-%d loop %d dt %.3f flags %x muzzle %.0f,%.0f hurt %.0f,%.0f %.0fx%.0f\n", crhc_id, i, c->anims[i].first,
+                    c->anims[i].last, c->anims[i].loop, c->anims[i].frame_time, c->anims[i].flags, c->muzzle[i][0], c->muzzle[i][1],
+                    c->hurt[i].ox, c->hurt[i].oy, c->hurt[i].hw, c->hurt[i].hh);
     { const PackEntry *se = packs_find(c->sprite_id); if (se && se->type == RES_SPRITE) c->spr = sprite_get(c->sprite_id); else c->cb = cblock_get(c->sprite_id); }
     static const int8_t fireball_bob[8] = { 0, 0, 1, 0, 0, 1 };
     memcpy(c->torso_bob, fireball_bob, sizeof c->torso_bob);

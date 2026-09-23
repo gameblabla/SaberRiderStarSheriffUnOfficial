@@ -15,6 +15,7 @@ typedef struct {
     uint8_t kind;
     int layer;
     Sprite *spr;
+    bool dark;        /* stage 5: Dark April's shots (the player's shot sprite in violet) */
 } Bullet;
 
 typedef struct { Bullet b[MAX_BULLETS]; int n; } Bullets;

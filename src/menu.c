@@ -428,8 +428,8 @@ static void draw_credits(Menu *m, SDL_Renderer *r, int sw, int sh)
 static Sprite *victory_art(int stage, int character)
 {
     static const char *const HERO[4] = { "saber", "fireball", "april", "colt" };
-    static Sprite *cache[5][4]; static bool tried[5][4];
-    if (stage < 1 || stage > 4) return NULL;
+    static Sprite *cache[6][4]; static bool tried[6][4];
+    if (stage < 1 || stage > 5) return NULL;   /* stage 5 has none yet: victory/stage5_<hero>.png is picked up when there */
     int h = stage == 2 ? 0 : character & 3;
     if (!tried[stage][h]) {
         tried[stage][h] = true;

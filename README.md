@@ -212,10 +212,33 @@ cut into pieces (cliffs, cavern, props, wall modules, pillars, railing, the dirt
 loader (`forest_load`). Layers: SkyBG = the cavern (0.2), Mountains = orange cliffs (0.5), MidBG = the lab walls (1.0;
 open where the cave shows through), Playfield = the ground and props. The route opens in the cave, alternates lab
 stretches (monitors and consoles) with caves, and ends in the hall with the big windows. No pits; one-way decks on the
-scaffold roofs and rubble piles. The boss is, provisionally, level 1's (a type-10 trigger at the end, put on the
+scaffold roofs and rubble piles. The first boss is level 1's (a type-10 trigger at the end, put on the
 `Small Hyperjmpr` layer so its far pass shows over the cliffs and through the hall's gaps and its near pass flies
 inside the hall). Music track 14 (otherwise unused). `SABER_STAGE=5` starts there; stage 4's MISSION ACCOMPLISHED
-now continues into stage 5, and the credits roll after stage 5.
+now continues into stage 5, and the credits roll after stage 5. The far cavern loop is the cave shot's cavern, the
+cave seen through the lab's gap, then the cavern's open part again with its halves swapped (no mirror images).
+
+It opens like stages 3 and 4: the hero walks in and the radio scene (`LAB_SCRIPT_INTRO`) tells where the lab is.
+
+**Dark April** (`src/darkapril.c`): when level 1's boss is down the music dies out, April radios that Ramrod reads
+another lifesign right beside the hero - one that reads like her - and a violet shadow of April forms out of motes;
+a scene follows (nobody, April included, can explain her), then the duel in the locked hall. She is April's own body
+(her CRHC and sheet, drawn dark with a violet glow) run through the hero's own `player_control` / `player_resolve`,
+so her moveset is exactly April's: run, somersault, crouch, slide, 8-way aim, shooting on the move. Her buttons come
+from a small AI, Zelda II's Dark Link in spirit: mostly she **mirrors the player's own buttons** a moment later with
+left and right swapped (walk at her and she walks at you, shoot and she shoots back, crouch and she crouches; 16 steps
+behind, 9 in her second half); she reads a hero firing level while standing and ducks under it answering low (the hero has
+to jump it), jumps low shots or crouches under high ones on a dice roll, and breaks off into her own aimed volleys (up
+diagonals at a hero in the air), slides into the hero and somersaults over when the hero gets close. Her shots are the hero's
+in violet at half speed, and in this duel both sides' shots are 3 px thin so a crouch ducks a level shot. HP 14 / 20 /
+26 by difficulty; below half she reacts faster, fires faster and leaves afterimages. A slide through her hurts her;
+touching her otherwise hurts the hero. Ramrod refills the hero's hearts before the duel. Beaten, she comes apart in
+motes, the outro scene plays and MISSION ACCOMPLISHED follows. With **April** as the hero every scene is her own
+(`DARK_SCRIPT_*_APRIL`, opened without the usual name / avatar swap): she meets her own face, with her "huh?"
+(`assets/voice/april_huh.wav`). Dark April's avatar (`assets/dark_april_avatar.png`) and grunts
+(`assets/voice/dark_*.wav`: April's, lowered, with an echo) come from `../heroes/dark/`. Debug: `SABER_DARK=1
+SABER_START=6540` goes straight to her, `SABER_DARKHP=n` sets her HP, `SABER_NODARK=1` ends the stage after the
+first boss as before. There is no stage 5 victory painting yet: `assets/victory/stage5_<hero>.png` is used when present.
 
 ## Controls (as in the demo)
 
@@ -252,6 +275,7 @@ Original keys: arrows, A jump, S shoot, Return start/confirm, Escape quits.
 - `src/night.c`, `src/night_level.c` — stage 3, Hyperjumper Pass (see above)
 - `src/forest.c` — stage 4, the Red Palm Jungle: loads `assets/forest/forest.lvl` (built by `../forest/`) into the level-1 layer slots;
   `forest_load` loads stage 5's `assets/lab/lab.lvl` (built by `../lab/`) the same way
+- `src/darkapril.c` — stage 5's second boss, Dark April, and the stage's story scenes (see above)
 - `src/audio.c` mixes deliberately *unlike* the original: the demo's mixer (`FUN_00563900`) sums the music at vol/256
   and every sfx voice at unity into 16-bit and hard-clips at ±0x7fbc, and the material is mastered hot (most sfx and
   the music tracks peak at 0 dBFS or above), so a voice line over a gunshot clips. The port decodes the music in float,

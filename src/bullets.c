@@ -92,6 +92,7 @@ void bullets_draw(const Bullets *bs, int layer, float cam_x, float cam_y)
         if (b->angle != 0) {
             SDL_FRect src = { 0, 0, (float)b->spr->w, (float)b->spr->h }, dst = { x, y, (float)b->spr->w, (float)b->spr->h };
             SDL_RenderTextureRotated(SDL_GetRendererFromTexture(b->spr->tex), b->spr->tex, &src, &dst, -b->angle * 180.0 / 3.14159265, NULL, SDL_FLIP_NONE);
-        } else sprite_draw(b->spr, f, x, y, false);
+        } else if (b->dark) sprite_draw_mod(b->spr, f, x, y, 200, 90, 255, 255);
+        else sprite_draw(b->spr, f, x, y, false);
     }
 }

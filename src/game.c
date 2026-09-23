@@ -3,6 +3,8 @@
 #include "hud.h"
 #include "audio.h"
 #include "font.h"
+#include "heroes.h"
+#include "assets.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -69,9 +71,10 @@ static bool level_start(Game *g)
     if (g->night_on) { px = g->night.start_x; py = g->night.start_y; }
     if (g->forest_on) { px = g->forest.start_x; py = g->forest.start_y; }
     if (g->lab_on) { px = g->lab.start_x; py = g->lab.start_y; }
-    g->walk_in = (g->night_on || g->forest_on) && !SDL_getenv("SABER_START");   /* stages 3 and 4 open with the hero walking in from the left */
+    g->walk_in = (g->night_on || g->forest_on || g->lab_on) && !SDL_getenv("SABER_START");   /* stages 3, 4 and 5 open with the hero walking in from the left */
     if (g->walk_in && g->night_on) { g->walk_stop_x = g->night.intro_stop_x; g->walk_script = NIGHT_SCRIPT_INTRO; }
     if (g->walk_in && g->forest_on) { px = FOREST_INTRO_CAM - 40.0f; g->walk_stop_x = FOREST_INTRO_STOP; g->walk_script = FOREST_SCRIPT_INTRO; }
+    if (g->walk_in && g->lab_on) { px = FOREST_INTRO_CAM - 40.0f; g->walk_stop_x = FOREST_INTRO_STOP; g->walk_script = LAB_SCRIPT_INTRO; }   /* the same opening as stage 4 */
     if (SDL_getenv("SABER_START")) px = (float)atof(SDL_getenv("SABER_START"));   /* debug */
     player_spawn(&g->player, (unsigned)(g->menu.character - 1) < 3 ? HERO_CRHC[g->menu.character - 1] : 0x8403195A, px, py);
     /* stages 3 and 4 inherit the spares left over from the stage before (a fresh --level 3/4 falls back to the option) */
@@ -325,6 +328,7 @@ void game_update(Game *g, float dt)
         if (!cutscene_world) {
             character_animate(c, dt); effects_update(&g->effects, dt);
             for (int i = 0; i < MAX_ENEMIES; i++) if (g->enemies.e[i].cls) character_animate(&g->enemies.e[i].ch, dt);
+            if (g->lab_on) dark_animate(&g->dark, dt);
             return;
         }
     }
@@ -364,6 +368,28 @@ void game_update(Game *g, float dt)
         else if (won && c->state != CS_DEAD && !g->forest_outro_done) { g->forest_outro_done = true; open_scene(g, FOREST_SCRIPT_OUTRO); }   /* the radio, then the win */
         else if (won && c->state != CS_DEAD && g->forest_outro_done) { g->state = 0xe; g->state_t = 0; p->locked = true; music_play(6, false); }
     }
+    if (g->lab_on && SDL_getenv("SABER_DARK") && g->dark.state == DA_OFF && g->state == 10 && g->cam_x >= g->level.width - g->sw - 1)
+        dark_begin(&g->dark, g->cam_x, g->sw, g->menu.difficulty);   /* debug: SABER_DARK=1 SABER_START=6500: straight to Dark April */
+    if (g->lab_on) {   /* stage 5: Dark April, once level 1's boss is down (her scenes are April's own when April is the hero) */
+        dark_update(&g->dark, p, &g->in, &g->level, &g->world, &g->player_bullets, &g->enemy_bullets, &g->effects, g->player_layer, dt, g->state == 10);
+        if (dark_holds_arena(&g->dark)) { g->enemies.spawner_enabled = false; g->cam_locked = true; }
+        if (g->state == 10 && c->state != CS_DEAD) {
+            bool april = g->menu.character == HERO_APRIL; const char *scene = NULL;
+            if (g->dark.scene_call) { g->dark.scene_call = false; scene = april ? DARK_SCRIPT_CALL_APRIL : DARK_SCRIPT_CALL; }
+            else if (g->dark.scene_meet) {
+                g->dark.scene_meet = false; scene = april ? DARK_SCRIPT_MEET_APRIL : DARK_SCRIPT_MEET;
+                const char *huh = april ? asset_path("voice/april_huh.wav") : NULL;
+                if (huh) voice_play_file(huh);   /* April's own baffled "huh?" at the sight of herself */
+            }
+            else if (g->dark.scene_outro) { g->dark.scene_outro = false; scene = april ? DARK_SCRIPT_OUTRO_APRIL : DARK_SCRIPT_OUTRO; }
+            else if (g->dark.state == DA_DONE) { g->state = 0xe; g->state_t = 0; p->locked = true; music_play(6, false); }   /* after the outro: the win */
+            if (scene) {
+                if (april) dialog_set_hero(HERO_FIREBALL);   /* written for April as she is: no name / avatar swap */
+                open_scene(g, scene);
+                dialog_set_hero(g->menu.character);
+            }
+        }
+    }
     /* level-flow zones (FUN_00422d10 tail): exit, dialogs, camera stops, death zones */
     if (c->state != CS_DEAD && !p->locked) {
         float bx = c->body.x, by = c->body.y;
@@ -398,7 +424,11 @@ void game_update(Game *g, float dt)
         for (int k = 0; k < g->nstops; k++) if (g->stops[k].armed && g->stops[k].cx + g->stops[k].hx > g->cam_x && g->stops[k].cx + g->stops[k].hx < g->cam_x + g->sw) g->stops[k].armed = false;
     }
     if (g->enemies.cam_locked) g->cam_locked = true;
-    if (g->enemies.boss_done && g->state == 10) { g->enemies.boss_done = false; g->state = 0xe; g->state_t = 0; p->locked = true; music_play(6, false); }
+    if (g->enemies.boss_done && g->state == 10) {
+        g->enemies.boss_done = false;
+        if (g->lab_on && !SDL_getenv("SABER_NODARK")) { if (g->dark.state == DA_OFF) dark_begin(&g->dark, g->cam_x, g->sw, g->menu.difficulty); }   /* stage 5: not over yet (Dark April ends it) */
+        else { g->state = 0xe; g->state_t = 0; p->locked = true; music_play(6, false); }
+    }
     if (g->night_on && g->night.clear_ready && g->state == 10 && !g->night_outro_done && c->state != CS_DEAD) { g->night_outro_done = true; open_scene(g, NIGHT_SCRIPT_OUTRO); }
     if (g->night_on && g->night.clear_ready && g->state == 10 && g->night_outro_done) { g->night.clear_ready = false; g->state = 0xe; g->state_t = 0; p->locked = true; music_play(6, false); }
     player_resolve(c, dt);
@@ -508,6 +538,7 @@ void game_draw(Game *g)
             enemies_draw(&g->enemies, i, g->cam_x, g->cam_y);
             if (g->night_on || (g->forest_on && (i != g->night.play_layer || g->enemies.front_layer < 0)))
                 night_draw_layer(&g->night, g->ren, i, g->cam_x, g->cam_y);   /* Hyperjumper's passes use the level-1 boss layers */
+            if (i == g->player_layer && g->lab_on) dark_draw(&g->dark, g->cam_x, g->cam_y);   /* stage 5: Dark April, behind the hero */
             if (i == g->player_layer && (!g->forest_on || in_cabin) && g->state != 0xb) character_draw(&g->player.ch, g->cam_x, g->cam_y);
             if (i == g->player_layer && in_cabin) hero_drawn = true;   /* the last life is gone: no respawned hero standing there during the fade */
             bullets_draw(&g->player_bullets, i, g->cam_x, g->cam_y);
@@ -520,6 +551,7 @@ void game_draw(Game *g)
     hud_draw(g->ren, g->menu.character, g->menu.difficulty, g->player.lives, g->player.hp, 0);
     if (g->state == 0xd) dialog_draw(&g->dialog, g->ren, g->sw, g->sh);
     if (g->night_on || g->forest_on) night_draw_hud(&g->night, g->ren, g->sw, g->sh);
+    if (g->lab_on && g->state != 0xd) dark_draw_hud(&g->dark, g->ren, g->sw);
     if (g->forest_on && g->state != 0xd) forest_finale_draw_hud(&g->forest, &g->enemies, &g->night, g->ren, g->sw);
     if (g->state == 0xc) {   /* pause: dim + blinking PAUSE sprite (B2143E42) */
         SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(g->ren, 0, 0, 0, 64);
