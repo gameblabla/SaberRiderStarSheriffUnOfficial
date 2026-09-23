@@ -50,16 +50,16 @@ typedef struct { int obj, x; bool mirror; int y; } Place;
 static const Place LAYOUT[] = {
     /* the badlands: loose rocks, a first wreck to fight from */
     { ROCK_S2, 32, false, 0 }, { CACTUS_A, 144, false, 0 }, { CLUSTER_A, 288, true, 0 }, { TAXI, 512, false, 0 }, { CACTUS_B, 688, false, 0 }, { ROCK_S5, 752, false, 0 },
-    /* a stair of hover pads climbing over open ground */
-    { ROCK_S1, 880, false, 0 }, { CLUSTER_B, 1104, false, 0 }, { ROCK_M1, 1392, true, 0 }, { CACTUS_C, 1488, false, 0 }, { ROCK_S6, 1552, false, 0 },
-    { PAD64, 944, false, 160 }, { PAD80, 1056, false, 128 }, { PAD96, 1184, false, 96 }, { PAD64, 1344, true, 128 },
-    /* twin peaks, a bridge of pads between their tops */
+    /* a stair of hover pads up the face of the rock pile (every pad is bolted to rock, as in level 1) */
+    { ROCK_S3, 832, false, 0 }, { PILE, 912, false, 0 }, { CLUSTER_B, 1360, false, 0 }, { CACTUS_C, 1536, false, 0 }, { ROCK_S6, 1584, false, 0 },
+    { PAD64, 944, false, 160 }, { PAD80, 1056, false, 128 }, { PAD96, 1184, false, 96 }, { PAD64, 1376, true, 144 },
+    /* twin peaks: a climb to the first summit, the valley, a pad on the second */
     { PEAK_A, 1696, false, 0 }, { PEAK_B, 2080, true, 0 }, { CACTUS_D, 2464, false, 0 },
-    { PAD64, 1872, false, 128 }, { PAD128, 1984, false, 80 }, { PAD64, 2240, true, 128 },
+    { PAD64, 1744, false, 144 }, { PAD128, 1824, false, 80 }, { PAD64, 2176, true, 112 },
     /* the wreck yard: cover to fight across */
     { ROCK_S3, 2592, false, 0 }, { VAN, 2688, false, 0 }, { CAR, 2960, true, 0 }, { SIGN_A, 3120, false, 0 }, { TAXI, 3248, true, 0 }, { ROCK_S4, 3408, false, 0 },
     /* the mound, pads zig-zagging in front of it */
-    { MOUND, 3552, false, 0 }, { PAD80, 3584, false, 144 }, { PAD96, 3712, false, 96 }, { PAD64, 3856, true, 128 },
+    { MOUND, 3552, false, 0 }, { PAD80, 3568, false, 144 }, { PAD96, 3680, false, 96 }, { PAD64, 3808, true, 144 },
     { CACTUS_A, 3952, false, 0 }, { CLUSTER_A, 4032, false, 0 }, { ROCK_S7, 4224, true, 0 },
     /* the rock wall, a long climb along its face */
     { WALL, 4320, true, 0 }, { PAD64, 4368, false, 144 }, { PAD80, 4480, false, 112 }, { PAD128, 4624, false, 80 },
@@ -68,7 +68,7 @@ static const Place LAYOUT[] = {
     { SIGN_B, 5520, false, 0 }, { ROCK_M2, 5632, false, 0 }, { CACTUS_B, 5712, false, 0 }, { PILE, 5792, true, 0 }, { PAD96, 5952, false, 128 },
     { ROCK_S8, 6272, false, 0 },
     /* open ground: Hyperjumper's arena, only low rocks at the back */
-    { ROCK_S1, 6432, false, 0 }, { CACTUS_C, 6592, false, 0 }, { ROCK_S2, 6784, true, 0 }, { CACTUS_D, 6944, false, 0 },
+    { ROCK_S4, 6432, false, 0 }, { CACTUS_C, 6592, false, 0 }, { ROCK_S2, 6784, true, 0 }, { CACTUS_D, 6944, false, 0 },
 };
 
 /* MidBG (parallax 0.875): its rock-and-cactus stretches only (the houses sit at
@@ -141,6 +141,14 @@ static uint8_t mirror_cell(uint8_t v)
     return (uint8_t)((v & ~3u) | ((v & 1u) << 1) | ((v & 2u) >> 1));
 }
 
+/* a map cell that draws nothing (level 1 keeps ids for fully empty tiles) */
+static bool blank_cell(const TileMap *m, uint32_t v)
+{
+    if (!v) return true;
+    int n = m->cb ? cblock_ncells(m->cb) : 0;
+    return n > 0 && m->cb->cells[(v - 1) % (uint32_t)n] == 0xFFFF;
+}
+
 static bool plain_ground(int row, uint32_t v)
 {
     /* level 1's bare ground edge: rows 11/12 repeat 8..13 / 56..61 */
@@ -188,14 +196,24 @@ bool stage3_world_build(Level *L, Stage3World *w)
         uint32_t *dst = w->cells[li[o->layer]];
         int dy = o->surface && p->y ? p->y - o->surface : 0;   /* pads: px, a multiple of 16 */
         int n = (o->src1 - o->src0) / 16, dc0 = p->x / 16;
-        for (int k = 0; k < n; k++) {
+        /* the rocks' feet spill up to a tile past the object's columns (only into the ground rows): bring that
+         * column along or the rock ends in a flat cut */
+        bool rocks = o->layer == L_PLAYFIELD;
+        for (int k = rocks ? -1 : 0; k < (rocks ? n + 1 : n); k++) {
             int sc = p->mirror ? o->src1 / 16 - 1 - k : o->src0 / 16 + k, dc = dc0 + k;
-            if (dc < 0 || dc >= tcols || sc >= m->w) continue;
-            for (int r = o->row0; r < o->row1 && r < m->h; r++) {
+            if (dc < 0 || dc >= tcols || sc < 0 || sc >= m->w) continue;
+            bool foot = k < 0 || k >= n;
+            if (foot) {   /* only a lone foot: nothing of the column above the ground */
+                bool bare = true;
+                for (int r = o->row0; r < 11 && bare; r++) bare = blank_cell(m, m->cells[r * m->w + sc]);
+                if (!bare) continue;
+            }
+            for (int r = foot ? 11 : o->row0; r < (foot ? 13 : o->row1) && r < m->h; r++) {
                 uint32_t v = m->cells[r * m->w + sc];
                 int dr = r + dy / 16;
                 if (!v || dr < 0 || dr >= m->h) continue;
                 if (o->layer == L_PLAYFIELD && plain_ground(r, v)) continue;   /* keep the strip's own phase */
+                if (foot && !plain_ground(dr, dst[dr * tcols + dc] & ~STAGE3_CELL_FLIP)) continue;   /* never over a neighbour */
                 dst[dr * tcols + dc] = p->mirror ? v | STAGE3_CELL_FLIP : v;
             }
         }
@@ -249,11 +267,11 @@ static const Stage3Trigger TRIGGERS[] = {
     /* the pad stair: a sniper on the top pad, walkers from both sides, a kneeler on the last pad */
     { 7,  900,   8, 1, { { 1232, 51 } },                               0,  1,  0,    0 },
     { 1,  880, 520, 2, { { LFT, 160 }, { R, 160 } },                1100, -1, 40,  400 },
-    { 9, 1080,   8, 1, { { 1376, 83 } },                               0,  1,  0,    0 },
-    /* twin peaks: a sniper on the bridge, grunts from behind, a kneeler on the far pad */
-    { 6, 1740,   8, 1, { { 2048, 35 } },                               0,  1,  0,    0 },
+    { 9, 1080,   8, 1, { { 1408, 99 } },                               0,  1,  0,    0 },
+    /* twin peaks: a sniper on the summit pad, grunts from behind, a kneeler on the far pad */
+    { 6, 1580,   8, 1, { { 1888, 35 } },                               0,  1,  0,    0 },
     { 5, 1900,   8, 1, { { LFT, 160 } },                             700,  2, 20,    0 },
-    { 8, 1960,   8, 1, { { 2256, 83 } },                               0,  1,  0,    0 },
+    { 8, 1940,   8, 1, { { 2208, 67 } },                               0,  1,  0,    0 },
     { 2, 2100, 400, 3, { { R, 160 }, { R, 160 }, { LFT, 160 } },    1500, -1, 60,  600 },
     /* the wreck yard: gunmen on all three roofs, walkers both ways */
     { 9, 2480,   8, 1, { { 2780, 99 } },                               0,  1,  0,    0 },
@@ -261,7 +279,7 @@ static const Stage3Trigger TRIGGERS[] = {
     { 6, 2760,   8, 1, { { 3048, 123 } },                              0,  1,  0,    0 },
     { 8, 3040,   8, 1, { { 3336, 123 } },                              0,  1,  0,    0 },
     /* the mound */
-    { 7, 3460,   8, 1, { { 3760, 51 } },                               0,  1,  0,    0 },
+    { 7, 3420,   8, 1, { { 3728, 51 } },                               0,  1,  0,    0 },
     { 5, 3560, 500, 1, { { R, 160 } },                              1200,  4, 40,    0 },
     { 8, 3860,   8, 1, { { 4160, 160 } },                              0,  1,  0,    0 },
     /* the wall climb */
