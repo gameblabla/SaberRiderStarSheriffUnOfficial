@@ -14,6 +14,7 @@ const char *plat_default_data_dir(void) { return "SaberRider/data"; }
 int plat_default_ratio(void) { return 0; }   /* RATIO_WIDE */
 int plat_screen_modes(void) { return 4; }
 int plat_wide_width(int screen) { (void)screen; return 426; }
+bool plat_screen_43_only(int screen) { (void)screen; return false; }
 void plat_screen_label(int screen, char *buf, size_t n)
 {
     if (screen == 0) snprintf(buf, n, "FULL %ux%u", 852, 480); else snprintf(buf, n, "WINDOWED x%u", screen + 1);

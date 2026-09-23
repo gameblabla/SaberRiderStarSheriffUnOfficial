@@ -27,7 +27,8 @@ bool game_init(Game *g, Ren *ren, int sw, int sh, int start_level)
     if (plat_getenv("SABER_LIVES")) g->menu.lives = atoi(plat_getenv("SABER_LIVES"));   /* debug: starting lives */
     g->menu.ratio = plat_default_ratio();
     if (plat_getenv("SABER_RATIO")) g->menu.ratio = atoi(plat_getenv("SABER_RATIO"));   /* debug: start in a screen ratio (0 wide, -1 4:3, 1 stretch) */
-    if (plat_getenv("SABER_SCREEN")) g->menu.screen = atoi(plat_getenv("SABER_SCREEN"));   /* debug: start on a SCREEN choice (Dreamcast 1: 832x480) */
+    if (plat_getenv("SABER_SCREEN")) g->menu.screen = atoi(plat_getenv("SABER_SCREEN"));   /* debug: start on a SCREEN choice (Dreamcast VGA 1: 832x480, 2: 320x240) */
+    if (plat_screen_43_only(g->menu.screen)) g->menu.ratio = RATIO_43;
     if (g->menu.ratio != RATIO_WIDE || g->menu.screen) {
         g->sw = g->menu.ratio == RATIO_WIDE ? plat_wide_width(g->menu.screen) : 320;
         plat_apply_screen(ren, g->sw, g->sh, g->menu.ratio, g->menu.screen ? g->menu.screen : -1);

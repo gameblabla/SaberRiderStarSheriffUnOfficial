@@ -29,6 +29,8 @@ void plat_apply_screen(Ren *r, int sw, int sh, int ratio, int screen);
 /* the SCREEN option's choices and their label ("FULL 852x480", "WINDOWED x2", "VGA 832x480") */
 int  plat_screen_modes(void);
 void plat_screen_label(int screen, char *buf, size_t n);
+/* true when that SCREEN choice only shows 4:3 (the RATIO option is held at 4:3 there) */
+bool plat_screen_43_only(int screen);
 /* the WIDE ratio's logical width on that SCREEN choice: 426 (852x480 halved), 416 where the display is 832x480 */
 int  plat_wide_width(int screen);
 /* the ratio a fresh start uses (menu RATIO option) */

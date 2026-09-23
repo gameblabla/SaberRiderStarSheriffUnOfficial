@@ -124,9 +124,11 @@ void menu_update(Menu *m, const Input *in, float dt, int sw, Ren *r)
             break;
         case OPT_PLAYER: lives_caps(m->difficulty, &maxl, &maxc); m->lives += dir; if (m->lives < 0) m->lives = 0; if (m->lives > maxl) m->lives = maxl; break;
         case OPT_CONTINUE: lives_caps(m->difficulty, &maxl, &maxc); m->continues += dir; if (m->continues < 0) m->continues = 0; if (m->continues > maxc) m->continues = maxc; break;
-        case OPT_SCREEN: if (dir) { int n = plat_screen_modes(); m->screen = (m->screen + n + dir) % n; m->apply_screen_mode = true; } break;
-        case OPT_RATIO:   /* WIDE -> 4:3 -> STRETCH -> WIDE */
-            if (dir) { m->ratio = m->ratio == RATIO_WIDE ? (dir > 0 ? RATIO_43 : RATIO_STRETCH) : m->ratio == RATIO_43 ? (dir > 0 ? RATIO_STRETCH : RATIO_WIDE) : (dir > 0 ? RATIO_WIDE : RATIO_43); m->apply_screen_mode = true; }
+        case OPT_SCREEN:
+            if (dir) { int n = plat_screen_modes(); m->screen = (m->screen + n + dir) % n; m->apply_screen_mode = true; if (plat_screen_43_only(m->screen)) m->ratio = RATIO_43; }
+            break;
+        case OPT_RATIO:   /* WIDE -> 4:3 -> STRETCH -> WIDE (held at 4:3 on a 4:3-only screen) */
+            if (dir && !plat_screen_43_only(m->screen)) { m->ratio = m->ratio == RATIO_WIDE ? (dir > 0 ? RATIO_43 : RATIO_STRETCH) : m->ratio == RATIO_43 ? (dir > 0 ? RATIO_STRETCH : RATIO_WIDE) : (dir > 0 ? RATIO_WIDE : RATIO_43); m->apply_screen_mode = true; }
             break;
         case OPT_FILTER: if (dir) m->filter = (m->filter + FILTER_COUNT + dir) % FILTER_COUNT; break;
         case OPT_MUSIC:
