@@ -67,11 +67,12 @@ const char *const DARK_SCRIPT_OUTRO_APRIL =
 #define READY_T    0.9f     /* after the scene: a beat before she moves */
 #define DEATH_T    1.1f     /* her death animation, then she dissolves */
 #define DISSOLVE_T 1.6f
+#define GAP_MIN    100.0f   /* closer than this she backs off (a leap over the hero when cornered): she duels at range */
 #define SHOT_SPEED 250.0f   /* the hero's shots fly at 500 */
 #define SHOT_R     3.0f     /* shot radius in this duel, both ways (5 elsewhere): a crouch ducks a level shot, as it
                                should - with 5 the crouch box's top still caught it by a pixel */
 
-enum { M_MIRROR, M_ATTACK, M_SLIDE, M_LEAP };
+enum { M_MIRROR, M_ATTACK, M_SLIDE, M_LEAP, M_RETREAT };
 enum { DG_NONE, DG_CROUCH, DG_JUMP };
 enum { B_L = 1, B_R = 2, B_U = 4, B_D = 8, B_J = 16, B_S = 32, B_A = 64 };
 
@@ -181,12 +182,11 @@ static void pick_mode(DarkApril *d, const Character *P, float adx, bool phase2)
 {
     float r = frand();
     bool grounded = on_ground(P);
-    if (adx < 60.0f && r < 0.45f) d->mode = M_LEAP;
-    else if (grounded && adx > 70.0f && adx < 190.0f && r < (phase2 ? 0.3f : 0.2f)) d->mode = M_SLIDE;
+    if (grounded && adx > 130.0f && adx < 220.0f && r < (phase2 ? 0.25f : 0.15f)) d->mode = M_SLIDE;
     else if (r < (phase2 ? 0.55f : 0.6f)) d->mode = M_MIRROR;
     else d->mode = M_ATTACK;
     d->mode_t = d->mode == M_MIRROR ? 1.6f + frand() * 1.8f : d->mode == M_ATTACK ? 1.2f + frand() * 1.3f : 1.0f;
-    d->pref = 90.0f + frand() * 80.0f;
+    d->pref = 130.0f + frand() * 70.0f;
     d->crouch_shoot = frand() < 0.35f;
 }
 
@@ -202,10 +202,14 @@ static void think(DarkApril *d, const Player *pl, const Bullets *pb, float dt)
     bool player_down = P->state == CS_DEAD;
 
     d->mode_t -= dt; d->dodge_cd -= dt; d->counter_t -= dt;
+    float back_room = right ? left_room : right_room;
+    if (adx < GAP_MIN && on_ground(c) && c->state != CS_SLIDE && d->mode != M_LEAP && d->mode != M_RETREAT && !player_down) {
+        d->mode = M_RETREAT; d->mode_t = 2.0f; d->pref = 140.0f + frand() * 50.0f; d->counter_t = 0; d->dodge_t = 0;
+    }
     /* the hero firing level at her while standing: she reads it, ducks under it and answers low (to be jumped) */
     bool level_fire = (P->flags & CF_SHOOT) && on_ground(P) && P->state != CS_CROUCH && P->state != CS_SLIDE &&
                       (P->aim == (right ? AIM_L : AIM_R));
-    if (level_fire && d->counter_t <= -0.4f && d->mode != M_SLIDE && d->mode != M_LEAP) {
+    if (level_fire && d->counter_t <= -0.4f && d->mode != M_SLIDE && d->mode != M_LEAP && d->mode != M_RETREAT) {
         float chance = (d->difficulty == 0 ? 0.35f : d->difficulty == 1 ? 0.55f : 0.7f) + (phase2 ? 0.15f : 0.0f);
         d->counter_t = frand() < chance ? 0.7f + frand() * 0.5f : 0.0f;
     }
@@ -214,14 +218,14 @@ static void think(DarkApril *d, const Player *pl, const Bullets *pb, float dt)
         else { w[BTN_DOWN] = true; w[BTN_SHOOT] = !player_down; }
         return;
     }
-    if (d->mode_t <= 0 && c->state != CS_SLIDE && on_ground(c)) pick_mode(d, P, adx, phase2);
+    if (d->mode_t <= 0 && c->state != CS_SLIDE && on_ground(c) && d->mode != M_RETREAT) pick_mode(d, P, adx, phase2);
     if (d->player_idle > 1.1f && d->mode == M_MIRROR) { d->mode = M_ATTACK; d->mode_t = 1.4f; d->pref = 100.0f + frand() * 60.0f; }
 
     /* dodging comes first: one roll per shot she sees coming (the cooldown), a better eye in the second half */
     if (d->dodge_t > 0) {
         d->dodge_t -= dt;
         if (d->dodge == DG_CROUCH) { w[BTN_DOWN] = true; w[BTN_SHOOT] = !player_down && frand() < 0.5f && c->facing == (right ? 1 : 0); return; }
-        if (d->dodge == DG_JUMP) { w[BTN_JUMP] = d->dodge_t > 0.25f; if (frand() < 0.5f) w[toward] = true; return; }
+        if (d->dodge == DG_JUMP) { w[BTN_JUMP] = d->dodge_t > 0.25f; if (back_room > 60.0f) w[away] = true; return; }   /* hop back, not at the hero */
     }
     if (d->dodge_cd <= 0 && on_ground(c) && c->state != CS_SLIDE) {
         int th = threat(d, pb);
@@ -238,13 +242,12 @@ static void think(DarkApril *d, const Player *pl, const Bullets *pb, float dt)
         uint8_t v = d->hist[(d->hist_i - delay + DARK_HIST * 4) % DARK_HIST];
         w[BTN_LEFT] = v & B_R; w[BTN_RIGHT] = v & B_L; w[BTN_UP] = v & B_U; w[BTN_DOWN] = v & B_D;
         w[BTN_JUMP] = v & B_J; w[BTN_SHOOT] = (v & B_S) && !player_down; w[BTN_AIM] = v & B_A;
+        if (adx < GAP_MIN + 40.0f && !w[BTN_AIM]) w[toward] = false;   /* mirrored, but she won't walk into the hero */
         break; }
     case M_ATTACK:
         if (player_down) { w[BTN_AIM] = true; w[toward] = true; break; }
         if (adx > d->pref + 24.0f) {                        /* close in, firing on the run */
             w[toward] = true; w[BTN_SHOOT] = frand() < 0.6f;
-        } else if (adx < 44.0f) {                           /* too close: over the hero */
-            d->mode = M_LEAP; d->mode_t = 1.0f;
         } else if (d->crouch_shoot && on_ground(P) && c->facing == (right ? 1 : 0)) {
             w[BTN_DOWN] = true; w[BTN_SHOOT] = true;      /* low shots: the hero has to jump them */
         } else {                                            /* planted, 8-way aim at the hero's middle */
@@ -256,20 +259,26 @@ static void think(DarkApril *d, const Player *pl, const Bullets *pb, float dt)
         break;
     case M_SLIDE:      /* down + toward, then jump: April's slide, right into the hero */
         if (c->state == CS_SLIDE) { w[toward] = false; break; }
-        if (d->mode_t < 0.9f && on_ground(c)) { d->mode = M_ATTACK; d->mode_t = 0.8f + frand(); break; }
+        if (d->mode_t < 0.9f && on_ground(c)) { d->mode = M_RETREAT; d->mode_t = 2.0f; d->pref = 150.0f; break; }   /* through the hero: then away */
         w[toward] = true; w[BTN_DOWN] = true; w[BTN_JUMP] = true;
         break;
-    case M_LEAP:       /* a somersault over (or at) the hero */
-        if (on_ground(c) && d->mode_t < 0.8f) { d->mode = M_ATTACK; d->mode_t = 1.0f + frand(); d->pref = 120.0f; break; }
+    case M_LEAP:       /* cornered: a somersault over the hero, then away on the other side */
+        if (on_ground(c) && d->mode_t < 0.8f) { d->mode = M_RETREAT; d->mode_t = 2.0f; d->pref = 150.0f; break; }
         w[toward] = true; w[BTN_JUMP] = on_ground(c);
+        break;
+    case M_RETREAT:    /* back off to her range, then turn and duel */
+        if (adx >= d->pref || d->mode_t <= 0 || (back_room < 40.0f && adx >= GAP_MIN)) {
+            d->mode = M_ATTACK; d->mode_t = 1.2f + frand(); w[BTN_AIM] = true; w[toward] = true; break;
+        }
+        if (back_room < 40.0f) { d->mode = M_LEAP; d->mode_t = 1.0f; w[toward] = true; w[BTN_JUMP] = on_ground(c); break; }
+        w[away] = true;
         break;
     }
     /* the arena's walls: backed into one she jumps out toward the middle */
     bool into_left = w[BTN_LEFT] && left_room < 28.0f, into_right = w[BTN_RIGHT] && right_room < 28.0f;
-    if ((into_left || into_right) && on_ground(c) && d->mode != M_MIRROR) {
+    if ((into_left || into_right) && on_ground(c) && d->mode != M_MIRROR && d->mode != M_RETREAT) {
         w[BTN_LEFT] = into_right; w[BTN_RIGHT] = into_left; w[BTN_JUMP] = true; w[BTN_AIM] = false;
     }
-    (void)away;
 }
 
 static void fire(DarkApril *d, Bullets *eb, Effects *fx, int layer)

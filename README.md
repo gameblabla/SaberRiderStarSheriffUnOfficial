@@ -229,7 +229,9 @@ from a small AI, Zelda II's Dark Link in spirit: mostly she **mirrors the player
 left and right swapped (walk at her and she walks at you, shoot and she shoots back, crouch and she crouches; 16 steps
 behind, 9 in her second half); she reads a hero firing level while standing and ducks under it answering low (the hero has
 to jump it), jumps low shots or crouches under high ones on a dice roll, and breaks off into her own aimed volleys (up
-diagonals at a hero in the air), slides into the hero and somersaults over when the hero gets close. Her shots are the hero's
+diagonals at a hero in the air) and long-range slides. She duels at range: closer than 100 px she backs off to
+140..190 px (mirroring never walks her into the hero), and cornered she somersaults over the hero and backs off on
+the other side. Her shots are the hero's
 in violet at half speed, and in this duel both sides' shots are 3 px thin so a crouch ducks a level shot. HP 14 / 20 /
 26 by difficulty; below half she reacts faster, fires faster and leaves afterimages. A slide through her hurts her;
 touching her otherwise hurts the hero. Ramrod refills the hero's hearts before the duel. Beaten, she comes apart in
