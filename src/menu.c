@@ -429,7 +429,7 @@ static Sprite *victory_art(int stage, int character)
 {
     static const char *const HERO[4] = { "saber", "fireball", "april", "colt" };
     static Sprite *cache[8][4]; static bool tried[8][4];
-    if (stage < 1 || stage > 7) return NULL;   /* stage 5 has none yet: victory/stage5_<hero>.png is picked up when there */
+    if (stage < 1 || stage > 7) return NULL;
     int h = stage == 2 || stage >= 6 ? 0 : character & 3;   /* the Grand Prix and Ramrod are the whole crew's */
     if (!tried[stage][h]) {
         tried[stage][h] = true;
