@@ -73,20 +73,23 @@ wrecks the car at step n).
 
 ## Stage 3 — "Hyperjumper Pass" (night desert route + boss)
 
-A new ~6600 px night run through the desert, built by `src/night_level.c` from whole scenes of the level-1
-tilemaps: the play plane (Playfield, Platforms, Cars, ForegroundStuff) and the collision grid are cut together
-on 16 px columns that no rock, car, pad or house crosses, and re-laid in a new order, some scenes mirrored
-(cells with bit 31 set draw flipped). The town and the ruined house are left out; the level-1 boss yard is not
-used. MidBG and Cars MidBG are rebuilt the same way in their own parallax space from their rock-only stretches,
-so no house shows in the distance. Every level-1 layer keeps its parallax and is drawn through a per-layer night
-palette (`night_layer_tint`), in front of `assets/stage3/native/stage3_night_sky.png` and the red moon, which is
-drawn right after the sky so it stays behind everything. The route: a pointed rock with a pad, a wreck, the
-signpost flats, the big rock wall with five pads, wrecks and a van, the wall again mirrored, a last wreck, then
-open ground for the arena. There are no pits, as in level 1.
+A new 7040 px night run through the desert, laid out in `src/night_level.c` from single level-1 objects rather
+than level-1 scenes: each rock, cactus, rock cluster, peak, the rock wall, the mound, every hover-pad size, the three
+wrecks and the two signposts is a level-1 tile rectangle that nothing else touches, stamped (optionally mirrored)
+over a plain ground strip (level 1's 6-tile ground repeat). Pads can go at any height and carry their one-way
+collision; the wrecks carry their stepped solid collision. Cells with bit 31 set draw flipped. The route: badlands
+with a first wreck for cover, a stair of pads climbing over open ground, twin peaks bridged by pads, a wreck yard
+(van, car, taxi, signpost), pads zig-zagging in front of the mound, a long pad climb along the rock wall, the
+crossroads with the rock pile, then open ground for the arena. No pits, as in level 1. MidBG and Cars MidBG are
+rebuilt from their rock-only stretches in their own parallax space, so no house shows in the distance. Every
+level-1 layer keeps its parallax and is drawn through a per-layer night palette (`night_layer_tint`), in front of
+`assets/stage3/native/stage3_night_sky.png` and the red moon, which is drawn right after the sky so it stays behind
+everything.
 
 Enemies use the level-1 trigger objects (`stage3_triggers` feeds `enemies_add_trigger`): walkers, grunts and
-the grunt variant stream in from just outside either screen edge with random intervals; snipers and kneelers
-are placed on the pads, car roofs and the van 260+ px past a thin trigger, so they scroll into view instead of
+the grunt variant stream in from just outside either screen edge (often from behind) with random intervals;
+snipers and kneelers are placed on the top pads, the peak bridge, all three wreck roofs and the wall's pads, 260+ px
+past a thin trigger, so they scroll into view instead of
 appearing. No level-1 dialog, horse, stampede or convoy object is installed.
 
 Hyperjumper (art in `assets/hyperjumper/`) waits until the camera stops at the end of the route, then enters
