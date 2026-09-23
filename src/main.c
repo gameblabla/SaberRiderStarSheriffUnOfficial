@@ -50,7 +50,7 @@ int main(int argc, char **argv)
     Game g;
     if (!game_init(&g, ren, SCREEN_W, SCREEN_H, start_level)) return 1;
 
-    /* debug: SABER_SCRIPT="60:R,20:RJ,40:" drives the input for N fixed steps each (L R U D J S A P) */
+    /* debug: SABER_SCRIPT="60:R,20:RJ,40:" drives the input for N fixed steps each (L R U D J S A P, X = power) */
     const char *script = SDL_getenv("SABER_SCRIPT");
     int script_n = 0; char script_keys[16] = "";
     bool running = true;
@@ -89,7 +89,8 @@ int main(int argc, char **argv)
                         case 'L': g.in.raw[BTN_LEFT] = true; break;  case 'R': g.in.raw[BTN_RIGHT] = true; break;
                         case 'U': g.in.raw[BTN_UP] = true; break;    case 'D': g.in.raw[BTN_DOWN] = true; break;
                         case 'J': g.in.raw[BTN_JUMP] = true; break;  case 'S': g.in.raw[BTN_SHOOT] = true; break;
-                        case 'A': g.in.raw[BTN_AIM] = true; break;   case 'P': g.in.raw[BTN_PAUSE] = true; break; }
+                        case 'A': g.in.raw[BTN_AIM] = true; break;   case 'P': g.in.raw[BTN_PAUSE] = true; break;
+                        case 'X': g.in.raw[BTN_POWER] = true; break; }
                 }
             }
             if (SDL_getenv("SABER_FUZZ")) {   /* debug: random inputs, hold each for a few frames */
@@ -97,7 +98,7 @@ int main(int argc, char **argv)
                 if (hold-- <= 0) { hold = rand() % 20; mask = (unsigned)rand(); }
                 for (int b = 0; b < BTN_COUNT; b++) g.in.raw[b] = (mask >> b) & 1;
                 if (g.in.raw[BTN_LEFT] && g.in.raw[BTN_RIGHT]) g.in.raw[BTN_LEFT] = false;
-                g.in.raw[BTN_PAUSE] = false;
+                g.in.raw[BTN_PAUSE] = false; g.in.raw[BTN_POWER] = false;
             }
             game_update(&g, (float)step); audio_update(); acc -= step;
             if (shot_frames > 0) shot_frames--;   /* SABER_SHOT counts fixed steps, not rendered frames */

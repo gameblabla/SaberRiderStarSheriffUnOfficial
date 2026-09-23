@@ -273,16 +273,37 @@ Debug: `SABER_STAGE=6` (or `--level 6`) starts there, `SABER_R6WAVE=n` goes stra
 `SABER_R6BOT=1` plays it on autopilot (for flow and balance runs), `SABER_R6GOD=1` takes no damage, and `SABER_TRACE=1`
 prints the wave state every second and each hit taken (`r6 hurt`).
 
+## Power attacks (ours)
+
+The HUD's item counter (next to the lives) holds the hero's power attacks: two a stage on the platform stages (1, 3,
+4, 5) and in the final phase. **X/F** (gamepad North) uses one; a 20 s cooldown (a grey bar under the counter) runs
+before the next. The world stops under a cut-in (the power button or Start skips it after 0.4 s):
+
+- **Saber Rider / Fireball**: their special-attack anime clips (`assets/power/`, made from the clips in the repo root
+  by `tools/build_power_assets.py`: the picture up to the first all-white frame as a raw MPEG-4 stream that
+  `video_open_file` decodes with libavcodec's parser, the sound as a wav). The game's own flash follows: every Outrider
+  on screen goes down, a boss in the fight loses 25 % of its hit points to Fireball's blast, 18 % to Saber's slash
+  (which also clears the enemy shots and leaves him untouchable for ~2.5 s). Level 1's boss only takes it in its sweep,
+  Hyperjumper only while it fights (not on its passes).
+- **April**: a drawn cut-in (the select screen's portrait, her face from the briefing's hero pieces, speed lines in her
+  colour), then 8 s at 1.7x speed with a pink afterimage trail (bar in her colour under the counter).
+- **Colt**: the same kind of cut-in, then 10 s of rapid fire (a shot every 0.07 s instead of 0.2 s).
+- **Final phase** (space.c): every hero gets the drawn cut-in, ending in a screen bomb (enemy shots gone, mines and
+  light craft destroyed, 7 % off the cruiser's hull, 2.5 s of grace); counter `SPC` in its HUD, 12 s cooldown.
+
+`src/power.c` holds the cut-ins, timers and trail; the strikes are `enemies_power_strike`, `night_power_hit`,
+`dark_power_hit` and space.c's `hero_bomb`. Debug: `SABER_POWER=n` items at the start, `X` in `SABER_SCRIPT`.
+
 ## Controls (as in the demo)
 
 Arrows move · **W/A** jump · **S/D** shoot · hold **Q/E** aim (8 directions) · **Enter** pause/start ·
-down+jump slides · down on a platform + jump drops through. Gamepads: d-pad/stick, South/North jump,
-East/West shoot, shoulders aim, Start pause.
+**X/F** power attack (ours) · down+jump slides · down on a platform + jump drops through. Gamepads: d-pad/stick,
+South jump, North power attack, East/West shoot, shoulders aim, Start pause.
 
 ## Debug switches (environment variables)
 
 `SABER_START=x` spawn at level x · `SABER_MENU=n` start in front-end state n · `SABER_SHOT=file.bmp,camx,steps`
-screenshot after N fixed steps and quit · `SABER_SCRIPT="60:R,3:RJ,40:"` scripted input (L R U D J S A P) ·
+screenshot after N fixed steps and quit · `SABER_SCRIPT="60:R,3:RJ,40:"` scripted input (L R U D J S A P, X power) ·
 `SABER_TRACE=1` per-frame player trace (+ spawn triggers at start, convoy spawn / dying / stuck-enemy diagnostics, every humanoid once a second, boss state every 10 frames; `=2` also prints humanoids within 40 px of either screen edge every frame) · `SABER_FUZZ=1` random input ·
 `SABER_HERO=n` hero 0..3 for a direct level start · `SABER_LIVES=n` starting lives · `SABER_KILL=n` kill the player at step n · `SABER_BOSSHP=n` the horse boss's / Hyperjumper's HP · `SABER_BORED=s` seconds of idling before the bored animation (April) · `SABER_DEBUG=1` collision overlay from the start · `SABER_WINDOW=852x480` initial window size · **F1** collision overlay · **F2** free camera.
 

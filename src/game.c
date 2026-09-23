@@ -49,6 +49,7 @@ static bool level_start(Game *g)
     if (g->mode7) { mode7_destroy(g->mode7); g->mode7 = NULL; }
     if (g->ramrod) { ramrod_destroy(g->ramrod); g->ramrod = NULL; }
     if (g->space) { space_destroy(g->space); g->space = NULL; }
+    power_close(&g->power);
     memset(g, 0, sizeof *g);
     g->ren = ren; g->sw = sw; g->sh = sh; g->menu = menu; g->in_level = true; g->stage = stage; g->carry_lives = carry; g->continues_left = conts; g->mode7_phase2 = mode7_phase2;
     if (stage == 2) {   /* the Mode-7 Grand Prix: its own world, HUD and flow */
@@ -62,7 +63,7 @@ static bool level_start(Game *g)
         return g->ramrod != NULL;
     }
     if (stage == 7) {   /* straight on from the mechs: Ramrod in cruiser mode after the battle cruiser */
-        g->space = space_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives);
+        g->space = space_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives, g->menu.character);
         if (g->space) title_start(g);
         return g->space != NULL;
     }
@@ -93,6 +94,8 @@ static bool level_start(Game *g)
     /* stages 3 and 4 inherit the spares left over from the stage before (a fresh --level 3/4 falls back to the option) */
     g->player.lives = (stage >= 3 && carry > 0) ? carry : g->menu.lives;
     g->player.hp = g->player.max_hp = hearts_for(g->menu.difficulty);
+    power_reset(&g->power, g->menu.character, false);   /* two power attacks a stage */
+    g->hero_speed = g->player.ch.speed;
     enemies_reset(&g->enemies);
     g->enemies.difficulty = g->menu.difficulty;
     g->player_layer = 11;
@@ -266,6 +269,23 @@ static void open_scene(Game *g, const char *script)
     g->dlg_focus_x = g->dlg_focus_y = 0; g->dlg_t_before = g->dlg_t_after = 0;
 }
 
+/* a power attack's cut-in has ended: Saber's and Fireball's land now (April's and Colt's run on in power.c). Every
+ * Outrider on screen goes down; a boss in the fight loses a slice of its hit points - a quarter for Fireball's blast,
+ * less for Saber's slash, which also clears the enemy shots and leaves him untouchable for a moment */
+static void power_strike(Game *g)
+{
+    int h = g->menu.character & 3;
+    if (h != HERO_SABER && h != HERO_FIREBALL) return;
+    bool saber = h == HERO_SABER; float frac = saber ? 0.18f : 0.25f;
+    enemies_power_strike(&g->enemies, &g->effects, g->cam_x, g->sw, g->sh, frac);
+    if (g->night_on || g->forest_on) night_power_hit(&g->night, &g->effects, frac, saber);
+    if (g->lab_on) dark_power_hit(&g->dark, frac);
+    if (saber) {
+        g->enemy_bullets.n = 0;
+        if (g->player.ch.state != CS_DEAD) { g->player.ch.flags |= CF_HIT; g->player.ch.hit_t = 150.0f; }
+    }
+}
+
 void game_update(Game *g, float dt)
 {
     input_update(&g->in);
@@ -315,6 +335,14 @@ void game_update(Game *g, float dt)
         return;
     }
     Player *p = &g->player; Character *c = &p->ch;
+    if (power_in_cutin(&g->power)) {   /* a power attack's cut-in: the world holds still under it */
+        power_update(&g->power, &g->in, dt);
+        if (power_take_strike(&g->power)) power_strike(g);
+        return;
+    }
+    if (g->state == 10 && btn_pressed(&g->in, BTN_POWER) && power_can_start(&g->power) && c->state != CS_DEAD && !p->locked && !g->walk_in) {
+        power_start(&g->power, g->ren); p->fire_hold = true; return;
+    }
     if (g->state == 0xc) {            /* pause: FUN_0042cfc0(0xc) -> FUN_00411300 pauses the music, FUN_004113b0 resumes it */
         if (btn_pressed(&g->in, BTN_PAUSE)) { g->state = 10; sfx_play(10, 0); music_pause(false); }
         return;
@@ -385,9 +413,10 @@ void game_update(Game *g, float dt)
             else { g->walk_in = false; open_scene(g, g->walk_script); }
         }
         character_sync_ground(c); player_death_update(p, dt, g->level.height, &g->cam_x, g->sw);
+        c->speed = g->hero_speed * (power_speed(&g->power) ? 1.7f : 1.0f);   /* April's power: a burst of speed */
         player_control(p, g->walk_in ? &walk : &g->in, dt);
     }
-    player_try_fire(p, &g->player_bullets, &g->effects, g->player_layer);
+    if (player_try_fire(p, &g->player_bullets, &g->effects, g->player_layer) && power_rapid(&g->power)) p->fire_cooldown = 0.07f;   /* Colt's power */
     player_check_enemy_bullets(p, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh);
     g->world.world_min_x = g->walk_in ? 0 : g->cam_x;   /* GameLevel::update: physics world min = camera left edge (not while walking in) */
     enemies_update(&g->enemies, p, &g->level, &g->world, &g->player_bullets, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh, dt);
@@ -478,6 +507,9 @@ void game_update(Game *g, float dt)
     bullets_update(&g->player_bullets, &g->level, &g->effects, dt, g->cam_x, g->cam_y, g->sw, g->sh);
     bullets_update(&g->enemy_bullets, &g->level, &g->effects, dt, g->cam_x, g->cam_y, g->sw, g->sh);
     character_animate(c, dt);
+    if (power_speed(&g->power)) character_animate(c, dt * 0.7f);   /* the legs keep up with April's burst */
+    power_update(&g->power, &g->in, dt);
+    power_trail_update(&g->power, c, dt);
     effects_update(&g->effects, dt);
     player_frame_end(p, dt);
     if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "cam=%.0f lock=%d st=%d aim=%d face=%d anim=%d frame=%d ov=%d ovf=%d flags=%x coll=%x pos=%.1f,%.1f v=%.1f,%.1f in=%d%d%d%d%d%d%d\n",
@@ -522,6 +554,12 @@ static void draw_collision(Game *g)
     }
 }
 
+static void draw_hero(Game *g)
+{
+    power_draw_trail(&g->power, g->cam_x, g->cam_y);   /* April's afterimages under her */
+    character_draw(&g->player.ch, g->cam_x, g->cam_y);
+}
+
 static void draw_scanlines(Game *g)
 {
     if (!menu_scanlines(&g->menu)) return;
@@ -546,7 +584,8 @@ void game_draw(Game *g)
     if (g->ramrod) { ramrod_draw(g->ramrod, menu_scanlines(&g->menu)); if (g->title_on) title_draw(g); return; }
     if (g->space) { space_draw(g->space, menu_scanlines(&g->menu)); if (g->title_on) title_draw(g); return; }
     Level *L = &g->level;
-    float shake = g->enemies.cam_shake ? (float)(rand() % 4) : 0.0f;
+    bool power_shake = g->power.phase == PW_FLASH && g->power.t < 0.35f && !g->power.bomb;
+    float shake = g->enemies.cam_shake || power_shake ? (float)(rand() % 4) : 0.0f;
     float saved = g->cam_y; g->cam_y += shake;
     if (g->night_on) night_draw_background(&g->night, g->cam_x, g->sw, g->sh);   /* night sky + red moon, behind every layer */
     bool hero_drawn = false;
@@ -568,7 +607,7 @@ void game_draw(Game *g)
                jumping up through one from below he stays in front (half a hero behind a plank, the rest in front
                of the tower, read as the sprite being cut) */
             if (g->forest_on && !hero_drawn && i > g->player_layer && !strcmp(L->layers[i].name, "ForegroundStuff")) {
-                if (g->state != 0xb) character_draw(&g->player.ch, g->cam_x, g->cam_y);
+                if (g->state != 0xb) draw_hero(g);
                 hero_drawn = true;
             }
             if (i == g->enemies.front_layer) {   /* stage 4: a tower sniper's rifle over his cabin wall, his shots and flash */
@@ -582,16 +621,17 @@ void game_draw(Game *g)
             if (g->night_on || (g->forest_on && (i != g->night.play_layer || g->enemies.front_layer < 0)))
                 night_draw_layer(&g->night, g->ren, i, g->cam_x, g->cam_y);   /* Hyperjumper's passes use the level-1 boss layers */
             if (i == g->player_layer && g->lab_on) dark_draw(&g->dark, g->cam_x, g->cam_y);   /* stage 5: Dark April, behind the hero */
-            if (i == g->player_layer && (!g->forest_on || in_cabin) && g->state != 0xb) character_draw(&g->player.ch, g->cam_x, g->cam_y);
+            if (i == g->player_layer && (!g->forest_on || in_cabin) && g->state != 0xb) draw_hero(g);
             if (i == g->player_layer && in_cabin) hero_drawn = true;   /* the last life is gone: no respawned hero standing there during the fade */
             bullets_draw(&g->player_bullets, i, g->cam_x, g->cam_y);
             bullets_draw(&g->enemy_bullets, i, g->cam_x, g->cam_y);
             effects_draw(&g->effects, i, g->cam_x, g->cam_y);
         }
     }
-    if (g->forest_on && !hero_drawn && g->state != 0xb) character_draw(&g->player.ch, g->cam_x, g->cam_y);
+    if (g->forest_on && !hero_drawn && g->state != 0xb) draw_hero(g);
     g->cam_y = saved;
-    hud_draw(g->ren, g->menu.character, g->menu.difficulty, g->player.lives, g->player.hp, 0);
+    hud_draw(g->ren, g->menu.character, g->menu.difficulty, g->player.lives, g->player.hp, g->power.items);   /* the item count = power attacks left */
+    power_draw_hud(&g->power, g->ren, 0x2c, 0x17, 0x1a);
     if (g->state == 0xd) dialog_draw(&g->dialog, g->ren, g->sw, g->sh);
     if (g->night_on || g->forest_on) night_draw_hud(&g->night, g->ren, g->sw, g->sh);
     if (g->lab_on && g->state != 0xd) dark_draw_hud(&g->dark, g->ren, g->sw);
@@ -602,6 +642,7 @@ void game_draw(Game *g)
         Sprite *ps = sprite_get(0xB2143E42);
         if (ps && ((SDL_GetTicks() / 16) & 0x7f) > 0x30) sprite_draw(ps, 0, (float)((g->sw - ps->w) / 2), (float)((g->sh - ps->h) / 2), false);
     }
+    power_draw(&g->power, g->ren, g->sw, g->sh);
     draw_scanlines(g);
     if (g->title_on) title_draw(g);
     if (g->state == 0xe || g->state == 0xb) {   /* fade out: the same sine ramps that end the states, minus 1 */

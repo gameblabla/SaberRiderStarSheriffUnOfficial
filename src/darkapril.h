@@ -47,7 +47,8 @@ void dark_update(DarkApril *d, Player *pl, const Input *pin, const Level *L, con
 void dark_animate(DarkApril *d, float dt);   /* while a dialogue holds the world: she keeps breathing */
 void dark_draw(const DarkApril *d, float cam_x, float cam_y);
 void dark_draw_hud(const DarkApril *d, SDL_Renderer *ren, int sw);
-bool dark_holds_arena(const DarkApril *d);   /* from her arrival to her end: no waves, the camera stays */
+bool dark_holds_arena(const DarkApril *d);
+void dark_power_hit(DarkApril *d, float frac);   /* a hero's power attack (power.c) */   /* from her arrival to her end: no waves, the camera stays */
 
 /* the story scenes (dialog_open_script format). _APRIL ones are for April as the hero and are opened without the
  * hero swap (dialog_set_hero(HERO_FIREBALL) around the open); the others are written for Fireball like every stage */

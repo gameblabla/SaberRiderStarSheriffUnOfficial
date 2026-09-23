@@ -912,6 +912,42 @@ static void update_generic(Enemies *E, Enemy *e, Player *pl, const Level *L, con
     update_walker(E, e, pl, L, W, pb, cam_x, sw, dt);
 }
 
+/* ours: a hero's power attack lands (power.c). Every Outrider on screen goes down at once, each in a blast; level 1's
+ * boss loses boss_frac of its hit points, but only in its sweep across the play plane (the passes are out of reach,
+ * as they are for the hero's shots). Returns how many went down. */
+int enemies_power_strike(Enemies *E, Effects *fx, float cam_x, int sw, int sh, float boss_frac)
+{
+    int n = 0;
+    AnimDef blast = { 0, 0, 11, 11, 0.025f, 0 };
+    for (int i = 0; i < MAX_ENEMIES; i++) {
+        Enemy *e = &E->e[i]; Character *c = &e->ch; Body *b = &c->body;
+        if (!e->cls || e->dying) continue;
+        if (b->x < cam_x - 16.0f || b->x > cam_x + sw + 16.0f || b->y < -48.0f || b->y > sh + 48.0f) continue;
+        switch (e->cls) {
+        case EC_WALKER: case EC_GRUNT: case EC_GRUNT_B: case EC_SNIPER: case EC_SNIPER_B: case EC_KNEELER: case EC_KNEELER_B:
+        case EC_STALKER: case EC_SHIELD:
+            if (e->cls == EC_SHIELD) { if (e->dormant) continue; if (e->st == 1) e->st = 2; }   /* the death set without the panel */
+            c->state = CS_DEAD; b->vx = (b->x < E->px ? -1.0f : 1.0f) * 102.0f;
+            kill(E, e, 0x19f); n++;
+            effects_spawn(fx, 0x9C861FF3, e->layer, &blast, b->x, b->y - 20.0f, 32, 32, 0);
+            break;
+        case EC_HORSEBOSS: {
+            if (e->variant == 99 || c->state != CS_WALK) break;
+            int dmg = (int)ceilf((SDL_getenv("SABER_BOSSHP") ? atoi(SDL_getenv("SABER_BOSSHP")) : 0x42) * boss_frac);
+            for (int k = 0; k < 6; k++) effects_spawn(fx, 0x9C861FF3, e->layer, &blast, b->x - 50.0f + rand() % 100, b->y - 40.0f + rand() % 50, 32, 32, 0);
+            if ((e->hp -= dmg) <= 0) {
+                e->hp = 0; kill(E, e, 0xed8); c->state = CS_DEAD; E->boss_phase = 1; c->flags &= ~CF_SHOOT;
+                if (e->link >= 0 && E->e[e->link].cls) { E->e[e->link].cls = 0; E->count--; e->link = -1; }
+            } else { c->flags |= CF_HIT; c->hit_t = 4.0f; }
+            n++;
+            break; }
+        default: break;
+        }
+    }
+    if (n) { sfx_play(5, 0); sfx_play(6, 4); }
+    return n;
+}
+
 void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, Bullets *eb, Effects *fx,
                     float cam_x, int sw, int sh, float dt)
 {

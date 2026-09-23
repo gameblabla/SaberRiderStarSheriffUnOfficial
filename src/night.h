@@ -69,7 +69,8 @@ bool night_init(Night *n, Level *L, int difficulty);
 void night_dispose(Night *n);
 /* just Hyperjumper (art, layers, hit points) for another stage: it stays dormant until night_boss_summon */
 void night_boss_load(Night *n, const Level *L, int difficulty);
-void night_boss_summon(Night *n, float arena_x, int sw);   /* far pass, mid pass, then the fight over [arena_x, arena_x + sw] */
+void night_boss_summon(Night *n, float arena_x, int sw);
+void night_power_hit(Night *n, Effects *fx, float frac, bool clear_shots);   /* a hero's power attack (power.c) */   /* far pass, mid pass, then the fight over [arena_x, arena_x + sw] */
 void night_update(Night *n, Player *pl, Bullets *pb, Effects *fx, const Level *L,
                   float cam_x, int sw, float dt, bool live);
 

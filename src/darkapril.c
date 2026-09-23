@@ -312,6 +312,14 @@ static void take_hit(DarkApril *d, int dmg)
     if (d->mode == M_MIRROR && frand() < 0.3f) { d->mode = M_ATTACK; d->mode_t = 0.9f; d->pref = 120.0f; }   /* stung: she answers */
 }
 
+/* ours: a hero's power attack (power.c) catches her mid-fight: frac of her hit points */
+void dark_power_hit(DarkApril *d, float frac)
+{
+    if (d->state != DA_FIGHT) return;
+    take_hit(d, (int)ceilf(d->hp_max * frac));
+    d->flash = 0.3f;
+}
+
 static void body_step(DarkApril *d, const Level *L, const PhysicsWorld *W, float dt)
 {
     Character *c = &d->p.ch;

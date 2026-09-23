@@ -73,6 +73,8 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
                     float cam_x, int sw, int sh, float dt);
 void enemies_draw(const Enemies *E, int layer, float cam_x, float cam_y);
 void enemies_draw_front(const Enemies *E, float cam_x, float cam_y);
+/* ours: a power attack (power.c) wipes out the enemies on screen and hurts level 1's boss by boss_frac of its HP */
+int  enemies_power_strike(Enemies *E, Effects *fx, float cam_x, int sw, int sh, float boss_frac);
 bool player_damage(Player *pl, int hit_dir, int dmg);
 void player_check_enemy_bullets(Player *pl, Bullets *eb, Effects *fx, float cam_x, int sw, int sh);
 Enemy *enemy_spawn(Enemies *E, const Trigger *t, float x, float y, const Level *L, const PhysicsWorld *W, float cam_x, int sw, int sh);

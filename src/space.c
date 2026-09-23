@@ -6,6 +6,7 @@
 #include "heroes.h"
 #include "gfx.h"
 #include "namehash.h"
+#include "power.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -205,6 +206,7 @@ struct Space {
     float white, red, black, shake, clink_t;
     unsigned rng; int music_now;
     bool god, bot;
+    Power pw;                     /* the hero's power attack: the drawn cut-in, then a screen bomb (power.c) */
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -362,9 +364,10 @@ static void run_event(Space *s, const Ev *e)
 /* ---------------------------------------------------------------- setup */
 static int cmp_ev(const void *a, const void *b) { float x = ((const Ev *)a)->t, y = ((const Ev *)b)->t; return x < y ? -1 : x > y; }
 
-Space *space_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives)
+Space *space_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives, int hero)
 {
     Space *s = calloc(1, sizeof *s);
+    power_reset(&s->pw, hero, true);
     s->ren = ren; s->sw = sw; s->sh = sh; s->rng = 0x7E57AB1Eu; s->music_now = -1; s->radio_now = -1;
     s->ok = load_assets(s);
     s->difficulty = difficulty; s->lives = lives;
@@ -391,6 +394,7 @@ void space_destroy(Space *s)
     if (!s) return;
     SDL_Texture *t[] = { s->atlas, s->boss_tex, s->neb, s->planet, s->far };
     for (int i = 0; i < 5; i++) if (t[i]) SDL_DestroyTexture(t[i]);
+    power_close(&s->pw);
     free(s->boss_px); free(s);
 }
 int space_result(const Space *s) { return s->result; }
@@ -456,6 +460,29 @@ static void detonate_torpedo(Space *s, float x, float y)
     if (alive(s)) s->inv_t = fmaxf(s->inv_t, 1.0f);
 }
 
+/* the hero's power attack (power.c) goes off once its cut-in ends: every enemy shot burns out, the mines and the
+ * light craft on screen are torn apart, the rest and the cruiser take a heavy hit, and Ramrod gets a moment's
+ * grace. A cut above a torpedo, but no finisher: 7 % of the hull. */
+static void hero_bomb(Space *s)
+{
+    s->white = 1.0f; s->shake = fmaxf(s->shake, 0.8f);
+    sfx_play(6, 0); sfx_play(5, 6);
+    for (int k = 0; k < 18; k++) spawn_expl(s, frand(s) * s->sw, TOP + frand(s) * (s->sh - TOP), 1.0f + frand(s) * 1.2f);
+    for (int i = 0; i < MAX_SHOT; i++) if (s->shot[i].on && s->shot[i].kind >= S_ORB) { spawn_fx(s, FX_SPARK, s->shot[i].x, s->shot[i].y, 1, 0.2f); s->shot[i].on = false; }
+    for (int i = 0; i < MAX_FOE; i++) {
+        Foe *f = &s->foe[i];
+        if (f->kind == F_OFF || f->wait > 0 || f->x < -20 || f->x > s->sw + 20) continue;
+        if (f->kind == F_MINE) foe_kill(s, f, true);
+        else { f->hp -= 40; f->flash = 0.2f; if (f->hp <= 0) foe_kill(s, f, true); }
+    }
+    Boss *b = &s->boss;
+    if (b->on && s->phase == PH_BOSS) {
+        b->hp -= b->hp_max * 0.07f; b->flash = 0.3f;
+        for (int k = 0; k < b->nports; k++) if (b->port[k].lit && !b->port[k].dead) b->port[k].hp -= 25;
+    }
+    if (alive(s)) s->inv_t = fmaxf(s->inv_t, 2.5f);
+}
+
 static void fire_bolts(Space *s)
 {
     static const struct { float dx, dy, vy; int lvl; } B[] = {
@@ -497,6 +524,8 @@ static void player_control(Space *s, const Input *in, float dt)
     if (!btn_down(in, BTN_JUMP)) s->bomb_hold = false;
     s->fire_cd -= dt;
     if (btn_down(in, BTN_SHOOT) && !s->fire_hold && s->fire_cd <= 0) { fire_bolts(s); s->fire_cd = s->power >= 3 ? 0.095f : 0.11f; }
+    bool fighting = s->phase == PH_PLAY || s->phase == PH_WARNING || s->phase == PH_BOSS_IN || s->phase == PH_BOSS;
+    if (btn_pressed(in, BTN_POWER) && fighting && !s->dlg.active && power_can_start(&s->pw)) { power_start(&s->pw, s->ren); s->fire_hold = true; }
     if (btn_pressed(in, BTN_JUMP) && !s->bomb_hold && s->bombs > 0) {
         for (int i = 0; i < MAX_SHOT; i++) if (!s->shot[i].on) { s->shot[i] = (Shot){ true, S_TORPEDO, s->px + 20, s->py, 260, 0, 0.4f }; break; }
         s->bombs--; sfx_file("torpedo.wav");
@@ -933,6 +962,12 @@ void space_update(Space *s, const Input *in, float dt)
 {
     if (!s->ok) { s->result = 1; return; }
     if (s->result) return;
+    if (power_in_cutin(&s->pw)) {   /* the power attack's cut-in: everything holds still under it */
+        power_update(&s->pw, in, dt);
+        if (power_take_strike(&s->pw)) hero_bomb(s);
+        return;
+    }
+    power_update(&s->pw, in, dt);
     bool can_pause = s->phase == PH_PLAY || s->phase == PH_BOSS || s->phase == PH_BOSS_IN || s->phase == PH_WARNING;
     if (btn_pressed(in, BTN_PAUSE) && can_pause && !s->dlg.active) { s->paused = !s->paused; sfx_play(10, 0); music_pause(s->paused); }
     if (s->paused) return;
@@ -1237,7 +1272,7 @@ static void render_hud(Space *s, Font *small)
 {
     SDL_Renderer *ren = s->ren;
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-    rect(ren, 3, 3, 82, fmaxf(46, 12 + s->hp_max * 9.0f), 0, 0, 20, 140);
+    rect(ren, 3, 3, 82, fmaxf(58, 12 + s->hp_max * 9.0f), 0, 0, 20, 140);
     static const uint8_t CELL[5][3] = { { 90, 220, 60 }, { 170, 225, 50 }, { 250, 210, 40 }, { 250, 140, 30 }, { 230, 30, 30 } };
     static const int MAP[6][5] = { { 0 }, { 0 }, { 0, 4 }, { 0, 2, 4 }, { 0, 2, 3, 4 }, { 0, 1, 2, 3, 4 } };   /* green at the bottom, red on top */
     for (int i = 0; i < s->hp_max && i < 5; i++) {
@@ -1255,7 +1290,13 @@ static void render_hud(Space *s, Font *small)
         font_draw(small, buf, 19, 16, 255, 255, 255);
         font_draw(small, "PWR", 19, 26, 150, 220, 255);
         font_draw(small, "TRP", 19, 36, 255, 190, 120);
+        font_draw(small, "SPC", 19, 46, 255, 150, 220);
     }
+    for (int i = 0; i < s->pw.items; i++) {   /* the hero's power attacks left: a little four-point star each */
+        float x = 50 + i * 9.0f, y = 50;
+        rect(ren, x - 1, y - 3, 3, 7, 255, 200, 240, 255); rect(ren, x - 3, y - 1, 7, 3, 255, 200, 240, 255); rect(ren, x, y, 1, 1, 255, 255, 255, 255);
+    }
+    power_draw_hud(&s->pw, ren, 48, 55, 26);
     for (int i = 0; i < 3; i++) rect(ren, 48 + i * 9, 28, 7, 5, i < s->power ? 80 : 20, i < s->power ? 230 : 40, i < s->power ? 255 : 60, 255);
     for (int i = 0; i < s->bombs; i++) draw_frame(s, A_TORPEDO, 0, 52 + i * 7, 40, 0.55f, false, 255, 255, 255, 255);
     /* the run to the cruiser */
@@ -1320,7 +1361,8 @@ static void render_instructions(Space *s, Font *f, Font *small)
     rect(s->ren, 0, 0, (float)sw, (float)sh, 0, 0, 0, (uint8_t)(140 * open));
     static const struct { const char *label, *desc; } LINES[] = {
         { "FLY", "Arrows (hold Aim for fine steering)" }, { "GUNS", "Shoot button - hold it" },
-        { "TORPEDO", "Jump button - clears the screen" }, { "PICK UP", "P power  S shield  B torpedo" },
+        { "TORPEDO", "Jump button - clears the screen" }, { "SPECIAL", "Power button - hero bomb (x2)" },
+        { "PICK UP", "P power  S shield  B torpedo" },
     };
     int nl = (int)(sizeof LINES / sizeof *LINES);
     float full_h = 34 + nl * 14 + 22, pw = (float)sw - 40, ph = full_h * open, x0 = 20, y0 = (sh - full_h) * 0.5f + (full_h - ph) * 0.5f;
@@ -1373,6 +1415,7 @@ void space_draw(Space *s, bool scanlines)
     if (s->dlg.active) dialog_draw(&s->dlg, ren, s->sw, s->sh);
     if (s->phase == PH_INSTR) render_instructions(s, f, small);
     if (s->white > 0) rect(ren, 0, 0, (float)s->sw, (float)s->sh, 255, 255, 255, (uint8_t)(255 * clampf(s->white, 0, 1)));
+    power_draw(&s->pw, ren, s->sw, s->sh);
     if (scanlines) {
         SDL_SetRenderDrawColor(ren, 0, 0, 0, 70);
         for (int y = 1; y < s->sh; y += 2) { SDL_FRect q = { 0, (float)y, (float)s->sw, 1 }; SDL_RenderFillRect(ren, &q); }

@@ -12,6 +12,7 @@
 #include "night.h"
 #include "forest.h"
 #include "darkapril.h"
+#include "power.h"
 
 typedef struct {
     SDL_Renderer *ren;
@@ -46,6 +47,8 @@ typedef struct {
     bool forest_outro_done;      /* stage 4: the win's radio scene already shown */
     Forest lab; bool lab_on;     /* stage 5: the cave lab (assets/lab, ../lab/compose.py) in the same form; level 1's boss */
     DarkApril dark;              /* stage 5: the second boss, after level 1's (darkapril.c) */
+    Power power;                 /* the hero's power attacks on the platform stages (power.c) */
+    float hero_speed;            /* the hero's CRHC run speed (April's power raises it for a while) */
     bool walk_in;                /* stages 3/4/5 open with the hero walking in from off screen to walk_stop_x, then walk_script */
     float walk_stop_x; const char *walk_script;
     bool night_taunt_done, night_outro_done;   /* stage 3: the story scenes already shown */

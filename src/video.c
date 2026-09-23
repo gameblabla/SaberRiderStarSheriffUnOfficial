@@ -16,6 +16,9 @@ struct Video {
     float t, fps;
     bool finished, have_frame;
     bool owns_music, owns_sfx;   /* which audio the video started (stopped with it) */
+    /* our own clips (video_open_file): a raw MPEG-4 part 2 stream split into packets by libavcodec's parser */
+    uint8_t *file; size_t file_size, file_pos;
+    AVCodecParserContext *parser; bool parser_flushed, decoder_flushed;
 };
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
@@ -47,8 +50,65 @@ Video *video_open(SDL_Renderer *r, uint32_t id)
     return v;
 }
 
+static void show_frame(Video *v)
+{
+    if (!v->sws) v->sws = sws_getContext(v->fr->width, v->fr->height, v->fr->format, v->w, v->h, AV_PIX_FMT_RGBA, SWS_BILINEAR, NULL, NULL, NULL);
+    void *pix; int pitch;
+    if (SDL_LockTexture(v->tex, NULL, &pix, &pitch)) {
+        uint8_t *dst[1] = { pix }; int ls[1] = { pitch };
+        sws_scale(v->sws, (const uint8_t *const *)v->fr->data, v->fr->linesize, 0, v->fr->height, dst, ls);
+        SDL_UnlockTexture(v->tex);
+    }
+    v->have_frame = true;
+}
+
+/* the next picture of a video_open_file stream; false at its end (nframes is then the count shown) */
+static bool decode_next_stream(Video *v)
+{
+    for (;;) {
+        if (avcodec_receive_frame(v->ctx, v->fr) == 0) { show_frame(v); v->cur++; return true; }
+        if (v->decoder_flushed) { v->nframes = v->cur; return false; }
+        uint8_t *out = NULL; int out_size = 0;
+        if (v->file_pos < v->file_size) {
+            int used = av_parser_parse2(v->parser, v->ctx, &out, &out_size, v->file + v->file_pos, (int)(v->file_size - v->file_pos), AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0);
+            v->file_pos += used > 0 ? (size_t)used : v->file_size - v->file_pos;
+        } else if (!v->parser_flushed) {   /* the parser holds the last picture until it is told the stream ended */
+            av_parser_parse2(v->parser, v->ctx, &out, &out_size, NULL, 0, AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0);
+            v->parser_flushed = true;
+        } else { avcodec_send_packet(v->ctx, NULL); v->decoder_flushed = true; continue; }
+        if (out_size > 0 && av_new_packet(v->pkt, out_size) == 0) {
+            memcpy(v->pkt->data, out, (size_t)out_size);
+            avcodec_send_packet(v->ctx, v->pkt);
+            av_packet_unref(v->pkt);
+        }
+    }
+}
+
+Video *video_open_file(SDL_Renderer *r, const char *path, float fps)
+{
+    SDL_IOStream *io = path ? SDL_IOFromFile(path, "rb") : NULL;
+    if (!io) return NULL;
+    Sint64 size = SDL_GetIOSize(io);
+    Video *v = calloc(1, sizeof *v);
+    v->file = size > 0 ? av_mallocz((size_t)size + AV_INPUT_BUFFER_PADDING_SIZE) : NULL;
+    if (!v->file || SDL_ReadIO(io, v->file, (size_t)size) != (size_t)size) { SDL_CloseIO(io); av_free(v->file); free(v); return NULL; }
+    SDL_CloseIO(io);
+    v->file_size = (size_t)size; v->fps = fps; v->nframes = 1 << 30;
+    const AVCodec *c = avcodec_find_decoder(AV_CODEC_ID_MPEG4);
+    v->ctx = c ? avcodec_alloc_context3(c) : NULL;
+    v->parser = av_parser_init(AV_CODEC_ID_MPEG4);
+    if (!v->ctx || !v->parser || avcodec_open2(v->ctx, c, NULL) < 0) { video_close(v); return NULL; }
+    v->pkt = av_packet_alloc(); v->fr = av_frame_alloc();
+    v->w = 320; v->h = 240;   /* the clips are made at the pack videos' size (tools/build_power_assets.py); sws scales to it anyway */
+    v->tex = SDL_CreateTexture(r, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, v->w, v->h);
+    if (!v->tex) { video_close(v); return NULL; }
+    SDL_SetTextureScaleMode(v->tex, SDL_SCALEMODE_LINEAR);
+    return v;
+}
+
 static bool decode_next(Video *v)
 {
+    if (v->parser) return decode_next_stream(v);
     while (v->cur < v->nframes) {
         uint32_t sz = v->sizes[v->cur];
         uint8_t *buf = av_malloc(sz + AV_INPUT_BUFFER_PADDING_SIZE);
@@ -59,17 +119,7 @@ static bool decode_next(Video *v)
         v->p += sz; v->cur++;
         avcodec_send_packet(v->ctx, v->pkt);
         av_packet_unref(v->pkt);
-        if (avcodec_receive_frame(v->ctx, v->fr) == 0) {
-            if (!v->sws) v->sws = sws_getContext(v->fr->width, v->fr->height, v->fr->format, v->w, v->h, AV_PIX_FMT_RGBA, SWS_BILINEAR, NULL, NULL, NULL);
-            void *pix; int pitch;
-            if (SDL_LockTexture(v->tex, NULL, &pix, &pitch)) {
-                uint8_t *dst[1] = { pix }; int ls[1] = { pitch };
-                sws_scale(v->sws, (const uint8_t *const *)v->fr->data, v->fr->linesize, 0, v->fr->height, dst, ls);
-                SDL_UnlockTexture(v->tex);
-            }
-            v->have_frame = true;
-            return true;
-        }
+        if (avcodec_receive_frame(v->ctx, v->fr) == 0) { show_frame(v); return true; }
     }
     return false;
 }
@@ -110,6 +160,8 @@ void video_close(Video *v)
     if (v->owns_music) music_stop();
     if (v->owns_sfx) sfx_stop_blob();
     if (v->sws) sws_freeContext(v->sws);
+    if (v->parser) av_parser_close(v->parser);
+    av_free(v->file);
     av_frame_free(&v->fr); av_packet_free(&v->pkt); avcodec_free_context(&v->ctx);
     if (v->tex) SDL_DestroyTexture(v->tex);
     free(v);

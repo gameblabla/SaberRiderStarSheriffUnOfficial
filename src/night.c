@@ -410,6 +410,19 @@ void night_update(Night *n, Player *pl, Bullets *pb, Effects *fx, const Level *L
     if (fighting(n) && pl->ch.state != CS_DEAD) boss_collisions(n, pl, pb, fx);
 }
 
+/* ours: a hero's power attack (power.c) lands while Hyperjumper is in the fight: frac of its hit points, blasts all
+ * over the hull; clear_shots also burns its bolts out of the air */
+void night_power_hit(Night *n, Effects *fx, float frac, bool clear_shots)
+{
+    if (clear_shots) for (int i = 0; i < HYPERJUMPER_SHOTS; i++) n->shots[i].alive = false;
+    if (!fighting(n)) return;
+    AnimDef a = { 0, 0, 11, 11, 0.025f, 0 };
+    for (int k = 0; k < 6; k++) effects_spawn(fx, 0x9C861FF3, n->fx_layer, &a, n->bx - 50 + rnd(100), n->by - 25 + rnd(50), 32, 32, 0);
+    n->hp -= (int)ceilf(n->hp_max * frac);
+    if (n->hp <= 0) { n->hp = 0; begin_death(n); }
+    else n->hit_flash = 0.3f;
+}
+
 void night_boss_summon(Night *n, float arena_x, int sw)
 {
     if (n->state != HJ_DORMANT) return;
