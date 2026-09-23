@@ -5,7 +5,7 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-DATA_DIR="${1:-../SaberRider/data}"
+DATA_DIR="${1:-SaberRider/data}"
 shift || true
 
 if [ ! -d build ]; then

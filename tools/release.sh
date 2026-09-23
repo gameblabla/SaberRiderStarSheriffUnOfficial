@@ -6,7 +6,7 @@
 #   tools/release.sh [--linux] [--dc] [--full-disc] [DATA_DIR]
 #     --linux / --dc   only that package (default: both)
 #     --full-disc      rebuild the whole Dreamcast disc (sound, music, FMV conversion) instead of reusing build/dc/stage
-#     DATA_DIR         the demo's data/ folder with the .pck packs (default ../SaberRider/data)
+#     DATA_DIR         the demo's data/ folder with the .pck packs (default SaberRider/data, the copy in this repo)
 # The Dreamcast part sources $KOS_ENV (default /opt/toolchains/dc/kos/environ.sh).
 set -euo pipefail
 
@@ -25,7 +25,7 @@ for a in "$@"; do
     esac
 done
 [ $want_linux = 0 ] && [ $want_dc = 0 ] && want_linux=1 want_dc=1
-DATA="$(cd "${DATA:-$ROOT/../SaberRider/data}" && pwd)"
+DATA="$(cd "${DATA:-$ROOT/SaberRider/data}" && pwd)"
 PACKS=(pack.pck common.pck levels.pck menu.pck level1.pck video.pck)
 for p in "${PACKS[@]}"; do [ -f "$DATA/$p" ] || { echo "missing $DATA/$p (pass the demo's data/ folder)" >&2; exit 1; }; done
 

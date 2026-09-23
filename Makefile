@@ -23,7 +23,7 @@ $(OBJDIR)/%.o: src/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 run: $(BIN)
-	SABER_ASSETS="$(CURDIR)/assets" ./$(BIN) ../SaberRider/data
+	SABER_ASSETS="$(CURDIR)/assets" ./$(BIN) SaberRider/data
 
 clean:
 	rm -rf $(OBJDIR) $(BIN)

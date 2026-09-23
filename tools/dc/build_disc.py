@@ -16,7 +16,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 KOS = Path('/opt/toolchains/dc/kos')
-FMV = ROOT.parent / 'Dreamcast/dreamcast-fmv'
+FMV = ROOT / 'third_party/dreamcast-fmv'
 PACKS = ('pack.pck', 'common.pck', 'levels.pck', 'menu.pck', 'level1.pck')
 
 
@@ -87,6 +87,9 @@ def convert_video(source: Path, soundtrack: Path | None, target: Path,
         # The upstream script expands this as words, not shell redirection.
         'PVRTX_QUIET': ' ',
     })
+    for packer in ('pack_dcmv', 'pack_dcmv_chunk'):   # the vendored converter ships sources only
+        if not (FMV / packer).is_file():
+            run('gcc', '-O2', FMV / f'{packer}.c', '-o', FMV / packer, '-llz4', '-lzstd', '-lm')
     run(need(FMV / 'convert_to_pvr_fmv.sh'), cwd=FMV, env=env)
     need(target)
 

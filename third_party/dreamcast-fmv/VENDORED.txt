@@ -1,0 +1,7 @@
+Vendored from https://github.com/GPF/dreamcast-fmv
+commit 9c0889ae9dc8d338a38341a72a260df6c870c4ec (2026-05-10), unmodified.
+
+Only what tools/dc/build_disc.py runs: convert_to_pvr_fmv.sh, generate_durations.py, the packer sources
+(pack_dcmv / pack_dcmv_chunk are compiled here on first use: gcc, liblz4, libzstd) and dcaconv, a prebuilt
+x86-64 Linux binary of https://github.com/TapamN/dcaconv. The DCMV player itself lives in
+src/platform/dreamcast/dcfmv. pvrtex comes from KallistiOS (utils/pvrtex).

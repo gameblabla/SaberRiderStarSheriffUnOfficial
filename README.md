@@ -2,9 +2,9 @@
 
 A C11 + SDL3 re-implementation of the cancelled 2017–2019 Kickstarter game's public demo
 (the "Hero Mode" level 1 with Fireball), reverse-engineered from the Linux demo executable
-and its E2DM data packs. The game reads the **original** `data/*.pck` files directly — nothing
-from the demo is redistributed here. You need your own copy of the demo (Windows/Linux/macOS
-builds share the same packs).
+and its E2DM data packs. The game reads the **original** `data/*.pck` files directly; the demo's
+six packs are kept unchanged in `SaberRider/data/`, the default data folder of every build
+and run script (pass another `data/` folder to use your own copy).
 
 ## Build
 
@@ -12,16 +12,15 @@ Dependencies: SDL3, libvorbisfile, libavcodec/libswscale (FMV), CMake, a C11 com
 
     cmake -S . -B build -G Ninja
     cmake --build build
-    ./build/saber_rider /path/to/SaberRider/data
-    ./build/saber_rider /path/to/SaberRider/data --level 2    # skip the front end: 1 the frontier town, 2 the Grand Prix, 3 Hyperjumper Pass, 4 the Red Palm Jungle
+    ./build/saber_rider SaberRider/data
+    ./build/saber_rider SaberRider/data --level 2    # skip the front end: 1 the frontier town, 2 the Grand Prix, 3 Hyperjumper Pass, 4 the Red Palm Jungle
 
 ## Dreamcast build
 
 The Dreamcast target uses KallistiOS, the native PowerVR renderer, AICA ADPCM
 samples, libADX music streaming, and the DCMV player. It shares gameplay,
 collision, levels, and menus with the SDL3 build through `src/platform/`.
-You need the original demo's `data/*.pck` files; the resulting disc image is
-for your own use with those data files.
+It reads the demo's packs from `SaberRider/data` (override with `DATA=`).
 
 KOS, its kos-ports and the game must share one SH4 float ABI. The build expects
 `export KOS_SH4_PRECISION="-m4-single-only"` (32-bit `double`) in `environ.sh`,
@@ -32,12 +31,13 @@ Mixing `-m4-single` code with the `-m4-single-only` newlib breaks libm and print
 ```sh
 source /opt/toolchains/dc/kos/environ.sh
 make -f Makefile.dc -j8
-make -f Makefile.dc disc DATA=/path/to/SaberRider/data
+make -f Makefile.dc disc
 ```
 
 The playable image is `build/dc/saber_rider.cdi`. The disc builder requires
 FFmpeg, the KOS `wav2adpcm`, `pvrtex`, `scramble`, and `makeip` utilities, the
-local `../Dreamcast/dreamcast-fmv` converter, `mkisofs`, and `cdi4dc`.
+DCMV converter vendored in `third_party/dreamcast-fmv` (its packers are compiled
+on first use: gcc, liblz4, libzstd), `mkisofs`, and `cdi4dc`.
 It converts the pack sound effects to AICA ADPCM, music to ADX, and the pack
 videos and power-attack clips to DCMV. Do not copy `video.pck` to the disc:
 the runtime opens the converted files in `/cd/video` instead.
@@ -68,7 +68,7 @@ wipes in through venetian-blind strips while the music comes up; a button skips 
 
 ## Release packages
 
-    tools/release.sh [--linux] [--dc] [--full-disc] [path/to/SaberRider/data]
+    tools/release.sh [--linux] [--dc] [--full-disc] [path/to/SaberRider/data]   # packs default to SaberRider/data
 
 The script writes two separate zips to `release/`:
 
