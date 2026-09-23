@@ -1,7 +1,8 @@
 #include "character.h"
 #include "pack.h"
 #include "heroes.h"
-#include <SDL3/SDL.h>
+#include "platform/render.h"
+#include "platform/plat.h"
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
@@ -30,12 +31,12 @@ bool character_init(Character *c, uint32_t crhc_id, bool enemy)
         c->anim_flags[i] = rd32(d + 0xa24 + i * 4);
     }
     c->hp_max = rd32(d + 0xadc);
-    if (SDL_getenv("SABER_ANIMS"))   /* debug: dump the table */
+    if (plat_getenv("SABER_ANIMS"))   /* debug: dump the table */
         for (int i = 0; i < CHAR_CRHC_ANIMS; i++)
             fprintf(stderr, "crhc %08X anim %2d: cells %d-%d loop %d dt %.3f flags %x muzzle %.0f,%.0f hurt %.0f,%.0f %.0fx%.0f\n", crhc_id, i, c->anims[i].first,
                     c->anims[i].last, c->anims[i].loop, c->anims[i].frame_time, c->anims[i].flags, c->muzzle[i][0], c->muzzle[i][1],
                     c->hurt[i].ox, c->hurt[i].oy, c->hurt[i].hw, c->hurt[i].hh);
-    { const PackEntry *se = packs_find(c->sprite_id); if (se && se->type == RES_SPRITE) c->spr = sprite_get(c->sprite_id); else c->cb = cblock_get(c->sprite_id); }
+    { const PackEntry *se = packs_peek(c->sprite_id); if (se && se->type == RES_SPRITE) c->spr = sprite_get(c->sprite_id); else c->cb = cblock_get(c->sprite_id); }
     static const int8_t fireball_bob[8] = { 0, 0, 1, 0, 0, 1 };
     memcpy(c->torso_bob, fireball_bob, sizeof c->torso_bob);
     c->bored_anim[0] = c->bored_anim[1] = -1; c->walk_aim_ov = WALK_AIM_ALL; c->ov_sync = false;
@@ -243,7 +244,7 @@ void character_draw(const Character *c, float cam_x, float cam_y)
 {
     if (c->anim >= CHAR_MAX_ANIMS) return;
     float x = floorf(c->body.x - c->origin_x - cam_x), y = floorf(c->body.y - c->origin_y - cam_y);
-    if ((c->flags & CF_HIT) && c->hit_t > 0.01f && (SDL_GetTicks() / 16 & 2)) return;   /* invulnerability blink (effect flag 0x10 every other 2 frames) */
+    if ((c->flags & CF_HIT) && c->hit_t > 0.01f && (plat_ticks_ms() / 16 & 2)) return;   /* invulnerability blink (effect flag 0x10 every other 2 frames) */
     draw_cell(c, c->frame, (int)(c->anims[c->anim].flags & 0xff), x, y);
     /* the torso is its own sprite object placed at the base offset (up/down aims, 1 px walk bob) */
     float oy = c->base_oy;

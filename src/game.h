@@ -1,5 +1,6 @@
 #pragma once
-#include <SDL3/SDL.h>
+#include "platform/render.h"
+#include "platform/plat.h"
 #include "level.h"
 #include "player.h"
 #include "input.h"
@@ -15,7 +16,7 @@
 #include "power.h"
 
 typedef struct {
-    SDL_Renderer *ren;
+    Ren *ren;
     int sw, sh;
     Level level;
     PhysicsWorld world;
@@ -58,10 +59,13 @@ typedef struct {
     Dialog dialog; int dlg_phase; float dlg_focus_x, dlg_focus_y, dlg_t_before, dlg_t_after, dlg_last_cam;   /* state 0xd (FUN_0042d690) */
     float title_t; bool title_on;   /* the level's title card before it starts (game.c title_*) */
     bool debug_collision, free_cam;
-    bool key[SDL_SCANCODE_COUNT];
+    bool dbg_key[8];             /* DBG_KEY_*: debug keys held (free camera) */
 } Game;
 
-bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh, int start_level);   /* start_level: 0 front end, 1 / 2 straight into that level */
-void game_event(Game *g, const SDL_Event *ev);
+/* debug keys the platform forwards (keyboards only): F1 collision overlay, F2 free camera, arrows + shift move it */
+enum { DBG_KEY_COLLISION, DBG_KEY_FREECAM, DBG_KEY_LEFT, DBG_KEY_RIGHT, DBG_KEY_FAST, DBG_KEY_COUNT };
+
+bool game_init(Game *g, Ren *ren, int sw, int sh, int start_level);   /* start_level: 0 front end, 1 / 2 straight into that level */
+void game_debug_key(Game *g, int key, bool down);
 void game_update(Game *g, float dt);
 void game_draw(Game *g);

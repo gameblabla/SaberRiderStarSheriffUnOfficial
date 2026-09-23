@@ -1,6 +1,8 @@
-#include "video.h"
-#include "pack.h"
-#include "audio.h"
+/* video.h on libavcodec: the packs' E2DM .vid (XviD elementary stream, obfuscated frame heads) and our raw MPEG-4 clips */
+#include "../../video.h"
+#include "../../pack.h"
+#include "../../audio.h"
+#include "sdl_platform.h"
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
 #include <libavutil/imgutils.h>
@@ -23,7 +25,7 @@ struct Video {
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 
-Video *video_open(SDL_Renderer *r, uint32_t id)
+Video *video_open(Ren *ren, uint32_t id)
 {
     const PackEntry *e = packs_find_type(id, RES_VIDEO);
     if (!e || e->size < 64) return NULL;
@@ -39,13 +41,17 @@ Video *video_open(SDL_Renderer *r, uint32_t id)
     v->ctx = avcodec_alloc_context3(c);
     if (avcodec_open2(v->ctx, c, NULL) < 0) { free(v); return NULL; }
     v->pkt = av_packet_alloc(); v->fr = av_frame_alloc();
+    SDL_Renderer *r = (SDL_Renderer *)ren;
     v->tex = SDL_CreateTexture(r, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, v->w, v->h);
     SDL_SetTextureScaleMode(v->tex, SDL_SCALEMODE_LINEAR);
     /* audio */
     if (audio_off + audio_size <= e->size && audio_size > 12) {
         const uint8_t *a = e->data + audio_off;
-        if (!memcmp(a, "MUPS", 4)) v->owns_music = music_play_blob(a, audio_size, false);
-        else if (!memcmp(a, "RIFF", 4)) { sfx_play_blob(a, audio_size); v->owns_sfx = true; }
+        if (!memcmp(a, "MUPS", 4)) {
+            v->owns_music = snd_sdl_music_blob(a, audio_size, false);
+            if (v->owns_music) { music_set_duck(1.0f); music_set_volume(1.0f); }   /* the video's track plays at full level */
+        }
+        else if (!memcmp(a, "RIFF", 4)) { snd_sdl_sfx_blob(a, audio_size); v->owns_sfx = true; }
     }
     return v;
 }
@@ -84,7 +90,7 @@ static bool decode_next_stream(Video *v)
     }
 }
 
-Video *video_open_file(SDL_Renderer *r, const char *path, float fps)
+Video *video_open_file(Ren *ren, const char *path, float fps)
 {
     SDL_IOStream *io = path ? SDL_IOFromFile(path, "rb") : NULL;
     if (!io) return NULL;
@@ -100,6 +106,7 @@ Video *video_open_file(SDL_Renderer *r, const char *path, float fps)
     if (!v->ctx || !v->parser || avcodec_open2(v->ctx, c, NULL) < 0) { video_close(v); return NULL; }
     v->pkt = av_packet_alloc(); v->fr = av_frame_alloc();
     v->w = 320; v->h = 240;   /* the clips are made at the pack videos' size (tools/build_power_assets.py); sws scales to it anyway */
+    SDL_Renderer *r = (SDL_Renderer *)ren;
     v->tex = SDL_CreateTexture(r, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, v->w, v->h);
     if (!v->tex) { video_close(v); return NULL; }
     SDL_SetTextureScaleMode(v->tex, SDL_SCALEMODE_LINEAR);
@@ -136,19 +143,19 @@ bool video_update(Video *v, float dt)
     return true;
 }
 
-void video_draw(Video *v, SDL_Renderer *r, int sw, int sh)
+void video_draw(Video *v, Ren *ren, int sw, int sh)
 {
     if (!v || !v->have_frame) return;
     float scale = (float)sw / v->w; if (v->h * scale > sh) scale = (float)sh / v->h;
     SDL_FRect dst = { (sw - v->w * scale) * 0.5f, (sh - v->h * scale) * 0.5f, v->w * scale, v->h * scale };
-    SDL_RenderTexture(r, v->tex, NULL, &dst);
+    SDL_RenderTexture((SDL_Renderer *)ren, v->tex, NULL, &dst);
 }
 
-void video_draw_rect(Video *v, SDL_Renderer *r, float x, float y, float w, float h)
+void video_draw_rect(Video *v, Ren *ren, float x, float y, float w, float h)
 {
     if (!v || !v->have_frame) return;
     SDL_FRect dst = { x, y, w, h };
-    SDL_RenderTexture(r, v->tex, NULL, &dst);
+    SDL_RenderTexture((SDL_Renderer *)ren, v->tex, NULL, &dst);
 }
 void video_size(const Video *v, int *w, int *h) { *w = v ? v->w : 0; *h = v ? v->h : 0; }
 
@@ -158,7 +165,7 @@ void video_close(Video *v)
     /* FUN_0042d0a0(video layer) -> FUN_00411480: the video's own audio stops with it; a RIFF-voiced video (the
      * briefing) leaves the menu music alone */
     if (v->owns_music) music_stop();
-    if (v->owns_sfx) sfx_stop_blob();
+    if (v->owns_sfx) snd_sdl_stop_blob();
     if (v->sws) sws_freeContext(v->sws);
     if (v->parser) av_parser_close(v->parser);
     av_free(v->file);

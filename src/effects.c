@@ -9,7 +9,7 @@ Effect *effects_spawn(Effects *fx, uint32_t sprite_id, int layer, const AnimDef 
         Effect *e = &fx->e[i];
         if (e->alive) continue;
         memset(e, 0, sizeof *e);
-        const PackEntry *pe = packs_find(sprite_id);
+        const PackEntry *pe = packs_peek(sprite_id);
         if (!pe) return NULL;
         if (pe->type == RES_CBLOCK) e->cb = cblock_get(sprite_id); else e->spr = sprite_get(sprite_id);
         e->alive = true; e->anim = *a; e->frame = a->first; e->layer = layer;
@@ -44,9 +44,9 @@ void effects_draw(const Effects *fx, int layer, float cam_x, float cam_y)
         if (e->spr) {
             int f = e->frame < e->spr->frames ? e->frame : e->spr->frames - 1;
             if (e->angle != 0) {
-                SDL_FRect src = { (float)(f * e->spr->w), 0, (float)e->spr->w, (float)e->spr->h };
-                SDL_FRect dst = { x, y, (float)e->spr->w, (float)e->spr->h };
-                SDL_RenderTextureRotated(SDL_GetRendererFromTexture(e->spr->tex), e->spr->tex, &src, &dst, -e->angle * 180.0 / 3.14159265, NULL, SDL_FLIP_NONE);
+                RFRect src = { (float)(f * e->spr->w), 0, (float)e->spr->w, (float)e->spr->h };
+                RFRect dst = { x, y, (float)e->spr->w, (float)e->spr->h };
+                r_tex_rot(rtex_renderer(sprite_tex(e->spr)), sprite_tex(e->spr), &src, &dst, -e->angle * 180.0 / 3.14159265, NULL, R_FLIP_NONE);
             } else sprite_draw(e->spr, f, x, y, e->flip);
         } else if (e->cb) {
             int ci = e->frame; if (ci >= 0 && ci < cblock_ncells(e->cb) && e->cb->cells[ci] != 0xFFFF) cblock_draw_tile(e->cb, e->cb->cells[ci], x, y, e->flip);

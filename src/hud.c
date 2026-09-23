@@ -1,15 +1,15 @@
 #include "hud.h"
 #include "gfx.h"
 
-static void rect(SDL_Renderer *r, int x1, int y1, int x2, int y2, uint32_t argb)
+static void rect(Ren *r, int x1, int y1, int x2, int y2, uint32_t argb)
 {
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(r, (argb >> 16) & 255, (argb >> 8) & 255, argb & 255, argb >> 24);
-    SDL_FRect q = { (float)x1, (float)y1, (float)(x2 - x1), (float)(y2 - y1) };
-    SDL_RenderFillRect(r, &q);
+    r_set_draw_blend(r, R_BLEND_BLEND);
+    r_set_draw_color(r, (argb >> 16) & 255, (argb >> 8) & 255, argb & 255, argb >> 24);
+    RFRect q = { (float)x1, (float)y1, (float)(x2 - x1), (float)(y2 - y1) };
+    r_fill_rect(r, &q);
 }
 
-void hud_draw(SDL_Renderer *r, int character, int difficulty, int lives, int hearts, int ammo)
+void hud_draw(Ren *r, int character, int difficulty, int lives, int hearts, int ammo)
 {
     Sprite *font = sprite_get(0x87A5333C);
     int c11, c9, c6;

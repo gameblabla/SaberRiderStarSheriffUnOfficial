@@ -71,12 +71,12 @@ enum { PH_INTRO, PH_INSTRUCTIONS, PH_COUNTDOWN, PH_RACE, PH_FINISH, PH_BREAKAWAY
 #define N_RACERS 7
 
 struct Mode7 {
-    SDL_Renderer *ren; int sw, sh;
-    SDL_Texture *atlas; Spr spr[S_COUNT]; bool ok;
+    Ren *ren; int sw, sh;
+    RTex *atlas; Spr spr[S_COUNT]; bool ok;
     uint32_t tiles[T_COUNT][MIPS][TEX * TEX];   /* level L is (TEX >> L) square */
     uint8_t cells[MAPN * MAPN];
-    SDL_Texture *floor_tex; uint32_t *floor_px; int floor_h;
-    SDL_Texture *sky_tex; int sky_w, sky_h; bool sky_ok;
+    RFloor *floor; int floor_h;   /* the ground plane (platform/render.h), made on first draw */
+    RTex *sky_tex; int sky_w, sky_h; bool sky_ok;
     /* track */
     float tx[TRACK_N], ty[TRACK_N], tlen[TRACK_N], track_len;
     /* player */
@@ -154,9 +154,8 @@ static bool load_atlas(Mode7 *m)
     }
     if (f) fclose(f);
     if (found < S_COUNT) fprintf(stderr, "mode7.txt: %d/%d sprites\n", found, S_COUNT);
-    m->atlas = SDL_CreateTexture(m->ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, w, h);
-    SDL_UpdateTexture(m->atlas, NULL, px, w * 4);
-    SDL_SetTextureBlendMode(m->atlas, SDL_BLENDMODE_BLEND); SDL_SetTextureScaleMode(m->atlas, SDL_SCALEMODE_NEAREST);
+    m->atlas = rtex_create(m->ren, w, h, R_TEX_STATIC, px);
+    rtex_set_blend(m->atlas, R_BLEND_BLEND); rtex_set_scale(m->atlas, R_SCALE_NEAREST);
     /* floor materials into memory, with box-filtered mips */
     Spr *fl = &m->spr[S_FLOOR];
     for (int t = 0; t < T_COUNT && t < fl->frames; t++) {
@@ -185,9 +184,8 @@ static bool load_sky(Mode7 *m)
     if (!png) { fprintf(stderr, "assets/sky_mode7.png missing\n"); return false; }
     int w, h; uint32_t *px = png_load_rgba(png, &w, &h);
     if (!px) return false;
-    m->sky_tex = SDL_CreateTexture(m->ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, w, h);
-    SDL_UpdateTexture(m->sky_tex, NULL, px, w * 4);
-    SDL_SetTextureScaleMode(m->sky_tex, SDL_SCALEMODE_NEAREST);
+    m->sky_tex = rtex_create(m->ren, w, h, R_TEX_STATIC, px);
+    rtex_set_scale(m->sky_tex, R_SCALE_NEAREST);
     m->sky_w = w; m->sky_h = h;
     free(px);
     return true;
@@ -199,14 +197,14 @@ static void draw_spr(Mode7 *m, int id, int frame, float cx, float ybot, float sc
     Spr *s = &m->spr[id]; if (s->frames < 1) return;
     if (frame < 0) frame = 0;
     if (frame >= s->frames) frame = s->frames - 1;
-    SDL_FRect src = { (float)(s->x + frame * s->w), (float)s->y, (float)s->w, (float)s->h };
+    RFRect src = { (float)(s->x + frame * s->w), (float)s->y, (float)s->w, (float)s->h };
     float w = s->w * scale, h = s->h * scale;
-    SDL_FRect dst = { floorf(cx - w * 0.5f), floorf(ybot - h), w, h };
+    RFRect dst = { floorf(cx - w * 0.5f), floorf(ybot - h), w, h };
     if (dst.x + w < 0 || dst.x > m->sw || dst.y + h < 0 || dst.y > m->sh) return;
-    SDL_SetTextureColorMod(m->atlas, r, g, b); SDL_SetTextureAlphaMod(m->atlas, a);
-    if (angle != 0) SDL_RenderTextureRotated(m->ren, m->atlas, &src, &dst, angle, NULL, SDL_FLIP_NONE);
-    else SDL_RenderTexture(m->ren, m->atlas, &src, &dst);
-    SDL_SetTextureColorMod(m->atlas, 255, 255, 255); SDL_SetTextureAlphaMod(m->atlas, 255);
+    rtex_set_color_mod(m->atlas, r, g, b); rtex_set_alpha_mod(m->atlas, a);
+    if (angle != 0) r_tex_rot(m->ren, m->atlas, &src, &dst, angle, NULL, R_FLIP_NONE);
+    else r_tex(m->ren, m->atlas, &src, &dst);
+    rtex_set_color_mod(m->atlas, 255, 255, 255); rtex_set_alpha_mod(m->atlas, 255);
 }
 
 /* ---------------------------------------------------------------- worlds */
@@ -272,8 +270,8 @@ static void build_track(Mode7 *m)
         m->cells[idx] = t;
     }
     free(dist); free(near);
-    if (SDL_getenv("SABER_M7MAP")) {   /* debug: dump the material map */
-        FILE *f = fopen(SDL_getenv("SABER_M7MAP"), "wb");
+    if (plat_getenv("SABER_M7MAP")) {   /* debug: dump the material map */
+        FILE *f = fopen(plat_getenv("SABER_M7MAP"), "wb");
         if (f) { fprintf(f, "P5\n%d %d\n255\n", MAPN, MAPN); for (int i = 0; i < MAPN * MAPN; i++) fputc(m->cells[i] * 20, f); fclose(f); }
     }
 }
@@ -366,6 +364,7 @@ static void start_race(Mode7 *m)
 {
     ents_clear(m, false);
     build_track(m);
+    if (m->floor) r_floor_cells_changed(m->floor);
     place_props_around_track(m);
     /* the grid: 8 cars, two abreast, behind the line */
     static const struct { int spr; float max; bool hornet; const char *name; } FIELD[N_RACERS] = {
@@ -386,14 +385,11 @@ static void start_race(Mode7 *m)
     m->near_idx = -1; m->race_time = 0;
 }
 
-Mode7 *mode7_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives, bool resume_phase2)
+Mode7 *mode7_create(Ren *ren, int sw, int sh, int difficulty, int lives, bool resume_phase2)
 {
     Mode7 *m = calloc(1, sizeof *m);
     m->ren = ren; m->sw = sw; m->sh = sh; m->rng = 0xC0FFEE;
     m->floor_h = sh - HORIZON - 1;
-    m->floor_px = calloc((size_t)sw * m->floor_h, 4);
-    m->floor_tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, sw, m->floor_h);
-    SDL_SetTextureScaleMode(m->floor_tex, SDL_SCALEMODE_NEAREST);
     m->ok = load_atlas(m);
     if (m->ok && m->spr[S_BUGGY].frames < 5) { fprintf(stderr, "mode7.png is stale (buggy needs 5 steering frames): rerun tools/build_mode7_assets.py\n"); m->ok = false; }
     m->sky_ok = load_sky(m);
@@ -405,11 +401,11 @@ Mode7 *mode7_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives
     m->phase = PH_INTRO; m->phase_t = 0;
     play_music(m, 10, true);
     m->intro_pending = true;
-    if (SDL_getenv("SABER_M7PHASE")) {   /* debug: 1 race (no story), 2 pursuit, 3 boss, 4 the finish -> briefing */
-        int ph = atoi(SDL_getenv("SABER_M7PHASE")); m->intro_pending = false;
-        if (ph == 1) { m->phase = PH_COUNTDOWN; m->countdown = 3.99f; if (SDL_getenv("SABER_M7LAP")) { m->lap = 1; m->progress = m->track_len + m->s; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_RACER) m->ents[i].lap = 1; } }
+    if (plat_getenv("SABER_M7PHASE")) {   /* debug: 1 race (no story), 2 pursuit, 3 boss, 4 the finish -> briefing */
+        int ph = atoi(plat_getenv("SABER_M7PHASE")); m->intro_pending = false;
+        if (ph == 1) { m->phase = PH_COUNTDOWN; m->countdown = 3.99f; if (plat_getenv("SABER_M7LAP")) { m->lap = 1; m->progress = m->track_len + m->s; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_RACER) m->ents[i].lap = 1; } }
         else if (ph == 2) { m->phase = PH_PURSUIT; begin_pursuit(m); }
-        else if (ph == 3) { begin_pursuit(m); m->phase = PH_BOSS; begin_boss(m); if (SDL_getenv("SABER_M7BOSSHP")) m->ents[m->boss_i].hp = (float)atof(SDL_getenv("SABER_M7BOSSHP")); }
+        else if (ph == 3) { begin_pursuit(m); m->phase = PH_BOSS; begin_boss(m); if (plat_getenv("SABER_M7BOSSHP")) m->ents[m->boss_i].hp = (float)atof(plat_getenv("SABER_M7BOSSHP")); }
         else if (ph == 4) { m->phase = PH_RACE; m->lap = 2; m->progress = 2 * m->track_len + m->s; m->last_s = m->s; m->speed = 500; for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_RACER) { m->ents[i].lap = 2; m->ents[i].speed = 500; } }   /* the grid, two laps in: 510 units to the flag */
     }
     if (resume_phase2) { m->intro_pending = false; m->phase = PH_PURSUIT; m->phase_t = 0; begin_pursuit(m); }
@@ -420,10 +416,10 @@ void mode7_destroy(Mode7 *m)
 {
     if (!m) return;
     sfx_loop(NULL);
-    if (m->atlas) SDL_DestroyTexture(m->atlas);
-    if (m->floor_tex) SDL_DestroyTexture(m->floor_tex);
-    if (m->sky_tex) SDL_DestroyTexture(m->sky_tex);
-    free(m->floor_px); free(m);
+    if (m->atlas) rtex_destroy(m->atlas);
+    if (m->floor) r_floor_destroy(m->floor);
+    if (m->sky_tex) rtex_destroy(m->sky_tex);
+    free(m);
 }
 
 int mode7_result(const Mode7 *m) { return m->result; }
@@ -502,7 +498,7 @@ static void player_drive(Mode7 *m, const Input *in, float dt, bool free_drive)
     float vmax = road ? 470.0f : rumble ? 380.0f : 250.0f;
     if (m->boost_locked && m->boost >= 0.5f) m->boost_locked = false;   /* recharged halfway: turbo usable again */
     bool turbo = !m->boost_locked && btn_down(in, BTN_AIM) && m->boost > 0.05f && m->spin_t <= 0 && phase_plays(m);
-    if (!free_drive && SDL_getenv("SABER_M7AUTO") && atoi(SDL_getenv("SABER_M7AUTO")) >= 2 && m->spin_t <= 0 && phase_plays(m))   /* debug: the auto-driver also uses the turbo */
+    if (!free_drive && plat_getenv("SABER_M7AUTO") && atoi(plat_getenv("SABER_M7AUTO")) >= 2 && m->spin_t <= 0 && phase_plays(m))   /* debug: the auto-driver also uses the turbo */
         turbo = !m->boost_locked && (m->turbo_on ? m->boost > 0.05f : m->boost > 0.6f);
     if (turbo) {
         vmax *= 1.35f; m->boost -= dt * 0.33f;
@@ -523,7 +519,7 @@ static void player_drive(Mode7 *m, const Input *in, float dt, bool free_drive)
     bool accel = btn_down(in, BTN_JUMP) || btn_down(in, BTN_UP);
     bool brake = btn_down(in, BTN_DOWN);
     float steer = (btn_down(in, BTN_LEFT) ? -1 : 0) + (btn_down(in, BTN_RIGHT) ? 1 : 0);
-    if (!free_drive && SDL_getenv("SABER_M7AUTO")) {   /* debug: drive along the circuit (test laps without a driver) */
+    if (!free_drive && plat_getenv("SABER_M7AUTO")) {   /* debug: drive along the circuit (test laps without a driver) */
         float ax, ay; track_point(m, m->s + 260, 0, &ax, &ay, NULL);
         float want = atan2f(dwrap(ay, m->py), dwrap(ax, m->px)), d = angdiff(want, m->heading);
         steer = d > 0.05f ? 1 : d < -0.05f ? -1 : 0; accel = true;
@@ -772,6 +768,7 @@ static void begin_pursuit(Mode7 *m)
 {
     ents_clear(m, false);
     build_desert(m);
+    if (m->floor) r_floor_cells_changed(m->floor);
     m->hp = m->max_hp; m->hurt_t = 0; m->spin_t = 0; m->spin_dur = 0;
     m->px = WORLD * 0.5f; m->py = WORLD * 0.5f; m->heading = m->cam_heading = -PI / 2; m->speed = 200;
     m->pursuit_spawn_t = 2.5f; m->pursuit_t = 0;
@@ -804,7 +801,7 @@ static void begin_boss(Mode7 *m)
 static void begin_victory(Mode7 *m)
 {
     m->phase = PH_VICTORY; m->phase_t = 0;   /* the car coasts to a stop by the burning wreck */
-    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "victory after %.0f s\n", m->phase_t);
+    if (plat_getenv("SABER_TRACE")) fprintf(stderr, "victory after %.0f s\n", m->phase_t);
     for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE;
     music_play(6, false); m->music_now = 6;
     dialog_open_script(&m->dlg, SCRIPT_VICTORY);
@@ -818,9 +815,9 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         m->paused = !m->paused; sfx_play(10, 0); music_pause(m->paused); if (m->paused) { sfx_loop(NULL); m->turbo_on = false; }
     }
     if (m->paused) return;
-    { static int kill = -2; if (kill == -2) kill = SDL_getenv("SABER_KILL") ? atoi(SDL_getenv("SABER_KILL")) : -1; if (kill >= 0 && kill-- == 0) { m->hurt_t = 0; player_hurt(m, 99); } }   /* debug: die at step N */
+    { static int kill = -2; if (kill == -2) kill = plat_getenv("SABER_KILL") ? atoi(plat_getenv("SABER_KILL")) : -1; if (kill >= 0 && kill-- == 0) { m->hurt_t = 0; player_hurt(m, 99); } }   /* debug: die at step N */
     m->phase_t += dt;
-    { static int last = -1, step; step++; if (SDL_getenv("SABER_TRACE") && m->phase != last) { fprintf(stderr, "m7 phase %d at step %d\n", m->phase, step); last = m->phase; } }
+    { static int last = -1, step; step++; if (plat_getenv("SABER_TRACE") && m->phase != last) { fprintf(stderr, "m7 phase %d at step %d\n", m->phase, step); last = m->phase; } }
     if (m->msg_t > 0) m->msg_t -= dt;
     if (m->hurt_t > 0) m->hurt_t -= dt;
     if (m->shake > 0) m->shake -= dt;
@@ -848,7 +845,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
     case PH_RACE:
         m->race_time += dt;
         player_drive(m, in, dt, false);
-        if (SDL_getenv("SABER_TRACE") && (int)m->race_time != (int)(m->race_time - dt)) fprintf(stderr, "race t=%.0f lap=%d s=%.0f lat=%.0f v=%.0f rank=%d hp=%d turbo=%d boost=%.2f\n", m->race_time, m->lap, m->s, m->lat, m->speed, m->rank, m->hp, m->turbo_on, m->boost);
+        if (plat_getenv("SABER_TRACE") && (int)m->race_time != (int)(m->race_time - dt)) fprintf(stderr, "race t=%.0f lap=%d s=%.0f lat=%.0f v=%.0f rank=%d hp=%d turbo=%d boost=%.2f\n", m->race_time, m->lap, m->s, m->lat, m->speed, m->rank, m->hp, m->turbo_on, m->boost);
         update_racers(m, dt); update_ents(m, dt);
         standings(m);
         if (m->lap >= 3) {   /* the chequered flag after three laps: the car coasts on under the FINISH banner while the
@@ -905,7 +902,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         m->pursuit_t += dt;
         Ent *b = &m->ents[m->boss_i];
         m->gap = hypotf(dwrap(b->x, m->px), dwrap(b->y, m->py));
-        if (SDL_getenv("SABER_TRACE") && (int)m->pursuit_t != (int)(m->pursuit_t - dt)) fprintf(stderr, "pursuit t=%.0f gap=%.0f leader %.0f,%.0f v=%.0f | player %.0f,%.0f v=%.0f\n", m->pursuit_t, m->gap, b->x, b->y, b->speed, m->px, m->py, m->speed);
+        if (plat_getenv("SABER_TRACE") && (int)m->pursuit_t != (int)(m->pursuit_t - dt)) fprintf(stderr, "pursuit t=%.0f gap=%.0f leader %.0f,%.0f v=%.0f | player %.0f,%.0f v=%.0f\n", m->pursuit_t, m->gap, b->x, b->y, b->speed, m->px, m->py, m->speed);
         /* the escort drops back in pairs to get between the player and the leader */
         m->pursuit_spawn_t -= dt;
         if (m->pursuit_spawn_t <= 0 && m->gap > 700) {
@@ -929,7 +926,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         m->gap = dwrap(b->y, m->py) < 0 ? hypotf(dwrap(b->x, m->px), dwrap(b->y, m->py)) : 0;
         m->pursuit_spawn_t -= dt;   /* the odd escort still comes back to block */
         if (m->pursuit_spawn_t <= 0 && b->state == B_RUN) { m->pursuit_spawn_t = 7.0f + frand(m) * 4.0f; spawn_escorts(m, 1); }
-        if (SDL_getenv("SABER_TRACE") && ((int)(m->phase_t * 60) % 60) == 0) fprintf(stderr, "boss st=%d pos=%.0f,%.0f hp=%.0f | player %.0f,%.0f h=%.2f hp=%d\n", b->state, b->x, b->y, b->hp, m->px, m->py, m->heading, m->hp);
+        if (plat_getenv("SABER_TRACE") && ((int)(m->phase_t * 60) % 60) == 0) fprintf(stderr, "boss st=%d pos=%.0f,%.0f hp=%.0f | player %.0f,%.0f h=%.2f hp=%d\n", b->state, b->x, b->y, b->hp, m->px, m->py, m->heading, m->hp);
         break; }
     case PH_VICTORY:
         if (m->speed > 0) idle.state[BTN_DOWN] = 0;   /* brakes on until it stands */
@@ -965,44 +962,25 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
 /* ---------------------------------------------------------------- drawing */
 static void render_floor(Mode7 *m)
 {
-    float ch = m->cam_heading;
-    float fx = cosf(ch), fy = sinf(ch), rx = -fy, ry = fx;
-    float camx = m->px - fx * CAM_BACK, camy = m->py - fy * CAM_BACK;
-    int sw = m->sw;
-    const uint32_t haze = 0xFF8CB2D8u;   /* ABGR (R d8, G b2, B 8c): dust at the horizon */
-    for (int row = 0; row < m->floor_h; row++) {
-        int y = HORIZON + 1 + row;
-        float d = CAM_H * FOCAL / (float)(y - HORIZON);
-        float step = d / FOCAL;   /* world units per screen pixel across this row */
-        float fog = clampf((d - FOG0) / (FOG1 - FOG0), 0, 1);
-        int fa = (int)(fog * 256);
-        int mip = step < 1.5f ? 0 : step < 3.0f ? 1 : step < 6.0f ? 2 : 3;
-        int msz = TEX >> mip, mmask = msz - 1, msh = 5 - mip;
-        float wx = camx + fx * d - rx * step * (sw * 0.5f), wy = camy + fy * d - ry * step * (sw * 0.5f);
-        uint32_t *out = m->floor_px + (size_t)row * sw;
-        for (int x = 0; x < sw; x++) {
-            int ix = (int)floorf(wx), iy = (int)floorf(wy);
-            uint8_t t = m->cells[((iy >> MAPSH) & (MAPN - 1)) * MAPN + ((ix >> MAPSH) & (MAPN - 1))];
-            uint32_t c = m->tiles[t][mip][(((iy >> mip) & mmask) << msh) + ((ix >> mip) & mmask)];
-            if (fa) {
-                uint32_t r = ((c & 0xff) * (256 - fa) + (haze & 0xff) * fa) >> 8;
-                uint32_t g = (((c >> 8) & 0xff) * (256 - fa) + ((haze >> 8) & 0xff) * fa) >> 8;
-                uint32_t b = (((c >> 16) & 0xff) * (256 - fa) + ((haze >> 16) & 0xff) * fa) >> 8;
-                c = 0xff000000u | b << 16 | g << 8 | r;
-            }
-            out[x] = c;
-            wx += rx * step; wy += ry * step;
-        }
+    if (!m->floor) {
+        static const uint32_t *mats[T_COUNT * MIPS];
+        for (int t = 0; t < T_COUNT; t++) for (int L = 0; L < MIPS; L++) mats[t * MIPS + L] = m->tiles[t][L];
+        RFloorDesc d = { MAPN, MAPSH, m->cells, TEX, MIPS, T_COUNT, mats };
+        m->floor = r_floor_create(m->ren, &d);
+        if (!m->floor) return;
     }
-    SDL_UpdateTexture(m->floor_tex, NULL, m->floor_px, sw * 4);
-    SDL_FRect dst = { 0, (float)(HORIZON + 1), (float)sw, (float)m->floor_h };
-    SDL_RenderTexture(m->ren, m->floor_tex, NULL, &dst);
+    float ch = m->cam_heading, fx = cosf(ch), fy = sinf(ch);
+    RFloorView v = { m->px - fx * CAM_BACK, m->py - fy * CAM_BACK, fx, fy, CAM_H, FOCAL, (float)HORIZON,
+                     HORIZON + 1, HORIZON + 1 + m->floor_h, 0.0f, FOG0, FOG1, 256,
+                     0xFF8CB2D8u,   /* ABGR (R d8, G b2, B 8c): dust at the horizon */
+                     1.5f, m->sw };
+    r_floor_draw(m->ren, m->floor, &v);
 }
 
 static void render_horizon(Mode7 *m)
 {
-    SDL_SetRenderDrawColor(m->ren, 78, 160, 214, 255);
-    SDL_FRect sky = { 0, 0, (float)m->sw, (float)(HORIZON + 1) }; SDL_RenderFillRect(m->ren, &sky);
+    r_set_draw_color(m->ren, 78, 160, 214, 255);
+    RFRect sky = { 0, 0, (float)m->sw, (float)(HORIZON + 1) }; r_fill_rect(m->ren, &sky);
     if (!m->sky_ok) return;
     /* the panorama is scaled to fill the sky band exactly (no squash: both axes share one factor), then tiled at
      * its own width - it was authored to loop there, so this is a clean wrap with none of the dead columns /
@@ -1011,8 +989,8 @@ static void render_horizon(Mode7 *m)
     float turn = m->cam_heading / TWO_PI;
     float ox = fmodf(turn * tw, tw); if (ox < 0) ox += tw;
     for (float x = -ox; x < m->sw; x += tw) {
-        SDL_FRect dst = { x, 0, tw, (float)(HORIZON + 1) };
-        SDL_RenderTexture(m->ren, m->sky_tex, NULL, &dst);
+        RFRect dst = { x, 0, tw, (float)(HORIZON + 1) };
+        r_tex(m->ren, m->sky_tex, NULL, &dst);
     }
 }
 
@@ -1053,18 +1031,18 @@ static void render_sprites(Mode7 *m)
         if ((e->kind == K_RACER || e->kind == K_ESCORT) && items[i].d < 2600 && e->hp_max > 0) {   /* a small health bar over every rival */
             float w = 20 * clampf(items[i].scale * 1.6f, 0.5f, 1.5f), top = items[i].sy - m->spr[e->spr].h * items[i].scale - 5;
             float f = e->hp / e->hp_max;
-            SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_BLEND);
-            SDL_SetRenderDrawColor(m->ren, 0, 0, 0, 150); SDL_FRect bg = { floorf(items[i].sx - w * 0.5f - 1), floorf(top - 1), w + 2, 4 }; SDL_RenderFillRect(m->ren, &bg);
-            SDL_SetRenderDrawColor(m->ren, f > 0.5f ? 90 : 240, f > 0.25f ? 220 : 80, 60, 255); SDL_FRect fg = { floorf(items[i].sx - w * 0.5f), floorf(top), w * f, 2 }; SDL_RenderFillRect(m->ren, &fg);
+            r_set_draw_blend(m->ren, R_BLEND_BLEND);
+            r_set_draw_color(m->ren, 0, 0, 0, 150); RFRect bg = { floorf(items[i].sx - w * 0.5f - 1), floorf(top - 1), w + 2, 4 }; r_fill_rect(m->ren, &bg);
+            r_set_draw_color(m->ren, f > 0.5f ? 90 : 240, f > 0.25f ? 220 : 80, 60, 255); RFRect fg = { floorf(items[i].sx - w * 0.5f), floorf(top), w * f, 2 }; r_fill_rect(m->ren, &fg);
         }
         if (e->kind == K_BOSS && e->state != B_DYING) {   /* the target: red corner brackets around the leader, pulsing */
             float hw = m->spr[e->spr].w * items[i].scale * 0.5f + 4 + 2 * ((int)(m->phase_t * 6) & 1), hh = m->spr[e->spr].h * items[i].scale + 8;
             float x0 = floorf(items[i].sx - hw), x1 = floorf(items[i].sx + hw), y1 = floorf(items[i].sy + 4), y0 = floorf(y1 - hh);
             float L = clampf(hw * 0.4f, 3, 10);
-            SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_NONE); SDL_SetRenderDrawColor(m->ren, 255, 50, 50, 255);
-            SDL_FRect q[8] = { { x0, y0, L, 2 }, { x0, y0, 2, L }, { x1 - L, y0, L, 2 }, { x1 - 2, y0, 2, L },
+            r_set_draw_blend(m->ren, R_BLEND_NONE); r_set_draw_color(m->ren, 255, 50, 50, 255);
+            RFRect q[8] = { { x0, y0, L, 2 }, { x0, y0, 2, L }, { x1 - L, y0, L, 2 }, { x1 - 2, y0, 2, L },
                                { x0, y1 - 2, L, 2 }, { x0, y1 - L, 2, L }, { x1 - L, y1 - 2, L, 2 }, { x1 - 2, y1 - L, 2, L } };
-            SDL_RenderFillRects(m->ren, q, 8);
+            r_fill_rects(m->ren, q, 8);
         }
     }
 }
@@ -1094,11 +1072,11 @@ static void render_player(Mode7 *m)
     }
 }
 
-static void bar(SDL_Renderer *r, float x, float y, float w, float h, float f, uint8_t R, uint8_t G, uint8_t B)
+static void bar(Ren *r, float x, float y, float w, float h, float f, uint8_t R, uint8_t G, uint8_t B)
 {
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(r, 0, 0, 0, 160); SDL_FRect bg = { x - 1, y - 1, w + 2, h + 2 }; SDL_RenderFillRect(r, &bg);
-    SDL_SetRenderDrawColor(r, R, G, B, 255); SDL_FRect fg = { x, y, w * clampf(f, 0, 1), h }; SDL_RenderFillRect(r, &fg);
+    r_set_draw_blend(r, R_BLEND_BLEND);
+    r_set_draw_color(r, 0, 0, 0, 160); RFRect bg = { x - 1, y - 1, w + 2, h + 2 }; r_fill_rect(r, &bg);
+    r_set_draw_color(r, R, G, B, 255); RFRect fg = { x, y, w * clampf(f, 0, 1), h }; r_fill_rect(r, &fg);
 }
 
 /* the chequered flag: a band of black / white squares rolls across the middle of the screen with FINISH on it, the
@@ -1110,16 +1088,16 @@ static void render_finish(Mode7 *m, Font *f, Font *small)
     float out = clampf((t - (FINISH_DUR - 0.4f)) / 0.4f, 0, 1);
     float bx = -sw * (1 - in) + sw * out * out;   /* rolls in from the left, leaves to the right */
     const int CS = 10; float y0 = 64;
-    SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_NONE);
+    r_set_draw_blend(m->ren, R_BLEND_NONE);
     for (int row = 0; row < 2; row++) for (int col = -1; col <= sw / CS + 1; col++) {
         int scroll = (int)(t * 60) / CS;
         bool white = ((col + row + scroll) & 1) == 0;
-        SDL_SetRenderDrawColor(m->ren, white ? 245 : 20, white ? 245 : 20, white ? 245 : 24, 255);
-        SDL_FRect q = { bx + col * CS, y0 + row * CS, CS, CS }; SDL_RenderFillRect(m->ren, &q);
-        SDL_FRect q2 = { bx + col * CS, y0 + 52 + row * CS, CS, CS }; SDL_RenderFillRect(m->ren, &q2);
+        r_set_draw_color(m->ren, white ? 245 : 20, white ? 245 : 20, white ? 245 : 24, 255);
+        RFRect q = { bx + col * CS, y0 + row * CS, CS, CS }; r_fill_rect(m->ren, &q);
+        RFRect q2 = { bx + col * CS, y0 + 52 + row * CS, CS, CS }; r_fill_rect(m->ren, &q2);
     }
-    SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(m->ren, 0, 0, 0, 170);
-    SDL_FRect mid = { bx, y0 + 20, (float)sw, 32 }; SDL_RenderFillRect(m->ren, &mid);
+    r_set_draw_blend(m->ren, R_BLEND_BLEND); r_set_draw_color(m->ren, 0, 0, 0, 170);
+    RFRect mid = { bx, y0 + 20, (float)sw, 32 }; r_fill_rect(m->ren, &mid);
     const char *fin = "FINISH!"; float fw = (float)font_text_width(f, fin);
     font_draw(f, fin, bx + sw * 0.5f - fw * 0.5f + 1, y0 + 25, 40, 30, 0);
     font_draw(f, fin, bx + sw * 0.5f - fw * 0.5f, y0 + 24, 255, 210, 40);
@@ -1139,16 +1117,16 @@ static void render_finish(Mode7 *m, Font *f, Font *small)
 static void render_brief(Mode7 *m, Font *f, Font *small)
 {
     float t = m->phase_t; int sw = m->sw, sh = m->sh;
-    SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_NONE);
-    SDL_SetRenderDrawColor(m->ren, 0, 0, 0, 255); SDL_FRect all = { 0, 0, (float)sw, (float)sh }; SDL_RenderFillRect(m->ren, &all);
+    r_set_draw_blend(m->ren, R_BLEND_NONE);
+    r_set_draw_color(m->ren, 0, 0, 0, 255); RFRect all = { 0, 0, (float)sw, (float)sh }; r_fill_rect(m->ren, &all);
     /* the panel wipes open from the middle in the first 0.3 s */
     float open = clampf(t / 0.3f, 0, 1); open = 1 - (1 - open) * (1 - open);
     bool narrow = sw < 400;   /* 4:3: no room beside the lines, so the panel grows and the target sits under them */
     float ph = (narrow ? 200 : 150) * open, py = (sh - ph) * 0.5f;
-    SDL_SetRenderDrawColor(m->ren, 10, 18, 44, 255); SDL_FRect panel = { 16, py, (float)(sw - 32), ph }; SDL_RenderFillRect(m->ren, &panel);
-    SDL_SetRenderDrawColor(m->ren, 60, 120, 220, 255); SDL_FRect top = { 16, py - 2, (float)(sw - 32), 2 }, bot = { 16, py + ph, (float)(sw - 32), 2 }; SDL_RenderFillRect(m->ren, &top); SDL_RenderFillRect(m->ren, &bot);
-    SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(m->ren, 60, 120, 220, 40);
-    for (float y = py; y < py + ph; y += 3) { SDL_FRect ln = { 16, y, (float)(sw - 32), 1 }; SDL_RenderFillRect(m->ren, &ln); }   /* console scanlines */
+    r_set_draw_color(m->ren, 10, 18, 44, 255); RFRect panel = { 16, py, (float)(sw - 32), ph }; r_fill_rect(m->ren, &panel);
+    r_set_draw_color(m->ren, 60, 120, 220, 255); RFRect top = { 16, py - 2, (float)(sw - 32), 2 }, bot = { 16, py + ph, (float)(sw - 32), 2 }; r_fill_rect(m->ren, &top); r_fill_rect(m->ren, &bot);
+    r_set_draw_blend(m->ren, R_BLEND_BLEND); r_set_draw_color(m->ren, 60, 120, 220, 40);
+    for (float y = py; y < py + ph; y += 3) { RFRect ln = { 16, y, (float)(sw - 32), 1 }; r_fill_rect(m->ren, &ln); }   /* console scanlines */
     if (open < 1) return;
     /* the lines, typed in at 2.2 lines / s */
     static const char *const LINES[] = { "CAVALRY COMMAND - ALERT", "TARGET:  BLACK HORNET LEADER", "VEHICLE: HORNET RACING BUGGY", "HEADING: NORTH - DOME CITY", "ORDERS:  PURSUE AND DESTROY" };
@@ -1158,7 +1136,7 @@ static void render_brief(Mode7 *m, Font *f, Font *small)
         int len = (int)strlen(LINES[i]), shown = (int)(lt * 40); if (shown > len) shown = len;
         uint8_t r = i == 0 ? 255 : i == nl - 1 ? 255 : 200, g = i == 0 ? 182 : i == nl - 1 ? 90 : 220, b = i == 0 ? 0 : i == nl - 1 ? 90 : 255;
         font_draw_n(small, LINES[i], shown, 30, py + 12 + i * 16, r, g, b);
-        if (shown < len && ((int)(t * 12) & 1)) { SDL_SetRenderDrawColor(m->ren, 200, 220, 255, 255); SDL_FRect cur = { 30 + font_text_width_n(small, LINES[i], shown), py + 12 + i * 16, 6, (float)small->h }; SDL_RenderFillRect(m->ren, &cur); }
+        if (shown < len && ((int)(t * 12) & 1)) { r_set_draw_color(m->ren, 200, 220, 255, 255); RFRect cur = { 30 + font_text_width_n(small, LINES[i], shown), py + 12 + i * 16, 6, (float)small->h }; r_fill_rect(m->ren, &cur); }
     }
     if (tl > nl / 2.2f + 0.3f) {
         const char *go = t < BRIEF_TEXT_DUR ? "PRESS A BUTTON" : "GO!";
@@ -1171,15 +1149,15 @@ static void render_brief(Mode7 *m, Font *f, Font *small)
     float sc = sc0 + 14.0f * zz;
     /* a pulsing red reticle around the car's silhouette, the scan bar rolling down it */
     Spr *ls = &m->spr[S_LEADER]; float hw = ls->w * sc * 0.5f + 6 + 2 * ((int)(t * 6) & 1), hh = ls->h * sc + 10;
-    SDL_SetRenderDrawColor(m->ren, 60, 20, 30, 255); SDL_FRect bg = { cx - hw, cy - hh + 2, hw * 2, hh }; SDL_RenderFillRect(m->ren, &bg);
+    r_set_draw_color(m->ren, 60, 20, 30, 255); RFRect bg = { cx - hw, cy - hh + 2, hw * 2, hh }; r_fill_rect(m->ren, &bg);
     draw_spr(m, S_LEADER, 1, cx, cy, sc, 0, 255, 255, 255, 255);
     float x0 = cx - hw, x1 = cx + hw, y1 = cy + 4, yy0 = y1 - hh, L = clampf(hw * 0.4f, 4, 14);
-    SDL_SetRenderDrawColor(m->ren, 255, 50, 50, 255);
-    SDL_FRect q[8] = { { x0, yy0, L, 2 }, { x0, yy0, 2, L }, { x1 - L, yy0, L, 2 }, { x1 - 2, yy0, 2, L }, { x0, y1 - 2, L, 2 }, { x0, y1 - L, 2, L }, { x1 - L, y1 - 2, L, 2 }, { x1 - 2, y1 - L, 2, L } };
-    SDL_RenderFillRects(m->ren, q, 8);
-    if (zt == 0) { SDL_SetRenderDrawColor(m->ren, 255, 80, 80, 120); SDL_FRect scan = { x0, yy0 + fmodf(t * 40, hh), hw * 2, 2 }; SDL_RenderFillRect(m->ren, &scan); }
+    r_set_draw_color(m->ren, 255, 50, 50, 255);
+    RFRect q[8] = { { x0, yy0, L, 2 }, { x0, yy0, 2, L }, { x1 - L, yy0, L, 2 }, { x1 - 2, yy0, 2, L }, { x0, y1 - 2, L, 2 }, { x0, y1 - L, 2, L }, { x1 - L, y1 - 2, L, 2 }, { x1 - 2, y1 - L, 2, L } };
+    r_fill_rects(m->ren, q, 8);
+    if (zt == 0) { r_set_draw_color(m->ren, 255, 80, 80, 120); RFRect scan = { x0, yy0 + fmodf(t * 40, hh), hw * 2, 2 }; r_fill_rect(m->ren, &scan); }
     if (tl > 1.0f && zt == 0) font_draw(small, "TARGET", cx - font_text_width(small, "TARGET") * 0.5f, yy0 - 12, 255, 60, 60);
-    if (zt > 0) { SDL_SetRenderDrawColor(m->ren, 255, 255, 255, (uint8_t)(255 * zz)); SDL_RenderFillRect(m->ren, &all); }
+    if (zt > 0) { r_set_draw_color(m->ren, 255, 255, 255, (uint8_t)(255 * zz)); r_fill_rect(m->ren, &all); }
 }
 
 static void render_hud(Mode7 *m)
@@ -1229,8 +1207,8 @@ static void render_hud(Mode7 *m)
             float rel = angdiff(atan2f(dwrap(b->y, m->py), dwrap(b->x, m->px)), m->cam_heading);
             if (fabsf(rel) > 0.75f) {
                 float cx = m->sw * 0.5f + sinf(rel) * (m->sw * 0.45f), cy = 60 - cosf(rel) * 40 + 60;
-                SDL_SetRenderDrawColor(m->ren, 255, 60, 60, 255);
-                SDL_FRect q = { cx - 4, cy - 4, 8, 8 }; SDL_RenderFillRect(m->ren, &q);
+                r_set_draw_color(m->ren, 255, 60, 60, 255);
+                RFRect q = { cx - 4, cy - 4, 8, 8 }; r_fill_rect(m->ren, &q);
                 font_draw(small, rel > 0 ? ">" : "<", cx + (rel > 0 ? 6 : -12), cy - 5, 255, 60, 60);
             }
         }
@@ -1238,10 +1216,10 @@ static void render_hud(Mode7 *m)
     if (m->msg_t > 0) font_draw(f, m->msg, (float)(m->sw / 2 - font_text_width(f, m->msg) / 2), 96, 255, 255, 255);
     if (m->phase == PH_FINISH) render_finish(m, f, small);
     if (m->paused) {
-        SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(m->ren, 0, 0, 0, 64);
-        SDL_FRect q = { 0, 0, (float)m->sw, (float)m->sh }; SDL_RenderFillRect(m->ren, &q);
+        r_set_draw_blend(m->ren, R_BLEND_BLEND); r_set_draw_color(m->ren, 0, 0, 0, 64);
+        RFRect q = { 0, 0, (float)m->sw, (float)m->sh }; r_fill_rect(m->ren, &q);
         Sprite *ps = sprite_get(0xB2143E42);
-        if (ps && ((SDL_GetTicks() / 16) & 0x7f) > 0x30) sprite_draw(ps, 0, (float)((m->sw - ps->w) / 2), (float)((m->sh - ps->h) / 2), false);
+        if (ps && ((plat_ticks_ms() / 16) & 0x7f) > 0x30) sprite_draw(ps, 0, (float)((m->sw - ps->w) / 2), (float)((m->sh - ps->h) / 2), false);
     }
 }
 
@@ -1252,9 +1230,9 @@ static void render_instructions(Mode7 *m, Font *f, Font *small)
 {
     float t = m->phase_t; int sw = m->sw, sh = m->sh;
     float open = clampf(t / INSTR_OPEN_DUR, 0, 1); open = 1 - (1 - open) * (1 - open);
-    SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(m->ren, 0, 0, 0, (uint8_t)(140 * open));
-    SDL_FRect scrim = { 0, 0, (float)sw, (float)sh }; SDL_RenderFillRect(m->ren, &scrim);
+    r_set_draw_blend(m->ren, R_BLEND_BLEND);
+    r_set_draw_color(m->ren, 0, 0, 0, (uint8_t)(140 * open));
+    RFRect scrim = { 0, 0, (float)sw, (float)sh }; r_fill_rect(m->ren, &scrim);
     static const struct { const char *label, *desc; } LINES[] = {
         { "STEER", "Left / Right" }, { "ACCELERATE", "Jump button or Up" }, { "FIRE", "Shoot button" },
         { "TURBO", "Aim button" }, { "BRAKE", "Down" },
@@ -1262,11 +1240,11 @@ static void render_instructions(Mode7 *m, Font *f, Font *small)
     int nl = (int)(sizeof LINES / sizeof *LINES);
     float full_h = 34 + nl * 14 + 22;
     float pw = (float)sw - 40, ph = full_h * open, px0 = 20, py0 = (sh - full_h) * 0.5f + (full_h - ph) * 0.5f;
-    SDL_SetRenderDrawColor(m->ren, 10, 18, 44, (uint8_t)(255 * open));
-    SDL_FRect panel = { px0, py0, pw, ph }; SDL_RenderFillRect(m->ren, &panel);
-    SDL_SetRenderDrawColor(m->ren, 60, 120, 220, (uint8_t)(255 * open));
-    SDL_FRect top = { px0, py0 - 2, pw, 2 }, bot = { px0, py0 + ph, pw, 2 };
-    SDL_RenderFillRect(m->ren, &top); SDL_RenderFillRect(m->ren, &bot);
+    r_set_draw_color(m->ren, 10, 18, 44, (uint8_t)(255 * open));
+    RFRect panel = { px0, py0, pw, ph }; r_fill_rect(m->ren, &panel);
+    r_set_draw_color(m->ren, 60, 120, 220, (uint8_t)(255 * open));
+    RFRect top = { px0, py0 - 2, pw, 2 }, bot = { px0, py0 + ph, pw, 2 };
+    r_fill_rect(m->ren, &top); r_fill_rect(m->ren, &bot);
     if (open < 1 || !f || !small) return;
     const char *title = "ALL GALAXY GRAND PRIX";
     font_draw(f, title, px0 + (pw - font_text_width(f, title)) * 0.5f, py0 + 8, 255, 182, 0);
@@ -1294,14 +1272,14 @@ void mode7_draw(Mode7 *m, bool scanlines)
     render_hud(m);
     if (m->dlg.active) dialog_draw(&m->dlg, m->ren, m->sw, m->sh);
     if (m->phase == PH_INSTRUCTIONS) { Font *f = font_get(0x4058897F), *small = font_get(0x12072E60); render_instructions(m, f, small); }
-    if (m->white > 0) { SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(m->ren, 255, 255, 255, (uint8_t)(255 * m->white)); SDL_FRect q = { 0, 0, (float)m->sw, (float)m->sh }; SDL_RenderFillRect(m->ren, &q); }
+    if (m->white > 0) { r_set_draw_blend(m->ren, R_BLEND_BLEND); r_set_draw_color(m->ren, 255, 255, 255, (uint8_t)(255 * m->white)); RFRect q = { 0, 0, (float)m->sw, (float)m->sh }; r_fill_rect(m->ren, &q); }
     if (scanlines) {
-        SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(m->ren, 0, 0, 0, 70);
-        for (int y = 1; y < m->sh; y += 2) { SDL_FRect q = { 0, (float)y, (float)m->sw, 1 }; SDL_RenderFillRect(m->ren, &q); }
+        r_set_draw_blend(m->ren, R_BLEND_BLEND); r_set_draw_color(m->ren, 0, 0, 0, 70);
+        for (int y = 1; y < m->sh; y += 2) { RFRect q = { 0, (float)y, (float)m->sw, 1 }; r_fill_rect(m->ren, &q); }
     }
     if (m->phase == PH_GAMEOVER || m->phase == PH_CLEARED) {
         float a = clampf(m->phase_t / (m->phase == PH_CLEARED ? 1.2f : 1.5f), 0, 1); uint8_t v = m->phase == PH_CLEARED ? 255 : 0;
-        SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(m->ren, v, v, v, (uint8_t)(a * 255));
-        SDL_FRect q = { 0, 0, (float)m->sw, (float)m->sh }; SDL_RenderFillRect(m->ren, &q);
+        r_set_draw_blend(m->ren, R_BLEND_BLEND); r_set_draw_color(m->ren, v, v, v, (uint8_t)(a * 255));
+        RFRect q = { 0, 0, (float)m->sw, (float)m->sh }; r_fill_rect(m->ren, &q);
     }
 }

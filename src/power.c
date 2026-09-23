@@ -39,7 +39,7 @@ void power_reset(Power *pw, int hero, bool bomb)
     power_close(pw);
     memset(pw, 0, sizeof *pw);
     pw->hero = hero & 3; pw->bomb = bomb; pw->items = POWER_ITEMS;
-    if (SDL_getenv("SABER_POWER")) pw->items = atoi(SDL_getenv("SABER_POWER"));   /* debug: items at the start */
+    if (plat_getenv("SABER_POWER")) pw->items = atoi(plat_getenv("SABER_POWER"));   /* debug: items at the start */
 }
 
 bool power_can_start(const Power *pw) { return pw->items > 0 && pw->cooldown <= 0 && pw->phase == PW_IDLE && pw->boost_t <= 0; }
@@ -47,11 +47,12 @@ bool power_in_cutin(const Power *pw) { return pw->phase == PW_CUTIN; }
 bool power_speed(const Power *pw) { return !pw->bomb && hero_of(pw) == HERO_APRIL && pw->boost_t > 0; }
 bool power_rapid(const Power *pw) { return !pw->bomb && hero_of(pw) == HERO_COLT && pw->boost_t > 0; }
 
-void power_start(Power *pw, SDL_Renderer *ren)
+void power_start(Power *pw, Ren *ren)
 {
     if (!power_can_start(pw)) return;
     pw->items--; pw->phase = PW_CUTIN; pw->t = 0; pw->dur = CUT_DUR; pw->strike = false;
-    music_pause(true);
+    music_set_duck(0.28f);
+    sfx_play_file(asset_path("power/saber_intermission.wav"));
     const char *clip = pw->bomb ? NULL : CLIP[hero_of(pw)];
     if (clip) {
         char buf[64]; snprintf(buf, sizeof buf, "%s.m4v", clip);
@@ -66,7 +67,7 @@ static void end_cutin(Power *pw)
     if (pw->video) { video_close(pw->video); pw->video = NULL; }
     pw->phase = PW_FLASH; pw->t = 0; pw->strike = true;
     pw->cooldown = pw->cooldown_max = pw->bomb ? BOMB_COOLDOWN : COOLDOWN;
-    music_pause(false);
+    music_set_duck(1.0f);
     int h = hero_of(pw);
     if (!pw->bomb && h == HERO_APRIL) { pw->boost_t = pw->boost_max = SPEED_TIME; sfx_play_file(asset_path("sfx/turbo_start.wav")); }
     else if (!pw->bomb && h == HERO_COLT) { pw->boost_t = pw->boost_max = RAPID_TIME; sfx_play(1, 0); }
@@ -94,7 +95,7 @@ bool power_take_strike(Power *pw) { bool s = pw->strike; pw->strike = false; ret
 void power_close(Power *pw)
 {
     if (pw->video) { video_close(pw->video); pw->video = NULL; voice_stop(); }
-    if (pw->phase == PW_CUTIN) music_pause(false);
+    if (pw->phase == PW_CUTIN) music_set_duck(1.0f);
     pw->phase = PW_IDLE;
 }
 
@@ -114,32 +115,32 @@ void power_draw_trail(const Power *pw, float cam_x, float cam_y)
     for (int k = 0; k < POWER_TRAIL; k++) {   /* oldest first */
         int i = (pw->trail_i + k) % POWER_TRAIL;
         const Character *c = &pw->trail[i];
-        if (pw->trail_life[i] <= 0 || !c->cb || !c->cb->tex) continue;
-        SDL_Texture *t = c->cb->tex;
-        SDL_SetTextureColorMod(t, 255, 90 + 20 * k, 190); SDL_SetTextureAlphaMod(t, (uint8_t)(170 * pw->trail_life[i] / 0.25f)); SDL_SetTextureBlendMode(t, SDL_BLENDMODE_ADD);
+        if (pw->trail_life[i] <= 0 || !c->cb || !cblock_tex(c->cb)) continue;
+        RTex *t = cblock_tex(c->cb);
+        rtex_set_color_mod(t, 255, 90 + 20 * k, 190); rtex_set_alpha_mod(t, (uint8_t)(170 * pw->trail_life[i] / 0.25f)); rtex_set_blend(t, R_BLEND_ADD);
         character_draw(c, cam_x, cam_y);
-        SDL_SetTextureColorMod(t, 255, 255, 255); SDL_SetTextureAlphaMod(t, 255); SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+        rtex_set_color_mod(t, 255, 255, 255); rtex_set_alpha_mod(t, 255); rtex_set_blend(t, R_BLEND_BLEND);
     }
 }
 
 /* ---- drawing */
-static void fill(SDL_Renderer *r, float x, float y, float w, float h, uint8_t R, uint8_t G, uint8_t B, uint8_t A)
+static void fill(Ren *r, float x, float y, float w, float h, uint8_t R, uint8_t G, uint8_t B, uint8_t A)
 {
-    SDL_SetRenderDrawColor(r, R, G, B, A); SDL_FRect q = { x, y, w, h }; SDL_RenderFillRect(r, &q);
+    r_set_draw_color(r, R, G, B, A); RFRect q = { x, y, w, h }; r_fill_rect(r, &q);
 }
 
-static void thick_line(SDL_Renderer *r, float x0, float y0, float x1, float y1, int w)
+static void thick_line(Ren *r, float x0, float y0, float x1, float y1, int w)
 {
-    for (int k = -w; k <= w; k++) { SDL_RenderLine(r, x0 + k, y0, x1 + k, y1); SDL_RenderLine(r, x0, y0 + k, x1, y1 + k); }
+    for (int k = -w; k <= w; k++) { r_line(r, x0 + k, y0, x1 + k, y1); r_line(r, x0, y0 + k, x1, y1 + k); }
 }
 
 /* the drawn cut-in, after the clips' opening: the screen darkens, a band in the hero's colour opens across the middle
  * with speed lines racing through it, the hero's face slides in from the right, the portrait from the left, the name
  * and the move type in, a glint, then everything burns out to white */
-static void draw_cutin(const Power *pw, SDL_Renderer *r, int sw, int sh)
+static void draw_cutin(const Power *pw, Ren *r, int sw, int sh)
 {
     int h = hero_of(pw); float t = pw->t;
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    r_set_draw_blend(r, R_BLEND_BLEND);
     fill(r, 0, 0, (float)sw, (float)sh, 0, 0, 0, (uint8_t)(170 * clampf(t / 0.15f, 0, 1)));
     float cy = sh * 0.5f, half = 64 * ease_out(t / 0.2f), top = cy - half, bot = cy + half;
     if (half < 1) return;
@@ -150,8 +151,8 @@ static void draw_cutin(const Power *pw, SDL_Renderer *r, int sw, int sh)
         fill(r, 0, y, (float)sw, 1, R, G, B, 255);
     }
     fill(r, 0, top - 2, (float)sw, 2, 0, 0, 0, 255); fill(r, 0, bot, (float)sw, 2, 0, 0, 0, 255);
-    SDL_Rect clip = { 0, (int)top, sw, (int)(bot - top) };
-    SDL_SetRenderClipRect(r, &clip);
+    RRect clip = { 0, (int)top, sw, (int)(bot - top) };
+    r_set_clip(r, &clip);
     /* speed lines racing left */
     for (int i = 0; i < 44; i++) {
         unsigned s = (unsigned)i * 2654435761u;
@@ -166,12 +167,12 @@ static void draw_cutin(const Power *pw, SDL_Renderer *r, int sw, int sh)
         int f = PIECE[h];
         float tx = sw * 0.70f - PIECE_C[f][0], ty = cy - PIECE_C[f][1];
         tx = floorf(tx + (1 - ease_out((t - 0.08f) / 0.25f)) * sw * 0.8f + (t - 0.33f) * -12);   /* keeps drifting a little */
-        SDL_Rect face = { (int)tx + PIECE_X[f][0], (int)top, PIECE_X[f][1] - PIECE_X[f][0], (int)(bot - top) };   /* not the black the briefing's collage filled around it */
-        SDL_GetRectIntersection(&face, &clip, &face);
-        SDL_SetRenderClipRect(r, &face);
+        RRect face = { (int)tx + PIECE_X[f][0], (int)top, PIECE_X[f][1] - PIECE_X[f][0], (int)(bot - top) };   /* not the black the briefing's collage filled around it */
+        r_rect_intersect(&face, &clip, &face);
+        r_set_clip(r, &face);
         cblock_draw_frame(pc, f, tx, floorf(ty), false);
     }
-    SDL_SetRenderClipRect(r, NULL);
+    r_set_clip(r, NULL);
     /* the portrait from the left, a drop shadow behind it, breaking out of the band */
     Sprite *po = sprite_get(PORTRAIT[h]);
     float px = 0;
@@ -182,10 +183,10 @@ static void draw_cutin(const Power *pw, SDL_Renderer *r, int sw, int sh)
         sprite_draw(po, 0, px, py, false);
         if (t > 0.72f && t < 1.05f) {   /* the glint */
             float g = (t - 0.72f) / 0.33f, gx = px + po->w * 0.7f, gy = py + po->h * 0.28f, a = sinf(g * 3.1415927f), l = 3 + 11 * a;
-            SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_ADD); SDL_SetRenderDrawColor(r, 255, 255, 255, (uint8_t)(255 * a));
-            SDL_RenderLine(r, gx - l, gy, gx + l, gy); SDL_RenderLine(r, gx, gy - l, gx, gy + l);
-            SDL_RenderLine(r, gx - l * 0.4f, gy - l * 0.4f, gx + l * 0.4f, gy + l * 0.4f); SDL_RenderLine(r, gx - l * 0.4f, gy + l * 0.4f, gx + l * 0.4f, gy - l * 0.4f);
-            SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+            r_set_draw_blend(r, R_BLEND_ADD); r_set_draw_color(r, 255, 255, 255, (uint8_t)(255 * a));
+            r_line(r, gx - l, gy, gx + l, gy); r_line(r, gx, gy - l, gx, gy + l);
+            r_line(r, gx - l * 0.4f, gy - l * 0.4f, gx + l * 0.4f, gy + l * 0.4f); r_line(r, gx - l * 0.4f, gy + l * 0.4f, gx + l * 0.4f, gy - l * 0.4f);
+            r_set_draw_blend(r, R_BLEND_BLEND);
         }
     }
     /* the name and the move */
@@ -193,7 +194,7 @@ static void draw_cutin(const Power *pw, SDL_Renderer *r, int sw, int sh)
     float tx = (po ? sw * 0.06f + po->w : 90) + 10;
     if (big && t > 0.45f) {   /* twice the size on a dark caption strip (it runs over the face) */
         float sl = ease_out((t - 0.45f) / 0.15f), y = bot - 24 - big->h * 2.0f;
-        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+        r_set_draw_blend(r, R_BLEND_BLEND);
         fill(r, tx - 6 + (1 - sl) * sw, y - 3, (float)sw, bot - y + 3, 0, 0, 0, 140);
         font_draw_scaled(big, NAME[h], tx + 2 - (1 - sl) * 40, y + 2, 2.0f, 0, 0, 0);
         font_draw_scaled(big, NAME[h], tx - (1 - sl) * 40, y, 2.0f, 255, 255, 255);
@@ -209,12 +210,12 @@ static void draw_cutin(const Power *pw, SDL_Renderer *r, int sw, int sh)
     if (w > 0) fill(r, 0, 0, (float)sw, (float)sh, 255, 255, 255, (uint8_t)(255 * w));
 }
 
-void power_draw(const Power *pw, SDL_Renderer *r, int sw, int sh)
+void power_draw(const Power *pw, Ren *r, int sw, int sh)
 {
     int h = hero_of(pw);
     if (pw->phase == PW_CUTIN) {
         if (pw->video) {
-            SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+            r_set_draw_blend(r, R_BLEND_BLEND);
             fill(r, 0, 0, (float)sw, (float)sh, 0, 0, 0, 255);
             video_draw(pw->video, r, sw, sh);
             float in = 1 - clampf(pw->t / 0.12f, 0, 1);   /* the clips open on white: cut from the game through it */
@@ -224,23 +225,23 @@ void power_draw(const Power *pw, SDL_Renderer *r, int sw, int sh)
     }
     if (pw->phase != PW_FLASH) return;
     float k = 1 - pw->t / FLASH_DUR;
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    r_set_draw_blend(r, R_BLEND_BLEND);
     /* white, going over to the hero's colour as it fades */
     float c = clampf(pw->t / 0.25f, 0, 1);
     fill(r, 0, 0, (float)sw, (float)sh, (uint8_t)(255 + (FLASH[h][0] - 255) * c), (uint8_t)(255 + (FLASH[h][1] - 255) * c), (uint8_t)(255 + (FLASH[h][2] - 255) * c), (uint8_t)(235 * k * k));
     if (!pw->bomb && h == HERO_SABER && pw->t < 0.45f) {   /* the saber's cuts across the screen */
         float a = 1 - pw->t / 0.45f;
-        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_ADD); SDL_SetRenderDrawColor(r, 200, 240, 255, (uint8_t)(255 * a));
+        r_set_draw_blend(r, R_BLEND_ADD); r_set_draw_color(r, 200, 240, 255, (uint8_t)(255 * a));
         thick_line(r, -10, sh * 0.15f, (float)sw + 10, sh * 0.75f, 1);
         thick_line(r, sw * 0.2f, (float)sh + 10, sw * 0.85f, -10, 1);
         thick_line(r, -10, sh * 0.8f, (float)sw + 10, sh * 0.35f, 0);
-        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+        r_set_draw_blend(r, R_BLEND_BLEND);
     }
 }
 
-void power_draw_hud(const Power *pw, SDL_Renderer *r, float x, float y, float w)
+void power_draw_hud(const Power *pw, Ren *r, float x, float y, float w)
 {
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    r_set_draw_blend(r, R_BLEND_BLEND);
     if (pw->boost_t > 0 && pw->boost_max > 0) {   /* April's / Colt's power running out */
         int h = hero_of(pw);
         fill(r, x, y, w, 2, 0, 0, 0, 200);

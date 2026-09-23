@@ -1,6 +1,7 @@
 #pragma once
 /* Graphics resources decoded from the packs: cblocks (tile banks + cell grids) and sprites. */
-#include <SDL3/SDL.h>
+#include "platform/render.h"
+#include "platform/plat.h"
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -8,19 +9,28 @@ typedef struct {
     uint32_t id;
     int frames, cols, rows;     /* cell grid per frame */
     int tw, th, ntiles;
-    const uint16_t *cells;      /* frames*cols*rows, 0xFFFF = empty (points into pack memory) */
+    const uint16_t *cells;      /* frames*cols*rows, 0xFFFF = empty (our copy) */
     const uint8_t  *mask;
-    SDL_Texture *tex;           /* tile sheet, TILES_PER_ROW tiles wide */
+    RTex *tex;           /* tile sheet, TILES_PER_ROW tiles wide; NULL while evicted (cblock_tex brings it back) */
     int sheet_cols;
+    bool from_pack;      /* can be rebuilt from its pack block (so its texture may be evicted) */
+    uint32_t last_used;  /* gfx frame of the last draw */
 } CBlock;
 
 typedef struct Sprite {
     uint32_t id;
     int w, h, frames;
-    SDL_Texture *tex;           /* frames laid out horizontally, each POT-padded frame cropped to w×h */
+    RTex *tex;           /* frames laid out horizontally, each POT-padded frame cropped to w×h; NULL while evicted */
+    bool from_pack;
+    uint32_t last_used;
 } Sprite;
 
-bool  gfx_init(SDL_Renderer *r);
+bool  gfx_init(Ren *r);
+/* once per drawn frame: the clock that decides which textures are idle enough to evict under memory pressure */
+void  gfx_frame(void);
+/* the texture to draw with (reloaded from the pack if it had been evicted) */
+RTex *sprite_tex(const Sprite *s);
+RTex *cblock_tex(const CBlock *c);
 CBlock *cblock_get(uint32_t id);          /* cached */
 /* a cblock made of our own RGBA sheet: one frame of (w/tw) x (h/th) cells, cell i = tile i (recreated heroes) */
 CBlock *cblock_from_rgba(uint32_t id, const uint32_t *px, int w, int h, int tw, int th);

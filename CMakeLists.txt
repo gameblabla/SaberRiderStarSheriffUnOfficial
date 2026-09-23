@@ -5,9 +5,12 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE RelWithDebInfo)
 endif()
+# the core game (src/*.c) + the SDL3 platform (src/platform/sdl3) + shared backend helpers (src/platform/common).
+# The Dreamcast build is Makefile.dc (KallistiOS).
 find_package(SDL3 REQUIRED CONFIG)
-file(GLOB SRC CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.c)
+file(GLOB SRC CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.c ${CMAKE_SOURCE_DIR}/src/platform/sdl3/*.c ${CMAKE_SOURCE_DIR}/src/platform/common/*.c)
 add_executable(saber_rider ${SRC})
+target_include_directories(saber_rider PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(saber_rider PRIVATE -Wall -Wextra -Wno-unused-parameter)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(VORBISFILE REQUIRED IMPORTED_TARGET vorbisfile)

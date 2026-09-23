@@ -9,7 +9,8 @@
  * mesas, a nearer pass, then it comes in to fight. It hovers and fires its
  * pilot gun diagonally, skims the ground (jump over it or slide under it),
  * and hangs overhead in its front pose raining straight-down bolts. */
-#include <SDL3/SDL.h>
+#include "platform/render.h"
+#include "platform/plat.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include "level.h"
@@ -77,5 +78,5 @@ void night_update(Night *n, Player *pl, Bullets *pb, Effects *fx, const Level *L
 /* per-layer night palette for the level-1 tile banks (false: skip the layer) */
 bool night_layer_tint(const Night *n, const Layer *ly, uint8_t *r, uint8_t *g, uint8_t *b);
 void night_draw_background(Night *n, float cam_x, int sw, int sh);
-void night_draw_layer(Night *n, SDL_Renderer *ren, int layer, float cam_x, float cam_y);   /* boss + shots in their sprite layer */
-void night_draw_hud(Night *n, SDL_Renderer *ren, int sw, int sh);
+void night_draw_layer(Night *n, Ren *ren, int layer, float cam_x, float cam_y);   /* boss + shots in their sprite layer */
+void night_draw_hud(Night *n, Ren *ren, int sw, int sh);

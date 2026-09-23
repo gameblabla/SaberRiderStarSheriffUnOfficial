@@ -15,6 +15,38 @@ Dependencies: SDL3, libvorbisfile, libavcodec/libswscale (FMV), CMake, a C11 com
     ./build/saber_rider /path/to/SaberRider/data
     ./build/saber_rider /path/to/SaberRider/data --level 2    # skip the front end: 1 the frontier town, 2 the Grand Prix, 3 Hyperjumper Pass, 4 the Red Palm Jungle
 
+## Dreamcast build
+
+The Dreamcast target uses KallistiOS, the native PowerVR renderer, AICA ADPCM
+samples, libADX music streaming, and the DCMV player. It shares gameplay,
+collision, levels, and menus with the SDL3 build through `src/platform/`.
+You need the original demo's `data/*.pck` files; the resulting disc image is
+for your own use with those data files.
+
+KOS, its kos-ports and the game must share one SH4 float ABI. The build expects
+`export KOS_SH4_PRECISION="-m4-single-only"` (32-bit `double`) in `environ.sh`,
+with KOS and the ports (libADX, sh4zam, stb_image) rebuilt after changing it.
+Mixing `-m4-single` code with the `-m4-single-only` newlib breaks libm and printf
+(`floorf(96)` returned 0).
+
+```sh
+source /opt/toolchains/dc/kos/environ.sh
+make -f Makefile.dc -j8
+make -f Makefile.dc disc DATA=/path/to/SaberRider/data
+```
+
+The playable image is `build/dc/saber_rider.cdi`. The disc builder requires
+FFmpeg, the KOS `wav2adpcm`, `pvrtex`, `scramble`, and `makeip` utilities, the
+local `../Dreamcast/dreamcast-fmv` converter, `mkisofs`, and `cdi4dc`.
+It converts the pack sound effects to AICA ADPCM, music to ADX, and the pack
+videos and power-attack clips to DCMV. Do not copy `video.pck` to the disc:
+the runtime opens the converted files in `/cd/video` instead.
+
+Controls: D-pad or stick moves, A jumps, B/X shoots, Y uses the power attack,
+triggers aim, and Start pauses. A+B+X+Y+Start resets to the console menu.
+For developer runs, put `NAME=value` lines such as `SABER_STAGE=3` in
+`build/dc/stage/saber.env`, then rebuild the ISO/CDI from that stage directory.
+
 After the last life a CONTINUE? screen counts 20 -> 0 (the CONTINUE option's credits, per run; START restarts the
 stage with the option's lives). An optional `assets/continue.png` goes behind its text (letterboxed to the screen).
 Every stage opens with its title card (STAGE n, the level's name typed in over an amber band, then the level
@@ -278,6 +310,8 @@ prints the wave state every second and each hit taken (`r6 hurt`).
 The HUD's item counter (next to the lives) holds the hero's power attacks: two a stage on the platform stages (1, 3,
 4, 5) and in the final phase. **X/F** (gamepad North) uses one; a 20 s cooldown (a grey bar under the counter) runs
 before the next. The world stops under a cut-in (the power button or Start skips it after 0.4 s):
+The 1.79 s cue in `assets/power/saber_intermission.wav` plays when a power attack begins. Level music keeps its place,
+dips under the cue and the attack voice, then rises smoothly after the strike.
 
 - **Saber Rider / Fireball**: their special-attack anime clips (`assets/power/`, made from the clips in the repo root
   by `tools/build_power_assets.py`: the picture up to the first all-white frame as a raw MPEG-4 stream that

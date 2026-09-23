@@ -86,7 +86,7 @@ void level_draw_layer(const Level *L, int li, float cam_x, float cam_y, int sw, 
     int tw = cb->tw, th = cb->th;
     bool wrap = ly->extra == 1;
     /* repeating layers auto-scroll by frame_count * parallax (TileMapRenderer::render, repeat mode); others by camera * parallax */
-    float ox = wrap ? (float)(SDL_GetTicks() * 60 / 1000) * ly->parallax : cam_x * ly->parallax, oy = wrap ? 0 : cam_y * ly->parallax;
+    float ox = wrap ? (float)(plat_ticks_ms() * 60 / 1000) * ly->parallax : cam_x * ly->parallax, oy = wrap ? 0 : cam_y * ly->parallax;
     int ncells = cblock_ncells(cb);
     int mapw_px = m->used_w * tw;
     if (wrap && mapw_px > 0) ox = fmodf(ox, (float)mapw_px), oy = 0;

@@ -4,13 +4,14 @@
  * mechs on the town). A Mode-7 floor under a 360-degree panorama, the Outrider mechs as scaled sprites; Ramrod
  * shoots (hold, the guns heat up) or punches (close range, alternating fists, the DC881 clip's arm).
  * Three waves, radio scenes between them. Art: assets/ramrod (../ramrod pipeline). */
-#include <SDL3/SDL.h>
+#include "platform/render.h"
+#include "platform/plat.h"
 #include <stdbool.h>
 #include "input.h"
 
 typedef struct Ramrod Ramrod;
 
-Ramrod *ramrod_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives);
+Ramrod *ramrod_create(Ren *ren, int sw, int sh, int difficulty, int lives);
 void    ramrod_destroy(Ramrod *r);
 void    ramrod_update(Ramrod *r, const Input *in, float dt);
 void    ramrod_draw(Ramrod *r, bool scanlines);

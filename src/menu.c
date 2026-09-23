@@ -15,12 +15,12 @@
 #define MENU_PERIOD 2.4f          /* +0x60: splash / zoom period */
 #define ATTRACT_FRAMES 1800       /* title idle -> intro (DAT_007c5bac) */
 
-static void fill(SDL_Renderer *r, int sw, int sh, uint8_t R, uint8_t G, uint8_t B, uint8_t A)
+static void fill(Ren *r, int sw, int sh, uint8_t R, uint8_t G, uint8_t B, uint8_t A)
 {
     if (A == 0) return;
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(r, R, G, B, A);
-    SDL_FRect q = { 0, 0, (float)sw, (float)sh }; SDL_RenderFillRect(r, &q);
+    r_set_draw_blend(r, R_BLEND_BLEND);
+    r_set_draw_color(r, R, G, B, A);
+    RFRect q = { 0, 0, (float)sw, (float)sh }; r_fill_rect(r, &q);
 }
 static bool confirm(const Input *in) { return btn_pressed(in, BTN_PAUSE) || btn_pressed(in, BTN_JUMP) || btn_pressed(in, BTN_SHOOT); }
 static bool action(const Input *in) { return btn_pressed(in, BTN_JUMP) || btn_pressed(in, BTN_SHOOT); }
@@ -28,8 +28,8 @@ static uint8_t clamp255(float v) { return v <= 0 ? 0 : v >= 255 ? 255 : (uint8_t
 /* the menu's universal easing: min(1, 2 sin(pi t / period)) — 0 at both ends of the period, 1 in the middle */
 static float ease(float t, float dur) { float x = 2.0f * sinf(PI * t / dur); return x > 1 ? 1 : x < 0 ? 0 : x; }
 static float zoom_scale(float f) { return 32.0f - 31.0f * f; }   /* DAT_007c422c + DAT_007c5854 * f */
-static bool blink_on(int mask, int lim) { return ((int)(SDL_GetTicks() / 16) & mask) < lim; }
-static uint32_t frame_no(void) { return (uint32_t)(SDL_GetTicks() / 16); }
+static bool blink_on(int mask, int lim) { return ((int)(plat_ticks_ms() / 16) & mask) < lim; }
+static uint32_t frame_no(void) { return (uint32_t)(plat_ticks_ms() / 16); }
 static void draw_centered(Sprite *s, int sw, int y) { if (s) sprite_draw(s, 0, (float)((sw - s->w) / 2), (float)y, false); }
 /* triangle-wave alpha used by the result screens: (frame*2)&0x7f folded into 0x33..0x73, relative to a 0x80 neutral */
 static uint8_t pulse_alpha(void) { unsigned u = (frame_no() * 2) & 0x7f; unsigned a = u < 0x40 ? u + 0x33 : 0xb3 - u; return (uint8_t)(a * 2); }
@@ -42,7 +42,7 @@ static void lives_caps(int difficulty, int *max_lives, int *max_cont)
     *max_cont  = difficulty == 0 ? 5 : difficulty == 1 ? 4 : 3;
 }
 
-static void open_briefing(Menu *m, SDL_Renderer *r)
+static void open_briefing(Menu *m, Ren *r)
 {
     const PackEntry *e = packs_find(0x29CAD5D3);   /* briefing script: line 1 = video name, rest = text */
     if (!e) return;
@@ -57,7 +57,7 @@ void menu_enter(Menu *m, int state)
 {
     if (m->video) { video_close(m->video); m->video = NULL; }
     int prev = m->state;
-    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "menu %d -> %d\n", prev, state);
+    if (plat_getenv("SABER_TRACE")) fprintf(stderr, "menu %d -> %d\n", prev, state);
     m->state = state; m->t = 0; m->dur = MENU_PERIOD; m->idle_frames = 0;
     switch (state) {
     case MS_SPLASH0: case MS_SPLASH1: case MS_SPLASH2: case MS_SPLASH3: case MS_INTRO:
@@ -76,7 +76,7 @@ void menu_enter(Menu *m, int state)
     }
 }
 
-void menu_update(Menu *m, const Input *in, float dt, int sw, SDL_Renderer *r)
+void menu_update(Menu *m, const Input *in, float dt, int sw, Ren *r)
 {
     (void)sw;
     switch (m->state) {
@@ -124,7 +124,7 @@ void menu_update(Menu *m, const Input *in, float dt, int sw, SDL_Renderer *r)
             break;
         case OPT_PLAYER: lives_caps(m->difficulty, &maxl, &maxc); m->lives += dir; if (m->lives < 0) m->lives = 0; if (m->lives > maxl) m->lives = maxl; break;
         case OPT_CONTINUE: lives_caps(m->difficulty, &maxl, &maxc); m->continues += dir; if (m->continues < 0) m->continues = 0; if (m->continues > maxc) m->continues = maxc; break;
-        case OPT_SCREEN: if (dir) { m->screen = (m->screen + 4 + dir) % 4; m->apply_screen_mode = true; } break;
+        case OPT_SCREEN: if (dir) { int n = plat_screen_modes(); m->screen = (m->screen + n + dir) % n; m->apply_screen_mode = true; } break;
         case OPT_RATIO:   /* WIDE -> 4:3 -> STRETCH -> WIDE */
             if (dir) { m->ratio = m->ratio == RATIO_WIDE ? (dir > 0 ? RATIO_43 : RATIO_STRETCH) : m->ratio == RATIO_43 ? (dir > 0 ? RATIO_STRETCH : RATIO_WIDE) : (dir > 0 ? RATIO_WIDE : RATIO_43); m->apply_screen_mode = true; }
             break;
@@ -208,10 +208,10 @@ static void draw_title_bg(Sprite *bg, int sw, int sh, float s)
     if (!bg) return;
     float w = bg->w * s, h = bg->h * s, cx = sw * 0.5f, y = (sh - h) * 0.5f;
     if (s == 1.0f) { sprite_draw(bg, 0, 0, 0, false); sprite_draw(bg, 0, (float)(sw - bg->w), 0, true); return; }
-    SDL_FRect src = { 0, 0, (float)bg->w, (float)bg->h };
-    SDL_FRect l = { cx - w, y, w, h }, rr = { cx, y, w, h };
-    SDL_RenderTexture(SDL_GetRendererFromTexture(bg->tex), bg->tex, &src, &l);
-    SDL_RenderTextureRotated(SDL_GetRendererFromTexture(bg->tex), bg->tex, &src, &rr, 0, NULL, SDL_FLIP_HORIZONTAL);
+    RFRect src = { 0, 0, (float)bg->w, (float)bg->h };
+    RFRect l = { cx - w, y, w, h }, rr = { cx, y, w, h };
+    r_tex(rtex_renderer(sprite_tex(bg)), sprite_tex(bg), &src, &l);
+    r_tex_rot(rtex_renderer(sprite_tex(bg)), sprite_tex(bg), &src, &rr, 0, NULL, R_FLIP_H);
 }
 
 static void draw_spiral(Menu *m, int sw, int sh, uint8_t bright)
@@ -223,7 +223,7 @@ static void draw_spiral(Menu *m, int sw, int sh, uint8_t bright)
     if (moon) sprite_draw_rotated(moon, 0, sw * 0.5f, sh * 0.5f, 1.0f, deg, bright, 255);
 }
 
-static void draw_options(Menu *m, SDL_Renderer *r, int sw, int sh)
+static void draw_options(Menu *m, Ren *r, int sw, int sh)
 {
     m->angle += STEP;
     draw_spiral(m, sw, sh, 0x33 * 2);
@@ -243,7 +243,7 @@ static void draw_options(Menu *m, SDL_Renderer *r, int sw, int sh)
     static const char *FILT[FILTER_COUNT] = { "NONE", "CRT", "DOUBLE", "DOUBLE+SCANLINES", "CRT+SCANLINES" };
     char lives[16], cont[16], scr[32], mus[24];
     snprintf(lives, sizeof lives, "%02d", m->lives); snprintf(cont, sizeof cont, "%02d", m->continues);
-    if (m->screen == 0) snprintf(scr, sizeof scr, "FULL %ux%u", 852, 480); else snprintf(scr, sizeof scr, "WINDOWED x%u", m->screen + 1);
+    plat_screen_label(m->screen, scr, sizeof scr);
     if (m->music_track == 0) snprintf(mus, sizeof mus, "OPTIONS"); else snprintf(mus, sizeof mus, "TEST TRACK%02d", m->music_track);
     const char *rows[7][2] = { { "LEVEL", DIFF[m->difficulty] }, { "PLAYER", lives }, { "CONTINUE", cont }, { "SCREEN", scr },
                                { "RATIO", m->ratio == RATIO_WIDE ? "WIDE" : m->ratio == RATIO_43 ? "4:3" : "STRETCH" }, { "FILTER", FILT[m->filter] }, { "MUSIC TEST", mus } };
@@ -257,7 +257,7 @@ static void draw_options(Menu *m, SDL_Renderer *r, int sw, int sh)
     (void)r;
 }
 
-static void draw_main(Menu *m, SDL_Renderer *r, int sw, int sh)
+static void draw_main(Menu *m, Ren *r, int sw, int sh)
 {
     Sprite *bg = sprite_get(0xD7DEBAC0), *logo = sprite_get(0xB04BAC5F), *shadow = sprite_get(0x989121EC);
     Sprite *start = sprite_get(0x01E9B701), *opt = sprite_get(0x8FF0AB30);
@@ -281,7 +281,7 @@ static void draw_main(Menu *m, SDL_Renderer *r, int sw, int sh)
     if (m->idle_frames > ATTRACT_FRAMES) fill(r, sw, sh, 0, 0, 0, clamp255((m->t - m->dur * 0.5f) * 255));
 }
 
-static void draw_briefing(Menu *m, SDL_Renderer *r, int sw, int sh)
+static void draw_briefing(Menu *m, Ren *r, int sw, int sh)
 {
     Sprite *room = sprite_get(0x0EAE8AEB);
     fill(r, sw, sh, 0, 0, 0, 255);
@@ -295,10 +295,10 @@ static void draw_briefing(Menu *m, SDL_Renderer *r, int sw, int sh)
         if (m->dlg.active && !m->dlg.closing && m->dlg.frame < 21) half = m->dlg.frame * 0.0075757f * vh;
         if (m->dlg.closing) half = m->dlg.frame * 0.0075757f * vh;
         if (half > 0) {
-            SDL_Rect clip = { (int)x, (int)(cy - half), (int)w + 1, (int)(half * 2) + 1 };
-            SDL_SetRenderClipRect(r, &clip);
+            RRect clip = { (int)x, (int)(cy - half), (int)w + 1, (int)(half * 2) + 1 };
+            r_set_clip(r, &clip);
             video_draw_rect(m->video, r, x, cy - h * 0.5f, w, h);
-            SDL_SetRenderClipRect(r, NULL);
+            r_set_clip(r, NULL);
         }
     }
     if (m->dlg.active) dialog_draw(&m->dlg, r, sw, sh);
@@ -319,7 +319,7 @@ static void draw_briefing(Menu *m, SDL_Renderer *r, int sw, int sh)
     }
 }
 
-static void draw_charsel(Menu *m, SDL_Renderer *r, int sw, int sh)
+static void draw_charsel(Menu *m, Ren *r, int sw, int sh)
 {
     /* FUN_004296d0 */
     m->angle += STEP;
@@ -359,7 +359,7 @@ static void draw_charsel(Menu *m, SDL_Renderer *r, int sw, int sh)
 
 /* CONTINUE? - white on black, the count in big digits shrinking away as the second runs out, the continues left
  * under it. An optional assets/continue.png (any size, letterboxed to the screen) goes behind the text. */
-static void draw_continue(Menu *m, SDL_Renderer *r, int sw, int sh)
+static void draw_continue(Menu *m, Ren *r, int sw, int sh)
 {
     fill(r, sw, sh, 0, 0, 0, 255);
     static Sprite *bg; static bool bg_tried;
@@ -389,14 +389,14 @@ static void draw_continue(Menu *m, SDL_Renderer *r, int sw, int sh)
     if (m->t < 0.5f) fill(r, sw, sh, 0, 0, 0, clamp255((1 - m->t * 2) * 255));
 }
 
-static void draw_credits(Menu *m, SDL_Renderer *r, int sw, int sh)
+static void draw_credits(Menu *m, Ren *r, int sw, int sh)
 {
     /* FUN_00427a60: title backdrop, half-size logo, EXIT, one [fade] block of the credits text at a time */
     Sprite *bg = sprite_get(0xD7DEBAC0), *logo = sprite_get(0xB04BAC5F), *shadow = sprite_get(0x989121EC), *ex = sprite_get(0x94C9A3DA);
     draw_title_bg(bg, sw, sh, 1.0f);
     if (logo) {
         float lx = (sw - logo->w * 0.5f) * 0.5f;
-        if (shadow) { SDL_SetTextureAlphaMod(shadow->tex, 80); sprite_draw_scaled(shadow, 0, lx, 0xc, shadow->w * 0.5f, shadow->h * 0.5f); SDL_SetTextureAlphaMod(shadow->tex, 255); }
+        if (shadow) { rtex_set_alpha_mod(sprite_tex(shadow), 80); sprite_draw_scaled(shadow, 0, lx, 0xc, shadow->w * 0.5f, shadow->h * 0.5f); rtex_set_alpha_mod(sprite_tex(shadow), 255); }
         sprite_draw_scaled(logo, 0, lx, 0xc, logo->w * 0.5f, logo->h * 0.5f);
     }
     uint8_t R, G, B; hilite(1, &R, &G, &B);
@@ -446,7 +446,7 @@ static Sprite *victory_art(int stage, int character)
     return cache[stage][h];
 }
 
-void menu_draw(Menu *m, SDL_Renderer *r, int sw, int sh)
+void menu_draw(Menu *m, Ren *r, int sw, int sh)
 {
     switch (m->state) {
     case MS_SPLASH0: { fill(r, sw, sh, 0, 0, 0, 255); Sprite *s = sprite_get(0x7C5F519A); draw_centered(s, sw, s ? (sh - s->h) / 2 : 0); break; }

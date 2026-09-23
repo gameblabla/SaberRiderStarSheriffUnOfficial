@@ -32,7 +32,7 @@ void enemies_add_trigger(Enemies *E, const LevelObject *o)   /* FUN_00421070 + F
     t->remaining = o->loops; t->remaining_init = o->loops;
     for (int i = 0; i < o->n_wp && i < 8; i++) { t->wp[i][0] = o->wp[i][0]; t->wp[i][1] = o->wp[i][1]; t->nwp++; }
     if (t->nwp == 0) { t->wp[0][0] = o->x; t->wp[0][1] = o->y; t->nwp = 1; }
-    if (SDL_getenv("SABER_TRACE")) { fprintf(stderr, "trigger type=%d zone=%.0f..%.0f x %.0f..%.0f every=%d loops=%d wp=", t->type, t->cx - t->hx, t->cx + t->hx, t->cy - t->hy, t->cy + t->hy, t->interval_ms, t->remaining); for (int i = 0; i < t->nwp; i++) fprintf(stderr, "(%.0f,%.0f)", t->wp[i][0], t->wp[i][1]); fprintf(stderr, "\n"); }
+    if (plat_getenv("SABER_TRACE")) { fprintf(stderr, "trigger type=%d zone=%.0f..%.0f x %.0f..%.0f every=%d loops=%d wp=", t->type, t->cx - t->hx, t->cx + t->hx, t->cy - t->hy, t->cy + t->hy, t->interval_ms, t->remaining); for (int i = 0; i < t->nwp; i++) fprintf(stderr, "(%.0f,%.0f)", t->wp[i][0], t->wp[i][1]); fprintf(stderr, "\n"); }
 }
 
 static Enemy *alloc_slot(Enemies *E, int cls)   /* FUN_0041f980 */
@@ -41,7 +41,7 @@ static Enemy *alloc_slot(Enemies *E, int cls)   /* FUN_0041f980 */
     return NULL;
 }
 
-static void kill(Enemies *E, Enemy *e, int ms)   /* FUN_0041faf0 */
+static void enemy_kill(Enemies *E, Enemy *e, int ms)   /* FUN_0041faf0 */
 {
     (void)E; e->dying = true; e->death_t = ms * 0.001f;
 }
@@ -120,7 +120,7 @@ static Enemy *spawn_convoy(Enemies *E, const Trigger *t, float x, float y, const
         px0 += right ? step : -step;   /* the column extends away from the player (FUN_00415550) */
     }
     convoy_check(E);
-    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "convoy spawn: trigger x=%.0f player %.0f first horse %.0f step %.0f speed %.0f\n", x, E->px, head ? head->ch.body.x : -1, step, tmp.speed);
+    if (plat_getenv("SABER_TRACE")) fprintf(stderr, "convoy spawn: trigger x=%.0f player %.0f first horse %.0f step %.0f speed %.0f\n", x, E->px, head ? head->ch.body.x : -1, step, tmp.speed);
     return head;
 }
 
@@ -169,7 +169,7 @@ Enemy *enemy_spawn(Enemies *E, const Trigger *t, float x, float y, const Level *
         if (cls >= EC_STAMPEDE) { if (E->px <= b->x) character_move_left(&e->ch, 0); else character_move_right(&e->ch, 4); }
     } else if (cls == EC_HORSEBOSS) {
         b->x = x; b->y = y; b->flags = 0x0f | PHYS_NO_GRAVITY;
-        e->hp = SDL_getenv("SABER_BOSSHP") ? atoi(SDL_getenv("SABER_BOSSHP")) : 0x42; e->link = -1; e->ch.state = CS_FALL; e->ch.facing = 0; e->ch.aim = AIM_L;   /* debug: SABER_BOSSHP=n */
+        e->hp = plat_getenv("SABER_BOSSHP") ? atoi(plat_getenv("SABER_BOSSHP")) : 0x42; e->link = -1; e->ch.state = CS_FALL; e->ch.facing = 0; e->ch.aim = AIM_L;   /* debug: SABER_BOSSHP=n */
         E->boss_phase = 0;
     } else if (cls == EC_SHIELD) {
         e->ch.facing = E->px <= b->x ? 0 : 1;
@@ -284,7 +284,7 @@ resolve:
     }
     if (knock) b->vx += knock * 102.0f;
     if (die && c->state == CS_DEAD && !e->dying) { sfx_play(5, 0); sfx_play(6, 3); }
-    if (die) kill(E, e, 0x19f);
+    if (die) enemy_kill(E, e, 0x19f);
 }
 
 static void update_walker(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, float cam_x, int sw, float dt)   /* FUN_004144d0 */
@@ -525,7 +525,7 @@ static void update_prop(Enemies *E, Enemy *e, float cam_x, int sw)
     Character *c = &e->ch;
     c->body.flags = 0x1f;
     character_set_anim(c, 1);
-    if (c->body.x < cam_x - sw) kill(E, e, 0x19f);
+    if (c->body.x < cam_x - sw) enemy_kill(E, e, 0x19f);
 }
 
 /* FUN_004121a0: stampede horses (types 24..27): run across the screen at a fixed pixel speed per frame */
@@ -537,8 +537,8 @@ static void update_stampede(Enemies *E, Enemy *e, float cam_x, int sw)
     float sp = SPEED[e->cls - EC_STAMPEDE];
     bool right = c->aim == AIM_R;
     character_set_anim(c, right ? 2 : 1);
-    if (right) { c->body.x += sp; if (c->body.x - 2 * c->origin_x > cam_x + sw) kill(E, e, 0x19f); }
-    else { c->body.x -= sp; if (c->body.x + 2 * c->origin_x < cam_x) kill(E, e, 0x19f); }
+    if (right) { c->body.x += sp; if (c->body.x - 2 * c->origin_x > cam_x + sw) enemy_kill(E, e, 0x19f); }
+    else { c->body.x -= sp; if (c->body.x + 2 * c->origin_x < cam_x) enemy_kill(E, e, 0x19f); }
 }
 
 /* FUN_00415c10: convoy horse. Forced walk state, no gravity/collision, tramples the player and humanoid enemies. */
@@ -571,10 +571,10 @@ static void update_horse(Enemies *E, Enemy *e, Player *pl, float cam_x, int sw, 
         o->ch.state = CS_DEAD; sfx_play(5, 0); sfx_play(6, 3);
         character_resolve(&o->ch, dt);
         o->ch.body.vx += e->ch.facing == 0 ? -102.0f : 102.0f;
-        kill(E, o, 0x19f);
+        enemy_kill(E, o, 0x19f);
     }
     character_resolve(c, dt);
-    if (offscreen) kill(E, e, 0x19f); else sfx_play(20, 0);
+    if (offscreen) enemy_kill(E, e, 0x19f); else sfx_play(20, 0);
 }
 
 /* FUN_00417b60: the cutscene Outrider on the Ramrod's roof (type 28). Alarm pose when seen, then runs off; despawns
@@ -587,7 +587,7 @@ static void update_cutscene_outrider(Enemies *E, Enemy *e, float cam_x, int sw, 
         if (c->state == CS_IDLE) { c->state = CS_SLIDE; c->slide_t = 2.0f; sfx_play(22, 0); }
         else if (c->state == CS_SLIDE && c->slide_t < 1.0f) { c->state = CS_WALK; e->ch.facing = 1; c->aim = AIM_R; c->slide_t = 0; c->alert_time = 50.0f; e->ft = 50.0f; }
     } else {
-        if (e->ft >= 40.0f) kill(E, e, 0x19f);      /* ran off the screen */
+        if (e->ft >= 40.0f) enemy_kill(E, e, 0x19f);      /* ran off the screen */
         else { e->ft = 0; b->vx = b->vy = 0; }
     }
     character_sync_ground(c);
@@ -623,7 +623,7 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
          * sideways (the port used to keep hovering in place here) */
         c->state = CS_DEAD;
         b->flags = 0x0f; b->vx = 0;
-        if (SDL_getenv("SABER_TRACE") && (E->boss_phase % 10) == 0) fprintf(stderr, "boss dying phase=%d x=%.0f y=%.0f vy=%.0f\n", E->boss_phase, b->x, b->y, b->vy);
+        if (plat_getenv("SABER_TRACE") && (E->boss_phase % 10) == 0) fprintf(stderr, "boss dying phase=%d x=%.0f y=%.0f vy=%.0f\n", E->boss_phase, b->x, b->y, b->vy);
         b->x += (float)(rnd(180)) / 60.0f - 153.0f / 60.0f;
         if (rnd(10) >= 9) {
             AnimDef a = { 0, 0, 11, 11, 0.025f, 0 };
@@ -640,7 +640,7 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
     b->flags = 0x0f | PHYS_NO_GRAVITY;
     b->vy = sinf((float)(E->frame % 66) * 0.0952f) * amp;
     if (E->boss_phase == 0) { E->boss_phase = 1; E->cam_locked = true; music_play(8, true); sfx_play(0x13, 0); }
-    if (SDL_getenv("SABER_TRACE") && (E->frame % 10) == 0)
+    if (plat_getenv("SABER_TRACE") && (E->frame % 10) == 0)
         fprintf(stderr, "boss st=%d layer=%d x=%.0f y=%.0f vx=%.0f cam=%.0f phase=%d dir=%d aim=%d hp=%d anim=%d\n", c->state, e->layer, b->x, b->y, b->vx, cam_x, E->boss_phase, e->dir, c->aim, e->hp, c->anim);
 
     switch (c->state) {
@@ -710,7 +710,7 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
             pb->b[i] = pb->b[--pb->n];
             if (c->flags & (CF_HIT | CF_HIT_ALT)) break;
             if (--e->hp <= 0) {
-                kill(E, e, 0xed8); c->state = CS_DEAD; E->boss_phase = 1; c->flags &= ~CF_SHOOT;
+                enemy_kill(E, e, 0xed8); c->state = CS_DEAD; E->boss_phase = 1; c->flags &= ~CF_SHOOT;
                 if (e->link >= 0 && E->e[e->link].cls) { E->e[e->link].cls = 0; E->count--; e->link = -1; }
             } else {
                 c->flags |= CF_HIT; c->hit_t = 4.0f;
@@ -856,7 +856,7 @@ static void update_shield(Enemies *E, Enemy *e, Player *pl, Bullets *pb, Bullets
         c->state = CS_DEAD; b->vx = knock * 102.0f;
         if (e->st == 1) e->st = sh_shield_up(e) ? 0 : 2;   /* the death set with or without the panel */
         sfx_play(5, 0); sfx_play(6, 3);
-        kill(E, e, 0x19f);
+        enemy_kill(E, e, 0x19f);
     }
 }
 
@@ -873,15 +873,15 @@ static void draw_shield(const Enemy *e, float cam_x, float cam_y)
     else frame = e->st == 2 ? 7 : 0;
     float x = floorf(c->body.x - cam_x) - (c->facing ? SH_AX : 63.0f - SH_AX), y = floorf(sh_feet(e) - cam_y) - SH_FEET;
     bool flash = e->flash > 0 && !e->dying;
-    if (flash) SDL_SetTextureColorMod(spr->tex, 255, 170, 170);
+    if (flash) rtex_set_color_mod(sprite_tex(spr), 255, 170, 170);
     /* in a tower cabin the shield's foot (it reaches 5 px below his feet) would show through the gaps under the
        front wall's bottom beam: nothing below the feet */
-    SDL_Renderer *ren = e->on_deck ? SDL_GetRendererFromTexture(spr->tex) : NULL;
-    SDL_Rect clip = { -64, -64, 4096, (int)(y + SH_FEET) + 64 + 1 };
-    if (ren) SDL_SetRenderClipRect(ren, &clip);
+    Ren *ren = e->on_deck ? rtex_renderer(sprite_tex(spr)) : NULL;
+    RRect clip = { -64, -64, 4096, (int)(y + SH_FEET) + 64 + 1 };
+    if (ren) r_set_clip(ren, &clip);
     sprite_draw(spr, frame, x, y, c->facing == 0);
-    if (ren) SDL_SetRenderClipRect(ren, NULL);
-    if (flash) SDL_SetTextureColorMod(spr->tex, 255, 255, 255);
+    if (ren) r_set_clip(ren, NULL);
+    if (flash) rtex_set_color_mod(sprite_tex(spr), 255, 255, 255);
 }
 
 /* stage 4, after the cabin walls: a tower sniper's rifle aimed down reaches over his cabin's front wall */
@@ -896,9 +896,9 @@ void enemies_draw_front(const Enemies *E, float cam_x, float cam_y)
         const Character *c = &e->ch;
         float x = floorf(c->body.x - cam_x) - (c->facing ? SH_AX : 63.0f - SH_AX), y = floorf(sh_feet(e) - cam_y) - SH_FEET;
         bool flash = e->flash > 0;
-        if (flash) SDL_SetTextureColorMod(spr->tex, 255, 170, 170);
+        if (flash) rtex_set_color_mod(sprite_tex(spr), 255, 170, 170);
         sprite_draw(spr, 22, x, y, c->facing == 0);
-        if (flash) SDL_SetTextureColorMod(spr->tex, 255, 255, 255);
+        if (flash) rtex_set_color_mod(sprite_tex(spr), 255, 255, 255);
     }
 }
 
@@ -928,15 +928,15 @@ int enemies_power_strike(Enemies *E, Effects *fx, float cam_x, int sw, int sh, f
         case EC_STALKER: case EC_SHIELD:
             if (e->cls == EC_SHIELD) { if (e->dormant) continue; if (e->st == 1) e->st = 2; }   /* the death set without the panel */
             c->state = CS_DEAD; b->vx = (b->x < E->px ? -1.0f : 1.0f) * 102.0f;
-            kill(E, e, 0x19f); n++;
+            enemy_kill(E, e, 0x19f); n++;
             effects_spawn(fx, 0x9C861FF3, e->layer, &blast, b->x, b->y - 20.0f, 32, 32, 0);
             break;
         case EC_HORSEBOSS: {
             if (e->variant == 99 || c->state != CS_WALK) break;
-            int dmg = (int)ceilf((SDL_getenv("SABER_BOSSHP") ? atoi(SDL_getenv("SABER_BOSSHP")) : 0x42) * boss_frac);
+            int dmg = (int)ceilf((plat_getenv("SABER_BOSSHP") ? atoi(plat_getenv("SABER_BOSSHP")) : 0x42) * boss_frac);
             for (int k = 0; k < 6; k++) effects_spawn(fx, 0x9C861FF3, e->layer, &blast, b->x - 50.0f + rand() % 100, b->y - 40.0f + rand() % 50, 32, 32, 0);
             if ((e->hp -= dmg) <= 0) {
-                e->hp = 0; kill(E, e, 0xed8); c->state = CS_DEAD; E->boss_phase = 1; c->flags &= ~CF_SHOOT;
+                e->hp = 0; enemy_kill(E, e, 0xed8); c->state = CS_DEAD; E->boss_phase = 1; c->flags &= ~CF_SHOOT;
                 if (e->link >= 0 && E->e[e->link].cls) { E->e[e->link].cls = 0; E->count--; e->link = -1; }
             } else { c->flags |= CF_HIT; c->hit_t = 4.0f; }
             n++;
@@ -987,9 +987,9 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
         }
         physics_step(W, L, &e->ch.body, dt);
         character_animate(&e->ch, dt);
-        if (SDL_getenv("SABER_TRACE") && e->cls < 8 && !e->dying && ((E->tick % 60) == 0 || (SDL_getenv("SABER_TRACE")[0] == '2' && (e->ch.body.x < cam_x + 40.0f || e->ch.body.x > cam_x + 380.0f))))
+        if (plat_getenv("SABER_TRACE") && e->cls < 8 && !e->dying && ((E->tick % 60) == 0 || (plat_getenv("SABER_TRACE")[0] == '2' && (e->ch.body.x < cam_x + 40.0f || e->ch.body.x > cam_x + 380.0f))))
             fprintf(stderr, "enemy[%d] cls=%d type=%d st=%d face=%d pos=%.1f,%.0f hx=%.0f ox=%.0f fl=%x v=%.0f,%.0f coll=%x speed=%g gun=%d cd=%.2f cam=%.0f\n", (int)(e - E->e), e->cls, e->type, e->ch.state, e->ch.facing, e->ch.body.x, e->ch.body.y, e->ch.body.hx, e->ch.body.ox, e->ch.body.flags, e->ch.body.vx, e->ch.body.vy, e->ch.coll, e->ch.speed, e->gun_alive, e->gun_cd, cam_x);
-        if (SDL_getenv("SABER_TRACE") && e->cls < 8 && !e->dying) {   /* debug: humanoid that wants to move but does not */
+        if (plat_getenv("SABER_TRACE") && e->cls < 8 && !e->dying) {   /* debug: humanoid that wants to move but does not */
             if (fabsf(e->ch.body.x - e->dbg_x) < 0.5f && e->ch.body.vx != 0) { if (++e->dbg_still == 120) fprintf(stderr, "stuck? cls=%d state=%d pos=%.0f,%.0f vx=%.0f coll=%x cam=%.0f\n", e->cls, e->ch.state, e->ch.body.x, e->ch.body.y, e->ch.body.vx, e->ch.coll, cam_x); }
             else e->dbg_still = 0;
             e->dbg_x = e->ch.body.x;

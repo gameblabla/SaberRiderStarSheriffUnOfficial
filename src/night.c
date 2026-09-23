@@ -89,7 +89,7 @@ bool night_init(Night *n, Level *L, int difficulty)
     n->sky = load_sprite("stage3/native/stage3_night_sky.png", 0x48330009);
     n->moon = load_sprite("stage3/native/stage3_red_moon.png", 0x4833000A);
     night_boss_load(n, L, difficulty);
-    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "stage3: route %.0f px, boss hp %d\n", L->width, n->hp);
+    if (plat_getenv("SABER_TRACE")) fprintf(stderr, "stage3: route %.0f px, boss hp %d\n", L->width, n->hp);
     return true;
 }
 
@@ -111,7 +111,7 @@ void night_boss_load(Night *n, const Level *L, int difficulty)
     n->front_fire = load_sprite("hyperjumper/front_fire.png", 0x48330006);
     n->projectile_diagonal = load_sprite("hyperjumper/projectile_diagonal.png", 0x48330007);
     n->projectile_front = load_sprite("hyperjumper/projectile_front.png", 0x48330008);
-    n->hp_max = n->hp = SDL_getenv("SABER_BOSSHP") ? atoi(SDL_getenv("SABER_BOSSHP"))   /* debug: SABER_BOSSHP=n */
+    n->hp_max = n->hp = plat_getenv("SABER_BOSSHP") ? atoi(plat_getenv("SABER_BOSSHP"))   /* debug: SABER_BOSSHP=n */
                       : difficulty == 0 ? 48 : difficulty == 1 ? 60 : 72;
     n->state = HJ_DORMANT;
 }
@@ -201,7 +201,7 @@ static bool flash_frame(const Night *n) { return n->shooting && FIRE_PERIOD - n-
 static void set_state(Night *n, HyperState s)
 {
     n->state = s; n->st = 0;
-    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "stage3: hyperjumper state %d at %.0f,%.0f hp %d\n", s, n->bx, n->by, n->hp);
+    if (plat_getenv("SABER_TRACE")) fprintf(stderr, "stage3: hyperjumper state %d at %.0f,%.0f hp %d\n", s, n->bx, n->by, n->hp);
 }
 
 static void begin_side(Night *n, int dir)
@@ -463,19 +463,19 @@ void night_draw_background(Night *n, float cam_x, int sw, int sh)
     if (n->moon) sprite_draw(n->moon, 0, floorf(sw * 0.70f - cam_x * 0.02f), 22, false);
 }
 
-static void draw_sprite(SDL_Renderer *ren, const Sprite *s, float cx, float cy, float scale, bool flip,
+static void draw_sprite(Ren *ren, const Sprite *s, float cx, float cy, float scale, bool flip,
                         uint8_t r, uint8_t g, uint8_t b, float angle)
 {
     if (!s) return;
-    SDL_FRect src = { 0, 0, (float)s->w, (float)s->h };
+    RFRect src = { 0, 0, (float)s->w, (float)s->h };
     float w = roundf(s->w * scale), h = roundf(s->h * scale);
-    SDL_FRect dst = { floorf(cx) - floorf(w * 0.5f), floorf(cy) - floorf(h * 0.5f), w, h };
-    SDL_SetTextureColorMod(s->tex, r, g, b);
-    SDL_RenderTextureRotated(ren, s->tex, &src, &dst, angle, NULL, flip ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
-    SDL_SetTextureColorMod(s->tex, 255, 255, 255);
+    RFRect dst = { floorf(cx) - floorf(w * 0.5f), floorf(cy) - floorf(h * 0.5f), w, h };
+    rtex_set_color_mod(sprite_tex(s), r, g, b);
+    r_tex_rot(ren, sprite_tex(s), &src, &dst, angle, NULL, flip ? R_FLIP_H : R_FLIP_NONE);
+    rtex_set_color_mod(sprite_tex(s), 255, 255, 255);
 }
 
-void night_draw_layer(Night *n, SDL_Renderer *ren, int layer, float cam_x, float cam_y)
+void night_draw_layer(Night *n, Ren *ren, int layer, float cam_x, float cam_y)
 {
     float x = n->bx - cam_x, y = n->by - cam_y;
     bool blink = ((int)(n->st * 30.0f)) & 1;
@@ -511,18 +511,18 @@ void night_draw_layer(Night *n, SDL_Renderer *ren, int layer, float cam_x, float
     }
 }
 
-void night_draw_hud(Night *n, SDL_Renderer *ren, int sw, int sh)
+void night_draw_hud(Night *n, Ren *ren, int sw, int sh)
 {
     (void)sh;
     if (!n->boss_started || n->state < HJ_SIDE_IN || n->state >= HJ_DONE) return;
     Font *f = font_get(0x12072E60);
     float bw = 96, x = sw - bw - 10, y = 20;
     if (f) font_draw(f, "HYPERJUMPER", (int)x, 8, 220, 226, 245);
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(ren, 10, 12, 30, 200);
-    SDL_FRect bg = { x - 1, y - 1, bw + 2, 7 };
-    SDL_RenderFillRect(ren, &bg);
-    SDL_SetRenderDrawColor(ren, 230, 50, 50, 255);
-    SDL_FRect fg = { x, y, bw * (float)n->hp / (float)n->hp_max, 5 };
-    SDL_RenderFillRect(ren, &fg);
+    r_set_draw_blend(ren, R_BLEND_BLEND);
+    r_set_draw_color(ren, 10, 12, 30, 200);
+    RFRect bg = { x - 1, y - 1, bw + 2, 7 };
+    r_fill_rect(ren, &bg);
+    r_set_draw_color(ren, 230, 50, 50, 255);
+    RFRect fg = { x, y, bw * (float)n->hp / (float)n->hp_max, 5 };
+    r_fill_rect(ren, &fg);
 }

@@ -120,14 +120,14 @@ void dark_begin(DarkApril *d, float arena_x, int sw, int difficulty)
     memset(d, 0, sizeof *d);
     d->state = DA_WAIT; d->arena_x = arena_x; d->sw = sw; d->difficulty = difficulty;
     d->hp = d->hp_max = difficulty == 0 ? 14 : difficulty == 1 ? 20 : 26;
-    if (SDL_getenv("SABER_DARKHP")) d->hp = d->hp_max = atoi(SDL_getenv("SABER_DARKHP"));   /* debug */
+    if (plat_getenv("SABER_DARKHP")) d->hp = d->hp_max = atoi(plat_getenv("SABER_DARKHP"));   /* debug */
     avatar_load();
     hero_quiet(true);   /* April's body, but the player's grunts stay the player's */
     player_spawn(&d->p, CRHC_APRIL, arena_x + sw - 80.0f, 120.0f);
     hero_quiet(false);
     d->p.quiet = true; d->p.locked = true;
     for (int b = 0; b < BTN_COUNT; b++) d->in.state[b] = 1;
-    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "dark april: arena %.0f, hp %d\n", arena_x, d->hp);
+    if (plat_getenv("SABER_TRACE")) fprintf(stderr, "dark april: arena %.0f, hp %d\n", arena_x, d->hp);
 }
 
 bool dark_holds_arena(const DarkApril *d) { return d->state != DA_OFF; }
@@ -440,69 +440,69 @@ void dark_update(DarkApril *d, Player *pl, const Input *pin, const Level *L, con
     }
     if (d->state != prev) {
         d->t = 0;
-        if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "dark april: state %d -> %d (hp %d)\n", prev, d->state, d->hp);
+        if (plat_getenv("SABER_TRACE")) fprintf(stderr, "dark april: state %d -> %d (hp %d)\n", prev, d->state, d->hp);
     }
-    if (SDL_getenv("SABER_TRACE") && d->state == DA_FIGHT)
+    if (plat_getenv("SABER_TRACE") && d->state == DA_FIGHT)
         fprintf(stderr, "dark: mode=%d st=%d x=%.0f y=%.0f hp=%d hero=%d/%d in=%d%d%d%d%d%d%d\n", d->mode, c->state, c->body.x, c->body.y, d->hp, pl->hp, pl->lives,
                 d->want[0], d->want[1], d->want[2], d->want[3], d->want[4], d->want[5], d->want[6]);
 }
 
 /* her body with the sheet texture's colour, alpha and blend mode set for this draw (April's sheet is shared with the
  * hero when that is April: everything is put back) */
-static void draw_as(const Character *c, float cx, float cy, uint8_t r, uint8_t g, uint8_t b, uint8_t a, SDL_BlendMode m)
+static void draw_as(const Character *c, float cx, float cy, uint8_t r, uint8_t g, uint8_t b, uint8_t a, RBlend m)
 {
-    if (!c->cb || !c->cb->tex || !a) return;
-    SDL_Texture *t = c->cb->tex;
-    SDL_SetTextureColorMod(t, r, g, b); SDL_SetTextureAlphaMod(t, a); SDL_SetTextureBlendMode(t, m);
+    if (!c->cb || !cblock_tex(c->cb) || !a) return;
+    RTex *t = cblock_tex(c->cb);
+    rtex_set_color_mod(t, r, g, b); rtex_set_alpha_mod(t, a); rtex_set_blend(t, m);
     character_draw(c, cx, cy);
-    SDL_SetTextureColorMod(t, 255, 255, 255); SDL_SetTextureAlphaMod(t, 255); SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+    rtex_set_color_mod(t, 255, 255, 255); rtex_set_alpha_mod(t, 255); rtex_set_blend(t, R_BLEND_BLEND);
 }
 
 void dark_draw(const DarkApril *d, float cam_x, float cam_y)
 {
     if (d->state == DA_OFF) return;
     const Character *c = &d->p.ch;
-    SDL_Renderer *ren = c->cb && c->cb->tex ? SDL_GetRendererFromTexture(c->cb->tex) : NULL;
+    Ren *ren = c->cb && cblock_tex(c->cb) ? rtex_renderer(cblock_tex(c->cb)) : NULL;
     if (d->state != DA_DONE && d->state != DA_GONE && d->state != DA_WAIT && d->state != DA_CALL) {
         float a = d->alpha;
         for (int i = 0; i < d->nghost; i++) {   /* oldest first, faintest */
             int k = (d->ghost_i + i) % DARK_GHOSTS;
-            draw_as(&d->ghost[k], cam_x, cam_y, 110, 30, 170, (uint8_t)(a * (40 + 30 * i)), SDL_BLENDMODE_ADD);
+            draw_as(&d->ghost[k], cam_x, cam_y, 110, 30, 170, (uint8_t)(a * (40 + 30 * i)), R_BLEND_ADD);
         }
         /* a violet glow a pixel out all round, then the body as a dark shadow of April, a white flash on a hit */
         uint8_t ga = (uint8_t)(a * (190 + 50 * sinf(d->t * 6.0f)));
-        draw_as(c, cam_x - 1, cam_y, 150, 40, 230, ga, SDL_BLENDMODE_ADD);
-        draw_as(c, cam_x + 1, cam_y, 150, 40, 230, ga, SDL_BLENDMODE_ADD);
-        draw_as(c, cam_x, cam_y - 1, 150, 40, 230, ga, SDL_BLENDMODE_ADD);
-        draw_as(c, cam_x, cam_y + 1, 150, 40, 230, ga, SDL_BLENDMODE_ADD);
-        draw_as(c, cam_x, cam_y, 84, 46, 118, (uint8_t)(a * 255), SDL_BLENDMODE_BLEND);
-        if (d->flash > 0) draw_as(c, cam_x, cam_y, 255, 255, 255, (uint8_t)(a * 200), SDL_BLENDMODE_ADD);
+        draw_as(c, cam_x - 1, cam_y, 150, 40, 230, ga, R_BLEND_ADD);
+        draw_as(c, cam_x + 1, cam_y, 150, 40, 230, ga, R_BLEND_ADD);
+        draw_as(c, cam_x, cam_y - 1, 150, 40, 230, ga, R_BLEND_ADD);
+        draw_as(c, cam_x, cam_y + 1, 150, 40, 230, ga, R_BLEND_ADD);
+        draw_as(c, cam_x, cam_y, 84, 46, 118, (uint8_t)(a * 255), R_BLEND_BLEND);
+        if (d->flash > 0) draw_as(c, cam_x, cam_y, 255, 255, 255, (uint8_t)(a * 200), R_BLEND_ADD);
     }
     if (!ren) return;
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_ADD);
+    r_set_draw_blend(ren, R_BLEND_ADD);
     for (int i = 0; i < DARK_MOTES; i++) {
         const DarkMote *m = &d->motes[i];
         if (m->life <= 0) continue;
         float k = m->life / m->max;
-        SDL_SetRenderDrawColor(ren, (uint8_t)(170 * k + 40), (uint8_t)(60 * k), (uint8_t)(255 * k), 255);
-        SDL_FRect q = { floorf(m->x - cam_x), floorf(m->y - cam_y), k > 0.5f ? 2.0f : 1.0f, k > 0.5f ? 2.0f : 1.0f };
-        SDL_RenderFillRect(ren, &q);
+        r_set_draw_color(ren, (uint8_t)(170 * k + 40), (uint8_t)(60 * k), (uint8_t)(255 * k), 255);
+        RFRect q = { floorf(m->x - cam_x), floorf(m->y - cam_y), k > 0.5f ? 2.0f : 1.0f, k > 0.5f ? 2.0f : 1.0f };
+        r_fill_rect(ren, &q);
     }
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    r_set_draw_blend(ren, R_BLEND_BLEND);
 }
 
-void dark_draw_hud(const DarkApril *d, SDL_Renderer *ren, int sw)
+void dark_draw_hud(const DarkApril *d, Ren *ren, int sw)
 {
     if (d->state != DA_READY && d->state != DA_FIGHT && d->state != DA_DYING) return;
     Font *f = font_get(0x12072E60);
     float bw = 96, x = sw - bw - 10, y = 20;
     if (f) font_draw(f, "DARK APRIL", (int)x, 8, 225, 200, 250);
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(ren, 10, 8, 26, 200);
-    SDL_FRect bg = { x - 1, y - 1, bw + 2, 7 };
-    SDL_RenderFillRect(ren, &bg);
-    SDL_SetRenderDrawColor(ren, 170, 60, 240, 255);
+    r_set_draw_blend(ren, R_BLEND_BLEND);
+    r_set_draw_color(ren, 10, 8, 26, 200);
+    RFRect bg = { x - 1, y - 1, bw + 2, 7 };
+    r_fill_rect(ren, &bg);
+    r_set_draw_color(ren, 170, 60, 240, 255);
     float k = d->hp > 0 ? (float)d->hp / (float)d->hp_max : 0;
-    SDL_FRect fg = { x, y, bw * k, 5 };
-    SDL_RenderFillRect(ren, &fg);
+    RFRect fg = { x, y, bw * k, 5 };
+    r_fill_rect(ren, &fg);
 }

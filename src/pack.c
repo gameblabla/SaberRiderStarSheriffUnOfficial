@@ -30,50 +30,50 @@ static ResType type_of(const char *s, size_t n)
     return RES_UNKNOWN;
 }
 
+static bool read_at(FILE *f, uint32_t off, void *dst, size_t n)
+{
+    return fseek(f, (long)off, SEEK_SET) == 0 && fread(dst, 1, n, f) == n;
+}
+
 bool pack_load(Pack *p, const char *path)
 {
     memset(p, 0, sizeof *p);
-    FILE *f = fopen(path, "rb");
-    if (!f) { fprintf(stderr, "pack: cannot open %s\n", path); return false; }
-    fseek(f, 0, SEEK_END); p->file_size = (size_t)ftell(f); rewind(f);
-    p->file = malloc(p->file_size);
-    if (fread(p->file, 1, p->file_size, f) != p->file_size) { fclose(f); return false; }
-    fclose(f);
+    p->f = fopen(path, "rb");
+    if (!p->f) { fprintf(stderr, "pack: cannot open %s\n", path); return false; }
+    fseek(p->f, 0, SEEK_END); p->file_size = (size_t)ftell(p->f);
     const char *base = strrchr(path, '/'); base = base ? base + 1 : path;
     snprintf(p->name, sizeof p->name, "%s", base);
 
-    if (p->file_size < 0x20 || memcmp(p->file, "HEADLIST", 8)) { fprintf(stderr, "pack: bad magic %s\n", path); return false; }
-    uint32_t dir_off = rd32(p->file + 8), dir_len = rd32(p->file + 12);
+    uint8_t head[16];
+    if (p->file_size < 0x20 || !read_at(p->f, 0, head, 16) || memcmp(head, "HEADLIST", 8)) { fprintf(stderr, "pack: bad magic %s\n", path); return false; }
+    uint32_t dir_off = rd32(head + 8), dir_len = rd32(head + 12);
 
-    /* count entries */
+    /* the entry table runs from 0x10 to a zero id, the directory text follows it */
+    if (dir_off <= 0x10 || dir_off > p->file_size) { fprintf(stderr, "pack: bad directory %s\n", path); return false; }
+    uint8_t *tab = malloc(dir_off - 0x10);
+    if (!tab || !read_at(p->f, 0x10, tab, dir_off - 0x10)) { free(tab); return false; }
     int n = 0;
-    for (const uint8_t *e = p->file + 0x10; e + 16 <= p->file + p->file_size; e += 16, n++)
-        if (e[0] == 0) break;
-    p->entries = calloc(n, sizeof(PackEntry));
+    for (const uint8_t *e = tab; e + 16 <= tab + (dir_off - 0x10); e += 16, n++) if (e[0] == 0) break;
+    p->entries = calloc(n ? n : 1, sizeof(PackEntry));
     p->count = n;
-
-    /* directory: "type=ID\n" lines, LZO1Z-compressed */
-    uint32_t first_off = rd32(p->file + 0x10 + 8);
-    uint8_t *dir = malloc(dir_len + 16);
-    int got = lzo1z_decompress(p->file + dir_off, first_off - dir_off, dir, dir_len + 16);
-    if (got < 0) { fprintf(stderr, "pack: directory decompress failed %s\n", path); free(dir); return false; }
-
+    uint32_t first_off = n ? rd32(tab + 8) : (uint32_t)p->file_size;
     for (int i = 0; i < n; i++) {
-        const uint8_t *e = p->file + 0x10 + i * 16;
+        const uint8_t *e = tab + i * 16;
         PackEntry *pe = &p->entries[i];
         pe->id = hex_id((const char *)e);
-        uint32_t off = rd32(e + 8), declen = rd32(e + 12);
+        pe->off = rd32(e + 8); pe->size = pe->declen = rd32(e + 12);
         uint32_t next = (i + 1 < n) ? rd32(e + 16 + 8) : (uint32_t)p->file_size;
-        uint32_t complen = next - off;
-        if (complen == declen) { pe->data = p->file + off; pe->size = declen; }
-        else {
-            uint8_t *buf = malloc(declen + 16);
-            int r = lzo1z_decompress(p->file + off, complen, buf, declen + 16);
-            if (r < 0) { fprintf(stderr, "pack: block %08X decompress failed\n", pe->id); free(buf); return false; }
-            pe->data = buf; pe->size = (uint32_t)r; pe->owned = true;
-        }
+        pe->stored = next - pe->off;
     }
-    /* assign types from directory text */
+    free(tab);
+
+    /* directory: "type=ID\n" lines, LZO1Z-compressed */
+    uint32_t clen = first_off > dir_off ? first_off - dir_off : 0;
+    uint8_t *cdir = malloc(clen + 1), *dir = malloc(dir_len + 16);
+    int got = -1;
+    if (cdir && dir && read_at(p->f, dir_off, cdir, clen)) got = lzo1z_decompress(cdir, clen, dir, dir_len + 16);
+    free(cdir);
+    if (got < 0) { fprintf(stderr, "pack: directory decompress failed %s\n", path); free(dir); return false; }
     const char *s = (const char *)dir, *end = s + got;
     while (s < end && *s) {
         const char *eq = memchr(s, '=', end - s); if (!eq) break;
@@ -88,16 +88,39 @@ bool pack_load(Pack *p, const char *path)
     return true;
 }
 
+/* read (and decompress) a block */
+static bool entry_load(const Pack *p, PackEntry *pe)
+{
+    if (pe->data) return true;
+    uint8_t *raw = malloc(pe->stored + 16);
+    if (!raw || !read_at(p->f, pe->off, raw, pe->stored)) { fprintf(stderr, "pack: block %08X read failed\n", pe->id); free(raw); return false; }
+    if (pe->stored == pe->declen) { pe->data = raw; pe->size = pe->declen; pe->owned = true; return true; }
+    uint8_t *buf = malloc(pe->declen + 16);
+    int r = buf ? lzo1z_decompress(raw, pe->stored, buf, pe->declen + 16) : -1;
+    free(raw);
+    if (r < 0) { fprintf(stderr, "pack: block %08X decompress failed\n", pe->id); free(buf); return false; }
+    pe->data = buf; pe->size = (uint32_t)r; pe->owned = true;
+    return true;
+}
+
 void pack_free(Pack *p)
 {
     for (int i = 0; i < p->count; i++) if (p->entries[i].owned) free((void *)p->entries[i].data);
-    free(p->entries); free(p->file); memset(p, 0, sizeof *p);
+    free(p->entries);
+    if (p->f) fclose(p->f);
+    memset(p, 0, sizeof *p);
+}
+
+static PackEntry *pack_lookup(const Pack *p, uint32_t id)
+{
+    for (int i = 0; i < p->count; i++) if (p->entries[i].id == id) return &p->entries[i];
+    return NULL;
 }
 
 const PackEntry *pack_find(const Pack *p, uint32_t id)
 {
-    for (int i = 0; i < p->count; i++) if (p->entries[i].id == id) return &p->entries[i];
-    return NULL;
+    PackEntry *e = pack_lookup(p, id);
+    return e && entry_load(p, e) ? e : NULL;
 }
 
 /* ---- registry ---- */
@@ -112,19 +135,41 @@ bool packs_open(const char *data_dir, const char *const *names, int n)
         for (int j = 0; j < g_npacks; j++) if (!strcmp(g_packs[j].name, names[i])) dup = true;
         if (dup || g_npacks == MAX_PACKS) continue;
         char path[512]; snprintf(path, sizeof path, "%s/%s", data_dir, names[i]);
-        if (!pack_load(&g_packs[g_npacks], path)) return false;
+        if (!pack_load(&g_packs[g_npacks], path)) {
+            /* the video pack is optional (consoles play converted videos instead) */
+            if (!strcmp(names[i], "video.pck")) { pack_free(&g_packs[g_npacks]); continue; }
+            return false;
+        }
         g_npacks++;
     }
     return true;
 }
 
+const PackEntry *packs_peek(uint32_t id)
+{
+    for (int i = 0; i < g_npacks; i++) { const PackEntry *e = pack_lookup(&g_packs[i], id); if (e) return e; }
+    return NULL;
+}
+
 const PackEntry *packs_find(uint32_t id)
 {
-    for (int i = 0; i < g_npacks; i++) { const PackEntry *e = pack_find(&g_packs[i], id); if (e) return e; }
+    for (int i = 0; i < g_npacks; i++) { PackEntry *e = pack_lookup(&g_packs[i], id); if (e) return entry_load(&g_packs[i], e) ? e : NULL; }
     return NULL;
 }
 const PackEntry *packs_find_type(uint32_t id, ResType t)
 {
-    const PackEntry *e = packs_find(id); return (e && e->type == t) ? e : NULL;
+    const PackEntry *e = packs_peek(id);
+    return (e && e->type == t) ? packs_find(id) : NULL;
+}
+
+void packs_release(uint32_t id)
+{
+    for (int i = 0; i < g_npacks; i++) {
+        PackEntry *e = pack_lookup(&g_packs[i], id);
+        if (e) {
+            if (e->owned) { free((void *)e->data); e->data = NULL; e->owned = false; }
+            return;
+        }
+    }
 }
 void packs_close(void) { for (int i = 0; i < g_npacks; i++) pack_free(&g_packs[i]); g_npacks = 0; }

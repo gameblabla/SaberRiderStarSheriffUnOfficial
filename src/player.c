@@ -1,3 +1,4 @@
+#include <string.h>
 #include "player.h"
 #include "audio.h"
 

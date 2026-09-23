@@ -4,13 +4,14 @@
  * sidescrolling space battle", and the Dny9A6 clip of the brown cruiser firing its nose laser): the minefield it left
  * behind, its fighter squadrons, then the battle cruiser itself - gun ports, the nose laser, launched swarms and mines -
  * until it blows apart. Art: assets/space (../space/build.py). */
-#include <SDL3/SDL.h>
+#include "platform/render.h"
+#include "platform/plat.h"
 #include <stdbool.h>
 #include "input.h"
 
 typedef struct Space Space;
 
-Space *space_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives, int hero);
+Space *space_create(Ren *ren, int sw, int sh, int difficulty, int lives, int hero);
 void   space_destroy(Space *s);
 void   space_update(Space *s, const Input *in, float dt);
 void   space_draw(Space *s, bool scanlines);

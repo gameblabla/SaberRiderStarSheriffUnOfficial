@@ -117,9 +117,9 @@ enum { PH_INTRO, PH_STRIDE, PH_INSTR, PH_WAVE_IN, PH_FIGHT, PH_WAVE_CLEAR, PH_RA
 #define WAVE_IN_DUR 2.6f
 
 struct Ramrod {
-    SDL_Renderer *ren; int sw, sh; bool ok;
-    SDL_Texture *atlas, *sky, *cockpit, *floor_tex; Anim anim[A_COUNT];
-    uint32_t tex[MIPS][TEX * TEX]; uint32_t *floor_px; int floor_h;
+    Ren *ren; int sw, sh; bool ok;
+    RTex *atlas, *sky, *cockpit; RFloor *floor; Anim anim[A_COUNT];
+    uint32_t tex[MIPS][TEX * TEX]; int floor_h;
     int difficulty, lives, result;
     /* Ramrod */
     float px, py, heading, turn_v, speed, strafe_v, armor, armor_max, heat, fire_cd, gun_idle; bool overheated; int gun_side;
@@ -180,16 +180,15 @@ static void spawn_smoke(Ramrod *r, float x, float y, float z, float scale)
 }
 
 /* ---------------------------------------------------------------- loading */
-static SDL_Texture *load_tex(Ramrod *r, const char *name, int *w, int *h, uint32_t **keep)
+static RTex *load_tex(Ramrod *r, const char *name, int *w, int *h, uint32_t **keep)
 {
     char buf[64]; snprintf(buf, sizeof buf, "ramrod/%s", name);
     const char *p = asset_path(buf);
     if (!p) { fprintf(stderr, "assets/%s missing (run ../ramrod/build.py)\n", buf); return NULL; }
     int ww, hh; uint32_t *px = png_load_rgba(p, &ww, &hh);
     if (!px) return NULL;
-    SDL_Texture *t = SDL_CreateTexture(r->ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, ww, hh);
-    SDL_UpdateTexture(t, NULL, px, ww * 4);
-    SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND); SDL_SetTextureScaleMode(t, SDL_SCALEMODE_NEAREST);
+    RTex *t = rtex_create(r->ren, ww, hh, R_TEX_STATIC, px);
+    rtex_set_blend(t, R_BLEND_BLEND); rtex_set_scale(t, R_SCALE_NEAREST);
     if (w) *w = ww;
     if (h) *h = hh;
     if (keep) *keep = px; else free(px);
@@ -202,8 +201,8 @@ static bool load_assets(Ramrod *r)
     r->atlas = load_tex(r, "atlas.png", NULL, NULL, NULL);
     r->sky = load_tex(r, "sky.png", &w, &h, NULL);
     r->cockpit = load_tex(r, "cockpit.png", NULL, NULL, NULL);
-    uint32_t *fl = NULL; SDL_Texture *ft = load_tex(r, "floor.png", &w, &h, &fl);
-    if (ft) SDL_DestroyTexture(ft);
+    uint32_t *fl = NULL; RTex *ft = load_tex(r, "floor.png", &w, &h, &fl);
+    if (ft) rtex_destroy(ft);
     if (!r->atlas || !r->sky || !r->cockpit || !fl || w != TEX || h != TEX) { free(fl); return false; }
     memcpy(r->tex[0], fl, sizeof r->tex[0]); free(fl);
     for (int L = 1; L < MIPS; L++) {   /* box-filtered mips against far-row shimmer */
@@ -261,24 +260,21 @@ static void begin_wave(Ramrod *r, int w)
     sfx_file("alarm.wav");
 }
 
-Ramrod *ramrod_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives)
+Ramrod *ramrod_create(Ren *ren, int sw, int sh, int difficulty, int lives)
 {
     Ramrod *r = calloc(1, sizeof *r);
     r->ren = ren; r->sw = sw; r->sh = sh; r->rng = 0x5AB3E7u; r->music_now = -1;
     r->floor_h = sh - (int)HZ + 8;
-    r->floor_px = calloc((size_t)sw * r->floor_h, 4);
-    r->floor_tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, sw, r->floor_h);
-    SDL_SetTextureScaleMode(r->floor_tex, SDL_SCALEMODE_NEAREST);
     r->ok = load_assets(r);
     r->difficulty = difficulty; r->lives = lives;
     r->armor = r->armor_max = 100; r->heading = HEADING0; r->lock = -1; r->punch_t = -1;
-    r->god = SDL_getenv("SABER_R6GOD") != NULL;
+    r->god = plat_getenv("SABER_R6GOD") != NULL;
     dialog_set_hero(HERO_FIREBALL);   /* Ramrod is everyone's: the scenes are written for the whole crew */
     place_props(r);
     r->phase = PH_INTRO; r->dlg_pending = true; r->pending_script = SCRIPT_INTRO;
     play_music(r, 16);
-    if (SDL_getenv("SABER_R6WAVE")) {   /* debug: straight into wave n (1..3), no story */
-        int w = atoi(SDL_getenv("SABER_R6WAVE")) - 1; r->dlg_pending = false;
+    if (plat_getenv("SABER_R6WAVE")) {   /* debug: straight into wave n (1..3), no story */
+        int w = atoi(plat_getenv("SABER_R6WAVE")) - 1; r->dlg_pending = false;
         begin_wave(r, w < 0 ? 0 : w >= N_WAVES ? N_WAVES - 1 : w);
     }
     return r;
@@ -287,11 +283,11 @@ Ramrod *ramrod_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int liv
 void ramrod_destroy(Ramrod *r)
 {
     if (!r) return;
-    if (r->atlas) SDL_DestroyTexture(r->atlas);
-    if (r->sky) SDL_DestroyTexture(r->sky);
-    if (r->cockpit) SDL_DestroyTexture(r->cockpit);
-    if (r->floor_tex) SDL_DestroyTexture(r->floor_tex);
-    free(r->floor_px); free(r);
+    if (r->atlas) rtex_destroy(r->atlas);
+    if (r->sky) rtex_destroy(r->sky);
+    if (r->cockpit) rtex_destroy(r->cockpit);
+    if (r->floor) r_floor_destroy(r->floor);
+    free(r);
 }
 int ramrod_result(const Ramrod *r) { return r->result; }
 int ramrod_lives(const Ramrod *r) { return r->lives; }
@@ -302,7 +298,7 @@ static bool fighting(const Ramrod *r) { return r->phase == PH_FIGHT || r->phase 
 static void player_hurt(Ramrod *r, float dmg, float shake, const char *what)
 {
     if (!fighting(r) || r->god) return;
-    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "r6 hurt %s %.0f (armor %.0f)\n", what, dmg * dmg_mul(r), r->armor);
+    if (plat_getenv("SABER_TRACE")) fprintf(stderr, "r6 hurt %s %.0f (armor %.0f)\n", what, dmg * dmg_mul(r), r->armor);
     r->armor -= dmg * dmg_mul(r); r->hurt_t = 0.5f; r->shake = fmaxf(r->shake, shake); r->red = fmaxf(r->red, 0.55f);
     sfx_play(3, 0);
     if (r->armor <= 0) {
@@ -663,7 +659,7 @@ static void bot_input(Ramrod *r, Input *out)
 static void update_world(Ramrod *r, const Input *in, float dt, bool control)
 {
     Input bot;
-    if (control && SDL_getenv("SABER_R6BOT")) { bot_input(r, &bot); in = &bot; }
+    if (control && plat_getenv("SABER_R6BOT")) { bot_input(r, &bot); in = &bot; }
     if (control) player_control(r, in, dt);
     else { r->speed = approach(r->speed, 0, 300 * dt); r->strafe_v = approach(r->strafe_v, 0, 400 * dt); r->turn_v = approach(r->turn_v, 0, 7 * dt); r->bob = approach(r->bob, 0, 20 * dt); if (r->punch_t >= 0) { r->punch_t += dt; if (r->punch_t > 0.56f) r->punch_t = -1; } }
     for (int i = 0; i < MAX_MECH; i++) if (r->mech[i].st != M_OFF) mech_update(r, &r->mech[i], i, dt);
@@ -684,7 +680,7 @@ void ramrod_update(Ramrod *r, const Input *in, float dt)
     if (r->hurt_t > 0) r->hurt_t -= dt;
     if (r->shake > 0) r->shake -= dt;
     r->red = fmaxf(0, r->red - dt * 1.6f); r->white = fmaxf(0, r->white - dt * 1.5f);
-    { static int last = -1; if (SDL_getenv("SABER_TRACE") && r->phase != last) { fprintf(stderr, "r6 phase %d wave %d t=%.1f armor=%.0f\n", r->phase, r->wave, r->total_t, r->armor); last = r->phase; } }
+    { static int last = -1; if (plat_getenv("SABER_TRACE") && r->phase != last) { fprintf(stderr, "r6 phase %d wave %d t=%.1f armor=%.0f\n", r->phase, r->wave, r->total_t, r->armor); last = r->phase; } }
     if (r->dlg_pending) { r->dlg_pending = false; dialog_open_script(&r->dlg, r->pending_script); }
 
     switch (r->phase) {
@@ -712,7 +708,7 @@ void ramrod_update(Ramrod *r, const Input *in, float dt)
         while (r->spawned < w->n && r->wave_t >= w->s[r->spawned].delay + 1.0f && active < w->max_active) { spawn_mech(r, &w->s[r->spawned]); r->spawned++; active++; }
         if (r->spawned < w->n && active == 0 && r->wave_t > 1.0f) r->wave_t = fmaxf(r->wave_t, w->s[r->spawned].delay + 1.0f);   /* nobody left: bring the next one in now */
         update_world(r, in, dt, true);
-        if (SDL_getenv("SABER_TRACE") && (int)r->total_t != (int)(r->total_t - dt)) fprintf(stderr, "r6 t=%.0f wave=%d spawned=%d alive=%d armor=%.0f heat=%.2f pos=%.0f,%.0f h=%.2f kills=%d\n", r->total_t, r->wave, r->spawned, alive_mechs(r), r->armor, r->heat, r->px, r->py, r->heading, r->kills);
+        if (plat_getenv("SABER_TRACE") && (int)r->total_t != (int)(r->total_t - dt)) fprintf(stderr, "r6 t=%.0f wave=%d spawned=%d alive=%d armor=%.0f heat=%.2f pos=%.0f,%.0f h=%.2f kills=%d\n", r->total_t, r->wave, r->spawned, alive_mechs(r), r->armor, r->heat, r->px, r->py, r->heading, r->kills);
         if (r->phase != PH_DOWN && r->spawned >= w->n && alive_mechs(r) == 0) {
             r->phase = PH_WAVE_CLEAR; r->phase_t = 0;
             set_msg(r, r->wave == N_WAVES - 1 ? "SQUADRON DESTROYED" : "WAVE CLEARED", NULL, 2.2f);
@@ -772,22 +768,22 @@ static void draw_frame(Ramrod *r, int a, int fr, float x, float y, float scale, 
     Anim *an = &r->anim[a]; if (an->n == 0) return;
     fr = fr < 0 ? 0 : fr >= an->n ? an->n - 1 : fr;
     Frame *f = &an->f[fr];
-    SDL_FRect src = { (float)f->x, (float)f->y, (float)f->w, (float)f->h };
+    RFRect src = { (float)f->x, (float)f->y, (float)f->w, (float)f->h };
     float ax = flip ? f->w - 1 - f->ax : f->ax;
-    SDL_FRect dst = { floorf(x - ax * scale), floorf(y - f->ay * scale), roundf(f->w * scale), roundf(f->h * scale) };
+    RFRect dst = { floorf(x - ax * scale), floorf(y - f->ay * scale), roundf(f->w * scale), roundf(f->h * scale) };
     if (dst.w < 1 || dst.h < 1) return;
-    SDL_SetTextureColorMod(r->atlas, cr, cg, cb); SDL_SetTextureAlphaMod(r->atlas, ca);
-    SDL_RenderTextureRotated(r->ren, r->atlas, &src, &dst, 0, NULL, flip ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
-    SDL_SetTextureColorMod(r->atlas, 255, 255, 255); SDL_SetTextureAlphaMod(r->atlas, 255);
+    rtex_set_color_mod(r->atlas, cr, cg, cb); rtex_set_alpha_mod(r->atlas, ca);
+    r_tex_rot(r->ren, r->atlas, &src, &dst, 0, NULL, flip ? R_FLIP_H : R_FLIP_NONE);
+    rtex_set_color_mod(r->atlas, 255, 255, 255); rtex_set_alpha_mod(r->atlas, 255);
 }
 
-static void fill_ellipse(SDL_Renderer *ren, float cx, float cy, float rx, float ry, SDL_FColor c)
+static void fill_ellipse(Ren *ren, float cx, float cy, float rx, float ry, RFColor c)
 {
-    enum { N = 20 }; SDL_Vertex v[N + 1]; int idx[N * 3];
-    v[0].position = (SDL_FPoint){ cx, cy }; v[0].color = c;
-    for (int i = 0; i < N; i++) { float a = i * TWO_PI / N; v[i + 1].position = (SDL_FPoint){ cx + cosf(a) * rx, cy + sinf(a) * ry }; v[i + 1].color = c; }
+    enum { N = 20 }; RVertex v[N + 1]; int idx[N * 3];
+    v[0].position = (RFPoint){ cx, cy }; v[0].color = c;
+    for (int i = 0; i < N; i++) { float a = i * TWO_PI / N; v[i + 1].position = (RFPoint){ cx + cosf(a) * rx, cy + sinf(a) * ry }; v[i + 1].color = c; }
     for (int i = 0; i < N; i++) { idx[i * 3] = 0; idx[i * 3 + 1] = 1 + i; idx[i * 3 + 2] = 1 + (i + 1) % N; }
-    SDL_RenderGeometry(ren, NULL, v, N + 1, idx, N * 3);
+    r_geometry(ren, NULL, v, N + 1, idx, N * 3);
 }
 
 static void render_sky(Ramrod *r)
@@ -795,40 +791,26 @@ static void render_sky(Ramrod *r)
     float u = PANO_AHEAD + (r->heading - HEADING0) * FOCAL - r->sw * 0.5f;
     u = fmodf(u, (float)PANO_W); if (u < 0) u += PANO_W;
     float y0 = r->bob + (HZ - 167.0f);
-    SDL_SetRenderDrawColor(r->ren, 35, 131, 201, 255); SDL_FRect top = { 0, 0, (float)r->sw, fmaxf(0, y0) + 1 }; SDL_RenderFillRect(r->ren, &top);
-    for (float x = -u; x < r->sw; x += PANO_W) { SDL_FRect dst = { floorf(x), floorf(y0), PANO_W, PANO_H }; SDL_RenderTexture(r->ren, r->sky, NULL, &dst); }
+    r_set_draw_color(r->ren, 35, 131, 201, 255); RFRect top = { 0, 0, (float)r->sw, fmaxf(0, y0) + 1 }; r_fill_rect(r->ren, &top);
+    for (float x = -u; x < r->sw; x += PANO_W) { RFRect dst = { floorf(x), floorf(y0), PANO_W, PANO_H }; r_tex(r->ren, r->sky, NULL, &dst); }
 }
 
 static void render_floor(Ramrod *r)
 {
-    float c = cosf(r->heading), s = sinf(r->heading), rx = -s, ry = c;
-    int sw = r->sw; float hz = horizon(r);
-    int y0 = (int)ceilf(hz + 0.01f);
-    const uint32_t haze = 0xFF7AAAD9u;   /* ABGR: warm dust at the horizon (d9 aa 7a) */
-    for (int row = 0; row < r->floor_h; row++) {
-        int y = y0 + row; if (y >= r->sh) break;
-        float d = CAM_H * FOCAL / (y + 0.5f - hz);
-        float step = d / FOCAL;
-        float fog = clampf((d - FOG0) / (FOG1 - FOG0), 0, 1); int fa = (int)(fog * 230);
-        int mip = step < 1.4f ? 0 : step < 2.8f ? 1 : step < 5.6f ? 2 : 3;
-        int msz = TEX >> mip, mmask = msz - 1, msh = 8 - mip;
-        float wx = r->px + c * d - rx * step * (sw * 0.5f), wy = r->py + s * d - ry * step * (sw * 0.5f);
-        uint32_t *out = r->floor_px + (size_t)row * sw;
-        for (int x = 0; x < sw; x++) {
-            int ix = (int)floorf(wx) >> mip, iy = (int)floorf(wy) >> mip;
-            uint32_t col = r->tex[mip][((iy & mmask) << msh) + (ix & mmask)];
-            if (fa) {
-                uint32_t R = ((col & 0xff) * (256 - fa) + (haze & 0xff) * fa) >> 8;
-                uint32_t G = (((col >> 8) & 0xff) * (256 - fa) + ((haze >> 8) & 0xff) * fa) >> 8;
-                uint32_t B = (((col >> 16) & 0xff) * (256 - fa) + ((haze >> 16) & 0xff) * fa) >> 8;
-                col = 0xff000000u | B << 16 | G << 8 | R;
-            }
-            out[x] = col; wx += rx * step; wy += ry * step;
-        }
+    if (!r->floor) {
+        static uint8_t cell;   /* one material everywhere */
+        static const uint32_t *mats[MIPS];
+        for (int L = 0; L < MIPS; L++) mats[L] = r->tex[L];
+        RFloorDesc d = { 1, 8, &cell, TEX, MIPS, 1, mats };
+        r->floor = r_floor_create(r->ren, &d);
+        if (!r->floor) return;
     }
-    SDL_UpdateTexture(r->floor_tex, NULL, r->floor_px, sw * 4);
-    SDL_FRect dst = { 0, (float)y0, (float)sw, (float)r->floor_h };
-    SDL_RenderTexture(r->ren, r->floor_tex, NULL, &dst);
+    float hz = horizon(r);
+    int y0 = (int)ceilf(hz + 0.01f), y1 = y0 + r->floor_h; if (y1 > r->sh) y1 = r->sh;
+    RFloorView v = { r->px, r->py, cosf(r->heading), sinf(r->heading), CAM_H, FOCAL, hz, y0, y1, 0.5f, FOG0, FOG1, 230,
+                     0xFF7AAAD9u,   /* ABGR: warm dust at the horizon (d9 aa 7a) */
+                     1.4f, r->sw };
+    r_floor_draw(r->ren, r->floor, &v);
 }
 
 typedef struct { float f; int kind, i; } Item;
@@ -849,34 +831,34 @@ static void draw_mech(Ramrod *r, Mech *m, float f)
     default: break;
     }
     /* its shadow on the sand */
-    SDL_SetRenderDrawBlendMode(r->ren, SDL_BLENDMODE_BLEND);
-    fill_ellipse(r->ren, sx, sy, 44 * sc, 44 * sc * clampf(CAM_H / f * 1.4f, 0.08f, 0.5f), (SDL_FColor){ 0.2f, 0.1f, 0.08f, 0.35f });
+    r_set_draw_blend(r->ren, R_BLEND_BLEND);
+    fill_ellipse(r->ren, sx, sy, 44 * sc, 44 * sc * clampf(CAM_H / f * 1.4f, 0.08f, 0.5f), (RFColor){ 0.2f, 0.1f, 0.08f, 0.35f });
     uint8_t cr = 255, cg = 255, cb = 255, ca = fog_alpha(f);
     if (m->flash > 0) { cr = 255; cg = 255; cb = 255; }
     if (m->st == M_DYING) {   /* burning, sinking into its own blast */
         float t = m->dying_t / 1.5f; uint8_t v = (uint8_t)(255 - 150 * t);
         cr = v; cg = (uint8_t)(v * 0.7f); cb = (uint8_t)(v * 0.6f);
         if (((int)(m->dying_t * 20)) & 1) { cr = 255; cg = 200; cb = 150; }
-        SDL_Rect clip = { 0, 0, r->sw, (int)sy }; SDL_SetRenderClipRect(r->ren, &clip);
+        RRect clip = { 0, 0, r->sw, (int)sy }; r_set_clip(r->ren, &clip);
         draw_frame(r, VARIANT[m->variant].anim, MF_STAGGER, sx + sinf(m->dying_t * 40) * 1.5f, sy + t * t * 60 * sc, sc, false, cr, cg, cb, ca);
-        SDL_SetRenderClipRect(r->ren, NULL);
+        r_set_clip(r->ren, NULL);
         return;
     }
     draw_frame(r, VARIANT[m->variant].anim, fr, sx, sy, sc, false, cr, cg, cb, ca);
     if (m->flash > 0) {   /* hit flash: the sprite again, additive */
-        SDL_SetTextureBlendMode(r->atlas, SDL_BLENDMODE_ADD);
+        rtex_set_blend(r->atlas, R_BLEND_ADD);
         draw_frame(r, VARIANT[m->variant].anim, fr, sx, sy, sc, false, 255, 255, 255, 200);
-        SDL_SetTextureBlendMode(r->atlas, SDL_BLENDMODE_BLEND);
+        rtex_set_blend(r->atlas, R_BLEND_BLEND);
     }
     /* the cannon charging / the fist glowing red before a punch: the telegraphs */
     if (m->st == M_AIM || m->st == M_WINDUP) {
         bool aim = m->st == M_AIM;
         float fx = sx + (aim ? 22 : 30) * sc, fy = sy - (aim ? 92 : 84) * sc;
         float p = aim ? 1 - clampf(m->st_t / 0.75f, 0, 1) : 1 - clampf(m->st_t / 0.6f, 0, 1);
-        SDL_SetTextureBlendMode(r->atlas, SDL_BLENDMODE_ADD);
+        rtex_set_blend(r->atlas, R_BLEND_ADD);
         if (aim) draw_frame(r, A_PLASMA, (int)(r->total_t * 16) & 3, fx, fy, sc * (0.4f + 0.9f * p), false, 255, 255, 255, 255);
         else draw_frame(r, A_MFLASH, (int)(r->total_t * 20) & 1, fx, fy, sc * (0.8f + 1.4f * p), false, 255, 60, 40, 255);
-        SDL_SetTextureBlendMode(r->atlas, SDL_BLENDMODE_BLEND);
+        rtex_set_blend(r->atlas, R_BLEND_BLEND);
     }
 }
 
@@ -896,15 +878,15 @@ static void render_world(Ramrod *r)
         case 1: draw_mech(r, &r->mech[it->i], it->f); break;
         case 2: { Shot *s = &r->shot[it->i]; if (!project(r, s->x, s->y, s->z, &sx, &sy, &kk)) break;
             float qx, qy, qk;
-            SDL_SetRenderDrawBlendMode(r->ren, SDL_BLENDMODE_ADD);
+            r_set_draw_blend(r->ren, R_BLEND_ADD);
             if (!s->enemy && project(r, s->x - s->vx * 0.035f, s->y - s->vy * 0.035f, s->z - s->vz * 0.035f, &qx, &qy, &qk)) {   /* the bolt's streak */
-                SDL_SetRenderDrawColor(r->ren, 255, 140, 30, 255); SDL_RenderLine(r->ren, qx, qy + 1, sx, sy + 1); SDL_RenderLine(r->ren, qx + 1, qy, sx + 1, sy);
-                SDL_SetRenderDrawColor(r->ren, 255, 250, 200, 255); SDL_RenderLine(r->ren, qx, qy, sx, sy);
+                r_set_draw_color(r->ren, 255, 140, 30, 255); r_line(r->ren, qx, qy + 1, sx, sy + 1); r_line(r->ren, qx + 1, qy, sx + 1, sy);
+                r_set_draw_color(r->ren, 255, 250, 200, 255); r_line(r->ren, qx, qy, sx, sy);
             }
-            SDL_SetTextureBlendMode(r->atlas, SDL_BLENDMODE_ADD);
-            if (s->enemy) draw_frame(r, A_PLASMA, (int)(r->total_t * 14) & 3, sx, sy, fmaxf(0.25f, kk * 1.6f), false, 255, 255, 255, 255);
+            rtex_set_blend(r->atlas, R_BLEND_ADD);
+            if (s->enemy) draw_frame(r, A_PLASMA, (int)(r->total_t * 14) & 3, sx, sy, clampf(kk * 1.6f, 0.25f, 4), false, 255, 255, 255, 255);
             else draw_frame(r, A_BOLT, (int)(r->total_t * 20) & 1, sx, sy, fmaxf(0.3f, kk * 1.3f), false, 255, 255, 255, 255);
-            SDL_SetTextureBlendMode(r->atlas, SDL_BLENDMODE_BLEND);
+            rtex_set_blend(r->atlas, R_BLEND_BLEND);
             break; }
         case 3: { Fx *e = &r->fx[it->i]; if (!project(r, e->x, e->y, e->z, &sx, &sy, &kk)) break;
             float p = e->t / e->dur;
@@ -912,9 +894,10 @@ static void render_world(Ramrod *r)
             case FX_EXPL: draw_frame(r, A_EXPL, (int)(p * 6), sx, sy, kk * UNIT * 1.4f * e->scale, e->flip, 255, 255, 255, 255); break;
             case FX_SMOKE: draw_frame(r, A_SMOKE, (int)(p * 4), sx, sy, kk * UNIT * 2.0f * e->scale, false, 255, 255, 255, (uint8_t)(200 * (1 - p))); break;
             case FX_DEBRIS: draw_frame(r, A_DEBRIS, e->frame, sx, sy, kk * UNIT * e->scale, e->spin && ((int)(e->t * 8) & 1), 200, 200, 200, (uint8_t)(255 * (1 - clampf((p - 0.7f) / 0.3f, 0, 1)))); break;
-            case FX_FLASH: SDL_SetTextureBlendMode(r->atlas, SDL_BLENDMODE_ADD);
-                draw_frame(r, e->frame ? A_MFLASH : A_FLASH, 0, sx, sy, fmaxf(0.3f, kk * UNIT * e->scale), false, 255, 255, 255, 255);
-                SDL_SetTextureBlendMode(r->atlas, SDL_BLENDMODE_BLEND); break;
+            case FX_FLASH: rtex_set_blend(r->atlas, R_BLEND_ADD);
+                /* a cockpit hit flashes right in front of the glass: capped, or the 26 px sprite grows past the screen */
+                draw_frame(r, e->frame ? A_MFLASH : A_FLASH, 0, sx, sy, clampf(kk * UNIT * e->scale, 0.3f, 5), false, 255, 255, 255, 255);
+                rtex_set_blend(r->atlas, R_BLEND_BLEND); break;
             case FX_SCORCH: draw_frame(r, A_SCORCH, 0, sx, sy + 12 * kk * UNIT * e->scale * clampf(CAM_H / it->f * 1.4f, 0.08f, 0.5f), kk * UNIT * e->scale, false, 255, 255, 255, 100); break;
             }
             break; }
@@ -925,30 +908,30 @@ static void render_world(Ramrod *r)
 /* the reticle, lock brackets and the edge-of-screen threat markers */
 static void render_aim(Ramrod *r)
 {
-    SDL_Renderer *ren = r->ren; float cx = r->sw * 0.5f, cy = AIM_Y + r->bob * 0.5f;
+    Ren *ren = r->ren; float cx = r->sw * 0.5f, cy = AIM_Y + r->bob * 0.5f;
     bool locked = r->lock >= 0;
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    r_set_draw_blend(ren, R_BLEND_BLEND);
     if (locked) {
         Mech *m = &r->mech[r->lock]; float sx, sy, k;
         if (project(r, m->x, m->y, 0, &sx, &sy, &k)) {
             float sc = k * UNIT * m->scale, hw = 40 * sc + 3, top = sy - 140 * sc, bot = sy - 6 * sc;
             float L = clampf(hw * 0.5f, 3, 10), shrink = fmaxf(0, 1 - r->lock_t * 5) * 12;
             float x0 = floorf(sx - hw - shrink), x1 = floorf(sx + hw + shrink), y0 = floorf(top - shrink), y1 = floorf(bot + shrink);
-            SDL_SetRenderDrawColor(ren, 255, 60, 60, 255);
-            SDL_FRect q[8] = { { x0, y0, L, 1 }, { x0, y0, 1, L }, { x1 - L, y0, L, 1 }, { x1, y0, 1, L }, { x0, y1, L, 1 }, { x0, y1 - L, 1, L }, { x1 - L, y1, L, 1 }, { x1, y1 - L, 1, L } };
-            SDL_RenderFillRects(ren, q, 8);
+            r_set_draw_color(ren, 255, 60, 60, 255);
+            RFRect q[8] = { { x0, y0, L, 1 }, { x0, y0, 1, L }, { x1 - L, y0, L, 1 }, { x1, y0, 1, L }, { x0, y1, L, 1 }, { x0, y1 - L, 1, L }, { x1 - L, y1, L, 1 }, { x1, y1 - L, 1, L } };
+            r_fill_rects(ren, q, 8);
             /* its armour, over the brackets */
             float f = clampf(m->hp / m->hp_max, 0, 1), w = fmaxf(16, x1 - x0);
-            SDL_SetRenderDrawColor(ren, 0, 0, 0, 160); SDL_FRect bg = { x0, y0 - 5, w, 3 }; SDL_RenderFillRect(ren, &bg);
-            SDL_SetRenderDrawColor(ren, 255, 90, 60, 255); SDL_FRect fg = { x0, y0 - 5, w * f, 3 }; SDL_RenderFillRect(ren, &fg);
+            r_set_draw_color(ren, 0, 0, 0, 160); RFRect bg = { x0, y0 - 5, w, 3 }; r_fill_rect(ren, &bg);
+            r_set_draw_color(ren, 255, 90, 60, 255); RFRect fg = { x0, y0 - 5, w * f, 3 }; r_fill_rect(ren, &fg);
         }
     }
     uint8_t R = locked ? 255 : 120, G = locked ? 70 : 255, B = locked ? 60 : 140;
-    SDL_SetRenderDrawColor(ren, R, G, B, 230);
+    r_set_draw_color(ren, R, G, B, 230);
     float g = locked ? 3 : 5;
-    SDL_FRect q[4] = { { cx - g - 6, cy, 6, 1 }, { cx + g + 1, cy, 6, 1 }, { cx, cy - g - 6, 1, 6 }, { cx, cy + g + 1, 1, 6 } };
-    SDL_RenderFillRects(ren, q, 4);
-    SDL_FRect dot = { cx, cy, 1, 1 }; SDL_RenderFillRect(ren, &dot);
+    RFRect q[4] = { { cx - g - 6, cy, 6, 1 }, { cx + g + 1, cy, 6, 1 }, { cx, cy - g - 6, 1, 6 }, { cx, cy + g + 1, 1, 6 } };
+    r_fill_rects(ren, q, 4);
+    RFRect dot = { cx, cy, 1, 1 }; r_fill_rect(ren, &dot);
     /* threats outside the view: a chevron on that side, blinking when it is about to fire or swing */
     for (int i = 0; i < MAX_MECH; i++) {
         Mech *m = &r->mech[i]; if (m->st == M_OFF || m->st == M_DYING) continue;
@@ -958,9 +941,9 @@ static void render_aim(Ramrod *r)
         bool danger = m->st == M_AIM || m->st == M_WINDUP || m->st == M_CHARGE;
         if (danger && ((int)(r->total_t * 8) & 1)) continue;
         float x = a > 0 ? r->sw - 12.0f : 6.0f, y = 120 + clampf(fabsf(a) - 0.8f, 0, 2.4f) * 10;
-        SDL_SetRenderDrawColor(ren, 255, danger ? 60 : 200, 60, 255);
+        r_set_draw_color(ren, 255, danger ? 60 : 200, 60, 255);
         for (int k = 0; k < 5; k++) {   /* a solid arrowhead pointing out of the screen */
-            float w = (float)(5 - k); SDL_FRect c = { a < 0 ? x + k : x + 5 - k, y - w, 1, w * 2 }; SDL_RenderFillRect(ren, &c);
+            float w = (float)(5 - k); RFRect c = { a < 0 ? x + k : x + 5 - k, y - w, 1, w * 2 }; r_fill_rect(ren, &c);
         }
     }
 }
@@ -978,50 +961,50 @@ static void render_arm(Ramrod *r)
     float x = xoff(r) - f->ax, y = -f->ay + r->bob * 0.3f;
     bool right = r->punch_side == 1;
     if (right) x = r->sw - (x + f->w);
-    SDL_FRect src = { (float)f->x, (float)f->y, (float)f->w, (float)f->h }, dst = { floorf(x), floorf(y), (float)f->w, (float)f->h };
-    SDL_RenderTextureRotated(r->ren, r->atlas, &src, &dst, 0, NULL, right ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
+    RFRect src = { (float)f->x, (float)f->y, (float)f->w, (float)f->h }, dst = { floorf(x), floorf(y), (float)f->w, (float)f->h };
+    r_tex_rot(r->ren, r->atlas, &src, &dst, 0, NULL, right ? R_FLIP_H : R_FLIP_NONE);
 }
 
-static void bar(SDL_Renderer *ren, float x, float y, float w, float h, float f, uint8_t R, uint8_t G, uint8_t B)
+static void bar(Ren *ren, float x, float y, float w, float h, float f, uint8_t R, uint8_t G, uint8_t B)
 {
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(ren, 0, 0, 0, 170); SDL_FRect bg = { x, y, w, h }; SDL_RenderFillRect(ren, &bg);
-    SDL_SetRenderDrawColor(ren, R, G, B, 255); SDL_FRect fg = { x, y, floorf(w * clampf(f, 0, 1)), h }; SDL_RenderFillRect(ren, &fg);
+    r_set_draw_blend(ren, R_BLEND_BLEND);
+    r_set_draw_color(ren, 0, 0, 0, 170); RFRect bg = { x, y, w, h }; r_fill_rect(ren, &bg);
+    r_set_draw_color(ren, R, G, B, 255); RFRect fg = { x, y, floorf(w * clampf(f, 0, 1)), h }; r_fill_rect(ren, &fg);
 }
 
 /* the two monitors hanging from the canopy: radar left, Ramrod's status right */
 static void render_monitors(Ramrod *r)
 {
-    SDL_Renderer *ren = r->ren; float ox = xoff(r);
+    Ren *ren = r->ren; float ox = xoff(r);
     Font *small = font_get(0x12072E60);
     /* radar: forward is up, 1 px = 60 units */
-    SDL_FRect scr = { ox + 118, 23, 52, 33 };
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
-    SDL_SetRenderDrawColor(ren, 6, 34, 20, 255); SDL_RenderFillRect(ren, &scr);
+    RFRect scr = { ox + 118, 23, 52, 33 };
+    r_set_draw_blend(ren, R_BLEND_NONE);
+    r_set_draw_color(ren, 6, 34, 20, 255); r_fill_rect(ren, &scr);
     float cx = scr.x + scr.w * 0.5f, cy = scr.y + scr.h * 0.5f + 2;
-    SDL_SetRenderDrawColor(ren, 20, 90, 50, 255);
-    for (int k = 1; k <= 2; k++) for (int i = 0; i < 40; i++) { float a = i * TWO_PI / 40; SDL_RenderPoint(ren, cx + cosf(a) * 8 * k, cy + sinf(a) * 8 * k); }
-    SDL_RenderLine(ren, cx, cy, cx - 12, cy - 14); SDL_RenderLine(ren, cx, cy, cx + 12, cy - 14);   /* the view cone */
+    r_set_draw_color(ren, 20, 90, 50, 255);
+    for (int k = 1; k <= 2; k++) for (int i = 0; i < 40; i++) { float a = i * TWO_PI / 40; r_point(ren, cx + cosf(a) * 8 * k, cy + sinf(a) * 8 * k); }
+    r_line(ren, cx, cy, cx - 12, cy - 14); r_line(ren, cx, cy, cx + 12, cy - 14);   /* the view cone */
     float sweep = r->total_t * 3.0f;
-    SDL_SetRenderDrawColor(ren, 60, 200, 110, 255); SDL_RenderLine(ren, cx, cy, cx + sinf(sweep) * 16, cy - cosf(sweep) * 16);
+    r_set_draw_color(ren, 60, 200, 110, 255); r_line(ren, cx, cy, cx + sinf(sweep) * 16, cy - cosf(sweep) * 16);
     for (int i = 0; i < MAX_MECH; i++) {
         Mech *m = &r->mech[i]; if (m->st == M_OFF) continue;
         float f, l; to_cam(r, m->x, m->y, &f, &l);
         float bx = clampf(cx + l / 60, scr.x + 1, scr.x + scr.w - 3), by = clampf(cy - f / 60, scr.y + 1, scr.y + scr.h - 3);
         bool blink = (m->st == M_AIM || m->st == M_WINDUP || m->st == M_CHARGE) && ((int)(r->total_t * 8) & 1);
-        if (m->st == M_DYING) SDL_SetRenderDrawColor(ren, 90, 90, 90, 255);
-        else if (m->variant == V_COMMANDER) SDL_SetRenderDrawColor(ren, 255, 210, 40, 255);
-        else if (m->variant == V_HEAVY) SDL_SetRenderDrawColor(ren, 255, 70, 60, 255);
-        else SDL_SetRenderDrawColor(ren, 120, 255, 200, 255);
-        if (blink) SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
-        SDL_FRect b = { floorf(bx), floorf(by), m->variant == V_COMMANDER ? 3.0f : 2.0f, m->variant == V_COMMANDER ? 3.0f : 2.0f }; SDL_RenderFillRect(ren, &b);
+        if (m->st == M_DYING) r_set_draw_color(ren, 90, 90, 90, 255);
+        else if (m->variant == V_COMMANDER) r_set_draw_color(ren, 255, 210, 40, 255);
+        else if (m->variant == V_HEAVY) r_set_draw_color(ren, 255, 70, 60, 255);
+        else r_set_draw_color(ren, 120, 255, 200, 255);
+        if (blink) r_set_draw_color(ren, 255, 255, 255, 255);
+        RFRect b = { floorf(bx), floorf(by), m->variant == V_COMMANDER ? 3.0f : 2.0f, m->variant == V_COMMANDER ? 3.0f : 2.0f }; r_fill_rect(ren, &b);
     }
-    SDL_SetRenderDrawColor(ren, 255, 110, 230, 255);
-    for (int i = 0; i < MAX_SHOT; i++) if (r->shot[i].on && r->shot[i].enemy) { float f, l; to_cam(r, r->shot[i].x, r->shot[i].y, &f, &l); float bx = cx + l / 60, by = cy - f / 60; if (bx > scr.x && bx < scr.x + scr.w && by > scr.y && by < scr.y + scr.h) SDL_RenderPoint(ren, bx, by); }
-    SDL_SetRenderDrawColor(ren, 255, 255, 255, 255); SDL_FRect me = { cx - 1, cy - 1, 2, 2 }; SDL_RenderFillRect(ren, &me);
+    r_set_draw_color(ren, 255, 110, 230, 255);
+    for (int i = 0; i < MAX_SHOT; i++) if (r->shot[i].on && r->shot[i].enemy) { float f, l; to_cam(r, r->shot[i].x, r->shot[i].y, &f, &l); float bx = cx + l / 60, by = cy - f / 60; if (bx > scr.x && bx < scr.x + scr.w && by > scr.y && by < scr.y + scr.h) r_point(ren, bx, by); }
+    r_set_draw_color(ren, 255, 255, 255, 255); RFRect me = { cx - 1, cy - 1, 2, 2 }; r_fill_rect(ren, &me);
     /* status */
-    SDL_FRect st = { ox + 259, 23, 52, 33 };
-    SDL_SetRenderDrawColor(ren, 18, 22, 60, 255); SDL_RenderFillRect(ren, &st);
+    RFRect st = { ox + 259, 23, 52, 33 };
+    r_set_draw_color(ren, 18, 22, 60, 255); r_fill_rect(ren, &st);
     float ar = r->armor / r->armor_max;
     bool blink = ar < 0.3f && ((int)(r->total_t * 4) & 1);
     if (small) {
@@ -1045,8 +1028,8 @@ static void render_monitors(Ramrod *r)
     /* static on the screens when hit */
     if (r->hurt_t > 0.25f) {
         for (int i = 0; i < 90; i++) {
-            SDL_FRect *q = i & 1 ? &scr : &st; uint8_t v = (uint8_t)(frand(r) * 255);
-            SDL_SetRenderDrawColor(ren, v, v, v, 255); SDL_RenderPoint(ren, q->x + frand(r) * q->w, q->y + frand(r) * q->h);
+            RFRect *q = i & 1 ? &scr : &st; uint8_t v = (uint8_t)(frand(r) * 255);
+            r_set_draw_color(ren, v, v, v, 255); r_point(ren, q->x + frand(r) * q->w, q->y + frand(r) * q->h);
         }
     }
 }
@@ -1055,17 +1038,17 @@ static void render_instructions(Ramrod *r, Font *f, Font *small)
 {
     float t = r->phase_t; int sw = r->sw, sh = r->sh;
     float open = clampf(t / INSTR_OPEN, 0, 1); open = 1 - (1 - open) * (1 - open);
-    SDL_SetRenderDrawBlendMode(r->ren, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(r->ren, 0, 0, 0, (uint8_t)(140 * open)); SDL_FRect scrim = { 0, 0, (float)sw, (float)sh }; SDL_RenderFillRect(r->ren, &scrim);
+    r_set_draw_blend(r->ren, R_BLEND_BLEND);
+    r_set_draw_color(r->ren, 0, 0, 0, (uint8_t)(140 * open)); RFRect scrim = { 0, 0, (float)sw, (float)sh }; r_fill_rect(r->ren, &scrim);
     static const struct { const char *label, *desc; } LINES[] = {
         { "TURN", "Left / Right" }, { "WALK", "Up / Down" }, { "SIDESTEP", "Aim button + Left / Right" },
         { "GUNS", "Shoot button (they overheat)" }, { "PUNCH", "Jump button - close range" },
     };
     int nl = (int)(sizeof LINES / sizeof *LINES);
     float full_h = 34 + nl * 14 + 22, pw = (float)sw - 40, ph = full_h * open, x0 = 20, y0 = (sh - full_h) * 0.5f + (full_h - ph) * 0.5f;
-    SDL_SetRenderDrawColor(r->ren, 10, 18, 44, (uint8_t)(255 * open)); SDL_FRect panel = { x0, y0, pw, ph }; SDL_RenderFillRect(r->ren, &panel);
-    SDL_SetRenderDrawColor(r->ren, 60, 120, 220, (uint8_t)(255 * open));
-    SDL_FRect top = { x0, y0 - 2, pw, 2 }, bot = { x0, y0 + ph, pw, 2 }; SDL_RenderFillRect(r->ren, &top); SDL_RenderFillRect(r->ren, &bot);
+    r_set_draw_color(r->ren, 10, 18, 44, (uint8_t)(255 * open)); RFRect panel = { x0, y0, pw, ph }; r_fill_rect(r->ren, &panel);
+    r_set_draw_color(r->ren, 60, 120, 220, (uint8_t)(255 * open));
+    RFRect top = { x0, y0 - 2, pw, 2 }, bot = { x0, y0 + ph, pw, 2 }; r_fill_rect(r->ren, &top); r_fill_rect(r->ren, &bot);
     if (open < 1 || !f || !small) return;
     const char *title = "RAMROD - ROBOT MODE";
     font_draw(f, title, x0 + (pw - font_text_width(f, title)) * 0.5f, y0 + 8, 255, 182, 0);
@@ -1087,24 +1070,24 @@ static void center_text(Ramrod *r, Font *f, const char *s, float y, uint8_t R, u
 void ramrod_draw(Ramrod *r, bool scanlines)
 {
     if (!r->ok) return;
-    SDL_Renderer *ren = r->ren;
+    Ren *ren = r->ren;
     Font *f = font_get(0x4058897F), *small = font_get(0x12072E60);
     float shx = 0, shy = 0;
     if (r->shake > 0) { shx = (frand(r) - 0.5f) * 6 * fminf(1, r->shake * 3); shy = (frand(r) - 0.5f) * 5 * fminf(1, r->shake * 3); }
     float bob = r->bob; r->bob += shy;   /* the shake moves the world; the cockpit only jolts a little */
-    SDL_Rect vp = { (int)shx, 0, r->sw, r->sh }; SDL_SetRenderViewport(ren, &vp);
+    RRect vp = { (int)shx, 0, r->sw, r->sh }; r_set_viewport(ren, &vp);
     render_sky(r);
     render_floor(r);
     render_world(r);
     r->bob = bob;
-    SDL_SetRenderViewport(ren, NULL);
+    r_set_viewport(ren, NULL);
     if (fighting(r) || r->phase == PH_WAVE_CLEAR) render_aim(r);
     render_arm(r);
-    SDL_FRect cp = { floorf(xoff(r) + shx * 0.3f), floorf(shy * 0.3f), ART_W, 240 };
-    SDL_RenderTexture(ren, r->cockpit, NULL, &cp);
+    RFRect cp = { floorf(xoff(r) + shx * 0.3f), floorf(shy * 0.3f), ART_W, 240 };
+    r_tex(ren, r->cockpit, NULL, &cp);
     render_monitors(r);
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-    if (r->red > 0) { SDL_SetRenderDrawColor(ren, 200, 20, 10, (uint8_t)(110 * clampf(r->red, 0, 1))); SDL_FRect q = { 0, 0, (float)r->sw, (float)r->sh }; SDL_RenderFillRect(ren, &q); }
+    r_set_draw_blend(ren, R_BLEND_BLEND);
+    if (r->red > 0) { r_set_draw_color(ren, 200, 20, 10, (uint8_t)(110 * clampf(r->red, 0, 1))); RFRect q = { 0, 0, (float)r->sw, (float)r->sh }; r_fill_rect(ren, &q); }
     if (f && small) {
         if (r->phase == PH_STRIDE) {
             float t = r->phase_t;
@@ -1123,14 +1106,14 @@ void ramrod_draw(Ramrod *r, bool scanlines)
     }
     if (r->dlg.active) dialog_draw(&r->dlg, ren, r->sw, r->sh);
     if (r->phase == PH_INSTR) render_instructions(r, f, small);
-    if (r->white > 0) { SDL_SetRenderDrawColor(ren, 255, 255, 255, (uint8_t)(255 * clampf(r->white, 0, 1))); SDL_FRect q = { 0, 0, (float)r->sw, (float)r->sh }; SDL_RenderFillRect(ren, &q); }
+    if (r->white > 0) { r_set_draw_color(ren, 255, 255, 255, (uint8_t)(255 * clampf(r->white, 0, 1))); RFRect q = { 0, 0, (float)r->sw, (float)r->sh }; r_fill_rect(ren, &q); }
     if (scanlines) {
-        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(ren, 0, 0, 0, 70);
-        for (int y = 1; y < r->sh; y += 2) { SDL_FRect q = { 0, (float)y, (float)r->sw, 1 }; SDL_RenderFillRect(ren, &q); }
+        r_set_draw_blend(ren, R_BLEND_BLEND); r_set_draw_color(ren, 0, 0, 0, 70);
+        for (int y = 1; y < r->sh; y += 2) { RFRect q = { 0, (float)y, (float)r->sw, 1 }; r_fill_rect(ren, &q); }
     }
     float fade = r->phase == PH_CLEARED ? clampf(r->phase_t / 1.2f, 0, 1) : r->black;
     if (fade > 0) {
         uint8_t v = r->phase == PH_CLEARED ? 255 : 0;
-        SDL_SetRenderDrawColor(ren, v, v, v, (uint8_t)(255 * fade)); SDL_FRect q = { 0, 0, (float)r->sw, (float)r->sh }; SDL_RenderFillRect(ren, &q);
+        r_set_draw_color(ren, v, v, v, (uint8_t)(255 * fade)); RFRect q = { 0, 0, (float)r->sw, (float)r->sh }; r_fill_rect(ren, &q);
     }
 }

@@ -47,26 +47,26 @@ int font_text_width_n(const Font *f, const char *s, int n)
 void font_draw_n(const Font *f, const char *s, int n, float x, float y, uint8_t r, uint8_t g, uint8_t b)
 {
     if (!f || !f->spr) return;
-    SDL_SetTextureColorMod(f->spr->tex, r, g, b);
+    rtex_set_color_mod(sprite_tex(f->spr), r, g, b);
     for (int i = 0; s[i] && i < n; i++) {
         unsigned char c = (unsigned char)s[i];
         int gi = c - 0x21;
         if (gi >= 0 && gi < f->spr->frames) sprite_draw(f->spr, gi, x, y, false);
         x += glyph_w(f, c);
     }
-    SDL_SetTextureColorMod(f->spr->tex, 255, 255, 255);
+    rtex_set_color_mod(sprite_tex(f->spr), 255, 255, 255);
 }
 void font_draw(const Font *f, const char *s, float x, float y, uint8_t r, uint8_t g, uint8_t b) { font_draw_n(f, s, 1 << 30, x, y, r, g, b); }
 
 void font_draw_scaled(const Font *f, const char *s, float x, float y, float scale, uint8_t r, uint8_t g, uint8_t b)
 {
     if (!f || !f->spr) return;
-    SDL_SetTextureColorMod(f->spr->tex, r, g, b);
+    rtex_set_color_mod(sprite_tex(f->spr), r, g, b);
     for (int i = 0; s[i]; i++) {
         unsigned char c = (unsigned char)s[i];
         int gi = c - 0x21;
         if (gi >= 0 && gi < f->spr->frames) sprite_draw_scaled(f->spr, gi, x, y, f->spr->w * scale, f->spr->h * scale);
         x += glyph_w(f, c) * scale;
     }
-    SDL_SetTextureColorMod(f->spr->tex, 255, 255, 255);
+    rtex_set_color_mod(sprite_tex(f->spr), 255, 255, 255);
 }

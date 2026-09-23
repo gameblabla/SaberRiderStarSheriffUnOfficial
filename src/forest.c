@@ -197,7 +197,7 @@ bool forest_finale_update(Forest *f, Enemies *E, Night *hj, Effects *fx, const L
         add_stream(E, F->arena_x, (float)sw, 32, R_EDGE, L_EDGE, 5200, 0, layer);
         F->ntr = E->ntr - F->tr0;
         streams(E, F, F->ntr_onslaught, F->ntr, false);
-        if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "stage4: finale, arena %.0f..%.0f\n", F->arena_x, F->arena_x + sw);
+        if (plat_getenv("SABER_TRACE")) fprintf(stderr, "stage4: finale, arena %.0f..%.0f\n", F->arena_x, F->arena_x + sw);
         break;
     case FF_ONSLAUGHT:
     case FF_BOSS: {
@@ -220,7 +220,7 @@ bool forest_finale_update(Forest *f, Enemies *E, Night *hj, Effects *fx, const L
         /* the wreck has burnt out and the field is clear */
         if (hj->clear_ready && on_field(E) == 0 && alive && F->t > 0.5f) {
             F->state = FF_WON;
-            if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "stage4: finale won\n");
+            if (plat_getenv("SABER_TRACE")) fprintf(stderr, "stage4: finale won\n");
         }
         break;
     case FF_WON:
@@ -229,7 +229,7 @@ bool forest_finale_update(Forest *f, Enemies *E, Night *hj, Effects *fx, const L
     return F->state == FF_WON;
 }
 
-void forest_finale_draw_hud(const Forest *f, const Enemies *E, const Night *hj, SDL_Renderer *ren, int sw)
+void forest_finale_draw_hud(const Forest *f, const Enemies *E, const Night *hj, Ren *ren, int sw)
 {
     (void)ren;
     const ForestFinale *F = &f->fin;

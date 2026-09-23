@@ -2,7 +2,8 @@
 #include "assets.h"
 #include "gfx.h"
 #include "audio.h"
-#include <SDL3/SDL.h>
+#include "platform/render.h"
+#include "platform/plat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -94,15 +95,15 @@ static const AnimPatch APRIL_ANIMS[] = {
 /* April's grunts (../heroes/voice/generate.py) on the events Fireball's table 6 / 3-5 / 1-2 / 23 samples cover */
 static void april_sfx(void)
 {
-    static const struct { int id; const char *files[3]; } G[] = {
+    static const struct { int id; const char *files[4]; } G[] = {
         { 2,  { "voice/april_jump.wav" } },
-        { 3,  { "voice/april_hurt1.wav", "voice/april_hurt2.wav", "voice/april_hurt3.wav" } },
+        { 3,  { "voice/april_hurt1.wav", "voice/april_hurt2.wav", "voice/april_hurt3.wav", "voice/april_huh_anime_hurt.wav" } },
         { 4,  { "voice/april_death1.wav", "voice/april_death2.wav" } },
         { 15, { "voice/april_fall.wav" } },
     };
     for (size_t i = 0; i < sizeof G / sizeof *G; i++) {
-        const char *paths[3]; int n = 0;
-        for (int k = 0; k < 3 && G[i].files[k]; k++) { const char *p = asset_path(G[i].files[k]); if (p) paths[n++] = strdup(p); }
+        const char *paths[4]; int n = 0;
+        for (int k = 0; k < 4 && G[i].files[k]; k++) { const char *p = asset_path(G[i].files[k]); if (p) paths[n++] = strdup(p); }
         if (n) sfx_set_override(G[i].id, paths, n);
         for (int k = 0; k < n; k++) free((char *)paths[k]);
     }
@@ -116,6 +117,23 @@ static void saber_sfx(void)
         { 3,  { "voice/saber_hurt1.wav", "voice/saber_hurt2.wav", "voice/saber_hurt3.wav" } },
         { 4,  { "voice/saber_death1.wav", "voice/saber_death2.wav" } },
         { 15, { "voice/saber_fall.wav" } },
+    };
+    for (size_t i = 0; i < sizeof G / sizeof *G; i++) {
+        const char *paths[3]; int n = 0;
+        for (int k = 0; k < 3 && G[i].files[k]; k++) { const char *p = asset_path(G[i].files[k]); if (p) paths[n++] = strdup(p); }
+        if (n) sfx_set_override(G[i].id, paths, n);
+        for (int k = 0; k < n; k++) free((char *)paths[k]);
+    }
+}
+
+/* Colt's series-dialogue clone uses Fireball's same jump/hurt/death/fall events. */
+static void colt_sfx(void)
+{
+    static const struct { int id; const char *files[3]; } G[] = {
+        { 2,  { "voice/colt_jump.wav" } },
+        { 3,  { "voice/colt_hurt1.wav", "voice/colt_hurt2.wav", "voice/colt_hurt3.wav" } },
+        { 4,  { "voice/colt_death1.wav", "voice/colt_death2.wav" } },
+        { 15, { "voice/colt_fall.wav" } },
     };
     for (size_t i = 0; i < sizeof G / sizeof *G; i++) {
         const char *paths[3]; int n = 0;
@@ -159,6 +177,7 @@ bool hero_apply(Character *c)
         return true;
     }
     if (c->crhc_id == CRHC_COLT) {
+        if (!g_quiet) colt_sfx();
         CBlock *cb = colt_sheet();
         if (!cb) return false;
         c->cb = cb; c->spr = NULL;   /* every cell incl. the run is Fireball's art recoloured: table, bob and overlays stay Fireball's */
@@ -179,6 +198,6 @@ bool hero_apply(Character *c)
     }
     c->hurt[APRIL_BORED_L] = c->hurt[1]; c->hurt[APRIL_BORED_R] = c->hurt[2];
     c->bored_anim[0] = APRIL_BORED_L; c->bored_anim[1] = APRIL_BORED_R; c->bored_time = 10.0f;
-    if (SDL_getenv("SABER_BORED")) c->bored_time = (float)atof(SDL_getenv("SABER_BORED"));   /* debug */
+    if (plat_getenv("SABER_BORED")) c->bored_time = (float)atof(plat_getenv("SABER_BORED"));   /* debug */
     return true;
 }

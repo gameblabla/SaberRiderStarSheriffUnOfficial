@@ -51,7 +51,7 @@ typedef struct {
 enum { S_BOLT, S_TORPEDO, S_ORB, S_MLASER };
 typedef struct { bool on; int kind; float x, y, vx, vy, life; } Shot;
 enum { FX_EXPL, FX_SMOKE, FX_FLASH, FX_SPARK, FX_DEBRIS, FX_CHUNK, FX_PULL };
-typedef struct { bool on; int kind, frame; float x, y, vx, vy, t, dur, scale, rot, vr; SDL_FRect src; } Fx;
+typedef struct { bool on; int kind, frame; float x, y, vx, vy, t, dur, scale, rot, vr; RFRect src; } Fx;
 typedef struct { bool on; int kind; float x, y, t; } Cap;
 typedef struct { int alive, drop; bool failed; } Group;
 
@@ -185,8 +185,8 @@ enum { PH_INSTR, PH_PLAY, PH_WARNING, PH_BOSS_IN, PH_BOSS_TALK, PH_BOSS, PH_BOSS
 #define BOSS_IN_DUR 5.0f
 
 struct Space {
-    SDL_Renderer *ren; int sw, sh; bool ok;
-    SDL_Texture *atlas, *boss_tex, *neb, *planet, *far; Anim anim[A_COUNT];
+    Ren *ren; int sw, sh; bool ok;
+    RTex *atlas, *boss_tex, *neb, *planet, *far; Anim anim[A_COUNT];
     uint32_t *boss_px; int boss_w, boss_h, planet_w, planet_h, far_w, far_h;
     int difficulty, lives, result;
     /* Ramrod */
@@ -218,20 +218,19 @@ static void play_music(Space *s, int track) { if (s->music_now != track) { music
 static void sfx_file(const char *name) { char buf[64]; snprintf(buf, sizeof buf, "space/%s", name); sfx_play_file(asset_path(buf)); }
 static float diffk(const Space *s) { return s->difficulty == 0 ? 0.72f : s->difficulty == 1 ? 1.0f : 1.3f; }
 static float hpmul(const Space *s) { return s->difficulty == 0 ? 0.8f : s->difficulty == 1 ? 1.0f : 1.25f; }
-static bool trace(void) { return SDL_getenv("SABER_TRACE") != NULL; }
+static bool trace(void) { return plat_getenv("SABER_TRACE") != NULL; }
 static void radio(Space *s, int i) { if (s->radio_n < 6) s->radio_q[s->radio_n++] = i; }
 
 /* ---------------------------------------------------------------- loading */
-static SDL_Texture *load_tex(Space *s, const char *name, int *w, int *h, uint32_t **keep)
+static RTex *load_tex(Space *s, const char *name, int *w, int *h, uint32_t **keep)
 {
     char buf[64]; snprintf(buf, sizeof buf, "space/%s", name);
     const char *p = asset_path(buf);
     if (!p) { fprintf(stderr, "assets/%s missing (run ../space/build.py)\n", buf); return NULL; }
     int ww, hh; uint32_t *px = png_load_rgba(p, &ww, &hh);
     if (!px) return NULL;
-    SDL_Texture *t = SDL_CreateTexture(s->ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, ww, hh);
-    SDL_UpdateTexture(t, NULL, px, ww * 4);
-    SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND); SDL_SetTextureScaleMode(t, SDL_SCALEMODE_NEAREST);
+    RTex *t = rtex_create(s->ren, ww, hh, R_TEX_STATIC, px);
+    rtex_set_blend(t, R_BLEND_BLEND); rtex_set_scale(t, R_SCALE_NEAREST);
     if (w) *w = ww;
     if (h) *h = hh;
     if (keep) *keep = px; else free(px);
@@ -364,7 +363,7 @@ static void run_event(Space *s, const Ev *e)
 /* ---------------------------------------------------------------- setup */
 static int cmp_ev(const void *a, const void *b) { float x = ((const Ev *)a)->t, y = ((const Ev *)b)->t; return x < y ? -1 : x > y; }
 
-Space *space_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives, int hero)
+Space *space_create(Ren *ren, int sw, int sh, int difficulty, int lives, int hero)
 {
     Space *s = calloc(1, sizeof *s);
     power_reset(&s->pw, hero, true);
@@ -373,27 +372,27 @@ Space *space_create(SDL_Renderer *ren, int sw, int sh, int difficulty, int lives
     s->difficulty = difficulty; s->lives = lives;
     s->hp = s->hp_max = difficulty == 0 ? 5 : difficulty == 1 ? 4 : 3;
     s->power = 1; s->bombs = 3; s->px = -40; s->py = sh * 0.5f; s->enter_t = 1.0f;
-    s->god = SDL_getenv("SABER_R7GOD") != NULL; s->bot = SDL_getenv("SABER_R7BOT") != NULL;
+    s->god = plat_getenv("SABER_R7GOD") != NULL; s->bot = plat_getenv("SABER_R7BOT") != NULL;
     dialog_set_hero(HERO_FIREBALL);   /* the scenes are written for the whole crew, as in phase 1 */
     for (int i = 0; i < N_STAR; i++) { s->star_x[i] = frand(s) * sw; s->star_y[i] = frand(s) * sh; s->star_l[i] = i % 3; }
     memcpy(s->tl, TL, sizeof TL); qsort(s->tl, N_TL, sizeof *s->tl, cmp_ev);
     s->planet_x = 0;
     s->phase = PH_INSTR;
     play_music(s, 12);
-    if (SDL_getenv("SABER_R7T")) {   /* debug: start the timeline at t seconds (the events before it are skipped) */
-        s->tl_t = (float)atof(SDL_getenv("SABER_R7T"));
+    if (plat_getenv("SABER_R7T")) {   /* debug: start the timeline at t seconds (the events before it are skipped) */
+        s->tl_t = (float)atof(plat_getenv("SABER_R7T"));
         while (s->tl_next < N_TL && s->tl[s->tl_next].t < s->tl_t) s->tl_next++;
         s->planet_x = -s->tl_t * 8; s->phase = PH_PLAY; s->enter_t = 0; s->px = 60;
     }
-    if (SDL_getenv("SABER_R7BOSS")) { s->tl_t = PRE_BOSS; s->tl_next = N_TL; s->phase = PH_PLAY; s->enter_t = 0; s->px = 60; s->planet_x = -1000; }
+    if (plat_getenv("SABER_R7BOSS")) { s->tl_t = PRE_BOSS; s->tl_next = N_TL; s->phase = PH_PLAY; s->enter_t = 0; s->px = 60; s->planet_x = -1000; }
     return s;
 }
 
 void space_destroy(Space *s)
 {
     if (!s) return;
-    SDL_Texture *t[] = { s->atlas, s->boss_tex, s->neb, s->planet, s->far };
-    for (int i = 0; i < 5; i++) if (t[i]) SDL_DestroyTexture(t[i]);
+    RTex *t[] = { s->atlas, s->boss_tex, s->neb, s->planet, s->far };
+    for (int i = 0; i < 5; i++) if (t[i]) rtex_destroy(t[i]);
     power_close(&s->pw);
     free(s->boss_px); free(s);
 }
@@ -629,7 +628,7 @@ static void boss_start(Space *s)
 {
     Boss *b = &s->boss;
     b->on = true; b->x = s->sw + 10.0f; b->y = 40; b->hp = b->hp_max = 1200 * hpmul(s);
-    if (SDL_getenv("SABER_R7BOSSHP")) b->hp = b->hp_max = (float)atof(SDL_getenv("SABER_R7BOSSHP"));
+    if (plat_getenv("SABER_R7BOSSHP")) b->hp = b->hp_max = (float)atof(plat_getenv("SABER_R7BOSSHP"));
     for (int k = 0; k < b->nports; k++) { b->port[k].hp = 20 * hpmul(s); b->port[k].fire_t = 1.5f + k * 0.45f; b->port[k].dead = false; }
     b->laser = L_IDLE; b->laser_cd = 4.0f; b->swarm_cd = 7.0f; b->mine_cd = 5.0f; b->stage = 0;
 }
@@ -773,7 +772,7 @@ static void boss_die_update(Space *s, float dt)
                 if (solid < 24) continue;
                 Fx *e = fx_new(s); if (!e) break;
                 float x = b->x + gx + C * 0.5f, y = b->y + gy + C * 0.5f, dx = x - cx, dy = y - cy, d = hypotf(dx, dy) + 1;
-                e->kind = FX_CHUNK; e->x = x; e->y = y; e->src = (SDL_FRect){ (float)gx, (float)gy, (float)C, (float)C };
+                e->kind = FX_CHUNK; e->x = x; e->y = y; e->src = (RFRect){ (float)gx, (float)gy, (float)C, (float)C };
                 float v = 30 + frand(s) * 90;
                 e->vx = dx / d * v + 15; e->vy = dy / d * v * 0.8f + (frand(s) - 0.5f) * 30; e->vr = (frand(s) - 0.5f) * 200; e->rot = b->tilt;
                 e->dur = 3.0f + frand(s) * 1.5f;
@@ -1056,46 +1055,46 @@ static void draw_frame(Space *s, int a, int fr, float x, float y, float scale, b
     Anim *an = &s->anim[a]; if (an->n == 0) return;
     fr = fr < 0 ? 0 : fr >= an->n ? an->n - 1 : fr;
     Frame *f = &an->f[fr];
-    SDL_FRect src = { (float)f->x, (float)f->y, (float)f->w, (float)f->h };
+    RFRect src = { (float)f->x, (float)f->y, (float)f->w, (float)f->h };
     float ax = flip ? f->w - 1 - f->ax : f->ax;
-    SDL_FRect dst = { floorf(x - ax * scale), floorf(y - f->ay * scale), roundf(f->w * scale), roundf(f->h * scale) };
+    RFRect dst = { floorf(x - ax * scale), floorf(y - f->ay * scale), roundf(f->w * scale), roundf(f->h * scale) };
     if (dst.w < 1 || dst.h < 1) return;
-    SDL_SetTextureColorMod(s->atlas, cr, cg, cb); SDL_SetTextureAlphaMod(s->atlas, ca);
-    SDL_RenderTextureRotated(s->ren, s->atlas, &src, &dst, 0, NULL, flip ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
-    SDL_SetTextureColorMod(s->atlas, 255, 255, 255); SDL_SetTextureAlphaMod(s->atlas, 255);
+    rtex_set_color_mod(s->atlas, cr, cg, cb); rtex_set_alpha_mod(s->atlas, ca);
+    r_tex_rot(s->ren, s->atlas, &src, &dst, 0, NULL, flip ? R_FLIP_H : R_FLIP_NONE);
+    rtex_set_color_mod(s->atlas, 255, 255, 255); rtex_set_alpha_mod(s->atlas, 255);
 }
 static void draw_add(Space *s, int a, int fr, float x, float y, float scale, uint8_t cr, uint8_t cg, uint8_t cb, uint8_t ca)
 {
-    SDL_SetTextureBlendMode(s->atlas, SDL_BLENDMODE_ADD);
+    rtex_set_blend(s->atlas, R_BLEND_ADD);
     draw_frame(s, a, fr, x, y, scale, false, cr, cg, cb, ca);
-    SDL_SetTextureBlendMode(s->atlas, SDL_BLENDMODE_BLEND);
+    rtex_set_blend(s->atlas, R_BLEND_BLEND);
 }
-static void rect(SDL_Renderer *ren, float x, float y, float w, float h, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+static void rect(Ren *ren, float x, float y, float w, float h, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
 {
-    SDL_SetRenderDrawColor(ren, r, g, b, a); SDL_FRect q = { floorf(x), floorf(y), w, h }; SDL_RenderFillRect(ren, &q);
+    r_set_draw_color(ren, r, g, b, a); RFRect q = { floorf(x), floorf(y), w, h }; r_fill_rect(ren, &q);
 }
-static void fill_circle(SDL_Renderer *ren, float cx, float cy, float rad, SDL_FColor c)
+static void fill_circle(Ren *ren, float cx, float cy, float rad, RFColor c)
 {
-    enum { N = 24 }; SDL_Vertex v[N + 1]; int idx[N * 3];
-    v[0].position = (SDL_FPoint){ cx, cy }; v[0].color = c;
-    for (int i = 0; i < N; i++) { float a = i * 2 * PI / N; v[i + 1].position = (SDL_FPoint){ cx + cosf(a) * rad, cy + sinf(a) * rad }; v[i + 1].color = c; }
+    enum { N = 24 }; RVertex v[N + 1]; int idx[N * 3];
+    v[0].position = (RFPoint){ cx, cy }; v[0].color = c;
+    for (int i = 0; i < N; i++) { float a = i * 2 * PI / N; v[i + 1].position = (RFPoint){ cx + cosf(a) * rad, cy + sinf(a) * rad }; v[i + 1].color = c; }
     for (int i = 0; i < N; i++) { idx[i * 3] = 0; idx[i * 3 + 1] = 1 + i; idx[i * 3 + 2] = 1 + (i + 1) % N; }
-    SDL_RenderGeometry(ren, NULL, v, N + 1, idx, N * 3);
+    r_geometry(ren, NULL, v, N + 1, idx, N * 3);
 }
 
 static void render_background(Space *s)
 {
-    SDL_Renderer *ren = s->ren;
+    Ren *ren = s->ren;
     float u = fmodf(s->neb_x, (float)NEB_W);
-    for (float x = -u; x < s->sw; x += NEB_W) { SDL_FRect d = { floorf(x), 0, NEB_W, 240 }; SDL_RenderTexture(ren, s->neb, NULL, &d); }
+    for (float x = -u; x < s->sw; x += NEB_W) { RFRect d = { floorf(x), 0, NEB_W, 240 }; r_tex(ren, s->neb, NULL, &d); }
     for (int i = 0; i < N_STAR; i++) if (s->star_l[i] == 0) rect(ren, s->star_x[i], s->star_y[i], 1, 1, 110, 110, 170, 255);
     if (s->far_on) {
-        SDL_FRect d = { floorf(s->far_x), floorf(s->far_y), (float)s->far_w, (float)s->far_h };
-        SDL_RenderTexture(ren, s->far, NULL, &d);
+        RFRect d = { floorf(s->far_x), floorf(s->far_y), (float)s->far_w, (float)s->far_h };
+        r_tex(ren, s->far, NULL, &d);
     }
     if (s->planet_x - 120 > -s->planet_w) {   /* Yuma, falling behind */
-        SDL_FRect d = { floorf(s->planet_x - 120), (float)(s->sh - 150), (float)s->planet_w, (float)s->planet_h };   /* the disc's centre 120 px left of the screen, 150 below it */
-        SDL_RenderTexture(ren, s->planet, NULL, &d);
+        RFRect d = { floorf(s->planet_x - 120), (float)(s->sh - 150), (float)s->planet_w, (float)s->planet_h };   /* the disc's centre 120 px left of the screen, 150 below it */
+        r_tex(ren, s->planet, NULL, &d);
     }
     for (int i = 0; i < N_STAR; i++) {
         if (s->star_l[i] == 1) rect(ren, s->star_x[i], s->star_y[i], 1, 1, 190, 190, 255, 255);
@@ -1108,20 +1107,20 @@ static void render_background(Space *s)
 
 static void render_boss(Space *s)
 {
-    Boss *b = &s->boss; SDL_Renderer *ren = s->ren;
+    Boss *b = &s->boss; Ren *ren = s->ren;
     if (!b->on || b->broken) return;
-    SDL_FRect d = { floorf(b->x), floorf(b->y), (float)s->boss_w, (float)s->boss_h };
-    SDL_FPoint piv = { (float)s->boss_w, s->boss_h * 0.5f };
+    RFRect d = { floorf(b->x), floorf(b->y), (float)s->boss_w, (float)s->boss_h };
+    RFPoint piv = { (float)s->boss_w, s->boss_h * 0.5f };
     uint8_t v = 255;
     if (s->phase == PH_BOSS_DIE) { v = (uint8_t)(255 - clampf(b->die_t / 4.6f, 0, 1) * 110); }
-    SDL_SetTextureColorMod(s->boss_tex, v, v, v);
-    SDL_RenderTextureRotated(ren, s->boss_tex, NULL, &d, -b->tilt, &piv, SDL_FLIP_NONE);
+    rtex_set_color_mod(s->boss_tex, v, v, v);
+    r_tex_rot(ren, s->boss_tex, NULL, &d, -b->tilt, &piv, R_FLIP_NONE);
     if (b->flash > 0) {
-        SDL_SetTextureBlendMode(s->boss_tex, SDL_BLENDMODE_ADD); SDL_SetTextureColorMod(s->boss_tex, 120, 90, 70);
-        SDL_RenderTextureRotated(ren, s->boss_tex, NULL, &d, -b->tilt, &piv, SDL_FLIP_NONE);
-        SDL_SetTextureBlendMode(s->boss_tex, SDL_BLENDMODE_BLEND);
+        rtex_set_blend(s->boss_tex, R_BLEND_ADD); rtex_set_color_mod(s->boss_tex, 120, 90, 70);
+        r_tex_rot(ren, s->boss_tex, NULL, &d, -b->tilt, &piv, R_FLIP_NONE);
+        rtex_set_blend(s->boss_tex, R_BLEND_BLEND);
     }
-    SDL_SetTextureColorMod(s->boss_tex, 255, 255, 255);
+    rtex_set_color_mod(s->boss_tex, 255, 255, 255);
     /* the gun ports: lit, dark, wrecked; a live one pulses before it fires. They follow the hull as it lists. */
     float a = -b->tilt * PI / 180, ca = cosf(a), sa = sinf(a);
     for (int i = 0; i < b->nports; i++) {
@@ -1130,26 +1129,26 @@ static void render_boss(Space *s)
         Frame *f = &s->anim[A_PORT].f[fr];
         float dx = roundf(p->x - 5 + 0.01f) + 5 - piv.x, dy = roundf(p->y - 5 + 0.01f) + 5 - piv.y;
         float rx = dx * ca - dy * sa + piv.x - 5, ry = dx * sa + dy * ca + piv.y - 5;
-        SDL_FRect src = { (float)f->x, (float)f->y, (float)f->w, (float)f->h };
-        SDL_FRect dst = { floorf(b->x) + roundf(rx), floorf(b->y) + roundf(ry), (float)f->w, (float)f->h };
-        SDL_SetTextureColorMod(s->atlas, v, v, v);
-        SDL_RenderTexture(ren, s->atlas, &src, &dst);
-        SDL_SetTextureColorMod(s->atlas, 255, 255, 255);
+        RFRect src = { (float)f->x, (float)f->y, (float)f->w, (float)f->h };
+        RFRect dst = { floorf(b->x) + roundf(rx), floorf(b->y) + roundf(ry), (float)f->w, (float)f->h };
+        rtex_set_color_mod(s->atlas, v, v, v);
+        r_tex(ren, s->atlas, &src, &dst);
+        rtex_set_color_mod(s->atlas, 255, 255, 255);
         if (p->lit && !p->dead && p->fire_t < 0.4f && s->phase == PH_BOSS) draw_add(s, A_ORB, 1, b->x + p->x, b->y + p->y, 0.8f + (0.4f - p->fire_t), 255, 255, 255, 200);
     }
 }
 
 static void render_beam(Space *s)
 {
-    Boss *b = &s->boss; SDL_Renderer *ren = s->ren;
+    Boss *b = &s->boss; Ren *ren = s->ren;
     if (!b->on || b->broken || s->phase == PH_BOSS_DIE) return;
     float ex = boss_ex(s), ey = boss_ey(s);
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    r_set_draw_blend(ren, R_BLEND_BLEND);
     if (b->laser == L_CHARGE) {
         float p = clampf(b->laser_t / 1.3f, 0, 1);
         if (p > 0.5f && ((int)(b->laser_t * 16) & 1)) rect(ren, 0, ey, ex, 1, 230, 0, 40, 255);   /* the aiming line */
-        fill_circle(ren, ex, ey, 1.5f + 6 * p, (SDL_FColor){ 1, 0.6f, 0.62f, 1 });
-        fill_circle(ren, ex, ey, 0.8f + 4 * p, (SDL_FColor){ 1, 0.95f, 0.95f, 1 });
+        fill_circle(ren, ex, ey, 1.5f + 6 * p, (RFColor){ 1, 0.6f, 0.62f, 1 });
+        fill_circle(ren, ex, ey, 0.8f + 4 * p, (RFColor){ 1, 0.95f, 0.95f, 1 });
     } else if (b->laser == L_FIRE || b->laser == L_FADE) {
         /* the clip's profile: dark red edge, pink, a white core (11 rows; doubled in the last stage) */
         float k = b->stage >= 2 ? 2.0f : 1.0f, fl = ((int)(s->total_t * 30) & 1) ? 1.0f : 0.0f;
@@ -1160,8 +1159,8 @@ static void render_beam(Space *s)
         rect(ren, x0, ey - H * 0.82f, w, 2 * H * 0.82f, 251, 153, 151, 255);
         rect(ren, x0, ey - H * 0.46f - fl * 0.5f, w, 2 * H * 0.46f + fl, 249, 232, 232, 255);
         float br = (b->stage >= 2 ? 18 : 11) * (b->laser == L_FADE ? k / 2 + 0.5f : 1) + fl;
-        fill_circle(ren, ex, ey, br, (SDL_FColor){ 0.98f, 0.55f, 0.58f, 1 });
-        fill_circle(ren, ex, ey, br - 2, (SDL_FColor){ 1, 0.97f, 0.97f, 1 });
+        fill_circle(ren, ex, ey, br, (RFColor){ 0.98f, 0.55f, 0.58f, 1 });
+        fill_circle(ren, ex, ey, br - 2, (RFColor){ 1, 0.97f, 0.97f, 1 });
     }
 }
 
@@ -1244,18 +1243,18 @@ static void render_fx(Space *s, bool chunks)
         case FX_PULL: rect(s->ren, e->x, e->y, 2, 1, 255, 170, 190, 255); break;
         case FX_DEBRIS: {
             Frame *f = &s->anim[A_DEBRIS].f[e->frame % s->anim[A_DEBRIS].n];
-            SDL_FRect src = { (float)f->x, (float)f->y, (float)f->w, (float)f->h }, dst = { floorf(e->x - f->w * 0.5f), floorf(e->y - f->h * 0.5f), (float)f->w, (float)f->h };
-            SDL_SetTextureColorMod(s->atlas, 180, 120, 100); SDL_SetTextureAlphaMod(s->atlas, (uint8_t)(255 * (1 - clampf((p - 0.6f) / 0.4f, 0, 1))));
-            SDL_RenderTextureRotated(s->ren, s->atlas, &src, &dst, e->rot, NULL, SDL_FLIP_NONE);
-            SDL_SetTextureColorMod(s->atlas, 255, 255, 255); SDL_SetTextureAlphaMod(s->atlas, 255);
+            RFRect src = { (float)f->x, (float)f->y, (float)f->w, (float)f->h }, dst = { floorf(e->x - f->w * 0.5f), floorf(e->y - f->h * 0.5f), (float)f->w, (float)f->h };
+            rtex_set_color_mod(s->atlas, 180, 120, 100); rtex_set_alpha_mod(s->atlas, (uint8_t)(255 * (1 - clampf((p - 0.6f) / 0.4f, 0, 1))));
+            r_tex_rot(s->ren, s->atlas, &src, &dst, e->rot, NULL, R_FLIP_NONE);
+            rtex_set_color_mod(s->atlas, 255, 255, 255); rtex_set_alpha_mod(s->atlas, 255);
             break; }
         case FX_CHUNK: {
-            SDL_FRect dst = { floorf(e->x - e->src.w * 0.5f), floorf(e->y - e->src.h * 0.5f), e->src.w, e->src.h };
+            RFRect dst = { floorf(e->x - e->src.w * 0.5f), floorf(e->y - e->src.h * 0.5f), e->src.w, e->src.h };
             uint8_t v = (uint8_t)(200 - 120 * clampf(p * 1.5f, 0, 1));
-            SDL_SetTextureColorMod(s->boss_tex, v, (uint8_t)(v * 0.8f), (uint8_t)(v * 0.7f));
-            SDL_SetTextureAlphaMod(s->boss_tex, (uint8_t)(255 * (1 - clampf((p - 0.7f) / 0.3f, 0, 1))));
-            SDL_RenderTextureRotated(s->ren, s->boss_tex, &e->src, &dst, e->rot, NULL, SDL_FLIP_NONE);
-            SDL_SetTextureColorMod(s->boss_tex, 255, 255, 255); SDL_SetTextureAlphaMod(s->boss_tex, 255);
+            rtex_set_color_mod(s->boss_tex, v, (uint8_t)(v * 0.8f), (uint8_t)(v * 0.7f));
+            rtex_set_alpha_mod(s->boss_tex, (uint8_t)(255 * (1 - clampf((p - 0.7f) / 0.3f, 0, 1))));
+            r_tex_rot(s->ren, s->boss_tex, &e->src, &dst, e->rot, NULL, R_FLIP_NONE);
+            rtex_set_color_mod(s->boss_tex, 255, 255, 255); rtex_set_alpha_mod(s->boss_tex, 255);
             break; }
         }
     }
@@ -1270,8 +1269,8 @@ static void center_text(Space *s, Font *f, const char *t, float y, uint8_t R, ui
 /* the clip's HUD, top left: shield cells stacked red..green, then lives, gun power and torpedoes */
 static void render_hud(Space *s, Font *small)
 {
-    SDL_Renderer *ren = s->ren;
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    Ren *ren = s->ren;
+    r_set_draw_blend(ren, R_BLEND_BLEND);
     rect(ren, 3, 3, 82, fmaxf(58, 12 + s->hp_max * 9.0f), 0, 0, 20, 140);
     static const uint8_t CELL[5][3] = { { 90, 220, 60 }, { 170, 225, 50 }, { 250, 210, 40 }, { 250, 140, 30 }, { 230, 30, 30 } };
     static const int MAP[6][5] = { { 0 }, { 0 }, { 0, 4 }, { 0, 2, 4 }, { 0, 2, 3, 4 }, { 0, 1, 2, 3, 4 } };   /* green at the bottom, red on top */
@@ -1339,7 +1338,7 @@ static void render_radio(Space *s, Font *small)
     const Radio *r = &RADIO[s->radio_now];
     float t = s->radio_t, in = clampf(t / 0.2f, 0, 1) * clampf((4.2f - t) / 0.2f, 0, 1);
     float w = fminf(300, s->sw - 20.0f), x0 = s->sw * 0.5f - w * 0.5f, h = 30, y0 = s->sh - 4 - h * in;
-    SDL_SetRenderDrawBlendMode(s->ren, SDL_BLENDMODE_BLEND);
+    r_set_draw_blend(s->ren, R_BLEND_BLEND);
     rect(s->ren, x0, y0, w, h, 8, 14, 40, 210);
     rect(s->ren, x0, y0, w, 1, 90, 160, 255, 255);
     Sprite *av = sprite_get(namehash(r->avatar));
@@ -1357,7 +1356,7 @@ static void render_instructions(Space *s, Font *f, Font *small)
 {
     float t = s->phase_t; int sw = s->sw, sh = s->sh;
     float open = clampf(t / INSTR_OPEN, 0, 1); open = 1 - (1 - open) * (1 - open);
-    SDL_SetRenderDrawBlendMode(s->ren, SDL_BLENDMODE_BLEND);
+    r_set_draw_blend(s->ren, R_BLEND_BLEND);
     rect(s->ren, 0, 0, (float)sw, (float)sh, 0, 0, 0, (uint8_t)(140 * open));
     static const struct { const char *label, *desc; } LINES[] = {
         { "FLY", "Arrows (hold Aim for fine steering)" }, { "GUNS", "Shoot button - hold it" },
@@ -1383,11 +1382,11 @@ static void render_instructions(Space *s, Font *f, Font *small)
 void space_draw(Space *s, bool scanlines)
 {
     if (!s->ok) return;
-    SDL_Renderer *ren = s->ren;
+    Ren *ren = s->ren;
     Font *f = font_get(0x4058897F), *small = font_get(0x12072E60);
     float shx = 0, shy = 0;
     if (s->shake > 0) { float k = fminf(1, s->shake * 3); shx = (frand(s) - 0.5f) * 6 * k; shy = (frand(s) - 0.5f) * 5 * k; }
-    SDL_Rect vp = { (int)shx, (int)shy, s->sw, s->sh }; SDL_SetRenderViewport(ren, &vp);
+    RRect vp = { (int)shx, (int)shy, s->sw, s->sh }; r_set_viewport(ren, &vp);
     render_background(s);
     render_boss(s);
     render_fx(s, true);
@@ -1396,8 +1395,8 @@ void space_draw(Space *s, bool scanlines)
     render_player(s);
     render_fx(s, false);
     render_beam(s);
-    SDL_SetRenderViewport(ren, NULL);
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    r_set_viewport(ren, NULL);
+    r_set_draw_blend(ren, R_BLEND_BLEND);
     if (s->red > 0) rect(ren, 0, 0, (float)s->sw, (float)s->sh, 200, 20, 10, (uint8_t)(90 * clampf(s->red, 0, 1)));
     if (s->phase != PH_INSTR) render_hud(s, small);
     if (f && small) {
@@ -1417,8 +1416,8 @@ void space_draw(Space *s, bool scanlines)
     if (s->white > 0) rect(ren, 0, 0, (float)s->sw, (float)s->sh, 255, 255, 255, (uint8_t)(255 * clampf(s->white, 0, 1)));
     power_draw(&s->pw, ren, s->sw, s->sh);
     if (scanlines) {
-        SDL_SetRenderDrawColor(ren, 0, 0, 0, 70);
-        for (int y = 1; y < s->sh; y += 2) { SDL_FRect q = { 0, (float)y, (float)s->sw, 1 }; SDL_RenderFillRect(ren, &q); }
+        r_set_draw_color(ren, 0, 0, 0, 70);
+        for (int y = 1; y < s->sh; y += 2) { RFRect q = { 0, (float)y, (float)s->sw, 1 }; r_fill_rect(ren, &q); }
     }
     float fade = s->phase == PH_CLEARED ? clampf(s->phase_t / 1.6f, 0, 1) : s->black;
     if (fade > 0) { uint8_t v = s->phase == PH_CLEARED ? 255 : 0; rect(ren, 0, 0, (float)s->sw, (float)s->sh, v, v, v, (uint8_t)(255 * fade)); }

@@ -66,4 +66,4 @@ extern const char *const FOREST_SCRIPT_INTRO, *const FOREST_SCRIPT_AMBUSH, *cons
 bool forest_finale_update(Forest *f, Enemies *E, Night *hj, Effects *fx, const Level *L, const PhysicsWorld *W,
                           const Player *pl, float cam_x, int sw, int sh, int layer, float dt);
 /* the objective top right once Hyperjumper is down: the Outriders left (the ambush itself shows no timer) */
-void forest_finale_draw_hud(const Forest *f, const Enemies *E, const Night *hj, SDL_Renderer *ren, int sw);
+void forest_finale_draw_hud(const Forest *f, const Enemies *E, const Night *hj, Ren *ren, int sw);

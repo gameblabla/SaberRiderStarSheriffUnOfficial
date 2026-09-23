@@ -18,29 +18,28 @@ static bool level_start(Game *g);
 static void title_start(Game *g);
 static int hearts_for(int difficulty) { return difficulty == 0 ? 4 : difficulty == 1 ? 2 : 0; }   /* FUN_00422d10 / FUN_00428840 */
 
-bool game_init(Game *g, SDL_Renderer *ren, int sw, int sh, int start_level)
+bool game_init(Game *g, Ren *ren, int sw, int sh, int start_level)
 {
     memset(g, 0, sizeof *g);
     g->ren = ren; g->sw = sw; g->sh = sh;
     g->menu.difficulty = 1; g->menu.lives = 2; g->menu.continues = 3; g->menu.character = 1;   /* option defaults: NORMAL, 02, 03; Fireball */
-    if (SDL_getenv("SABER_HERO")) g->menu.character = atoi(SDL_getenv("SABER_HERO")) & 3;   /* debug: 0 Saber 1 Fireball 2 April 3 Colt */
-    if (SDL_getenv("SABER_LIVES")) g->menu.lives = atoi(SDL_getenv("SABER_LIVES"));   /* debug: starting lives */
-    if (SDL_getenv("SABER_RATIO")) {   /* debug: start in a screen ratio (0 wide, -1 4:3, 1 stretch) */
-        g->menu.ratio = atoi(SDL_getenv("SABER_RATIO")); g->sw = g->menu.ratio == RATIO_WIDE ? 426 : 320;
-        SDL_SetRenderLogicalPresentation(ren, g->sw, g->sh, g->menu.ratio == RATIO_STRETCH ? SDL_LOGICAL_PRESENTATION_STRETCH : SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
-    }
+    if (plat_getenv("SABER_HERO")) g->menu.character = atoi(plat_getenv("SABER_HERO")) & 3;   /* debug: 0 Saber 1 Fireball 2 April 3 Colt */
+    if (plat_getenv("SABER_LIVES")) g->menu.lives = atoi(plat_getenv("SABER_LIVES"));   /* debug: starting lives */
+    g->menu.ratio = plat_default_ratio();
+    if (plat_getenv("SABER_RATIO")) g->menu.ratio = atoi(plat_getenv("SABER_RATIO"));   /* debug: start in a screen ratio (0 wide, -1 4:3, 1 stretch) */
+    if (g->menu.ratio != RATIO_WIDE) { g->sw = 320; plat_apply_screen(ren, g->sw, g->sh, g->menu.ratio, -1); }
     g->stage = 1; g->continues_left = g->menu.continues;
     if (start_level) { g->stage = start_level; return level_start(g); }   /* --level N: skip the front end */
-    if (SDL_getenv("SABER_STAGE")) { g->stage = atoi(SDL_getenv("SABER_STAGE")); if (g->stage >= 2 && g->stage <= 7) return level_start(g); }   /* debug: straight into stage 2..6 (7 = stage 6's final phase) */
-    if (!SDL_getenv("SABER_MENU") && (SDL_getenv("SABER_START") || SDL_getenv("SABER_SCRIPT"))) return level_start(g);   /* debug: straight into the level */
-    if (SDL_getenv("SABER_CLEARED")) g->menu.cleared_stage = atoi(SDL_getenv("SABER_CLEARED"));   /* debug: SABER_MENU=15 art for that stage */
-    menu_enter(&g->menu, SDL_getenv("SABER_MENU") ? atoi(SDL_getenv("SABER_MENU")) : MS_SPLASH0);
+    if (plat_getenv("SABER_STAGE")) { g->stage = atoi(plat_getenv("SABER_STAGE")); if (g->stage >= 2 && g->stage <= 7) return level_start(g); }   /* debug: straight into stage 2..6 (7 = stage 6's final phase) */
+    if (!plat_getenv("SABER_MENU") && (plat_getenv("SABER_START") || plat_getenv("SABER_SCRIPT"))) return level_start(g);   /* debug: straight into the level */
+    if (plat_getenv("SABER_CLEARED")) g->menu.cleared_stage = atoi(plat_getenv("SABER_CLEARED"));   /* debug: SABER_MENU=15 art for that stage */
+    menu_enter(&g->menu, plat_getenv("SABER_MENU") ? atoi(plat_getenv("SABER_MENU")) : MS_SPLASH0);
     return true;
 }
 
 static bool level_start(Game *g)
 {
-    SDL_Renderer *ren = g->ren; int sw = g->sw, sh = g->sh;
+    Ren *ren = g->ren; int sw = g->sw, sh = g->sh;
     Menu menu = g->menu; int stage = g->stage ? g->stage : 1; int carry = g->carry_lives, conts = g->continues_left;
     bool mode7_phase2 = g->mode7_phase2;
     night_dispose(&g->night);
@@ -85,11 +84,11 @@ static bool level_start(Game *g)
     if (g->night_on) { px = g->night.start_x; py = g->night.start_y; }
     if (g->forest_on) { px = g->forest.start_x; py = g->forest.start_y; }
     if (g->lab_on) { px = g->lab.start_x; py = g->lab.start_y; }
-    g->walk_in = (g->night_on || g->forest_on || g->lab_on) && !SDL_getenv("SABER_START");   /* stages 3, 4 and 5 open with the hero walking in from the left */
+    g->walk_in = (g->night_on || g->forest_on || g->lab_on) && !plat_getenv("SABER_START");   /* stages 3, 4 and 5 open with the hero walking in from the left */
     if (g->walk_in && g->night_on) { g->walk_stop_x = g->night.intro_stop_x; g->walk_script = NIGHT_SCRIPT_INTRO; }
     if (g->walk_in && g->forest_on) { px = FOREST_INTRO_CAM - 40.0f; g->walk_stop_x = FOREST_INTRO_STOP; g->walk_script = FOREST_SCRIPT_INTRO; }
     if (g->walk_in && g->lab_on) { px = FOREST_INTRO_CAM - 40.0f; g->walk_stop_x = FOREST_INTRO_STOP; g->walk_script = LAB_SCRIPT_INTRO; }   /* the same opening as stage 4 */
-    if (SDL_getenv("SABER_START")) px = (float)atof(SDL_getenv("SABER_START"));   /* debug */
+    if (plat_getenv("SABER_START")) px = (float)atof(plat_getenv("SABER_START"));   /* debug */
     player_spawn(&g->player, (unsigned)(g->menu.character - 1) < 3 ? HERO_CRHC[g->menu.character - 1] : 0x8403195A, px, py);
     /* stages 3 and 4 inherit the spares left over from the stage before (a fresh --level 3/4 falls back to the option) */
     g->player.lives = (stage >= 3 && carry > 0) ? carry : g->menu.lives;
@@ -142,7 +141,7 @@ static bool level_start(Game *g)
         }
     }
     g->state = 10;
-    if (SDL_getenv("SABER_DEBUG")) g->debug_collision = true;   /* debug: collision overlay from the start */
+    if (plat_getenv("SABER_DEBUG")) g->debug_collision = true;   /* debug: collision overlay from the start */
     music_play(g->night_on ? 13 : g->forest_on ? 15 : g->lab_on ? 14 : 5, true);
     g->cam_x = px - sw / 2; if (g->cam_x < 0) g->cam_x = 0;
     if (g->walk_in) g->cam_x = g->night_on ? NIGHT_INTRO_CAM : FOREST_INTRO_CAM;
@@ -183,47 +182,47 @@ static void title_draw(Game *g)
 {
     float t = g->title_t; int sw = g->sw, sh = g->sh;
     Font *f = font_get(0x4058897F), *small = font_get(0x12072E60);
-    SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND);
+    r_set_draw_blend(g->ren, R_BLEND_BLEND);
     /* the black: solid until the wipe, then 10 strips that each shrink toward their own centre line, staggered top to
      * bottom, and a thin veil that fades out last */
-    if (t < TITLE_WIPE_T) { SDL_SetRenderDrawColor(g->ren, 0, 0, 0, 255); SDL_FRect q = { 0, 0, (float)sw, (float)sh }; SDL_RenderFillRect(g->ren, &q); }
+    if (t < TITLE_WIPE_T) { r_set_draw_color(g->ren, 0, 0, 0, 255); RFRect q = { 0, 0, (float)sw, (float)sh }; r_fill_rect(g->ren, &q); }
     else {
         const int N = 10; float strip = (float)sh / N, w = (t - TITLE_WIPE_T) / (TITLE_END_T - TITLE_WIPE_T);
         for (int i = 0; i < N; i++) {
-            float open = SDL_clamp((w - i * 0.045f) / 0.5f, 0.0f, 1.0f); open = 1 - (1 - open) * (1 - open);   /* ease out */
+            float open = PLAT_CLAMP((w - i * 0.045f) / 0.5f, 0.0f, 1.0f); open = 1 - (1 - open) * (1 - open);   /* ease out */
             float h = strip * (1 - open); if (h <= 0) continue;
-            SDL_SetRenderDrawColor(g->ren, 0, 0, 0, 255); SDL_FRect q = { 0, i * strip + (strip - h) * 0.5f, (float)sw, h }; SDL_RenderFillRect(g->ren, &q);
+            r_set_draw_color(g->ren, 0, 0, 0, 255); RFRect q = { 0, i * strip + (strip - h) * 0.5f, (float)sw, h }; r_fill_rect(g->ren, &q);
         }
-        SDL_SetRenderDrawColor(g->ren, 0, 0, 0, (uint8_t)(120 * (1 - w))); SDL_FRect v = { 0, 0, (float)sw, (float)sh }; SDL_RenderFillRect(g->ren, &v);
+        r_set_draw_color(g->ren, 0, 0, 0, (uint8_t)(120 * (1 - w))); RFRect v = { 0, 0, (float)sw, (float)sh }; r_fill_rect(g->ren, &v);
     }
     /* the band: a line growing from the centre (0..0.4 s), then opening vertically to 46 px (0.4..0.9 s); it slides
      * up and away with the wipe */
-    float cy = sh * 0.5f - 2, half_w = sw * SDL_clamp(t / 0.4f, 0.0f, 1.0f) * 0.5f;
-    float half_h = 1.5f + 21.5f * SDL_clamp((t - 0.4f) / 0.5f, 0.0f, 1.0f);
-    float gone = SDL_clamp((t - TITLE_WIPE_T) / 0.45f, 0.0f, 1.0f); gone *= gone;
+    float cy = sh * 0.5f - 2, half_w = sw * PLAT_CLAMP(t / 0.4f, 0.0f, 1.0f) * 0.5f;
+    float half_h = 1.5f + 21.5f * PLAT_CLAMP((t - 0.4f) / 0.5f, 0.0f, 1.0f);
+    float gone = PLAT_CLAMP((t - TITLE_WIPE_T) / 0.45f, 0.0f, 1.0f); gone *= gone;
     cy -= gone * (sh * 0.5f + 40); uint8_t fade = (uint8_t)(255 * (1 - gone));
     if (t > 0.0f && half_w > 1) {
-        SDL_SetRenderDrawColor(g->ren, 14, 22, 52, fade); SDL_FRect band = { sw * 0.5f - half_w, cy - half_h, half_w * 2, half_h * 2 }; SDL_RenderFillRect(g->ren, &band);
-        SDL_SetRenderDrawColor(g->ren, 255, 182, 0, fade);
-        SDL_FRect top = { sw * 0.5f - half_w, cy - half_h - 2, half_w * 2, 2 }, bot = { sw * 0.5f - half_w, cy + half_h, half_w * 2, 2 };
-        SDL_RenderFillRect(g->ren, &top); SDL_RenderFillRect(g->ren, &bot);
+        r_set_draw_color(g->ren, 14, 22, 52, fade); RFRect band = { sw * 0.5f - half_w, cy - half_h, half_w * 2, half_h * 2 }; r_fill_rect(g->ren, &band);
+        r_set_draw_color(g->ren, 255, 182, 0, fade);
+        RFRect top = { sw * 0.5f - half_w, cy - half_h - 2, half_w * 2, 2 }, bot = { sw * 0.5f - half_w, cy + half_h, half_w * 2, 2 };
+        r_fill_rect(g->ren, &top); r_fill_rect(g->ren, &bot);
         /* hatch marks running along the band's edges (a rolling shimmer) */
-        SDL_SetRenderDrawColor(g->ren, 255, 230, 120, (uint8_t)(fade * 0.6f));
+        r_set_draw_color(g->ren, 255, 230, 120, (uint8_t)(fade * 0.6f));
         int off = (int)(t * 90) % 16;
-        for (float x = sw * 0.5f - half_w + off; x < sw * 0.5f + half_w; x += 16) { SDL_FRect m1 = { x, cy - half_h - 2, 6, 2 }, m2 = { x + 8, cy + half_h, 6, 2 }; SDL_RenderFillRect(g->ren, &m1); SDL_RenderFillRect(g->ren, &m2); }
+        for (float x = sw * 0.5f - half_w + off; x < sw * 0.5f + half_w; x += 16) { RFRect m1 = { x, cy - half_h - 2, 6, 2 }, m2 = { x + 8, cy + half_h, 6, 2 }; r_fill_rect(g->ren, &m1); r_fill_rect(g->ren, &m2); }
     }
     if (!f || !small || t < TITLE_TEXT_T - 0.2f) return;
     const char *no = TITLE[title_idx(g)].no, *name = TITLE[title_idx(g)].name, *sub = TITLE[title_idx(g)].sub;
     /* "STAGE n" slides in from the left over 0.2 s */
-    float sl = SDL_clamp((t - (TITLE_TEXT_T - 0.2f)) / 0.2f, 0.0f, 1.0f); sl = 1 - (1 - sl) * (1 - sl);
+    float sl = PLAT_CLAMP((t - (TITLE_TEXT_T - 0.2f)) / 0.2f, 0.0f, 1.0f); sl = 1 - (1 - sl) * (1 - sl);
     float x0 = sw * 0.5f - font_text_width(f, name) * 0.5f;
     font_draw(small, no, x0 - (1 - sl) * 120, cy - half_h + 4, (uint8_t)(255 * sl * (1 - gone)), (uint8_t)(182 * sl * (1 - gone)), 0);
     /* the name types in, a bright cursor block at its head */
     int len = (int)strlen(name), shown = (int)((t - TITLE_TEXT_T) * 22); if (shown < 0) shown = 0; if (shown > len) shown = len;
     font_draw_n(f, name, shown, x0, cy - 6, fade, fade, fade);
-    if (shown < len && ((int)(t * 12) & 1)) { SDL_SetRenderDrawColor(g->ren, 255, 182, 0, fade); SDL_FRect cur = { x0 + font_text_width_n(f, name, shown), cy - 6, 8, (float)f->h }; SDL_RenderFillRect(g->ren, &cur); }
+    if (shown < len && ((int)(t * 12) & 1)) { r_set_draw_color(g->ren, 255, 182, 0, fade); RFRect cur = { x0 + font_text_width_n(f, name, shown), cy - 6, 8, (float)f->h }; r_fill_rect(g->ren, &cur); }
     /* the sub line fades in once the name is complete */
-    float sf = SDL_clamp((t - TITLE_TEXT_T - len / 22.0f - 0.2f) / 0.4f, 0.0f, 1.0f) * (1 - gone);
+    float sf = PLAT_CLAMP((t - TITLE_TEXT_T - len / 22.0f - 0.2f) / 0.4f, 0.0f, 1.0f) * (1 - gone);
     font_draw(small, sub, sw * 0.5f - font_text_width(small, sub) * 0.5f, cy + half_h - 12, (uint8_t)(200 * sf), (uint8_t)(200 * sf), (uint8_t)(210 * sf));
 }
 
@@ -234,14 +233,12 @@ static void game_over(Game *g)
     else menu_enter(&g->menu, MS_GAMEOVER);
 }
 
-void game_event(Game *g, const SDL_Event *ev)
+void game_debug_key(Game *g, int key, bool down)
 {
-    input_event(&g->in, ev);
-    if (ev->type == SDL_EVENT_KEY_DOWN || ev->type == SDL_EVENT_KEY_UP) {
-        g->key[ev->key.scancode] = ev->type == SDL_EVENT_KEY_DOWN;
-        if (ev->type == SDL_EVENT_KEY_DOWN && ev->key.scancode == SDL_SCANCODE_F1) g->debug_collision = !g->debug_collision;
-        if (ev->type == SDL_EVENT_KEY_DOWN && ev->key.scancode == SDL_SCANCODE_F2) g->free_cam = !g->free_cam;
-    }
+    if (key < 0 || key >= DBG_KEY_COUNT) return;
+    g->dbg_key[key] = down;
+    if (down && key == DBG_KEY_COLLISION) g->debug_collision = !g->debug_collision;
+    if (down && key == DBG_KEY_FREECAM) g->free_cam = !g->free_cam;
 }
 
 /* camera follows the player horizontally (FUN_0040c460), max 4 px/frame catch-up. The target is clamped to
@@ -438,7 +435,7 @@ void game_update(Game *g, float dt)
         else if (won && c->state != CS_DEAD && !g->forest_outro_done) { g->forest_outro_done = true; open_scene(g, FOREST_SCRIPT_OUTRO); }   /* the radio, then the win */
         else if (won && c->state != CS_DEAD && g->forest_outro_done) { g->state = 0xe; g->state_t = 0; p->locked = true; music_play(6, false); }
     }
-    if (g->lab_on && SDL_getenv("SABER_DARK") && g->dark.state == DA_OFF && g->state == 10 && g->cam_x >= g->level.width - g->sw - 1)
+    if (g->lab_on && plat_getenv("SABER_DARK") && g->dark.state == DA_OFF && g->state == 10 && g->cam_x >= g->level.width - g->sw - 1)
         dark_begin(&g->dark, g->cam_x, g->sw, g->menu.difficulty);   /* debug: SABER_DARK=1 SABER_START=6500: straight to Dark April */
     if (g->lab_on) {   /* stage 5: Dark April, once level 1's boss is down (her scenes are April's own when April is the hero) */
         dark_update(&g->dark, p, &g->in, &g->level, &g->world, &g->player_bullets, &g->enemy_bullets, &g->effects, g->player_layer, dt, g->state == 10);
@@ -486,7 +483,7 @@ void game_update(Game *g, float dt)
         }
         for (int k = 0; k < g->ndeath; k++) if (IN_ZONE(g->deathzones[k])) { p->respawn_x = g->deathzones[k].rx; p->respawn_y = g->deathzones[k].ry; c->state = CS_DEAD; }
         if (by - hh > g->level.height) { p->respawn_x = p->safe_x; p->respawn_y = p->safe_y; c->state = CS_DEAD; sfx_play(15, 0); }   /* fell out of the level */
-        { static int kill = -2; if (kill == -2) kill = SDL_getenv("SABER_KILL") ? atoi(SDL_getenv("SABER_KILL")) : -1; if (kill >= 0 && kill-- == 0) c->state = CS_DEAD; }   /* debug: die at step N */
+        { static int kill = -2; if (kill == -2) kill = plat_getenv("SABER_KILL") ? atoi(plat_getenv("SABER_KILL")) : -1; if (kill >= 0 && kill-- == 0) c->state = CS_DEAD; }   /* debug: die at step N */
         #undef IN_ZONE
     }
     if (g->enemies.release_request) {
@@ -496,7 +493,7 @@ void game_update(Game *g, float dt)
     if (g->enemies.cam_locked) g->cam_locked = true;
     if (g->enemies.boss_done && g->state == 10) {
         g->enemies.boss_done = false;
-        if (g->lab_on && !SDL_getenv("SABER_NODARK")) { if (g->dark.state == DA_OFF) dark_begin(&g->dark, g->cam_x, g->sw, g->menu.difficulty); }   /* stage 5: not over yet (Dark April ends it) */
+        if (g->lab_on && !plat_getenv("SABER_NODARK")) { if (g->dark.state == DA_OFF) dark_begin(&g->dark, g->cam_x, g->sw, g->menu.difficulty); }   /* stage 5: not over yet (Dark April ends it) */
         else { g->state = 0xe; g->state_t = 0; p->locked = true; music_play(6, false); }
     }
     if (g->night_on && g->night.clear_ready && g->state == 10 && !g->night_outro_done && c->state != CS_DEAD) { g->night_outro_done = true; open_scene(g, NIGHT_SCRIPT_OUTRO); }
@@ -512,14 +509,14 @@ void game_update(Game *g, float dt)
     power_trail_update(&g->power, c, dt);
     effects_update(&g->effects, dt);
     player_frame_end(p, dt);
-    if (SDL_getenv("SABER_TRACE")) fprintf(stderr, "cam=%.0f lock=%d st=%d aim=%d face=%d anim=%d frame=%d ov=%d ovf=%d flags=%x coll=%x pos=%.1f,%.1f v=%.1f,%.1f in=%d%d%d%d%d%d%d\n",
+    if (plat_getenv("SABER_TRACE")) fprintf(stderr, "cam=%.0f lock=%d st=%d aim=%d face=%d anim=%d frame=%d ov=%d ovf=%d flags=%x coll=%x pos=%.1f,%.1f v=%.1f,%.1f in=%d%d%d%d%d%d%d\n",
         g->cam_x, g->cam_locked, c->state, c->aim, c->facing, c->anim, c->frame, c->overlay, c->ov_frame, c->flags, c->coll, c->body.x, c->body.y, c->body.vx, c->body.vy,
         g->in.state[0], g->in.state[1], g->in.state[2], g->in.state[3], g->in.state[4], g->in.state[5], g->in.state[6]);
 
     if (g->free_cam) {
-        float sp = (g->key[SDL_SCANCODE_LSHIFT] ? 600.f : 200.f) * dt;
-        if (g->key[SDL_SCANCODE_RIGHT]) g->cam_x += sp;
-        if (g->key[SDL_SCANCODE_LEFT]) g->cam_x -= sp;
+        float sp = (g->dbg_key[DBG_KEY_FAST] ? 600.f : 200.f) * dt;
+        if (g->dbg_key[DBG_KEY_RIGHT]) g->cam_x += sp;
+        if (g->dbg_key[DBG_KEY_LEFT]) g->cam_x -= sp;
     } else if (g->cam_locked || g->state == 0xd) {
         /* camera frozen during a stop / driven by the cutscene */
     } else camera_follow(g, false);
@@ -532,25 +529,25 @@ void game_update(Game *g, float dt)
 static void draw_collision(Game *g)
 {
     Level *L = &g->level;
-    SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND);
+    r_set_draw_blend(g->ren, R_BLEND_BLEND);
     int cx0 = (int)(g->cam_x / L->cellw), cy0 = (int)(g->cam_y / L->cellh);
     for (int cy = cy0; cy < cy0 + g->sh / L->cellh + 2; cy++)
         for (int cx = cx0; cx < cx0 + g->sw / L->cellw + 2; cx++) {
             uint8_t v = level_cell(L, cx, cy);
             if (!v) continue;
-            if (v == 15) SDL_SetRenderDrawColor(g->ren, 255, 0, 0, 90); else SDL_SetRenderDrawColor(g->ren, 0, 255, 0, 90);
-            SDL_FRect r = { cx * L->cellw - g->cam_x, cy * L->cellh - g->cam_y, (float)L->cellw, (float)L->cellh };
-            SDL_RenderFillRect(g->ren, &r);
+            if (v == 15) r_set_draw_color(g->ren, 255, 0, 0, 90); else r_set_draw_color(g->ren, 0, 255, 0, 90);
+            RFRect r = { cx * L->cellw - g->cam_x, cy * L->cellh - g->cam_y, (float)L->cellw, (float)L->cellh };
+            r_fill_rect(g->ren, &r);
         }
     Body *b = &g->player.ch.body;
-    SDL_SetRenderDrawColor(g->ren, 0, 200, 255, 160);
-    SDL_FRect r = { b->x + b->ox - b->hx - g->cam_x, b->y + b->oy - b->hy - g->cam_y, b->hx * 2, b->hy * 2 };
-    SDL_RenderRect(g->ren, &r);
-    SDL_SetRenderDrawColor(g->ren, 255, 255, 0, 200);
+    r_set_draw_color(g->ren, 0, 200, 255, 160);
+    RFRect r = { b->x + b->ox - b->hx - g->cam_x, b->y + b->oy - b->hy - g->cam_y, b->hx * 2, b->hy * 2 };
+    r_rect(g->ren, &r);
+    r_set_draw_color(g->ren, 255, 255, 0, 200);
     for (int i = 0; i < L->nobjs && !g->night_on && !g->forest_on; i++) {
         LevelObject *o = &L->objs[i];
-        SDL_FRect q = { o->x - g->cam_x - 2, (o->type >= 998 ? 20 : 8) + (o->type % 7) * 6.f, 4, 4 };
-        SDL_RenderFillRect(g->ren, &q);
+        RFRect q = { o->x - g->cam_x - 2, (o->type >= 998 ? 20 : 8) + (o->type % 7) * 6.f, 4, 4 };
+        r_fill_rect(g->ren, &q);
     }
 }
 
@@ -563,8 +560,8 @@ static void draw_hero(Game *g)
 static void draw_scanlines(Game *g)
 {
     if (!menu_scanlines(&g->menu)) return;
-    SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(g->ren, 0, 0, 0, 70);
-    for (int y = 1; y < g->sh; y += 2) { SDL_FRect q = { 0, (float)y, (float)g->sw, 1 }; SDL_RenderFillRect(g->ren, &q); }
+    r_set_draw_blend(g->ren, R_BLEND_BLEND); r_set_draw_color(g->ren, 0, 0, 0, 70);
+    for (int y = 1; y < g->sh; y += 2) { RFRect q = { 0, (float)y, (float)g->sw, 1 }; r_fill_rect(g->ren, &q); }
 }
 
 void game_draw(Game *g)
@@ -572,12 +569,7 @@ void game_draw(Game *g)
     if (g->menu.apply_screen_mode && !g->in_level) {
         g->menu.apply_screen_mode = false;
         g->sw = g->menu.ratio == RATIO_WIDE ? 426 : 320;
-        SDL_SetRenderLogicalPresentation(g->ren, g->sw, g->sh, g->menu.ratio == RATIO_STRETCH ? SDL_LOGICAL_PRESENTATION_STRETCH : SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
-        SDL_Window *win = SDL_GetRenderWindow(g->ren);
-        if (win) {
-            SDL_SetWindowFullscreen(win, g->menu.screen == 0);
-            if (g->menu.screen > 0) SDL_SetWindowSize(win, 426 * (g->menu.screen + 1), 240 * (g->menu.screen + 1));
-        }
+        plat_apply_screen(g->ren, g->sw, g->sh, g->menu.ratio, g->menu.screen);
     }
     if (!g->in_level) { menu_draw(&g->menu, g->ren, g->sw, g->sh); draw_scanlines(g); return; }
     if (g->mode7) { mode7_draw(g->mode7, menu_scanlines(&g->menu)); if (g->title_on) title_draw(g); return; }
@@ -637,10 +629,10 @@ void game_draw(Game *g)
     if (g->lab_on && g->state != 0xd) dark_draw_hud(&g->dark, g->ren, g->sw);
     if (g->forest_on && g->state != 0xd) forest_finale_draw_hud(&g->forest, &g->enemies, &g->night, g->ren, g->sw);
     if (g->state == 0xc) {   /* pause: dim + blinking PAUSE sprite (B2143E42) */
-        SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(g->ren, 0, 0, 0, 64);
-        SDL_FRect q = { 0, 0, (float)g->sw, (float)g->sh }; SDL_RenderFillRect(g->ren, &q);
+        r_set_draw_blend(g->ren, R_BLEND_BLEND); r_set_draw_color(g->ren, 0, 0, 0, 64);
+        RFRect q = { 0, 0, (float)g->sw, (float)g->sh }; r_fill_rect(g->ren, &q);
         Sprite *ps = sprite_get(0xB2143E42);
-        if (ps && ((SDL_GetTicks() / 16) & 0x7f) > 0x30) sprite_draw(ps, 0, (float)((g->sw - ps->w) / 2), (float)((g->sh - ps->h) / 2), false);
+        if (ps && ((plat_ticks_ms() / 16) & 0x7f) > 0x30) sprite_draw(ps, 0, (float)((g->sw - ps->w) / 2), (float)((g->sh - ps->h) / 2), false);
     }
     power_draw(&g->power, g->ren, g->sw, g->sh);
     draw_scanlines(g);
@@ -650,8 +642,8 @@ void game_draw(Game *g)
                                   : (g->state_t > 5.5f ? 2.1f * sinf((g->state_t - 5.5f) * 1.5707964f) - 1.0f : 0.0f);
         if (a > 1) a = 1;
         if (a < 0) a = 0;
-        SDL_SetRenderDrawBlendMode(g->ren, SDL_BLENDMODE_BLEND); SDL_SetRenderDrawColor(g->ren, g->state == 0xe ? 255 : 0, g->state == 0xe ? 255 : 0, g->state == 0xe ? 255 : 0, (uint8_t)(a * 255));
-        SDL_FRect q = { 0, 0, (float)g->sw, (float)g->sh }; SDL_RenderFillRect(g->ren, &q);
+        r_set_draw_blend(g->ren, R_BLEND_BLEND); r_set_draw_color(g->ren, g->state == 0xe ? 255 : 0, g->state == 0xe ? 255 : 0, g->state == 0xe ? 255 : 0, (uint8_t)(a * 255));
+        RFRect q = { 0, 0, (float)g->sw, (float)g->sh }; r_fill_rect(g->ren, &q);
     }
     if (g->debug_collision) draw_collision(g);
 }

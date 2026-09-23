@@ -187,7 +187,7 @@ static void paginate(Dialog *d)
     if (!f) return;
     for (int i = 0; i < d->npages; i++) {
         char lines[DLG_WRAP_MAX][80]; int n = wrap(f, d->pages[i].text, 250 - 16, lines, DLG_WRAP_MAX);
-        if (SDL_getenv("SABER_DLGCHECK")) fprintf(stderr, "dialog: page %d wraps to %d lines%s\n", i, n, n > DLG_MAX_LINES ? " (SPLIT)" : "");   /* debug: scripts should fit one box a page */
+        if (plat_getenv("SABER_DLGCHECK")) fprintf(stderr, "dialog: page %d wraps to %d lines%s\n", i, n, n > DLG_MAX_LINES ? " (SPLIT)" : "");   /* debug: scripts should fit one box a page */
         if (n <= DLG_MAX_LINES || d->npages == DLG_MAX_PAGES) continue;
         memmove(&d->pages[i + 2], &d->pages[i + 1], sizeof(DialogPage) * (d->npages - i - 1));
         d->npages++;
@@ -227,7 +227,7 @@ static void draw_box(Sprite *ts, float x0, float y0, float x1, float y1)
 /* FUN_0042a5e0 / FUN_0042b250 geometry: box x (SW-226)/2..SW-(SW-274)/2 with an avatar, (SW-274)/2.. without,
  * y SH-64..SH-16; text at (+8,+4), 10 px lines; avatar 32x32 at (x0-32+6, y0-8); page marker = glyph 0x7f at
  * (x1-20, y1-10), blinking on bit 4 of the frame counter. */
-void dialog_draw(const Dialog *d, SDL_Renderer *r, int sw, int sh)
+void dialog_draw(const Dialog *d, Ren *r, int sw, int sh)
 {
     (void)r;
     if (!d->active || d->box == 0) return;

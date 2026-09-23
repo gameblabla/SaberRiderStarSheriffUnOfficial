@@ -1,7 +1,8 @@
 #pragma once
 /* Front-end state machine (E2DM menu object DAT_00ac9be0): splashes, intro FMV, title, options, briefing, character select,
  * result screens, backer credits. State numbers are the original's (+0x58). */
-#include <SDL3/SDL.h>
+#include "platform/render.h"
+#include "platform/plat.h"
 #include "input.h"
 #include "video.h"
 #include "dialog.h"
@@ -38,6 +39,6 @@ typedef struct {
 } Menu;
 
 void menu_enter(Menu *m, int state);
-void menu_update(Menu *m, const Input *in, float dt, int sw, SDL_Renderer *r);
-void menu_draw(Menu *m, SDL_Renderer *r, int sw, int sh);
+void menu_update(Menu *m, const Input *in, float dt, int sw, Ren *r);
+void menu_draw(Menu *m, Ren *r, int sw, int sh);
 static inline bool menu_scanlines(const Menu *m) { return m->filter == FILTER_CRT || m->filter == FILTER_DOUBLE_SCAN || m->filter == FILTER_CRT_SCAN; }

@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "masters": {
+    "stage3_night_sky.png": "fb87fe74ba69d5fcad4bd7f051d3c9f46131c31b513caabb988333392874869b",
+    "stage3_red_moon.png": "88fb829e5b0d06cbb5db2cd2846df84f14939bbb77db523e9e47128273154137",
+    "stage3_static_mesa.png": "bc255460e5511c19b092d973ddadb90f6fc415939505fff54ca017fc9816c044",
+    "stage3_static_cactus.png": "4ed729012f9b46906cb8bf74406ca851049cbaa2bffd5f7f60225030d1410dc8",
+    "stage3_static_scrub.png": "84f23e3fa90c334e8cebf06017aee09918cf17d3b0da9cf125dd6f09ffd903ec",
+    "stage3_static_fence.png": "676d747fa18c3935e8656f4c5096d4eacdf9bcf667506436849004db28b562b8",
+    "stage3_static_wreck.png": "a196b272d6eab69735ac2c525cc4de6d59be9e482cd22ef89f35aea161d5ef3e",
+    "stage3_static_pad.png": "a4723d697a1a2a1b7127a83a9154ace1e4373e2a1e8828293ad980a1b7f41f61"
+  },
+  "native": {
+    "stage3_night_sky.png": {
+      "size": [
+        720,
+        240
+      ],
+      "colors": 64,
+      "binary_alpha": false,
+      "source": "stage3_night_sky.png",
+      "sha256": "22d126bfc8d47844810c1d8a77cd24f5b6efe8749dde4b6406d01cdd51c4b3ca"
+    },
+    "stage3_red_moon.png": {
+      "size": [
+        96,
+        96
+      ],
+      "colors": 48,
+      "binary_alpha": true,
+      "source": "stage3_red_moon.png",
+      "sha256": "84b1b8c876b1d90749fe46f78df7b2e09e8a4b097d046a02855e91a103c90aab"
+    },
+    "stage3_static_mesa.png": {
+      "size": [
+        160,
+        154
+      ],
+      "colors": 48,
+      "binary_alpha": true,
+      "source": "stage3_static_mesa.png",
+      "sha256": "c63dfc8eb632626e0da1fef707f94ca93d76d0496945e91f720e83b7730b13ea"
+    },
+    "stage3_static_cactus.png": {
+      "size": [
+        64,
+        94
+      ],
+      "colors": 48,
+      "binary_alpha": true,
+      "source": "stage3_static_cactus.png",
+      "sha256": "9600bc105bcf205a0da8b23743419caa202e2cc351c023f7132763c9e79f5799"
+    },
+    "stage3_static_scrub.png": {
+      "size": [
+        64,
+        46
+      ],
+      "colors": 48,
+      "binary_alpha": true,
+      "source": "stage3_static_scrub.png",
+      "sha256": "e27ce338a571c7f04e487ef70ce35043e8db65332cf14c3e4f78c2ea360cbda7"
+    },
+    "stage3_static_fence.png": {
+      "size": [
+        112,
+        79
+      ],
+      "colors": 48,
+      "binary_alpha": true,
+      "source": "stage3_static_fence.png",
+      "sha256": "07c1e9e1ae12a6c71c0cded87af7769568826381e2b588d927d1006991906bab"
+    },
+    "stage3_static_wreck.png": {
+      "size": [
+        128,
+        75
+      ],
+      "colors": 64,
+      "binary_alpha": true,
+      "source": "stage3_static_wreck.png",
+      "sha256": "ff1364b68b1577b7c5bc83bd656b684037c778e58402891da3a4a8133ec7666f"
+    },
+    "stage3_static_pad.png": {
+      "size": [
+        112,
+        88
+      ],
+      "colors": 64,
+      "binary_alpha": true,
+      "source": "stage3_static_pad.png",
+      "sha256": "70d30529bdf0c2d4cd04092fbe026c47ab1ce41914b4ee0e502aa7c0b8242bab"
+    }
+  }
+}

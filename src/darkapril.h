@@ -6,7 +6,8 @@
  * moment later (left and right swapped: walk at her and she walks at you, shoot and she shoots back, crouch and she
  * crouches), dodges shots by jumping or crouching, and breaks off into her own attacks - aimed volleys, slides, leaps
  * over the hero. Her shots are the hero's in violet, slower. The game opens the story scenes she asks for. */
-#include <SDL3/SDL.h>
+#include "platform/render.h"
+#include "platform/plat.h"
 #include "player.h"
 #include "level.h"
 #include "bullets.h"
@@ -46,7 +47,7 @@ void dark_update(DarkApril *d, Player *pl, const Input *pin, const Level *L, con
                  Bullets *eb, Effects *fx, int layer, float dt, bool live);
 void dark_animate(DarkApril *d, float dt);   /* while a dialogue holds the world: she keeps breathing */
 void dark_draw(const DarkApril *d, float cam_x, float cam_y);
-void dark_draw_hud(const DarkApril *d, SDL_Renderer *ren, int sw);
+void dark_draw_hud(const DarkApril *d, Ren *ren, int sw);
 bool dark_holds_arena(const DarkApril *d);
 void dark_power_hit(DarkApril *d, float frac);   /* a hero's power attack (power.c) */   /* from her arrival to her end: no waves, the camera stays */
 

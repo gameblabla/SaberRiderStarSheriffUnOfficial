@@ -9,7 +9,8 @@
  *                          speed with an afterimage trail
  *   Colt                   the same kind of cut-in, then rapid fire
  * In the final phase (space.c) every hero gets the drawn cut-in and it ends in a screen bomb. */
-#include <SDL3/SDL.h>
+#include "platform/render.h"
+#include "platform/plat.h"
 #include <stdbool.h>
 #include "character.h"
 #include "input.h"
@@ -32,7 +33,7 @@ typedef struct {
 
 void power_reset(Power *pw, int hero, bool bomb);      /* a new stage: two items, no cooldown */
 bool power_can_start(const Power *pw);
-void power_start(Power *pw, SDL_Renderer *ren);         /* uses an item and opens the cut-in (the caller stops its world) */
+void power_start(Power *pw, Ren *ren);         /* uses an item and opens the cut-in (the caller stops its world) */
 bool power_in_cutin(const Power *pw);
 void power_update(Power *pw, const Input *in, float dt);   /* every step: the cut-in (skippable), the flash, the timers */
 bool power_take_strike(Power *pw);                      /* true once, on the step the cut-in ends */
@@ -40,6 +41,6 @@ bool power_speed(const Power *pw);                      /* April's burst is runn
 bool power_rapid(const Power *pw);                      /* Colt's */
 void power_trail_update(Power *pw, const Character *c, float dt);
 void power_draw_trail(const Power *pw, float cam_x, float cam_y);   /* April's afterimages, before the hero */
-void power_draw(const Power *pw, SDL_Renderer *ren, int sw, int sh);   /* the cut-in or the flash, over everything */
-void power_draw_hud(const Power *pw, SDL_Renderer *ren, float x, float y, float w);   /* recharge / effect bar */
+void power_draw(const Power *pw, Ren *ren, int sw, int sh);   /* the cut-in or the flash, over everything */
+void power_draw_hud(const Power *pw, Ren *ren, float x, float y, float w);   /* recharge / effect bar */
 void power_close(Power *pw);                            /* frees a clip still open (the stage ends) */
