@@ -52,10 +52,11 @@ typedef struct { Frame f[MAX_FRAMES]; int n; } Anim;
 enum { MF_WALK0, MF_WALK1, MF_WALK2, MF_WALK3, MF_AIM, MF_WINDUP, MF_PUNCH, MF_STAGGER };
 /* ---- mech kinds ---- */
 enum { V_GRUNT, V_HEAVY, V_COMMANDER };
-static const struct { int anim; float hp, speed, scale; int volley; float shot_dmg, punch_dmg; const char *name; } VARIANT[3] = {
-    { A_MECH,      16, 76, 1.00f, 1, 8, 14, "RENEGADE" },
-    { A_MECH_RED,  28, 84, 1.06f, 3, 6, 16, "RENEGADE HEAVY" },
-    { A_MECH_GOLD, 60, 78, 1.30f, 3, 8, 22, "RENEGADE COMMANDER" },
+/* rest: the least time between volleys (up to twice that); aim: the wind-up before one */
+static const struct { int anim; float hp, speed, scale; int volley; float shot_dmg, punch_dmg, rest, aim; const char *name; } VARIANT[3] = {
+    { A_MECH,      16, 76, 1.00f, 1, 8, 14, 1.0f, 0.70f, "RENEGADE" },
+    { A_MECH_RED,  34, 84, 1.06f, 3, 6, 16, 1.1f, 0.85f, "RENEGADE HEAVY" },
+    { A_MECH_GOLD, 90, 78, 1.30f, 4, 8, 22, 0.5f, 0.70f, "RENEGADE COMMANDER" },
 };
 enum { M_OFF, M_ENTER, M_APPROACH, M_CIRCLE, M_AIM, M_FIRE, M_CHARGE, M_WINDUP, M_PUNCH, M_STAGGER, M_DYING };
 typedef struct {
@@ -386,7 +387,7 @@ static void spawn_mech(Ramrod *r, const Spawn *sp)
     m->variant = sp->variant; m->x = r->px + cosf(a) * d; m->y = r->py + sinf(a) * d;
     m->hp = m->hp_max = VARIANT[sp->variant].hp * hpmul; m->scale = VARIANT[sp->variant].scale;
     m->st = M_ENTER; m->strafe = frand(r) < 0.5f ? -1 : 1; m->pref = 380 + frand(r) * 320; m->anim = frand(r) * 4;
-    m->fire_t = 1.0f + frand(r) * 1.5f;
+    m->fire_t = 0.5f + frand(r) * 1.0f;
 }
 
 static void push_apart(float *ax, float *ay, float bx, float by, float minr)
@@ -409,7 +410,9 @@ static void mech_update(Ramrod *r, Mech *m, int idx, float dt)
         break;
     case M_APPROACH:
         mvx = ux * spd; mvy = uy * spd;
+        m->fire_t -= dt * diffk;
         if (d < m->pref) { m->st = M_CIRCLE; m->st_t = 1.0f + frand(r) * 1.5f; }
+        else if (m->fire_t <= 0 && attackers(r, false) < 2 + r->difficulty + (m->variant == V_COMMANDER)) { m->st = M_AIM; m->st_t = VARIANT[m->variant].aim / diffk; }   /* opens fire on the way in */
         break;
     case M_CIRCLE: {   /* strafe round the player, holding the preferred range */
         float rad = (d - m->pref) * 0.8f;
@@ -418,11 +421,11 @@ static void mech_update(Ramrod *r, Mech *m, int idx, float dt)
         m->fire_t -= dt * diffk;
         if (d < 230 && attackers(r, true) == 0) { m->st = M_WINDUP; m->st_t = 0.65f / diffk; m->punch_dir = atan2f(dy, dx); sfx_file("charge.wav"); break; }   /* too close: it swings */
         if (m->st_t <= 0) {
-            m->st_t = 1.2f + frand(r) * 1.8f;
+            m->st_t = 0.6f + frand(r) * 1.0f;
             if (frand(r) < 0.3f) m->strafe = -m->strafe;
-            int cap = r->difficulty == 2 ? 3 : 2;
-            if (d < 700 && frand(r) < 0.35f * diffk && attackers(r, true) == 0 && attackers(r, false) < cap) { m->st = M_CHARGE; m->st_t = 3.0f; }
-            else if (m->fire_t <= 0 && d < 1300 && attackers(r, false) < cap) { m->st = M_AIM; m->st_t = (VARIANT[m->variant].volley > 1 ? 0.95f : 0.75f) / diffk; if (d < 1000) sfx_file("charge.wav"); }
+            int cap = 2 + r->difficulty + (m->variant == V_COMMANDER);   /* the command mech doesn't wait its turn */
+            if (d < 700 && frand(r) < 0.45f * diffk && attackers(r, true) == 0 && attackers(r, false) < cap) { m->st = M_CHARGE; m->st_t = 3.0f; }
+            else if (m->fire_t <= 0 && d < 1700 && attackers(r, false) < cap) { m->st = M_AIM; m->st_t = VARIANT[m->variant].aim / diffk; if (d < 1000) sfx_file("charge.wav"); }
             else m->pref = 360 + frand(r) * 360;
         }
         break; }
@@ -432,7 +435,7 @@ static void mech_update(Ramrod *r, Mech *m, int idx, float dt)
     case M_FIRE:
         if (m->st_t <= 0) {
             fire_plasma(r, m); m->volley_left--; m->st_t = 0.24f;
-            if (m->volley_left <= 0) { m->st = M_CIRCLE; m->st_t = 0.8f + frand(r); m->fire_t = 1.6f + frand(r) * 1.8f; }
+            if (m->volley_left <= 0) { m->st = M_CIRCLE; m->st_t = 0.4f + frand(r) * 0.5f; m->fire_t = VARIANT[m->variant].rest * (1 + frand(r)); }
         }
         break;
     case M_CHARGE:     /* runs at the player */
