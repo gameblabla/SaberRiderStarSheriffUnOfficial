@@ -212,7 +212,8 @@ static void draw_spr(Mode7 *m, int id, int frame, float cx, float ybot, float sc
 /* ---------------------------------------------------------------- worlds */
 static void fill_sand(Mode7 *m)
 {
-    for (int i = 0; i < MAPN * MAPN; i++) m->cells[i] = frand(m) < 0.5f ? T_SAND : T_SAND2;
+    /* frand(m) < 0.5f is the generator's top bit clear: the same draws, without a million float conversions */
+    for (int i = 0; i < MAPN * MAPN; i++) { m->rng = m->rng * 1664525u + 1013904223u; m->cells[i] = (m->rng >> 31) ? T_SAND2 : T_SAND; }
     /* scorched patches: a few hundred blobs a few cells across */
     for (int k = 0; k < 400; k++) {
         int cx = (int)(frand(m) * MAPN), cy = (int)(frand(m) * MAPN), r = 2 + (int)(frand(m) * 4);
@@ -244,32 +245,43 @@ static void build_track(Mode7 *m)
         float d = hypotf(m->tx[b] - m->tx[a], m->ty[b] - m->ty[a]);
         if (i < TRACK_N) m->tlen[i] = m->tlen[a] + d; else m->track_len = m->tlen[a] + d;
     }
-    /* rasterize: every map cell near the track remembers its nearest sample (distance + index), then the distance
-     * from the centreline picks the material and the sample's arc length phases the kerb / dash pattern */
+    /* rasterize: every map cell near the track remembers its nearest sample (squared distance + index), then the
+     * distance from the centreline picks the material and the sample's arc length phases the kerb / dash pattern.
+     * Only the track's bounding box is searched, with squared distances: the whole map with a hypotf per test took
+     * 2.7 s of the stage's load on the Dreamcast (a library call there, about a million of them). */
     fill_sand(m);
     const float HALF = 104, LINE_W = 4, KERB = 118;
-    float *dist = malloc(sizeof(float) * MAPN * MAPN); int16_t *near = malloc(sizeof(int16_t) * MAPN * MAPN);
-    for (int i = 0; i < MAPN * MAPN; i++) { dist[i] = 1e9f; near[i] = -1; }
     const int R = (int)(KERB / (1 << MAPSH)) + 1;
+    int bx0 = 1 << 30, by0 = 1 << 30, bx1 = -(1 << 30), by1 = -(1 << 30);
     for (int i = 0; i < TRACK_N; i++) {
         int ccx = (int)floorf(m->tx[i]) >> MAPSH, ccy = (int)floorf(m->ty[i]) >> MAPSH;
-        for (int cy = ccy - R; cy <= ccy + R; cy++) for (int cx = ccx - R; cx <= ccx + R; cx++) {
-            float wx = (cx << MAPSH) + (1 << MAPSH) * 0.5f, wy = (cy << MAPSH) + (1 << MAPSH) * 0.5f;
-            float d = hypotf(wx - m->tx[i], wy - m->ty[i]);
-            int idx = (cy & (MAPN - 1)) * MAPN + (cx & (MAPN - 1));
-            if (d < dist[idx]) { dist[idx] = d; near[idx] = (int16_t)i; }
+        bx0 = ccx < bx0 ? ccx : bx0; bx1 = ccx > bx1 ? ccx : bx1; by0 = ccy < by0 ? ccy : by0; by1 = ccy > by1 ? ccy : by1;
+    }
+    bx0 -= R; by0 -= R; bx1 += R; by1 += R;
+    int bw = bx1 - bx0 + 1, bh = by1 - by0 + 1;
+    float *dist = malloc(sizeof(float) * bw * bh); int16_t *near = malloc(sizeof(int16_t) * bw * bh);
+    for (int i = 0; i < bw * bh; i++) { dist[i] = 1e18f; near[i] = -1; }
+    for (int i = 0; i < TRACK_N; i++) {
+        int ccx = (int)floorf(m->tx[i]) >> MAPSH, ccy = (int)floorf(m->ty[i]) >> MAPSH;
+        for (int cy = ccy - R; cy <= ccy + R; cy++) {
+            float dy = (cy << MAPSH) + (1 << MAPSH) * 0.5f - m->ty[i], dy2 = dy * dy;
+            float *drow = dist + (cy - by0) * bw - bx0; int16_t *nrow = near + (cy - by0) * bw - bx0;
+            for (int cx = ccx - R; cx <= ccx + R; cx++) {
+                float dx = (cx << MAPSH) + (1 << MAPSH) * 0.5f - m->tx[i], d2 = dx * dx + dy2;
+                if (d2 < drow[cx]) { drow[cx] = d2; nrow[cx] = (int16_t)i; }
+            }
         }
     }
-    for (int idx = 0; idx < MAPN * MAPN; idx++) {
-        float d = dist[idx]; if (d >= KERB) continue;
-        float along = m->tlen[near[idx]];
+    for (int y = 0; y < bh; y++) for (int x = 0; x < bw; x++) {
+        int k = y * bw + x; float d2 = dist[k]; if (d2 >= KERB * KERB) continue;
+        float along = m->tlen[near[k]];
         uint8_t t;
-        if (along < 28) t = d < HALF ? T_CHECKER : T_SAND;                            /* start / finish line */
-        else if (d < 3) t = ((int)(along / 48) & 1) ? T_DASH : T_ASPHALT;            /* centre dashes */
-        else if (d < HALF - LINE_W) t = T_ASPHALT;
-        else if (d < HALF) t = T_LINE;
+        if (along < 28) t = d2 < HALF * HALF ? T_CHECKER : T_SAND;                               /* start / finish line */
+        else if (d2 < 3 * 3) t = ((int)(along / 48) & 1) ? T_DASH : T_ASPHALT;                  /* centre dashes */
+        else if (d2 < (HALF - LINE_W) * (HALF - LINE_W)) t = T_ASPHALT;
+        else if (d2 < HALF * HALF) t = T_LINE;
         else t = ((int)(along / 40) & 1) ? T_KERB_RED : T_KERB_WHITE;
-        m->cells[idx] = t;
+        cell_set(m, bx0 + x, by0 + y, t);
     }
     free(dist); free(near);
     if (plat_getenv("SABER_M7MAP")) {   /* debug: dump the material map */
