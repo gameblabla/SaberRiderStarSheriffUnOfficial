@@ -224,6 +224,15 @@ static void keep_window(RFloor *f, int L, float cam_x, float cam_y)
     }
     float scale = 1.0f / (float)(1 << L);
     int bx0 = (int)floorf(cam_x * scale / 8) - WB / 2, by0 = (int)floorf(cam_y * scale / 8) - WB / 2;
+    /* The map repeats every mapn << cell_shift world units, and the Mode-7 world wraps the camera round it: seen raw,
+     * that jump rebuilt every level in one frame (a ~0.4 s freeze each time the pursuit crossed the world's edge).
+     * A move by whole periods (of the map, or of the window when the map is smaller) leaves every block where it was,
+     * so the old window is taken as shifted by them. */
+    int pb = (f->d.mapn << f->d.cell_shift) >> (L + 3), per = pb >= WB ? pb : WB;
+    if (lv->valid && pb > 0 && per % pb == 0 && per % WB == 0) {
+        lv->bx0 += per * (int)floorf((float)(bx0 - lv->bx0) / (float)per + 0.5f);
+        lv->by0 += per * (int)floorf((float)(by0 - lv->by0) / (float)per + 0.5f);
+    }
     if (!lv->valid || abs(bx0 - lv->bx0) >= WB || abs(by0 - lv->by0) >= WB) {
         for (int by = by0; by < by0 + WB; by++) for (int bx = bx0; bx < bx0 + WB; bx++) build_block(f, L, bx, by);
     } else {

@@ -229,6 +229,25 @@ static volatile unsigned adx_drv_exits;
 void __real_snd_stream_shutdown(void);
 void __wrap_snd_stream_shutdown(void) { adx_drv_exits++; }
 
+/* KOS starts every stream at full volume, and libADX starts its own from its driver thread some time after adx_dec:
+ * the volume the game had set (0 under a stage's title card) came a frame or more later, so each stage opened with a
+ * burst of its music. libADX is the only caller of snd_stream_start (ours and the videos' streams are ADPCM): its
+ * stream gets the music's volume right behind the start command. */
+void __real_snd_stream_start(snd_stream_hnd_t hnd, uint32_t freq, int st);
+void __wrap_snd_stream_start(snd_stream_hnd_t hnd, uint32_t freq, int st)
+{
+    __real_snd_stream_start(hnd, freq, st);
+    if (hnd == shnd && snddrv.drv_status == SNDDRV_STATUS_INITIALIZING) snd_stream_volume(hnd, vol_of(music_gain));
+}
+/* Once libADX winds down (a stop, or a one-shot track's end) its callback hands the AICA its old buffer again until the
+ * driver thread gets round to stopping the channel: a stutter of the last bit of music. Muted from then on. */
+void __real_snd_stream_poll(snd_stream_hnd_t hnd);
+void __wrap_snd_stream_poll(snd_stream_hnd_t hnd)
+{
+    if (hnd == shnd && snddrv.drv_status == SNDDRV_STATUS_DONE) snd_stream_volume(hnd, 0);
+    __real_snd_stream_poll(hnd);
+}
+
 /* wait (up to ms) for cond, letting libADX's threads run */
 #define WAIT_FOR(cond, ms) do { uint64_t t_end_ = timer_ms_gettime64() + (ms); \
                                 while (!(cond) && timer_ms_gettime64() < t_end_) thd_sleep(1); } while (0)
@@ -244,6 +263,8 @@ static void music_stop_now(void)
      * after the stop wait for it to release its stream before anyone allocates another */
     if (music_paused) { adx_resume(); music_paused = false; }
     WAIT_FOR(ADX_UP, 1000);
+    if (snddrv.drv_status == SNDDRV_STATUS_STREAMING) snd_stream_volume(shnd, 0);   /* what is still queued plays out silent */
+    music_vol = -1;
     unsigned exits = adx_drv_exits;
     bool driver = snddrv.drv_status != SNDDRV_STATUS_NULL;
     adx_stop();

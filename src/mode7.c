@@ -868,7 +868,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         player_drive(m, &coast, dt, false);
         update_racers(m, dt); update_ents(m, dt);
         if (m->phase_t >= FINISH_DUR) {
-            if (m->finish_rank <= 3) { m->phase = PH_BREAKAWAY; m->phase_t = 0; dialog_open_script(&m->dlg, SCRIPT_BREAKAWAY); play_music(m, 14, true); }
+            if (m->finish_rank <= 3) { m->phase = PH_BREAKAWAY; m->phase_t = 0; dialog_open_script(&m->dlg, SCRIPT_BREAKAWAY); }   /* the pursuit music waits for the pursuit (PH_PURSUIT), after the radio call and the target card */
             else if (m->lives <= 0) { m->phase = PH_GAMEOVER; m->phase_t = 0; music_set_volume(0.5f); }   /* must rank 3rd or better: no spares left */
             else {   /* must rank 3rd or better: lose a life and start the race over from the beginning */
                 m->lives--;

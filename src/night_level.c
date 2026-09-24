@@ -155,6 +155,41 @@ static bool plain_ground(int row, uint32_t v)
     return (row == 11 && v >= 8 && v <= 13) || (row == 12 && v >= 56 && v <= 61);
 }
 
+/* a column with nothing above the ground rows (only a rock's foot, or bare ground) */
+static bool column_bare(const TileMap *m, int sc)
+{
+    for (int r = 0; r < 11 && r < m->h; r++) if (!blank_cell(m, m->cells[r * m->w + sc])) return false;
+    return true;
+}
+
+static bool column_plain(const TileMap *m, int sc)
+{
+    for (int r = 11; r <= 12 && r < m->h; r++) {
+        uint32_t v = m->cells[r * m->w + sc];
+        if (!blank_cell(m, v) && !plain_ground(r, v)) return false;
+    }
+    return true;
+}
+
+/* Which side's rock a lone foot column of level 1 belongs to: -1 left, +1 right, 0 unknown.
+ * A foot shades the ground on one side of its rock, so a foot tile (by its row-11 id) always
+ * belongs to the same side. Where only one neighbour is an object that side owns it; where
+ * both are (a foot between two objects, e.g. ROCK_S1 | foot | CACTUS_A) the tile's side
+ * elsewhere in the level decides. */
+static int foot_owner(const TileMap *m, int sc)
+{
+    if (sc < 0 || sc >= m->w || !column_bare(m, sc) || column_plain(m, sc)) return 0;
+    uint32_t id = m->cells[11 * m->w + sc];
+    int left = 0, right = 0;
+    for (int c = 1; c + 1 < m->w; c++) {
+        if (m->cells[11 * m->w + c] != id || !column_bare(m, c)) continue;
+        bool l = !column_bare(m, c - 1), r = !column_bare(m, c + 1);
+        if (l && !r) left++;
+        if (r && !l) right++;
+    }
+    return left > right ? -1 : right > left ? 1 : 0;
+}
+
 bool stage3_world_build(Level *L, Stage3World *w)
 {
     memset(w, 0, sizeof *w);
@@ -214,11 +249,9 @@ bool stage3_world_build(Level *L, Stage3World *w)
             int sc = p->mirror ? o->src1 / 16 - 1 - k : o->src0 / 16 + k, dc = dc0 + k;
             if (dc < 0 || dc >= tcols || sc < 0 || sc >= m->w) continue;
             bool foot = k < 0 || k >= n;
-            if (foot) {   /* only a lone foot: nothing of the column above the ground */
-                bool bare = true;
-                for (int r = o->row0; r < 11 && bare; r++) bare = blank_cell(m, m->cells[r * m->w + sc]);
-                if (!bare) continue;
-            }
+            /* only a lone foot (nothing of the column above the ground), and only this object's: the column
+             * next to an object can hold its neighbour's foot instead, a wedge cut flat on one side */
+            if (foot && foot_owner(m, sc) != ((k < 0) != p->mirror ? 1 : -1)) continue;
             for (int r = foot ? 11 : o->row0; r < (foot ? 13 : o->row1) && r < m->h; r++) {
                 uint32_t v = m->cells[r * m->w + sc];
                 int dr = r + dy / 16;
