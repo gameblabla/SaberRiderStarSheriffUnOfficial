@@ -1,0 +1,57 @@
+# Sega Saturn build (libyaul; a stock console, no RAM cartridge). See plan.md.
+#   source ~/.yaul.env
+#   make -f Makefile.saturn             -> build/saturn/saber_rider.iso + .cue from the staged disc tree
+#   make -f Makefile.saturn disc        -> bake the disc tree first (tools/saturn/build_disc.py; needs the demo's data)
+#   make -f Makefile.saturn RENDER=null -> no graphics (platform/null/render_null.c): the bring-up / CPU-profile build
+# The core game (src/*.c) + the Saturn platform (src/platform/saturn), linked by libyaul's build rules.
+ifeq ($(strip $(YAUL_INSTALL_ROOT)),)
+  $(error Undefined YAUL_INSTALL_ROOT: source ~/.yaul.env first)
+endif
+
+include $(YAUL_INSTALL_ROOT)/share/build.pre.mk
+
+RENDER  ?= null
+DATA    ?= SaberRider/data
+OUT     := build/saturn
+
+SH_PROGRAM    := saber_rider
+SH_BUILD_DIR  := obj-saturn
+SH_OUTPUT_DIR := $(OUT)
+SH_SRCS := $(wildcard src/*.c) $(wildcard src/platform/saturn/*.c) \
+	src/platform/null/aud_null.c src/platform/null/video_null.c
+ifeq ($(RENDER),null)
+SH_SRCS   += src/platform/null/render_null.c
+SH_CFLAGS += -DSAT_RENDER_NULL
+endif
+
+# PLAT_BAKED_ASSETS: textures, samples and our other files come baked into tex.pck / snd.pck / files.pck (build_disc.py)
+SH_CFLAGS += -std=gnu11 -O2 -g -Isrc/platform/saturn/include -Isrc \
+	-DPLAT_SATURN -DPLAT_LOW_MEMORY -DPLAT_BAKED_ASSETS \
+	-fno-finite-math-only \
+	-Wno-shadow -Wno-bad-function-cast -Wno-null-dereference -Wno-unused-parameter -Wno-sign-compare \
+	-Wno-missing-field-initializers -Wno-implicit-fallthrough -Wno-misleading-indentation -Wno-unused-function
+SH_LDFLAGS +=
+
+IMAGE_DIRECTORY        := $(OUT)/stage
+AUDIO_TRACKS_DIRECTORY := $(OUT)/tracks
+IMAGE_1ST_READ_BIN     := A.BIN
+
+IP_VERSION           := V0.100
+IP_RELEASE_DATE      := 20260924
+IP_AREAS             := JTUBKAEL
+IP_PERIPHERALS       := JAMKST
+IP_TITLE             := SABER RIDER
+IP_MASTER_STACK_ADDR := 0x06004000
+IP_SLAVE_STACK_ADDR  := 0x06001E00
+IP_1ST_READ_ADDR     := 0x06004000
+IP_1ST_READ_SIZE     := 0
+
+include $(YAUL_INSTALL_ROOT)/share/build.post.iso-cue.mk
+
+# the image also follows the staged files (build_disc.py), not only the program
+$(SH_OUTPUT_PATH)/$(SH_PROGRAM).iso: $(filter-out %/A.BIN,$(wildcard $(IMAGE_DIRECTORY)/*))
+
+.PHONY: disc
+disc:
+	python3 tools/saturn/build_disc.py --data $(DATA) --out $(OUT)
+	$(MAKE) -f Makefile.saturn RENDER=$(RENDER)

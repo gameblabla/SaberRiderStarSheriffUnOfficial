@@ -49,3 +49,25 @@ void  packs_close(void);
 /* blocks read from the packs so far (SABER_PERF: a read in the middle of a level is a stall) */
 unsigned packs_reads(void);
 uint32_t hex_id(const char *s8);
+
+/* The packs' data is little-endian. A big-endian console (the Saturn's SH-2) turns the arrays it keeps to host order in
+ * place; these are no-ops on little-endian machines. */
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define PACK_BIG_ENDIAN 1
+#endif
+static inline void le16_to_host(uint16_t *p, size_t n)
+{
+#ifdef PACK_BIG_ENDIAN
+    for (size_t i = 0; i < n; i++) p[i] = __builtin_bswap16(p[i]);
+#else
+    (void)p; (void)n;
+#endif
+}
+static inline void le32_to_host(uint32_t *p, size_t n)
+{
+#ifdef PACK_BIG_ENDIAN
+    for (size_t i = 0; i < n; i++) p[i] = __builtin_bswap32(p[i]);
+#else
+    (void)p; (void)n;
+#endif
+}

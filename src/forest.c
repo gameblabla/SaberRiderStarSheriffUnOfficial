@@ -4,6 +4,7 @@
 #include "audio.h"
 #include "font.h"
 #include "gfx.h"
+#include "pack.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -66,7 +67,8 @@ bool forest_load(Forest *f, Level *L, const char *dir, const char *file, uint32_
         if (slot[k] < 0 || !cb) { fprintf(stderr, "%s: layer %s unusable\n", dir, sn); r.ok = false; break; }
         f->cells[k] = malloc((size_t)w * h * 4);
         if (!f->cells[k]) { r.ok = false; break; }
-        memcpy(f->cells[k], cells, (size_t)w * h * 4);   /* little-endian host assumed, as for the pack data */
+        memcpy(f->cells[k], cells, (size_t)w * h * 4);
+        le32_to_host(f->cells[k], (size_t)w * h);
         TileMap *m = &f->maps[k];
         m->w = m->used_w = (int)w; m->h = (int)h; m->cblock_id = cb->id; m->cells = f->cells[k]; m->cb = cb;
         par[k] = p;

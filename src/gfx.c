@@ -38,13 +38,14 @@ static RTex *finish_tex(RTex *t, uint32_t id, int w, int h)
 static RTex *make_tex(uint32_t id, int w, int h, const uint32_t *px) { return finish_tex(rtex_create(R, w, h, R_TEX_STATIC, px), id, w, h); }
 
 #ifdef PLAT_BAKED_ASSETS
-/* A texture baked for the console ahead of time (a RES_TEX block of tex.pck, tools/dc/texbake.py): pack sprites, cblocks
+/* A texture baked for the console ahead of time (a RES_TEX block of tex.pck: tools/dc/texbake.py's "PVT1", tools/saturn/
+ * satbake.py's "SAT1", the same header up to the meta fields): pack sprites, cblocks
  * and fonts under their own id, our images under asset_key(path). One read of a block that goes to video memory as it
  * is. meta (if asked) gets a copy of the layout data baked with it (sprite frames, a cblock's cell grid). */
 static RTex *baked_tex(uint32_t key, int *w, int *h, uint8_t **meta)
 {
     const PackEntry *e = packs_find_type(key, RES_TEX);
-    if (!e || e->size < 32 || memcmp(e->data, "PVT1", 4)) return NULL;
+    if (!e || e->size < 32 || (memcmp(e->data, "PVT1", 4) && memcmp(e->data, "SAT1", 4))) return NULL;   /* Dreamcast / Saturn */
     const uint8_t *d = e->data;
     *w = rd16(d + 4); *h = rd16(d + 6);
     if (meta) {
@@ -127,7 +128,8 @@ static bool cblock_build(CBlock *c, bool parse)
         c->frames = rd16(d); c->cols = rd16(d + 2); c->rows = rd16(d + 4);
         uint16_t *cells = malloc((size_t)n * 2 + 2); uint8_t *mask = malloc((size_t)extra + 1);
         if (!cells || !mask) { free(cells); free(mask); return false; }
-        memcpy(cells, d + 16, (size_t)n * 2);        /* little-endian host assumed */
+        memcpy(cells, d + 16, (size_t)n * 2);
+        le16_to_host(cells, (size_t)n);
         memcpy(mask, d + 16 + n * 2, (size_t)extra);
         c->cells = cells; c->mask = mask;
     }

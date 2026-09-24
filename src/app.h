@@ -5,7 +5,11 @@
 #include "game.h"
 
 #define APP_SCREEN_W 426
+#ifdef PLAT_SATURN
+#define APP_SCREEN_H 224   /* the Saturn's 224-line modes (plan 3) */
+#else
 #define APP_SCREEN_H 240
+#endif
 
 bool  app_init(Ren *ren, const char *data_dir, int start_level);
 /* advance by `elapsed` seconds of real time; returns the fixed steps it ran (0..n) */

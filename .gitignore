@@ -7,3 +7,4 @@ __pycache__/
 release/
 /SaberRider/*
 !/SaberRider/data/
+/obj-saturn/

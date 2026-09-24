@@ -1,6 +1,7 @@
 #include "level.h"
 #include "pack.h"
 #include <string.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
 
@@ -12,7 +13,9 @@ bool level_load(Level *L, uint32_t id)
 {
     memset(L, 0, sizeof *L);
     const PackEntry *e = packs_find(id);
-    if (!e || memcmp(e->data, "LEVL", 4)) { fprintf(stderr, "level %08X not found\n", id); return false; }
+    /* "LEVh": a cached block whose tile maps a big-endian console already turned to host order (below) */
+    bool host = e && !memcmp(e->data, "LEVh", 4);
+    if (!e || (memcmp(e->data, "LEVL", 4) && !host)) { fprintf(stderr, "level %08X not found\n", id); return false; }
     const uint8_t *d = e->data, *p;
     L->id = id;
     if (rd32(d + 4) != 0) { fprintf(stderr, "level %08X: not TILE mode\n", id); return false; }
@@ -54,6 +57,15 @@ bool level_load(Level *L, uint32_t id)
         TileMap *m = &L->maps[mi];
         m->w = rd32(p); m->h = rd32(p + 4); m->cblock_id = rd32(p + 8);
         m->cells = (const uint32_t *)(p + 12);
+#ifdef PACK_BIG_ENDIAN
+        if (((uintptr_t)m->cells & 3) != 0) {   /* the unused level-2 blockout only; a console can't read it in place */
+            uint32_t *copy = malloc((size_t)m->w * m->h * 4);
+            if (!copy) return false;
+            memcpy(copy, p + 12, (size_t)m->w * m->h * 4);
+            le32_to_host(copy, (size_t)m->w * m->h);
+            m->cells = copy;
+        } else if (!host) le32_to_host((uint32_t *)(p + 12), (size_t)m->w * m->h);
+#endif
         p += 12 + (size_t)m->w * m->h * 4;
         m->cb = cblock_get(m->cblock_id);
         m->used_w = m->w;
@@ -66,6 +78,9 @@ bool level_load(Level *L, uint32_t id)
         mi++;
     }
     L->nmaps = mi;
+#ifdef PACK_BIG_ENDIAN
+    if (!host) memcpy((uint8_t *)d, "LEVh", 4);
+#endif
     return true;
 }
 
