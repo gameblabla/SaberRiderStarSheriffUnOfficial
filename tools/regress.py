@@ -40,6 +40,11 @@ def cases():
     out['s5_dark'] = (5, 'bench', 3000, {'SABER_START': '6500', 'SABER_DARK': '1', 'SABER_DARKHP': '12'})
     out['s5_boss'] = (5, 'bench', 3000, {'SABER_START': '6500', 'SABER_BOSSHP': '12'})
     out['s1_kill'] = (1, 'bench', 1500, {'SABER_KILL': '400'})
+    # the Grand Prix's phases: laps on the auto-driver, the finish and briefing, the pursuit, the boss
+    out['s2_auto'] = (2, 'bench', 4000, {'SABER_M7PHASE': '1', 'SABER_M7AUTO': '2'})
+    out['s2_finish'] = (2, 'bench', 3000, {'SABER_M7PHASE': '4', 'SABER_M7AUTO': '2'})
+    out['s2_pursuit'] = (2, 'fuzz', 3000, {'SABER_M7PHASE': '2'})
+    out['s2_boss'] = (2, 'fuzz', 3000, {'SABER_M7PHASE': '3', 'SABER_M7BOSSHP': '15'})
     return out
 
 
