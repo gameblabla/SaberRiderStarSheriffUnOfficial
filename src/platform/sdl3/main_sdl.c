@@ -15,6 +15,16 @@ static void usage(const char *exe)
                     "  --level N   skip the front end and start at level N (1 the frontier town, 2 the All Galaxy Grand Prix, 3 Hyperjumper Pass, 4 the Red Palm Jungle, 5 the cave lab, 6 Ramrod)\n", exe);
 }
 
+/* the display's frame period: a 59.94 / 60.x Hz display counts as exactly one 60 Hz game step, so each shown frame runs
+ * exactly one step instead of now and then none or two (the jitter of a measured frame time around 1/60 s did that) */
+static double frame_period(SDL_Window *win)
+{
+    const SDL_DisplayMode *dm = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(win));
+    double hz = dm && dm->refresh_rate > 1.0f ? dm->refresh_rate : 60.0;
+    if (hz > 59.0 && hz < 61.0) hz = 60.0;
+    return 1.0 / hz;
+}
+
 static int debug_key(SDL_Scancode sc)
 {
     switch (sc) {
@@ -39,11 +49,17 @@ int main(int argc, char **argv)
     SDL_Window *win; SDL_Renderer *ren;
     int ww = APP_SCREEN_W * 3, wh = APP_SCREEN_H * 3;
     if (SDL_getenv("SABER_WINDOW")) sscanf(SDL_getenv("SABER_WINDOW"), "%dx%d", &ww, &wh);   /* debug: initial window size */
+    SDL_SetHint(SDL_HINT_RENDER_VSYNC, "1");   /* asked for at creation too: not every backend takes it afterwards */
     if (!SDL_CreateWindowAndRenderer("Saber Rider and the Star Sheriffs", ww, wh, SDL_WINDOW_RESIZABLE, &win, &ren)) {
         fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1;
     }
     SDL_SetRenderLogicalPresentation(ren, APP_SCREEN_W, APP_SCREEN_H, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
-    SDL_SetRenderVSync(ren, 1);
+    /* every present waits for the display's vertical blank (no tearing). A driver that refuses gets adaptive vsync (tears
+     * only a late frame); with neither, the loop paces itself to the display's refresh */
+    int vsync = SDL_SetRenderVSync(ren, 1) ? 1 : SDL_SetRenderVSync(ren, SDL_RENDERER_VSYNC_ADAPTIVE) ? -1 : 0;
+    if (vsync != 1) SDL_Log("vsync %s (%s)", vsync ? "adaptive only" : "unavailable, pacing frames by the clock", SDL_GetError());
+    double period = frame_period(win);
+    if (SDL_getenv("SABER_FAST")) vsync = 1;   /* headless test runs go as fast as they can */
     input_sdl_init();
     if (!app_init((Ren *)ren, data_dir, start_level)) return 1;
     Game *g = app_game();
@@ -54,6 +70,7 @@ int main(int argc, char **argv)
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) running = false;
+            if (ev.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED || ev.type == SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED) period = frame_period(win);
             if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.scancode == SDL_SCANCODE_RETURN && (ev.key.mod & SDL_KMOD_ALT)) {
                 SDL_SetWindowFullscreen(win, !(SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN));
                 continue;
@@ -62,11 +79,21 @@ int main(int argc, char **argv)
             if (ev.type == SDL_EVENT_KEY_DOWN || ev.type == SDL_EVENT_KEY_UP) game_debug_key(g, debug_key(ev.key.scancode), ev.type == SDL_EVENT_KEY_DOWN);
         }
         Uint64 now = SDL_GetTicksNS();
-        app_update((now - prev) / 1e9); prev = now;
+        if (!vsync && now - prev < (Uint64)(period * 1e9)) {   /* no vsync: hold the frame rate at the display's */
+            SDL_DelayPrecise((Uint64)(period * 1e9) - (now - prev));
+            now = SDL_GetTicksNS();
+        }
+        double elapsed = (now - prev) / 1e9;
+        if (vsync && elapsed > period * 0.8 && elapsed < period * 1.2) elapsed = period;   /* one refresh: timer noise */
+        int steps = app_update(elapsed);
+        Uint64 t_upd = SDL_GetTicksNS();
         app_draw();
+        Uint64 t_draw = SDL_GetTicksNS();
         const char *shot = app_shot_path();
         if (shot) { plat_screenshot((Ren *)ren, shot); running = false; }
         SDL_RenderPresent(ren);
+        if (app_perf_on()) app_perf((uint32_t)((t_upd - now) / 1000), (uint32_t)((t_draw - t_upd) / 1000), (uint32_t)((now - prev) / 1000), steps, -1);
+        prev = now;
     }
     app_shutdown();
     SDL_DestroyRenderer(ren); SDL_DestroyWindow(win); SDL_Quit();

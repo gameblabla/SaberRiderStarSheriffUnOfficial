@@ -28,6 +28,8 @@ typedef struct Sprite {
 } Sprite;
 
 bool  gfx_init(Ren *r);
+/* the SCANLINES option: every other row of the sw x sh screen darkened, in one draw call */
+void  gfx_scanlines(int sw, int sh);
 /* forget every cached sprite and cblock (tools/dc/texprep walks all of the packs' graphics through the cache) */
 void  gfx_flush(void);
 /* the texture of one of our images (assets/): the console's baked one, else the PNG decoded; w, h may be NULL */
@@ -53,6 +55,11 @@ int   cblock_ncells(const CBlock *c);
 void  cblock_tint(const CBlock *c, uint8_t r, uint8_t g, uint8_t b);
 /* draw tile t at x,y (screen space, integer) */
 void  cblock_draw_tile(const CBlock *c, int t, float x, float y, bool flip);
+/* many tiles of one bank in one draw call: begin, a tile at a time (screen space, integer), end. Nothing else may be
+ * drawn in between. */
+void  cblock_batch_begin(const CBlock *c);
+void  cblock_batch_tile(int t, float x, float y, bool flip);
+void  cblock_batch_end(void);
 /* draw a full frame (cols×rows cells) with its top-left at x,y */
 void  cblock_draw_frame(const CBlock *c, int frame, float x, float y, bool flip);
 void  sprite_draw(const Sprite *s, int frame, float x, float y, bool flip);

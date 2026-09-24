@@ -59,8 +59,9 @@ static void script_step(void)
     }
 }
 
-void app_update(double elapsed)
+int app_update(double elapsed)
 {
+    int steps = 0;
     const double step = 1.0 / 60.0;
     acc += elapsed;
     if (acc > 0.25) acc = 0.25;
@@ -78,7 +79,9 @@ void app_update(double elapsed)
         }
         game_update(&g, (float)step); audio_update(); acc -= step;
         if (shot_frames > 0) shot_frames--;   /* SABER_SHOT counts fixed steps, not rendered frames */
+        steps++;
     }
+    return steps;
 }
 
 void app_draw(void)
@@ -91,6 +94,31 @@ void app_draw(void)
 }
 
 const char *app_shot_path(void) { return shot_now ? shot_path : NULL; }
+
+bool app_perf_on(void)
+{
+    static int on = -1; if (on < 0) on = plat_getenv("SABER_PERF") != NULL;
+    return on;
+}
+
+void app_perf(uint32_t upd_us, uint32_t draw_us, uint32_t frame_us, int steps, int prims)
+{
+    static uint32_t n, su, sd, mu, md, mf, prims_max, skip, dbl, quiet; static unsigned reads0;
+    if (quiet) { quiet--; return; }   /* the frames the report itself held up (a serial console line takes ~17 ms) */
+    su += upd_us; sd += draw_us;
+    if (upd_us > mu) mu = upd_us;
+    if (draw_us > md) md = draw_us;
+    if (frame_us > mf) mf = frame_us;
+    if (prims > (int)prims_max) prims_max = (uint32_t)prims;
+    if (steps == 0) skip++; else if (steps > 1) dbl++;
+    if (++n < 60) return;
+    unsigned reads = packs_reads();
+    fprintf(stderr, "perf: cam %5.0f enemies %2d | update %5.2f/%5.2f ms | draw %5.2f/%5.2f ms | frame max %5.2f ms | "
+                    "steps 0x%u 2+x%u | prims %u | pack reads %u\n",
+            g.in_level ? g.cam_x : -1.0f, g.enemies.count, su / 60000.0, mu / 1000.0, sd / 60000.0, md / 1000.0, mf / 1000.0,
+            skip, dbl, prims_max, reads - reads0);
+    reads0 = reads; n = su = sd = mu = md = mf = prims_max = skip = dbl = 0; quiet = 2;
+}
 
 void app_shutdown(void)
 {

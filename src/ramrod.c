@@ -1122,10 +1122,7 @@ void ramrod_draw(Ramrod *r, bool scanlines)
     if (r->dlg.active) dialog_draw(&r->dlg, ren, r->sw, r->sh);
     if (r->phase == PH_INSTR) render_instructions(r, f, small);
     if (r->white > 0) { r_set_draw_color(ren, 255, 255, 255, (uint8_t)(255 * clampf(r->white, 0, 1))); RFRect q = { 0, 0, (float)r->sw, (float)r->sh }; r_fill_rect(ren, &q); }
-    if (scanlines) {
-        r_set_draw_blend(ren, R_BLEND_BLEND); r_set_draw_color(ren, 0, 0, 0, 70);
-        for (int y = 1; y < r->sh; y += 2) { RFRect q = { 0, (float)y, (float)r->sw, 1 }; r_fill_rect(ren, &q); }
-    }
+    if (scanlines) gfx_scanlines(r->sw, r->sh);
     float fade = r->phase == PH_CLEARED ? clampf(r->phase_t / 1.2f, 0, 1) : r->black;
     if (fade > 0) {
         uint8_t v = r->phase == PH_CLEARED ? 255 : 0;

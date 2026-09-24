@@ -105,12 +105,16 @@ bool pack_load(Pack *p, const char *path)
     return true;
 }
 
+static unsigned g_reads;
+unsigned packs_reads(void) { return g_reads; }
+
 /* read (and decompress) a block */
 static bool entry_load(const Pack *p, PackEntry *pe)
 {
     if (pe->data) return true;
     static int log = -1; if (log < 0) log = plat_getenv("SABER_READLOG") != NULL;   /* debug: every read from a pack */
     if (log) fprintf(stderr, "pack: read %s %08X (%u KB) at %u ms\n", p->name, pe->id, (unsigned)(pe->stored / 1024), (unsigned)plat_ticks_ms());
+    g_reads++;
     uint8_t *raw = block_alloc(pe->stored + 16);
     if (!raw || !read_at(p->f, pe->off, raw, pe->stored)) { fprintf(stderr, "pack: block %08X read failed\n", pe->id); free(raw); return false; }
     if (pe->stored == pe->declen) { pe->data = raw; pe->size = pe->declen; pe->owned = true; return true; }

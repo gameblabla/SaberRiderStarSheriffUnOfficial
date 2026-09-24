@@ -1428,10 +1428,7 @@ void space_draw(Space *s, bool scanlines)
     if (s->phase == PH_INSTR) render_instructions(s, f, small);
     if (s->white > 0) rect(ren, 0, 0, (float)s->sw, (float)s->sh, 255, 255, 255, (uint8_t)(255 * clampf(s->white, 0, 1)));
     power_draw(&s->pw, ren, s->sw, s->sh);
-    if (scanlines) {
-        r_set_draw_color(ren, 0, 0, 0, 70);
-        for (int y = 1; y < s->sh; y += 2) { RFRect q = { 0, (float)y, (float)s->sw, 1 }; r_fill_rect(ren, &q); }
-    }
+    if (scanlines) gfx_scanlines(s->sw, s->sh);
     float fade = s->phase == PH_CLEARED ? clampf(s->phase_t / 1.6f, 0, 1) : s->black;
     if (fade > 0) { uint8_t v = s->phase == PH_CLEARED ? 255 : 0; rect(ren, 0, 0, (float)s->sw, (float)s->sh, v, v, v, (uint8_t)(255 * fade)); }
 }

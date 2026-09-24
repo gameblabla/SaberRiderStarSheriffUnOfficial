@@ -57,6 +57,7 @@ typedef struct {
     bool boss_music_started;
     bool boss_done;                  /* boss slot expired -> level complete (state 0xe) */
     int frame, tick;
+    float cam_max;                   /* the furthest right the camera has been (enemies_update) */
     int difficulty;                  /* stage 4's shield: shots it takes */
     bool shield_wake;                /* stage 4's finale: the dormant shield snipers join in */
     bool aim_decks;                  /* stage 4: a sniper aims 45 degrees up at a hero on a tower deck (72 px up: 48 once

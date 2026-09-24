@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+void aud_music_settle(void);   /* aud_dc.c: the music worker has carried out every request */
+
 struct Video {
     dcfmv_t *fmv;
     pvr_ptr_t tex; size_t tex_bytes; int tw, th;
@@ -72,6 +74,7 @@ static Video *open_path(const char *path)
     /* sound: the movie's clock follows its soundtrack when it has one */
     dcfmv_set_audio_clock_mode(v->fmv, dcfmv_audio_channels(v->fmv) > 0);
     if (dcfmv_audio_channels(v->fmv) > 0) {
+        aud_music_settle();   /* a music stop still under way must let go of its stream first */
         if (dcfmv_audio_init(v->fmv) < 0) dcfmv_set_audio_clock_mode(v->fmv, 0);
         else {
             v->audio_ready = true;

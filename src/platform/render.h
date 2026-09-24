@@ -74,6 +74,10 @@ void r_point(Ren *r, float x, float y);
 void r_tex(Ren *r, RTex *t, const RFRect *src, const RFRect *dst);   /* NULL src = whole texture, NULL dst = whole viewport */
 /* rotated clockwise by angle degrees around center (relative to dst; NULL = its centre), then flipped */
 void r_tex_rot(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, double angle, const RFPoint *center, RFlip flip);
+/* n unrotated copies out of one texture in one call (a tile layer, a character's cells): src[i] -> dst[i], a negative
+ * dst[i].w mirrors that one horizontally (its left edge stays dst[i].x). The same as n r_tex calls, without the
+ * per-call overhead: a thousand 16 px tiles a frame is most of what the game draws. */
+void r_tex_batch(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, int n);
 /* triangles; t may be NULL (colour only, draw blend mode) */
 void r_geometry(Ren *r, RTex *t, const RVertex *v, int nv, const int *idx, int ni);
 

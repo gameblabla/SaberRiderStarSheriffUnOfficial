@@ -567,9 +567,7 @@ static void draw_hero(Game *g)
 
 static void draw_scanlines(Game *g)
 {
-    if (!menu_scanlines(&g->menu)) return;
-    r_set_draw_blend(g->ren, R_BLEND_BLEND); r_set_draw_color(g->ren, 0, 0, 0, 70);
-    for (int y = 1; y < g->sh; y += 2) { RFRect q = { 0, (float)y, (float)g->sw, 1 }; r_fill_rect(g->ren, &q); }
+    if (menu_scanlines(&g->menu)) gfx_scanlines(g->sw, g->sh);
 }
 
 void game_draw(Game *g)

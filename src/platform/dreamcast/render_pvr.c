@@ -620,6 +620,25 @@ void rdc_poly(const RdcVert *v, int n)
     rdc_strip(s, k);
 }
 
+/* an axis-aligned quad in screen space (x0 < x1, y0 < y1; flips are in the texture coordinates): its four vertices
+ * go straight into the store queues when it lies inside the clip, through rdc_poly (clipped) when it straddles it.
+ * The current header must already be the right one. */
+static inline void quad(float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, uint32_t argb)
+{
+    if (x1 <= clx0 || x0 >= clx1 || y1 <= cly0 || y0 >= cly1) return;
+    if (x0 < clx0 || x1 > clx1 || y0 < cly0 || y1 > cly1) {
+        RdcVert v[4] = { { x0, y0, 1, u0, v0, argb, 0 }, { x1, y0, 1, u1, v0, argb, 0 }, { x1, y1, 1, u1, v1, argb, 0 }, { x0, y1, 1, u0, v1, argb, 0 } };
+        rdc_poly(v, 4);
+        return;
+    }
+    pvr_vertex_t *d;
+    d = pvr_dr_target(); d->flags = PVR_CMD_VERTEX;     d->x = x0; d->y = y0; d->z = 1; d->u = u0; d->v = v0; d->argb = argb; d->oargb = 0; pvr_dr_commit(d);
+    d = pvr_dr_target(); d->flags = PVR_CMD_VERTEX;     d->x = x1; d->y = y0; d->z = 1; d->u = u1; d->v = v0; d->argb = argb; d->oargb = 0; pvr_dr_commit(d);
+    d = pvr_dr_target(); d->flags = PVR_CMD_VERTEX;     d->x = x0; d->y = y1; d->z = 1; d->u = u0; d->v = v1; d->argb = argb; d->oargb = 0; pvr_dr_commit(d);
+    d = pvr_dr_target(); d->flags = PVR_CMD_VERTEX_EOL; d->x = x1; d->y = y1; d->z = 1; d->u = u1; d->v = v1; d->argb = argb; d->oargb = 0; pvr_dr_commit(d);
+    prims++;
+}
+
 /* ------------------------------------------------------------------ draw state */
 void r_set_draw_color(Ren *r, uint8_t R, uint8_t G, uint8_t B, uint8_t A) { (void)r; st.r = R; st.g = G; st.b = B; st.a = A; }
 void r_set_draw_blend(Ren *r, RBlend b) { (void)r; st.blend = b; }
@@ -663,7 +682,15 @@ void r_fill_rect(Ren *r, const RFRect *q)
     if (q->w <= 0 || q->h <= 0) return;
     fill_screen_quad(SX(q->x), SY(q->y), SX(q->x + q->w), SY(q->y + q->h));
 }
-void r_fill_rects(Ren *r, const RFRect *q, int n) { for (int i = 0; i < n; i++) r_fill_rect(r, &q[i]); }
+void r_fill_rects(Ren *r, const RFRect *q, int n)
+{
+    (void)r;
+    if (!in_frame || n <= 0) return;
+    uint32_t c = draw_argb();
+    rdc_header(&col_hdr[st.blend]);
+    for (int i = 0; i < n; i++)
+        if (q[i].w > 0 && q[i].h > 0) quad(SX(q[i].x), SY(q[i].y), SX(q[i].x + q[i].w), SY(q[i].y + q[i].h), 0, 0, 0, 0, c);
+}
 void r_rect(Ren *r, const RFRect *q)
 {
     if (!q || q->w <= 0 || q->h <= 0) return;
@@ -718,6 +745,14 @@ static void draw_tex(RTex *t, const RFRect *src, const RFRect *dst, double angle
         if (fh) { float a = d.w - lx1, b = d.w - lx0; lx0 = b; lx1 = a; }   /* lx0 now belongs to px0 */
         if (fv) { float a = d.h - ly1, b = d.h - ly0; ly0 = b; ly1 = a; }
         float u0 = (px0 - pg->x0) / pg->tw, u1 = (px1 - pg->x0) / pg->tw, v0 = (py0 - pg->y0) / pg->th, v1 = (py1 - pg->y0) / pg->th;
+        if (angle == 0) {   /* the common case: an upright rectangle */
+            float X0 = SX(d.x + lx0), X1 = SX(d.x + lx1), Y0 = SY(d.y + ly0), Y1 = SY(d.y + ly1), U0 = u0, U1 = u1, V0 = v0, V1 = v1, k;
+            if (X0 > X1) { k = X0; X0 = X1; X1 = k; k = U0; U0 = U1; U1 = k; }
+            if (Y0 > Y1) { k = Y0; Y0 = Y1; Y1 = k; k = V0; V0 = V1; V1 = k; }
+            rdc_header(page_hdr(t, pg));
+            quad(X0, Y0, X1, Y1, U0, V0, U1, V1, argb);
+            continue;
+        }
         float lx[4] = { lx0, lx1, lx1, lx0 }, ly[4] = { ly0, ly0, ly1, ly1 }, uu[4] = { u0, u1, u1, u0 }, vv[4] = { v0, v0, v1, v1 };
         RdcVert v[4];
         for (int k = 0; k < 4; k++) {
@@ -731,6 +766,35 @@ static void draw_tex(RTex *t, const RFRect *src, const RFRect *dst, double angle
 }
 
 void r_tex(Ren *r, RTex *t, const RFRect *src, const RFRect *dst) { (void)r; draw_tex(t, src, dst, 0, NULL, R_FLIP_NONE); }
+
+void r_tex_batch(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, int n)
+{
+    (void)r;
+    if (!in_frame || !t || !t->pages) return;
+    uint32_t argb = (uint32_t)t->a << 24 | (uint32_t)t->r << 16 | (uint32_t)t->g << 8 | t->b;
+    float sx = pvr_view.sx, sy = pvr_view.sy;
+    float ox = pvr_view.ox + (st.vp_on ? st.vp.x * sx : 0), oy = pvr_view.oy + (st.vp_on ? st.vp.y * sy : 0);
+    Page *pg = NULL; float iu = 0, iv = 0;
+    for (int i = 0; i < n; i++) {
+        const RFRect *s = &src[i], *d = &dst[i];
+        float w = d->w < 0 ? -d->w : d->w;
+        float x0 = ox + d->x * sx, y0 = oy + d->y * sy, x1 = x0 + w * sx, y1 = y0 + d->h * sy;
+        if (x1 <= clx0 || x0 >= clx1 || y1 <= cly0 || y0 >= cly1 || w <= 0 || d->h <= 0) continue;
+        if (!pg || s->x < pg->x0 || s->y < pg->y0 || s->x + s->w > pg->x0 + pg->w || s->y + s->h > pg->y0 + pg->h) {
+            pg = NULL;   /* the page holding this source rectangle (a tile never straddles two) */
+            for (int k = 0; k < t->npx * t->npy && !pg; k++) {
+                Page *p = &t->pages[k];
+                if (s->x >= p->x0 && s->y >= p->y0 && s->x + s->w <= p->x0 + p->w && s->y + s->h <= p->y0 + p->h) pg = p;
+            }
+            if (!pg) { RFRect dd = { d->x, d->y, w, d->h }; draw_tex(t, s, &dd, 0, NULL, d->w < 0 ? R_FLIP_H : R_FLIP_NONE); continue; }
+            rdc_header(page_hdr(t, pg));
+            iu = 1.0f / pg->tw; iv = 1.0f / pg->th;
+        }
+        float u0 = (s->x - pg->x0) * iu, u1 = u0 + s->w * iu, v0 = (s->y - pg->y0) * iv, v1 = v0 + s->h * iv;
+        if (d->w < 0) { float k = u0; u0 = u1; u1 = k; }
+        quad(x0, y0, x1, y1, u0, v0, u1, v1, argb);
+    }
+}
 void r_tex_rot(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, double angle, const RFPoint *center, RFlip flip) { (void)r; draw_tex(t, src, dst, angle, center, flip); }
 
 static inline uint32_t fcolor(const RFColor *c)

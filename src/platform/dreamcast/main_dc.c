@@ -47,10 +47,17 @@ int main(int argc, char **argv)
         /* Convert a bounded microsecond delta via 32-bit float (cheap on the
          * SH-4), then let the shared fixed-step app accumulator run. */
         float elapsed = (float)(uint32_t)(delta_ns / 1000) * 0.000001f;
-        app_update(elapsed); prev = now;
-        rdc_frame_begin();
+        /* one frame of a 60 Hz display is one game step: measured, it wobbles around 1/60 s, and the accumulator then
+         * ran some frames no step and the next two (a visible hitch every second or so) */
+        if (elapsed > 0.0152f && elapsed < 0.0182f) elapsed = 1.0f / 60.0f;
+        int steps = app_update(elapsed);
+        uint64_t t_upd = timer_ns_gettime64();
+        rdc_frame_begin();   /* waits for the PVR to take the last frame */
+        uint64_t t_begin = timer_ns_gettime64();
         app_draw();
         rdc_frame_end();
+        if (app_perf_on()) app_perf((uint32_t)((t_upd - now) / 1000), (uint32_t)((timer_ns_gettime64() - t_begin) / 1000), (uint32_t)(delta_ns / 1000), steps, rdc_prims());
+        prev = now;
         dc_video_update();
         if (now - last_report > 10000000000ull) {
             Game *g = app_game(); int hs, ha; rdc_header_stats(&hs, &ha);

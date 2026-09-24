@@ -55,8 +55,11 @@ Ren *rtex_renderer(const RTex *t) { (void)t; return &ren; }
 void r_set_evict_hook(bool (*hook)(void)) { (void)hook; }
 void r_tex(Ren *r, RTex *t, const RFRect *s, const RFRect *d) { (void)r; (void)t; (void)s; (void)d; }
 void r_tex_rot(Ren *r, RTex *t, const RFRect *s, const RFRect *d, double a, const RFPoint *c, RFlip f) { (void)r; (void)t; (void)s; (void)d; (void)a; (void)c; (void)f; }
+void r_tex_batch(Ren *r, RTex *t, const RFRect *s, const RFRect *d, int n) { (void)r; (void)t; (void)s; (void)d; (void)n; }
 void r_set_draw_color(Ren *r, uint8_t R, uint8_t G, uint8_t B, uint8_t A) { (void)r; (void)R; (void)G; (void)B; (void)A; }
 void r_fill_rect(Ren *r, const RFRect *q) { (void)r; (void)q; }
+void r_fill_rects(Ren *r, const RFRect *q, int n) { (void)r; (void)q; (void)n; }
+void r_set_draw_blend(Ren *r, RBlend b) { (void)r; (void)b; }
 
 /* ---- the platform bits gfx.c / assets.c reach ---- */
 const char *plat_getenv(const char *name) { return getenv(name); }

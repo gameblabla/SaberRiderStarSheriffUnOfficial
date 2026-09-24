@@ -86,7 +86,8 @@ files. Those stream. Do not copy `video.pck` to the disc: the runtime opens the
 converted files in `/cd/video` instead. Stages load what they use when they
 start: the level's graphics, and every enemy, shot and effect its triggers can
 spawn. The sfx table and the stage's own sounds load too, so nothing is read
-from the disc mid-level. `SABER_READLOG=1` logs every pack read, and
+from the disc mid-level. A music change (the boss's arrival, the mission jingle) is handed to a thread
+of its own, which stops libADX and opens the next track while the game runs on. `SABER_READLOG=1` logs every pack read, and
 `SABER_VRAMLOG=1` logs every texture with the VRAM and palette use.
 
 A CD-R is read at constant linear velocity. The image is padded to 650 MiB
@@ -431,6 +432,9 @@ moves. The Dreamcast pad layout stays fixed.
 screenshot after N fixed steps and quit · `SABER_SCRIPT="60:R,3:RJ,40:"` scripted input (L R U D J S A P, X power) ·
 `SABER_TRACE=1` per-frame player trace (+ spawn triggers at start, convoy spawn / dying / stuck-enemy diagnostics, every humanoid once a second, boss state every 10 frames; `=2` also prints humanoids within 40 px of either screen edge every frame) · `SABER_FUZZ=1` random input ·
 `SABER_HERO=n` hero 0..3 for a direct level start · `SABER_LIVES=n` starting lives · `SABER_KILL=n` kill the player at step n · `SABER_BOSSHP=n` the horse boss's / Hyperjumper's HP · `SABER_BORED=s` seconds of idling before the bored animation (April) · `SABER_DEBUG=1` collision overlay from the start · `SABER_WINDOW=852x480` initial window size · **F1** collision overlay · **F2** free camera.
+`SABER_PERF=1` a line a second on stderr (the serial log on the Dreamcast): the camera, live enemies, update and draw
+time (average / worst), the worst frame, frames that ran no step or two and more, the Dreamcast's draw count, and pack reads
+(a read in the middle of a level is a stall).
 
 ## Comparing against the original
 

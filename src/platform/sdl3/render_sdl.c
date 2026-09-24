@@ -64,6 +64,17 @@ void r_tex_rot(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, double ang
     if (t) SDL_RenderTextureRotated(SR(r), ST(t), (const SDL_FRect *)src, (const SDL_FRect *)dst, angle, (const SDL_FPoint *)center,
                                     (flip & R_FLIP_H ? SDL_FLIP_HORIZONTAL : 0) | (flip & R_FLIP_V ? SDL_FLIP_VERTICAL : 0));
 }
+void r_tex_batch(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, int n)
+{
+    if (!t) return;
+    for (int i = 0; i < n; i++) {   /* SDL merges consecutive copies of one texture into a single draw */
+        if (dst[i].w >= 0) SDL_RenderTexture(SR(r), ST(t), (const SDL_FRect *)&src[i], (const SDL_FRect *)&dst[i]);
+        else {
+            SDL_FRect d = { dst[i].x, dst[i].y, -dst[i].w, dst[i].h };
+            SDL_RenderTextureRotated(SR(r), ST(t), (const SDL_FRect *)&src[i], &d, 0, NULL, SDL_FLIP_HORIZONTAL);
+        }
+    }
+}
 void r_geometry(Ren *r, RTex *t, const RVertex *v, int nv, const int *idx, int ni)
 {
     SDL_RenderGeometry(SR(r), ST(t), (const SDL_Vertex *)v, nv, idx, ni);

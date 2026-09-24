@@ -237,17 +237,47 @@ void cblock_draw_tile(const CBlock *c, int t, float x, float y, bool flip)
     else r_tex(R, tex, &src, &dst);
 }
 
+/* ---- tile batches: one r_tex_batch for a run of tiles out of one bank ---- */
+#define BATCH_MAX 512
+static struct { const CBlock *c; RTex *tex; int n, shift; RFRect src[BATCH_MAX], dst[BATCH_MAX]; } g_batch;
+
+static void batch_flush(void)
+{
+    if (g_batch.n && g_batch.tex) r_tex_batch(R, g_batch.tex, g_batch.src, g_batch.dst, g_batch.n);
+    g_batch.n = 0;
+}
+void cblock_batch_begin(const CBlock *c)
+{
+    batch_flush();
+    g_batch.c = c; g_batch.tex = cblock_tex(c);
+    int cols = c->sheet_cols;   /* the sheet's width in tiles: a shift instead of a division when it is a power of two */
+    g_batch.shift = cols > 0 && !(cols & (cols - 1)) ? __builtin_ctz((unsigned)cols) : -1;
+}
+void cblock_batch_tile(int t, float x, float y, bool flip)
+{
+    const CBlock *c = g_batch.c;
+    if (!c || t < 0 || t >= c->ntiles) return;
+    if (g_batch.n == BATCH_MAX) batch_flush();
+    int col = g_batch.shift >= 0 ? t & (c->sheet_cols - 1) : t % c->sheet_cols, row = g_batch.shift >= 0 ? t >> g_batch.shift : t / c->sheet_cols;
+    g_batch.src[g_batch.n] = (RFRect){ (float)(col * c->tw), (float)(row * c->th), (float)c->tw, (float)c->th };
+    g_batch.dst[g_batch.n] = (RFRect){ x, y, flip ? -(float)c->tw : (float)c->tw, (float)c->th };
+    g_batch.n++;
+}
+void cblock_batch_end(void) { batch_flush(); g_batch.c = NULL; g_batch.tex = NULL; }
+
 void cblock_draw_frame(const CBlock *c, int frame, float x, float y, bool flip)
 {
     if (frame < 0 || frame >= c->frames) return;
     const uint16_t *cells = c->cells + frame * c->cols * c->rows;
+    cblock_batch_begin(c);
     for (int r = 0; r < c->rows; r++)
         for (int col = 0; col < c->cols; col++) {
             uint16_t t = cells[r * c->cols + col];
             if (t == 0xFFFF) continue;
             int cx = flip ? (c->cols - 1 - col) : col;
-            cblock_draw_tile(c, t, x + cx * c->tw, y + r * c->th, flip);
+            cblock_batch_tile(t, x + cx * c->tw, y + r * c->th, flip);
         }
+    cblock_batch_end();
 }
 
 /* ---- sprites ---- */
@@ -411,6 +441,15 @@ void gfx_flush(void)
     g_nspr = g_ncb = 0;
 }
 void gfx_frame(void) { g_frame++; }
+
+void gfx_scanlines(int sw, int sh)
+{
+    static RFRect rows[512];
+    int n = 0;
+    for (int y = 1; y < sh && n < 512; y += 2) rows[n++] = (RFRect){ 0, (float)y, (float)sw, 1 };
+    r_set_draw_blend(R, R_BLEND_BLEND); r_set_draw_color(R, 0, 0, 0, 70);
+    r_fill_rects(R, rows, n);
+}
 
 void sprite_draw(const Sprite *s, int frame, float x, float y, bool flip)
 {

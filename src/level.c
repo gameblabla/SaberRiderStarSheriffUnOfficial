@@ -94,20 +94,25 @@ void level_draw_layer(const Level *L, int li, float cam_x, float cam_y, int sw, 
     if (oy < 0) oy = 0;
     int cx0 = (int)floorf(ox / tw), cy0 = (int)floorf(oy / th);
     int ncx = sw / tw + 2, ncy = sh / th + 2;
-    for (int cy = cy0; cy < cy0 + ncy; cy++) {
-        if (cy < 0 || cy >= m->h) continue;
-        for (int cx = cx0; cx < cx0 + ncx; cx++) {
-            int mx = cx;
-            if (wrap) { mx = ((cx % m->used_w) + m->used_w) % m->used_w; }
-            else if (cx < 0 || cx >= m->w) continue;
-            uint32_t v = m->cells[cy * m->w + mx];
+    /* a cell's screen position is cx * tw - ox floored: cx * tw is whole, so the fraction is the layer's */
+    float fx = floorf(-ox), fy = floorf(-oy);
+    int cxa = cx0 > 0 || wrap ? cx0 : 0, cxb = cx0 + ncx < m->w || wrap ? cx0 + ncx : m->w;   /* the columns in the map */
+    int mx0 = wrap ? ((cxa % m->used_w) + m->used_w) % m->used_w : cxa;
+    cblock_batch_begin(cb);
+    for (int cy = cy0 < 0 ? 0 : cy0; cy < cy0 + ncy && cy < m->h; cy++) {
+        const uint32_t *row = m->cells + (size_t)cy * m->w;
+        float y = (float)(cy * th) + fy;
+        for (int cx = cxa, mx = mx0; cx < cxb; cx++) {
+            uint32_t v = row[mx];
+            if (++mx == m->used_w && wrap) mx = 0;
             bool flip = (v & 0x80000000u) != 0;   /* stage 3's mirrored scenes (night_level.c); never set in pack data */
             v &= 0x7FFFFFFFu;
             if (!v) continue;
-            int ci = (int)((v - 1) % (uint32_t)ncells);
+            uint32_t ci = v - 1; if (ci >= (uint32_t)ncells) ci %= (uint32_t)ncells;
             uint16_t t = cb->cells[ci];
             if (t == 0xFFFF) continue;
-            cblock_draw_tile(cb, t, floorf(cx * tw - ox), floorf(cy * th - oy), flip);
+            cblock_batch_tile(t, (float)(cx * tw) + fx, y, flip);
         }
     }
+    cblock_batch_end();
 }

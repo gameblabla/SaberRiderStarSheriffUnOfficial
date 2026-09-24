@@ -983,10 +983,21 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
     E->phcx = p->body.x + ph->ox; E->phcy = p->body.y + ph->oy; E->phx = ph->hw; E->phy = ph->hh;
     E->death_floor = L->height; E->dt = dt;
     E->tick++;
+    if (cam_x > E->cam_max) E->cam_max = cam_x;
     spawner_update(E, pl, L, W, cam_x, sw, sh, dt);
+    static int trace = -1; if (trace < 0) trace = plat_getenv("SABER_TRACE") ? (plat_getenv("SABER_TRACE")[0] == '2' ? 2 : 1) : 0;
     for (int i = 0; i < MAX_ENEMIES; i++) {
         Enemy *e = &E->e[i];
         if (!e->cls) continue;
+        /* ours: the ones that stand their ground go once they are a screen behind the furthest the camera has been
+         * (it never scrolls back, FUN_0040c460, and a scene's pan returns to it). Walkers and grunts leave by
+         * walking off, the props go a screen behind (FUN_00411aa0), but snipers and kneelers had no way out: every
+         * one left standing was simulated and drawn to the end of the level, and the slots ran out. */
+        if (e->ch.body.x < E->cam_max - sw - 64.0f) {
+            bool stays = e->cls == EC_SNIPER || e->cls == EC_SNIPER_B || e->cls == EC_KNEELER || e->cls == EC_KNEELER_B || e->cls == EC_END
+                      || e->cls == EC_SHIELD || e->cls == EC_CUTSCENE || (e->cls >= EC_PROP && e->cls < EC_STAMPEDE);
+            if (stays || (e->dying && e->cls != EC_HORSEBOSS && e->cls != EC_BUGGY)) { e->cls = 0; E->count--; continue; }
+        }
         if (e->dying) {
             e->death_t -= dt;
             /* FUN_0041f240: a dying entity gets no class update at all (its death pose was set on the kill frame),
@@ -1013,9 +1024,9 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
         }
         physics_step(W, L, &e->ch.body, dt);
         character_animate(&e->ch, dt);
-        if (plat_getenv("SABER_TRACE") && e->cls < 8 && !e->dying && ((E->tick % 60) == 0 || (plat_getenv("SABER_TRACE")[0] == '2' && (e->ch.body.x < cam_x + 40.0f || e->ch.body.x > cam_x + 380.0f))))
+        if (trace && e->cls < 8 && !e->dying && ((E->tick % 60) == 0 || (trace == 2 && (e->ch.body.x < cam_x + 40.0f || e->ch.body.x > cam_x + 380.0f))))
             fprintf(stderr, "enemy[%d] cls=%d type=%d st=%d face=%d pos=%.1f,%.0f hx=%.0f ox=%.0f fl=%x v=%.0f,%.0f coll=%x speed=%g gun=%d cd=%.2f cam=%.0f\n", (int)(e - E->e), e->cls, e->type, e->ch.state, e->ch.facing, e->ch.body.x, e->ch.body.y, e->ch.body.hx, e->ch.body.ox, e->ch.body.flags, e->ch.body.vx, e->ch.body.vy, e->ch.coll, e->ch.speed, e->gun_alive, e->gun_cd, cam_x);
-        if (plat_getenv("SABER_TRACE") && e->cls < 8 && !e->dying) {   /* debug: humanoid that wants to move but does not */
+        if (trace && e->cls < 8 && !e->dying) {   /* debug: humanoid that wants to move but does not */
             if (fabsf(e->ch.body.x - e->dbg_x) < 0.5f && e->ch.body.vx != 0) { if (++e->dbg_still == 120) fprintf(stderr, "stuck? cls=%d state=%d pos=%.0f,%.0f vx=%.0f coll=%x cam=%.0f\n", e->cls, e->ch.state, e->ch.body.x, e->ch.body.y, e->ch.body.vx, e->ch.coll, cam_x); }
             else e->dbg_still = 0;
             e->dbg_x = e->ch.body.x;
@@ -1028,6 +1039,9 @@ void enemies_draw(const Enemies *E, int layer, float cam_x, float cam_y)
     for (int i = 0; i < MAX_ENEMIES; i++) {
         const Enemy *e = &E->e[i];
         if (!e->cls || e->layer != layer) continue;
+        /* well off screen (640: wider than any logical screen; the boss's sprites are big and its passes fly in from
+           far out, so it is always drawn) */
+        if (e->cls != EC_HORSEBOSS && (e->ch.body.x < cam_x - 160.0f || e->ch.body.x > cam_x + 640.0f + 160.0f)) continue;
         if (e->cls == EC_SHIELD) draw_shield(e, cam_x, cam_y);
         else character_draw(&e->ch, cam_x, cam_y);
     }

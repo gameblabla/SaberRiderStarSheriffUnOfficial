@@ -1277,10 +1277,7 @@ void mode7_draw(Mode7 *m, bool scanlines)
     if (m->dlg.active) dialog_draw(&m->dlg, m->ren, m->sw, m->sh);
     if (m->phase == PH_INSTRUCTIONS) { Font *f = font_get(0x4058897F), *small = font_get(0x12072E60); render_instructions(m, f, small); }
     if (m->white > 0) { r_set_draw_blend(m->ren, R_BLEND_BLEND); r_set_draw_color(m->ren, 255, 255, 255, (uint8_t)(255 * m->white)); RFRect q = { 0, 0, (float)m->sw, (float)m->sh }; r_fill_rect(m->ren, &q); }
-    if (scanlines) {
-        r_set_draw_blend(m->ren, R_BLEND_BLEND); r_set_draw_color(m->ren, 0, 0, 0, 70);
-        for (int y = 1; y < m->sh; y += 2) { RFRect q = { 0, (float)y, (float)m->sw, 1 }; r_fill_rect(m->ren, &q); }
-    }
+    if (scanlines) gfx_scanlines(m->sw, m->sh);
     if (m->phase == PH_GAMEOVER || m->phase == PH_CLEARED) {
         float a = clampf(m->phase_t / (m->phase == PH_CLEARED ? 1.2f : 1.5f), 0, 1); uint8_t v = m->phase == PH_CLEARED ? 255 : 0;
         r_set_draw_blend(m->ren, R_BLEND_BLEND); r_set_draw_color(m->ren, v, v, v, (uint8_t)(a * 255));

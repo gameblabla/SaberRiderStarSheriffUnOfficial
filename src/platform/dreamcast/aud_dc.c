@@ -196,15 +196,31 @@ void aud_stop(int voice)
 }
 bool aud_playing(int voice) { return voice >= 64 ? stream_of(voice) >= 0 : voice >= 0; }
 
-/* ---- music: ADX from the disc ---- */
+/* ---- music: ADX from the disc, switched by a thread of its own ----
+ * A switch stops the old track (letting libADX's driver thread come up, then waiting for it to go) and opens the new
+ * file on the disc: the game loop used to stand still for all of that at every change in a level (the boss's arrival,
+ * the mission jingle, Dark April's fight). The game only posts what it wants now; the worker carries it out. */
 extern snd_stream_hnd_t shnd;   /* libADX's stream (its snddrv.c) */
-static bool music_on, music_paused; static float music_gain = 1.0f; static int music_vol = -1;
+static bool music_on, music_paused; static float music_gain = 1.0f; static int music_vol = -1;   /* the worker's */
+static struct { uint32_t id; bool loop, paused; unsigned seq; } want;   /* the game's wish, under music_mx */
+static unsigned done_seq;                                                /* the last wish carried out */
+static bool music_idle = true;                                           /* under music_mx */
+static mutex_t music_mx = MUTEX_INITIALIZER;
+static mutex_t switch_mx = MUTEX_INITIALIZER;   /* held by the worker while libADX's stream comes and goes */
+static semaphore_t music_sem;
+static kthread_t *music_thd; static volatile bool music_quit;
+
 static void apply_music_vol(void)
 {
-    /* the handle is valid once libADX's driver thread streams (a fresh track resets its volume) */
-    if (!music_on || snddrv.drv_status != SNDDRV_STATUS_STREAMING) { music_vol = -1; return; }
-    int v = vol_of(music_gain);
-    if (v != music_vol) { snd_stream_volume(shnd, v); music_vol = v; }
+    /* the handle is valid once libADX's driver thread streams (a fresh track resets its volume); not while the
+     * worker switches tracks: the next frame will do */
+    if (mutex_trylock(&switch_mx) != 0) return;
+    if (!music_on || snddrv.drv_status != SNDDRV_STATUS_STREAMING) music_vol = -1;
+    else {
+        int v = vol_of(music_gain);
+        if (v != music_vol) { snd_stream_volume(shnd, v); music_vol = v; }
+    }
+    mutex_unlock(&switch_mx);
 }
 /* libADX's driver thread ends with snd_stream_shutdown(), which would destroy every stream (our two, a video's) and
  * hand their handles to the next track; the link wraps it (Makefile.dc: --wrap) so it only tells us the thread is done.
@@ -216,16 +232,10 @@ void __wrap_snd_stream_shutdown(void) { adx_drv_exits++; }
 /* wait (up to ms) for cond, letting libADX's threads run */
 #define WAIT_FOR(cond, ms) do { uint64_t t_end_ = timer_ms_gettime64() + (ms); \
                                 while (!(cond) && timer_ms_gettime64() < t_end_) thd_sleep(1); } while (0)
+#define ADX_UP (snddrv.dec_status == SNDDEC_STATUS_STREAMING && snddrv.drv_status == SNDDRV_STATUS_STREAMING)
 
-bool aud_music_play(uint32_t id, bool loop)
-{
-    aud_music_stop();
-    char path[64]; snprintf(path, sizeof path, "/cd/music/%08lX.adx", (unsigned long)id);
-    if (!adx_dec(path, loop ? 1 : 0)) { printf("music: %s failed\n", path); return false; }
-    music_on = true; music_paused = false; music_vol = -1;
-    return true;
-}
-void aud_music_stop(void)
+/* worker: the track that plays now goes */
+static void music_stop_now(void)
 {
     if (!music_on) return;
     music_on = false;
@@ -233,19 +243,68 @@ void aud_music_stop(void)
      * its stream, set STREAMING over the stop's DONE and adx_stop spun forever. So let the driver come up first, and
      * after the stop wait for it to release its stream before anyone allocates another */
     if (music_paused) { adx_resume(); music_paused = false; }
-    WAIT_FOR(snddrv.dec_status == SNDDEC_STATUS_STREAMING && snddrv.drv_status == SNDDRV_STATUS_STREAMING, 1000);
+    WAIT_FOR(ADX_UP, 1000);
     unsigned exits = adx_drv_exits;
     bool driver = snddrv.drv_status != SNDDRV_STATUS_NULL;
     adx_stop();
     if (driver) WAIT_FOR(adx_drv_exits != exits, 500);
 }
-void aud_music_gain(float g) { music_gain = g; }
-void aud_music_pause(bool pause)
+
+static void *music_worker(void *arg)
 {
-    if (!music_on || pause == music_paused) return;
-    if (pause) adx_pause(); else adx_resume();
-    music_paused = pause;
+    (void)arg;
+    while (!music_quit) {
+        sem_wait(&music_sem);
+        for (;;) {
+            mutex_lock(&music_mx);
+            bool track = want.seq != done_seq, pause = !track && music_on && want.paused != music_paused;
+            if (!track && !pause) { music_idle = true; mutex_unlock(&music_mx); break; }
+            uint32_t id = want.id; bool loop = want.loop, paused = want.paused; unsigned seq = want.seq;
+            mutex_unlock(&music_mx);
+            mutex_lock(&switch_mx);
+            if (track) {
+                music_stop_now();
+                if (id) {
+                    char path[64]; snprintf(path, sizeof path, "/cd/music/%08lX.adx", (unsigned long)id);
+                    if (adx_dec(path, loop ? 1 : 0)) { music_on = true; music_paused = false; music_vol = -1; }
+                    else printf("music: %s failed\n", path);
+                }
+                done_seq = seq;
+            } else {
+                WAIT_FOR(ADX_UP, 1000);   /* libADX pauses a stream that is running */
+                if (paused) adx_pause(); else adx_resume();
+                music_paused = paused;
+            }
+            mutex_unlock(&switch_mx);
+        }
+    }
+    return NULL;
 }
+
+static void music_post(void (*edit)(uint32_t, bool), uint32_t id, bool loop)
+{
+    mutex_lock(&music_mx);
+    edit(id, loop); music_idle = false;
+    mutex_unlock(&music_mx);
+    sem_signal(&music_sem);
+}
+static void want_track(uint32_t id, bool loop) { want.id = id; want.loop = loop; want.paused = false; want.seq++; }
+static void want_pause(uint32_t id, bool pause) { (void)id; want.paused = pause; }
+
+/* until the worker has done everything asked of it (a video about to take a stream of its own, the shutdown) */
+void aud_music_settle(void)
+{
+    for (;;) {
+        mutex_lock(&music_mx); bool idle = music_idle; mutex_unlock(&music_mx);
+        if (idle) return;
+        thd_sleep(2);
+    }
+}
+
+bool aud_music_play(uint32_t id, bool loop) { music_post(want_track, id, loop); return true; }
+void aud_music_stop(void) { music_post(want_track, 0, false); }
+void aud_music_gain(float g) { music_gain = g; }
+void aud_music_pause(bool pause) { music_post(want_pause, 0, pause); }
 
 /* ---- lifetime ---- */
 void aud_update(void)
@@ -262,6 +321,8 @@ void aud_update(void)
 bool aud_init(void)
 {
     snd_stream_init();
+    sem_init(&music_sem, 0);
+    music_thd = thd_create(false, music_worker, NULL);
     memset(silence, 0x80, sizeof silence);   /* +step/8, -step/8, ...: holds the level (ADPCM has no zero code) */
     for (int i = 0; i < NSTREAM; i++) {
         strm[i].h = snd_stream_alloc(stream_cb, STREAM_BUF);
@@ -272,7 +333,8 @@ bool aud_init(void)
 
 void aud_shutdown(void)
 {
-    aud_music_stop();
+    aud_music_stop(); aud_music_settle();
+    music_quit = true; sem_signal(&music_sem); thd_join(music_thd, NULL);
     for (int i = 0; i < NSTREAM; i++) if (strm[i].h != SND_STREAM_INVALID) { snd_stream_stop(strm[i].h); snd_stream_destroy(strm[i].h); }
     snd_sfx_unload_all();
     __real_snd_stream_shutdown();

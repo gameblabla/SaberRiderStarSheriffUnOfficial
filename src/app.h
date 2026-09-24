@@ -8,11 +8,15 @@
 #define APP_SCREEN_H 240
 
 bool  app_init(Ren *ren, const char *data_dir, int start_level);
-/* advance by `elapsed` seconds of real time (runs 0..n fixed steps) */
-void  app_update(double elapsed);
+/* advance by `elapsed` seconds of real time; returns the fixed steps it ran (0..n) */
+int   app_update(double elapsed);
 /* draw the frame (the backend presents it) */
 void  app_draw(void);
 /* the SABER_SHOT path when the frame just drawn is to be saved (then quit), else NULL */
 const char *app_shot_path(void);
+/* debug SABER_PERF: the backend reports each frame's update / draw / whole-frame time (microseconds), the steps it
+ * ran and its draw count (-1 unknown); a line a second goes to stderr (the serial log on the Dreamcast) */
+bool  app_perf_on(void);
+void  app_perf(uint32_t upd_us, uint32_t draw_us, uint32_t frame_us, int steps, int prims);
 void  app_shutdown(void);
 Game *app_game(void);
