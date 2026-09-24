@@ -45,6 +45,13 @@ def cases():
     out['s2_finish'] = (2, 'bench', 3000, {'SABER_M7PHASE': '4', 'SABER_M7AUTO': '2'})
     out['s2_pursuit'] = (2, 'fuzz', 3000, {'SABER_M7PHASE': '2'})
     out['s2_boss'] = (2, 'fuzz', 3000, {'SABER_M7PHASE': '3', 'SABER_M7BOSSHP': '15'})
+    # Ramrod's waves on the bot (and fuzz, which gets it knocked down), the space chase and its boss
+    out['s6_w1bot'] = (6, 'bench', 3600, {'SABER_R6WAVE': '1', 'SABER_R6BOT': '1', 'SABER_R6GOD': '1'})
+    out['s6_w3bot'] = (6, 'bench', 3600, {'SABER_R6WAVE': '3', 'SABER_R6BOT': '1', 'SABER_R6GOD': '1'})
+    out['s6_w2fuzz'] = (6, 'fuzz', 3600, {'SABER_R6WAVE': '2'})
+    out['s7_bot'] = (7, 'bench', 3600, {'SABER_R7BOT': '1', 'SABER_R7GOD': '1'})
+    out['s7_late'] = (7, 'fuzz', 3000, {'SABER_R7T': '60'})
+    out['s7_boss'] = (7, 'bench', 3000, {'SABER_R7BOSS': '1', 'SABER_R7BOSSHP': '20', 'SABER_R7BOT': '1', 'SABER_R7GOD': '1'})
     return out
 
 

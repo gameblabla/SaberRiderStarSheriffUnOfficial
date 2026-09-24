@@ -11,7 +11,8 @@
  *   r_int(i)             an int as a real;           r_floor / r_ceil / r_trunc / r_round: a real to an int
  *   r_mul r_div r_muldiv products and quotients of two reals (a * b / c without overflow in fixed point)
  *   r_mul_dt(v, dt)      a rate over one step (dt is R_DT, the fixed 60 Hz step; exact v / 60 in fixed point)
- *   r_sin r_cos r_atan2  radians, like sinf / atan2f;  r_sqrt r_hypot r_abs r_min r_max r_fmod r_floorr
+ *   r_sin r_cos r_atan2  radians, like sinf / atan2f;  r_sqrt r_hypot r_abs r_min r_max r_fmod r_floorr r_remainder
+ *   r_len3(x, y, z)      a 3D vector's length; r_within2 / r_within3(d.., r): the vector shorter than r
  *   r_bits(u)            the demo's data files' IEEE floats, from their bits
  *   r_fmt / RS(v, d)     text with d decimals (printf("%s", RS(x, 2)) for "%.2f"); RSG(v) for "%g"
  *   r_ms(ms), r_milli(v) milliseconds (an int, a real) as seconds (* 0.001f)
@@ -48,6 +49,21 @@ static inline real r_sin(real rad) { return fx_sin(fx_ang_from_rad(rad)); }
 static inline real r_cos(real rad) { return fx_cos(fx_ang_from_rad(rad)); }
 static inline real r_atan2(real y, real x) { return fx_rad_from_ang(fx_atan2(y, x)); }
 static inline real r_fmod(real a, real b) { return b ? a % b : 0; }   /* the sign of a, like fmodf */
+static inline real r_remainder(real a, real b) { return b ? a - r_round(fx_div(a, b)) * b : 0; }   /* a - nearest multiple of b, like remainderf (halves away from 0, not to even) */
+/* sqrt(x^2 + y^2 + z^2) without the squares overflowing */
+static inline real r_len3(real x, real y, real z)
+{
+    uint32_t r = fx_isqrt64((uint64_t)((int64_t)x * x) + (uint64_t)((int64_t)y * y) + (uint64_t)((int64_t)z * z));
+    return r > (uint32_t)FX_MAX ? FX_MAX : (real)r;
+}
+static inline real r_len2(real x, real y)
+{
+    uint32_t r = fx_isqrt64((uint64_t)((int64_t)x * x) + (uint64_t)((int64_t)y * y));
+    return r > (uint32_t)FX_MAX ? FX_MAX : (real)r;
+}
+/* |(dx, dy)| < r, |(dx, dy, dz)| < r: squared distances in 64 bits */
+static inline bool r_within2(real dx, real dy, real r) { return (int64_t)dx * dx + (int64_t)dy * dy < (int64_t)r * r; }
+static inline bool r_within3(real dx, real dy, real dz, real r) { return (int64_t)dx * dx + (int64_t)dy * dy + (int64_t)dz * dz < (int64_t)r * r; }
 static inline real r_bits(uint32_t b) { return fx_from_f32bits(b); }
 static inline char *r_fmt(char *buf, real v, int dec) { return fx_fmt(buf, v, dec); }
 static inline char *r_fmt_g(char *buf, real v) { return fx_fmt(buf, v, 4); }
@@ -85,6 +101,11 @@ static inline real r_sin(real rad) { return sinf(rad); }
 static inline real r_cos(real rad) { return cosf(rad); }
 static inline real r_atan2(real y, real x) { return atan2f(y, x); }
 static inline real r_fmod(real a, real b) { return fmodf(a, b); }
+static inline real r_remainder(real a, real b) { return remainderf(a, b); }
+static inline real r_len2(real x, real y) { return sqrtf(x * x + y * y); }
+static inline real r_len3(real x, real y, real z) { return sqrtf(x * x + y * y + z * z); }
+static inline bool r_within2(real dx, real dy, real r) { return dx * dx + dy * dy < r * r; }
+static inline bool r_within3(real dx, real dy, real dz, real r) { return dx * dx + dy * dy + dz * dz < r * r; }
 static inline real r_bits(uint32_t b) { float f; memcpy(&f, &b, 4); return f; }
 static inline char *r_fmt(char *buf, real v, int dec) { snprintf(buf, 24, "%.*f", dec, (double)v); return buf; }
 static inline char *r_fmt_g(char *buf, real v) { snprintf(buf, 24, "%g", (double)v); return buf; }

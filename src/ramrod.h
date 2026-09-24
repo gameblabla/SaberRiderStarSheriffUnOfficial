@@ -13,7 +13,7 @@ typedef struct Ramrod Ramrod;
 
 Ramrod *ramrod_create(Ren *ren, int sw, int sh, int difficulty, int lives);
 void    ramrod_destroy(Ramrod *r);
-void    ramrod_update(Ramrod *r, const Input *in, float dt);
+void    ramrod_update(Ramrod *r, const Input *in, real dt);
 void    ramrod_draw(Ramrod *r, bool scanlines);
 /* 0 running, 1 phase cleared (after the outro scene; the final phase, space.c, follows), 2 game over */
 int     ramrod_result(const Ramrod *r);
