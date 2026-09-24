@@ -107,3 +107,10 @@ RFloor *r_floor_create(Ren *r, const RFloorDesc *d);
 void    r_floor_cells_changed(RFloor *f);
 void    r_floor_draw(Ren *r, RFloor *f, const RFloorView *v);
 void    r_floor_destroy(RFloor *f);
+
+/* ---- retained tile layers ----
+ * A backend with hardware scroll planes (the Saturn's VDP2) may hold a level's tile layers itself, baked ahead of time
+ * for that level. level_draw_layer asks it first: true means the backend shows layer `layer` of level `level` (its
+ * id) for this camera position this frame, and the core draws nothing for it; false (every other backend) means the
+ * core draws the tiles. */
+bool r_layer(Ren *r, uint32_t level, int layer, float cam_x, float cam_y);

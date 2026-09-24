@@ -107,13 +107,22 @@ def quantise(v: np.ndarray, k: int = 255, iters: int = 30) -> tuple[np.ndarray, 
     return out, 10 * np.log10(255 ** 2 / err) if err > 0 else 99.0
 
 
-def cut_bands(v: np.ndarray, wide: int) -> list[tuple[int, int, int]]:
+def cut_bands(v: np.ndarray, wide: int, allow4: bool = True) -> list[tuple[int, int, int]]:
     """rows of a unit's RGB555 pixels -> (y0, y1, fmt) bands: 4bpp runs where a band of rows has <= 15 colours,
     the wide format (8bpp or 16bpp) elsewhere; every band within MAX_RAW and MAX_H"""
     h, w = v.shape
     wpad = (w + 7) & ~7
     fits = lambda n, fmt: n <= MAX_H and (n * wpad * BYTES[fmt] + (32 if fmt == FMT_4BPP else 0)) <= MAX_RAW
     bands: list[tuple[int, int, int]] = []
+    if not allow4:
+        y = 0
+        while y < h:
+            y1 = y + 1
+            while y1 < h and fits(y1 - y + 1, wide):
+                y1 += 1
+            bands.append((y, y1, wide))
+            y = y1
+        return bands
     y = 0
     while y < h:
         colours: set[int] = set()
@@ -183,7 +192,9 @@ def units_for(w: int, h: int, meta: bytes, kind: int, rects: list[tuple[int, int
 
 
 def bake(px: np.ndarray, meta: bytes, stats: Stats, name: str = '', kind: int = 0,
-         rects: list[tuple[int, int, int, int]] | None = None) -> bytes:
+         rects: list[tuple[int, int, int, int]] | None = None, force8: bool = False) -> bytes:
+    """force8: every part 8bpp (palette pixels: the only VDP1 pixels with priority bits, e.g. a backdrop under the
+    VDP2 planes), quantised to 255 colours whatever the loss"""
     h, w = px.shape[:2]
     stats.n += 1
     stats.src_pixels += w * h
@@ -192,7 +203,7 @@ def bake(px: np.ndarray, meta: bytes, stats: Stats, name: str = '', kind: int = 
     palette = palette[palette != 0]
     if len(palette) > 255:
         q, db = quantise(v)
-        if db >= QUANT_DB:
+        if db >= QUANT_DB or force8:
             v = q
             palette = np.unique(v)
             palette = palette[palette != 0]
@@ -217,7 +228,7 @@ def bake(px: np.ndarray, meta: bytes, stats: Stats, name: str = '', kind: int = 
             for cx0 in range(x0, x1, step):
                 cx1 = min(x1, cx0 + step)
                 box = sub[y0:y1, cx0:cx1]
-                for b0, b1, fmt in cut_bands(box, wide):
+                for b0, b1, fmt in cut_bands(box, wide, not force8):
                     data = part_data(box[b0:b1], fmt, palette)
                     parts.append((ux + cx0, uy + y0 + b0, cx1 - cx0, b1 - b0, ((cx1 - cx0) + 7) & ~7, fmt, data))
                     stats.parts[fmt] += 1

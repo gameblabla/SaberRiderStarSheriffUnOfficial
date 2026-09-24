@@ -58,6 +58,7 @@ struct RTex {
     uint16_t *loc;              /* per part: its VDP1 address / 8, 0 while not in video memory */
     const uint8_t *pal; int npal; /* the 8bpp parts' palette (big-endian RGB555 of indices 1..npal) */
     uint8_t mr, mg, mb, alpha; RBlend blend; uint32_t tag;
+    uint8_t prio;               /* 8bpp parts: sprite priority register (their colour code's bits 14-12) */
     bool owned_block;           /* built here (runtime texture) */
 };
 struct RFloor { int unused; };
@@ -179,6 +180,18 @@ static void cram_release(int g)
     cslots[g].n = 0; cslots[g].t = NULL;
 }
 
+/* colour RAM entries [0, n) go to the VDP2 planes (vdp2_planes.c); VDP1's banks there are dropped (a level's start) */
+void rsat_cram_reserve(int entries)
+{
+    int n = (entries + 63) / 64;
+    for (int g = 0; g < CRAM_GRAN; g++) {
+        if (g < n) {
+            if (cowner[g] >= 0) cram_release(cowner[g]);
+            cowner[g] = -2;
+        } else if (cowner[g] == -2) cowner[g] = -1;
+    }
+}
+
 /* the colour code of t's palette tinted by (r, g, b) / 255, uploading it if needed; -1 if colour RAM is full */
 static int cram_bank(RTex *t, uint8_t r, uint8_t g, uint8_t b)
 {
@@ -189,7 +202,7 @@ static int cram_bank(RTex *t, uint8_t r, uint8_t g, uint8_t b)
     for (;;) {
         for (int base = 0; base < CRAM_GRAN; base += need) {
             bool free_run = true;
-            for (int k = 0; k < need && free_run; k++) free_run = cowner[base + k] < 0;
+            for (int k = 0; k < need && free_run; k++) free_run = cowner[base + k] == -1;
             if (!free_run) continue;
             for (int k = 0; k < need; k++) cowner[base + k] = (int8_t)base;
             cslots[base] = (CSlot){ t, tint, frame_no, (uint8_t)need };
@@ -386,6 +399,7 @@ void rtex_set_alpha_mod(RTex *t, uint8_t a) { if (t) t->alpha = a; }
 void rtex_set_blend(RTex *t, RBlend b) { if (t) t->blend = b; }
 void rtex_set_scale(RTex *t, RScale s) { (void)t; (void)s; }
 void rtex_set_tag(RTex *t, uint32_t tag) { if (t) t->tag = tag; }
+void rsat_tex_priority(RTex *t, int reg) { if (t) t->prio = (uint8_t)(reg & 7); }
 Ren *rtex_renderer(const RTex *t) { return t ? t->r : &ren; }
 
 /* ---------------------------------------------------------------- the command list */
@@ -398,6 +412,8 @@ static int scr_w = 320, scr_h = SAT_SCREEN_H;
 static bool uclip_active; static RRect uclip_cur;   /* the user clip rectangle set in the list */
 static bool pal_drawn;                              /* palette pixels may be in the framebuffer (drawn this frame) */
 static int fade_cmd = -1; static uint8_t fade_r, fade_g, fade_b, fade_a;   /* a full-screen translucent fill */
+static RTex *backdrop[4]; static int backdrop_x[4], backdrop_y[4], nbackdrops; static bool clear_fb;
+static void draw_backdrops(void);
 
 static Cmd *cmd_new(void)
 {
@@ -500,6 +516,7 @@ void r_clear(Ren *r)
     back_color = rgb555(draw_r, draw_g, draw_b);
     ncmd = 3;   /* keep the preamble: everything drawn so far is covered */
     uclip_active = false; pal_drawn = false; fade_cmd = -1;
+    draw_backdrops();
 }
 
 void r_fill_rect(Ren *r, const RFRect *q)
@@ -626,7 +643,7 @@ static void draw_part(RTex *t, int pi, const Map *m, const RRect *c, bool partia
     if (fmt == FMT_4BPP) { pm |= PM_LUT; k->colr = loc; k->srca = (uint16_t)(loc + 4); }   /* the table, then the texels */
     else if (fmt == FMT_8BPP) {   /* colour bank: 64 (mode 2), 128 (3) or 256 (4) colours */
         int g = pal_granules(t->npal);
-        pm |= (uint16_t)((g == 1 ? 2 : g == 2 ? 3 : 4) << 3); k->colr = (uint16_t)bank; k->srca = loc;
+        pm |= (uint16_t)((g == 1 ? 2 : g == 2 ? 3 : 4) << 3); k->colr = (uint16_t)(bank | t->prio << 12); k->srca = loc;
         pal_drawn = true;
     }
     else { pm |= PM_RGB; k->srca = loc; }
@@ -719,6 +736,37 @@ void rsat_frame_begin(void)
     Cmd *k = cmd_new(); k->ctrl = C_SYS_CLIP; k->xc = (int16_t)(scr_w - 1); k->yc = (int16_t)(scr_h - 1);
     k = cmd_new(); k->ctrl = C_USER_CLIP; k->xc = (int16_t)(scr_w - 1); k->yc = (int16_t)(scr_h - 1);
     k = cmd_new(); k->ctrl = C_LOCAL;
+    draw_backdrops();
+}
+
+void rsat_set_backdrops(RTex **t, const int *x, const int *y, int n, bool clear)
+{
+    clear_fb = clear;
+    nbackdrops = n < 4 ? n : 4;
+    for (int i = 0; i < nbackdrops; i++) { backdrop[i] = t[i]; backdrop_x[i] = x[i]; backdrop_y[i] = y[i]; }
+}
+
+/* the VDP2 planes' backdrops (vdp2_planes.c): palette sprites under the planes, first in the list so every other
+ * sprite covers them. With the planes on, the framebuffer is cleared to transparent first: the vblank erase of the
+ * variable frame change doesn't get through a whole 16bpp screen (the bottom ~40 lines keep the last frame's sprites) */
+static void draw_backdrops(void)
+{
+    if (clear_fb) {
+        Cmd *k = cmd_new();
+        if (k) {
+            k->ctrl = C_POLYGON; k->pmod = PM_ECD | PM_SPD; k->colr = 0;
+            k->xa = 0; k->ya = 0; k->xb = (int16_t)(scr_w - 1); k->yb = 0;
+            k->xc = (int16_t)(scr_w - 1); k->yc = (int16_t)(scr_h - 1); k->xd = 0; k->yd = (int16_t)(scr_h - 1);
+        }
+    }
+    bool vp = vp_on, cl = clip_on;
+    vp_on = clip_on = false;
+    for (int i = 0; i < nbackdrops; i++) {
+        RFRect d = { (float)backdrop_x[i], (float)backdrop_y[i], (float)backdrop[i]->w, (float)backdrop[i]->h };
+        tex_draw(backdrop[i], NULL, &d, 0, NULL, R_FLIP_NONE);
+    }
+    vp_on = vp; clip_on = cl;
+    pal_drawn = false;   /* under the planes: nothing is blended over them */
 }
 
 /* the colour offset (VDP2, every layer): the fade fill ending the frame, lerp towards its colour approximated as an add */
@@ -736,6 +784,7 @@ static void colour_offset(void)
 
 void rsat_frame_end(void)
 {
+    sat_planes_frame(scr_w);
     colour_offset();
     Cmd *k = &cmds[ncmd++]; memset(k, 0, sizeof *k); k->ctrl = C_END;
     vdp2_scrn_back_color_set(VDP2_VRAM_ADDR(3, 0x01FFFE), (rgb1555_t){ .raw = back_color });

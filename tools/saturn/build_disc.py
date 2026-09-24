@@ -10,6 +10,9 @@ Everything sits in the ISO root under an 8.3 upper-case name (src/platform/satur
   SND.PCK     the samples (the sound driver milestone fills it; empty until then)
   FILES.PCK   our other files (text, level blobs) and the RGBA of the few images the game reads as pixels, stored as
               host-order (big-endian) 0xAABBGGRR integers, the way the core reads pixels
+  STAGE.PCK   blocks that replace the demo's, opened before the other packs (tools/saturn/layers.py): a level without
+              the tile maps its VDP2 planes draw ("data", the level's id), the planes ("SPL1", id ^ SPL_XOR) and their
+              cells (32 KB blocks, id ^ (SPC_XOR + n)), the planes' VDP1 backdrops ("tex")
   SABER.ENV   debug switches (--env), as the Dreamcast's saber.env
 
 The source packs and assets are never modified.
@@ -30,8 +33,11 @@ sys.path.insert(0, str(ROOT / 'tools/dc'))
 sys.path.insert(0, str(HERE))
 import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
+import layers  # noqa: E402
 import pckwrite  # noqa: E402
 import satbake  # noqa: E402
+
+SPL_XOR, SPC_XOR = 0x53504C00, 0x53504300   # src/platform/saturn/vdp2_planes.c
 _spec = importlib.util.spec_from_file_location('dc_build_disc', ROOT / 'tools/dc/build_disc.py')
 dc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(dc)   # the Dreamcast builder: its asset tables and helpers
@@ -102,6 +108,46 @@ def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log) -> None:
     log(stats.report())
 
 
+def bake_stages(data: Path, work: Path, stage: pckwrite.Pack, log) -> None:
+    """every level with a plane layout (layers.PLANS): its planes, backdrops and slim level block"""
+    levprep = work / 'levprep'
+    subprocess.run(['cc', '-O2', '-std=gnu11', '-Isrc', 'tools/saturn/levprep.c', 'src/pack.c', 'src/lzo1z.c', '-o',
+                    str(levprep)], cwd=ROOT, check=True)
+    ids = [f'{i:08X}' for i in layers.PLANS]
+    subprocess.run([levprep, data, work, *ids], check=True)
+    stats = satbake.Stats()
+    for rid in ids:
+        res = layers.bake(work / f'{rid}.levl', work / 'srgb')
+        for line in res.report:
+            log(f'planes {rid}: {line}')
+        lid = int(rid, 16)
+        stage.add(lid, 'data', res.slim, lz4=True)
+        stage.add(lid ^ SPL_XOR, 'data', res.spl)
+        for k, cells in enumerate(res.spc):
+            stage.add(lid ^ (SPC_XOR + k), 'data', cells, lz4=True)
+        for tid, _, _, _, img in res.backdrops:
+            stage.add(tid, 'tex', satbake.bake(img, b'', stats, name=f'backdrop {tid:08X}', force8=True))
+        # a tile bank the planes draw from and VDP1 too: its texture with only VDP1's tiles (the planes have the rest)
+        for bank, cells in layers.vdp1_tiles(work / f'{rid}.levl', res.taken).items():
+            if (bank, 'tex') in stage:
+                continue
+            kind, px, meta = satbake.load_srgb(work / 'srgb' / f'{bank:08X}.srgb')
+            b = layers.levl.load_bank(work / 'srgb' / f'{bank:08X}.srgb')
+            tiles = sorted({int(b.cells[(v - 1) % len(b.cells)]) for v in cells} - {0xFFFF})
+            rects = [((t % b.sheet_cols) * b.tw, (t // b.sheet_cols) * b.th, b.tw, b.th) for t in tiles]
+            block = satbake.bake(px, meta, stats, name=f'{bank:08X} (VDP1 tiles)', kind=kind, rects=rects)
+            stage.add(bank, 'tex', block)
+            log(f'planes {rid}: tile bank {bank:08X} for VDP1: {len(tiles)} tiles, {len(block) // 1024} KB')
+        if not preview_dir:
+            continue
+        from PIL import Image
+        Image.fromarray(layers.preview(res, work / f'{rid}.levl', work / 'srgb', [0, 1500, 3000, 5000, 8000])).save(
+            preview_dir / f'planes_{rid}.png')
+
+
+preview_dir: Path | None = None
+
+
 def build(args: argparse.Namespace) -> None:
     out = args.out.resolve()
     stage, work = out / 'stage', out / 'work'
@@ -119,8 +165,11 @@ def build(args: argparse.Namespace) -> None:
     def log(msg: str) -> None:
         print(msg, file=logf, flush=True)
 
-    tex, snd, files = pckwrite.Pack(), pckwrite.Pack(), pckwrite.Pack()
+    tex, snd, files, stage_pack = pckwrite.Pack(), pckwrite.Pack(), pckwrite.Pack(), pckwrite.Pack()
     bake_textures(data, work, tex, log)
+    global preview_dir
+    preview_dir = out
+    bake_stages(data, work, stage_pack, log)
     for source in sorted((ROOT / 'assets').rglob('*')):
         if not source.is_file():
             continue
@@ -135,7 +184,7 @@ def build(args: argparse.Namespace) -> None:
                 files.add(key, 'image', image_block(source, IMAGES[rel.as_posix()]), lz4=True)
         else:
             files.add(key, 'file', file_block(source.read_bytes()), lz4=True)
-    for name, pack in (('TEX.PCK', tex), ('SND.PCK', snd), ('FILES.PCK', files)):
+    for name, pack in (('TEX.PCK', tex), ('SND.PCK', snd), ('FILES.PCK', files), ('STAGE.PCK', stage_pack)):
         size = pack.write(stage / name)
         print(f'{name}: {len(pack.blocks)} blocks, {size / 1024 / 1024:.1f} MiB', flush=True)
     logf.close()

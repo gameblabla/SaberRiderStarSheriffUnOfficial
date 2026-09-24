@@ -448,6 +448,7 @@ static bool evict_any(void)
 }
 
 bool gfx_init(Ren *r) { R = r; r_set_evict_hook(evict_one); packs_set_evict_hook(evict_any); return true; }
+Ren *gfx_renderer(void) { return R; }
 
 void gfx_flush(void)
 {

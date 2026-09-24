@@ -17,7 +17,7 @@ OUT     := build/saturn
 SH_PROGRAM    := saber_rider
 SH_BUILD_DIR  := obj-saturn
 SH_OUTPUT_DIR := $(OUT)
-SH_SRCS := $(wildcard src/*.c) $(filter-out %/render_sat.c,$(wildcard src/platform/saturn/*.c)) \
+SH_SRCS := $(wildcard src/*.c) $(filter-out %/render_sat.c %/vdp2_planes.c,$(wildcard src/platform/saturn/*.c)) \
 	src/platform/null/aud_null.c src/platform/null/video_null.c
 # SOFTFLOAT=0: libgcc's fp-bit soft-float instead of ours (platform/saturn/softfloat_sat.c), for comparisons
 ifeq ($(SOFTFLOAT),0)
@@ -27,12 +27,13 @@ ifeq ($(RENDER),null)
 SH_SRCS   += src/platform/null/render_null.c
 SH_CFLAGS += -DSAT_RENDER_NULL
 else
-SH_SRCS   += src/platform/saturn/render_sat.c
+SH_SRCS   += src/platform/saturn/render_sat.c src/platform/saturn/vdp2_planes.c
 endif
 
-# PLAT_BAKED_ASSETS: textures, samples and our other files come baked into tex.pck / snd.pck / files.pck (build_disc.py)
+# PLAT_BAKED_ASSETS: textures, samples and our other files come baked into tex.pck / snd.pck / files.pck (build_disc.py);
+# PLAT_STAGE_PACK: stage.pck, opened first (a level without the tile maps its VDP2 planes draw: tools/saturn/layers.py)
 SH_CFLAGS += -std=gnu11 -O2 -g -Isrc/platform/saturn/include -Isrc \
-	-DPLAT_SATURN -DPLAT_LOW_MEMORY -DPLAT_BAKED_ASSETS \
+	-DPLAT_SATURN -DPLAT_LOW_MEMORY -DPLAT_BAKED_ASSETS -DPLAT_STAGE_PACK \
 	-fno-finite-math-only \
 	-Wno-shadow -Wno-bad-function-cast -Wno-null-dereference -Wno-unused-parameter -Wno-sign-compare \
 	-Wno-missing-field-initializers -Wno-implicit-fallthrough -Wno-misleading-indentation -Wno-unused-function

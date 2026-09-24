@@ -28,6 +28,7 @@ typedef struct Sprite {
 } Sprite;
 
 bool  gfx_init(Ren *r);
+Ren  *gfx_renderer(void);
 /* the SCANLINES option: every other row of the sw x sh screen darkened, in one draw call */
 void  gfx_scanlines(int sw, int sh);
 /* forget every cached sprite and cblock (tools/dc/texprep walks all of the packs' graphics through the cache) */

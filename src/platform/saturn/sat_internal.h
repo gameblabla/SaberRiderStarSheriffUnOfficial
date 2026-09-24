@@ -31,6 +31,15 @@ void rsat_frame_begin(void);
 void rsat_frame_end(void);
 int  rsat_prims(void);
 void rsat_stats(unsigned *parts_resident, unsigned *vram_used, unsigned *uploads, unsigned *evicted);
+/* for vdp2_planes.c: colour RAM entries [0, n) kept from VDP1's palette banks (0: none); an 8bpp texture's pixels at a
+ * sprite priority register (0 the default, over the planes); textures drawn first every frame, under everything */
+void rsat_cram_reserve(int entries);
+struct RTex;
+void rsat_tex_priority(struct RTex *t, int reg);
+void rsat_set_backdrops(struct RTex **t, const int *x, const int *y, int n, bool clear_framebuffer);
+
+/* vdp2_planes.c: a level's tile layers as VDP2 planes (render.h r_layer); once a frame, before VDP1's list goes */
+void sat_planes_frame(int screen_w);
 
 /* input_sat.c */
 bool sat_reset_combo(void);           /* A+B+C+Start held on pad 1 */

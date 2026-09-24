@@ -67,7 +67,7 @@ bool level_load(Level *L, uint32_t id)
         } else if (!host) le32_to_host((uint32_t *)(p + 12), (size_t)m->w * m->h);
 #endif
         p += 12 + (size_t)m->w * m->h * 4;
-        m->cb = cblock_get(m->cblock_id);
+        m->cb = m->cblock_id ? cblock_get(m->cblock_id) : NULL;   /* 0: a map the backend holds (render.h r_layer) */
         m->used_w = m->w;
         if (L->layers[i].extra == 1) {
             int used = 0;
@@ -94,6 +94,7 @@ uint8_t level_cell(const Level *L, int cx, int cy)
  * the wrap layer (extra==1, SkyBG) repeats horizontally. */
 void level_draw_layer(const Level *L, int li, float cam_x, float cam_y, int sw, int sh)
 {
+    if (r_layer(gfx_renderer(), L->id, li, cam_x, cam_y)) return;   /* held by the backend (the Saturn's VDP2 planes) */
     const Layer *ly = &L->layers[li];
     const TileMap *m = ly->map;
     if (!m || !m->cb) return;

@@ -17,6 +17,12 @@ Game *app_game(void) { return &g; }
 bool app_init(Ren *ren, const char *data_dir, int start_level)
 {
     gfx_init(ren);
+#ifdef PLAT_STAGE_PACK
+    /* blocks baked for the console that replace the demo's (the Saturn: a level without the tile maps its planes draw,
+     * tools/saturn/build_disc.py): opened first, so a lookup finds them before the demo's */
+    static const char *const over[] = { "stage.pck" };
+    if (!packs_open(data_dir, over, 1)) return false;
+#endif
     static const char *const base[] = { "pack.pck", "common.pck", "levels.pck", "menu.pck", "level1.pck", "video.pck" };
     if (!packs_open(data_dir, base, 6)) return false;
 #ifdef PLAT_BAKED_ASSETS
