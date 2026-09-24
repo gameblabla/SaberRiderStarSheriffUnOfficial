@@ -1,0 +1,26 @@
+// Windows resources for saber_rider.exe (Makefile.win): the icon (from the demo's SaberRider/icon.png) and version info
+#include <winver.h>
+1 ICON "saber_rider.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "FileDescription", "Saber Rider and the Star Sheriffs (demo reconstruction)"
+      VALUE "ProductName", "Saber Rider and the Star Sheriffs"
+      VALUE "OriginalFilename", "saber_rider.exe"
+      VALUE "FileVersion", "1.0"
+      VALUE "ProductVersion", "1.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

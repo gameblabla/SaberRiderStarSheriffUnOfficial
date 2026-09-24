@@ -20,7 +20,9 @@ $(BIN): $(OBJ)
 
 $(OBJDIR)/%.o: src/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+-include $(OBJ:.o=.d)
 
 run: $(BIN)
 	SABER_ASSETS="$(CURDIR)/assets" ./$(BIN) SaberRider/data

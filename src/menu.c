@@ -65,7 +65,11 @@ void menu_enter(Menu *m, int state)
     case MS_MAIN:
         if (prev == MS_OPTIONS || prev == MS_CREDITS) m->t = m->dur * 0.5f;   /* no zoom-in when coming back from a sub menu */
         m->sel = 0; music_play(0, true); break;
-    case MS_OPTIONS: m->sel = 1; m->music_track = 0; if (prev != MS_CREDITS) music_play(3, true); break;
+    case MS_OPTIONS:
+        m->sel = prev == MS_CONTROLS ? OPT_CONTROLS : 1; m->music_track = 0;
+        if (prev != MS_CREDITS && prev != MS_CONTROLS) music_play(3, true);
+        break;
+    case MS_CONTROLS: m->bind_row = CR_BUTTON0; m->bind_col = 0; m->bind_wait = true; break;
     case MS_BRIEFING: m->dlg.active = false; music_play(2, true); break;
     case MS_CHARSEL: m->t = -0.25f; m->character = 1; music_play(1, true); break;
     case MS_GAMEOVER: m->dur = 3.0f; music_play(4, false); break;        /* FUN_0042d690 -> state 9 + music 4 */
@@ -114,8 +118,16 @@ void menu_update(Menu *m, const Input *in, float dt, int sw, Ren *r)
         break; }
     case MS_OPTIONS: {
         int maxl, maxc;
-        if (btn_pressed(in, BTN_UP)) { m->sel = m->sel == 0 ? OPT_COUNT - 1 : m->sel - 1; sfx_play(0, 0); }
-        if (btn_pressed(in, BTN_DOWN)) { m->sel = m->sel == OPT_COUNT - 1 ? 0 : m->sel + 1; sfx_play(0, 0); }
+        if (btn_pressed(in, BTN_UP)) {
+            m->sel = m->sel == 0 ? OPT_COUNT - 1 : m->sel - 1;
+            if (m->sel == OPT_CONTROLS && !plat_bind_supported()) m->sel--;
+            sfx_play(0, 0);
+        }
+        if (btn_pressed(in, BTN_DOWN)) {
+            m->sel = m->sel == OPT_COUNT - 1 ? 0 : m->sel + 1;
+            if (m->sel == OPT_CONTROLS && !plat_bind_supported()) m->sel++;
+            sfx_play(0, 0);
+        }
         int dir = btn_pressed(in, BTN_RIGHT) ? 1 : btn_pressed(in, BTN_LEFT) ? -1 : 0;
         if (dir) sfx_play(0, 0);
         switch (m->sel) {
@@ -142,7 +154,34 @@ void menu_update(Menu *m, const Input *in, float dt, int sw, Ren *r)
         if (confirm(in)) {
             if (m->sel == OPT_EXIT) { sfx_play(0, 0); menu_enter(m, MS_MAIN); }
             else if (m->sel == OPT_CREDITS) { sfx_play(0, 0); menu_enter(m, MS_CREDITS); }
+            else if (m->sel == OPT_CONTROLS) { sfx_play(0, 0); menu_enter(m, MS_CONTROLS); }
         }
+        break; }
+    case MS_CONTROLS: {
+        if (plat_bind_capturing()) {   /* the platform takes the next key / pad button itself */
+            m->bind_t += dt;
+            if (m->bind_t > 5.0f) plat_bind_cancel();
+            m->bind_wait = true;
+            break;
+        }
+        if (m->bind_wait) {
+            for (int b = 0; b < BTN_COUNT; b++) if (btn_down(in, b)) goto controls_done;
+            m->bind_wait = false;
+        }
+        if (btn_pressed(in, BTN_UP)) { m->bind_row = (m->bind_row + CR_COUNT - 1) % CR_COUNT; sfx_play(0, 0); }
+        if (btn_pressed(in, BTN_DOWN)) { m->bind_row = (m->bind_row + 1) % CR_COUNT; sfx_play(0, 0); }
+        int dir = btn_pressed(in, BTN_RIGHT) ? 1 : btn_pressed(in, BTN_LEFT) ? -1 : 0;
+        bool is_button = m->bind_row >= CR_BUTTON0 && m->bind_row < CR_RESET;
+        if (dir && m->bind_row == CR_DEVICE) { m->bind_dev = (m->bind_dev + BIND_DEVICES + dir) % BIND_DEVICES; sfx_play(0, 0); }
+        if (dir && is_button) { int c = m->bind_col + dir; if (c >= 0 && c < BIND_SLOTS) { m->bind_col = c; sfx_play(0, 0); } }
+        if (confirm(in)) {
+            sfx_play(0, 0);
+            if (m->bind_row == CR_DEVICE) m->bind_dev = (m->bind_dev + 1) % BIND_DEVICES;
+            else if (is_button) { plat_bind_capture(m->bind_dev, m->bind_row - CR_BUTTON0, m->bind_col); m->bind_t = 0; }
+            else if (m->bind_row == CR_RESET) { plat_bind_defaults(m->bind_dev); m->bind_wait = true; }
+            else { plat_bind_save(); menu_enter(m, MS_OPTIONS); }
+        }
+    controls_done:
         break; }
     case MS_CREDITS: {
         const PackEntry *e = packs_find(0x7E11BC19);
@@ -249,14 +288,66 @@ static void draw_options(Menu *m, Ren *r, int sw, int sh)
     if (m->music_track == 0) snprintf(mus, sizeof mus, "OPTIONS"); else snprintf(mus, sizeof mus, "TEST TRACK%02d", m->music_track);
     const char *rows[7][2] = { { "LEVEL", DIFF[m->difficulty] }, { "PLAYER", lives }, { "CONTINUE", cont }, { "SCREEN", scr },
                                { "RATIO", m->ratio == RATIO_WIDE ? "WIDE" : m->ratio == RATIO_43 ? "4:3" : "STRETCH" }, { "FILTER", FILT[m->filter] }, { "MUSIC TEST", mus } };
+    int dy = plat_bind_supported() ? 0x0e : 0x10;   /* an eighth row (CONTROLS) fits above BACKER CREDITS at 14 px */
     for (int i = 0; i < 7; i++) {
         hilite(m->sel == OPT_LEVEL + i, &R, &G, &B);
-        font_draw(f, rows[i][0], (float)lx, (float)(y0 + 0xd8 + i * 0x10), R, G, B);
-        font_draw(f, rows[i][1], (float)vx, (float)(y0 + 0xd8 + i * 0x10), 255, 255, 255);
+        font_draw(f, rows[i][0], (float)lx, (float)(y0 + 0xd8 + i * dy), R, G, B);
+        font_draw(f, rows[i][1], (float)vx, (float)(y0 + 0xd8 + i * dy), 255, 255, 255);
+    }
+    if (plat_bind_supported()) {
+        hilite(m->sel == OPT_CONTROLS, &R, &G, &B);
+        font_draw(f, "CONTROLS", (float)lx, (float)(y0 + 0xd8 + 7 * dy), R, G, B);
     }
     hilite(m->sel == OPT_CREDITS, &R, &G, &B);
     font_draw(f, "BACKER CREDITS", (float)(x0 + 0xca), (float)(y0 + 0x14e), R, G, B);
     (void)r;
+}
+
+/* OPTIONS > CONTROLS: the device, then each button's two bindings (left / right picks one, confirm rebinds it) */
+static void draw_controls(Menu *m, Ren *r, int sw, int sh)
+{
+    m->angle += STEP;
+    draw_spiral(m, sw, sh, 0x33 * 2);
+    fill(r, sw, sh, 0, 0, 0, 0xa0);
+    Font *f = font_get(0x4058897F);
+    if (!f) return;
+    static const char *NAMES[BTN_COUNT] = { "LEFT", "RIGHT", "UP", "DOWN", "JUMP", "SHOOT", "AIM", "PAUSE", "POWER" };
+    uint8_t R, G, B;
+    int x0 = sw / 2 - 150, cx[BIND_SLOTS] = { x0 + 96, x0 + 200 }, row_h = f->h + 3, y = 10;
+    const char *title = "CONTROLS";
+    font_draw(f, title, (float)((sw - font_text_width(f, title)) / 2), (float)y, 255, 182, 0);
+    y += row_h + 6;
+    hilite(m->bind_row == CR_DEVICE, &R, &G, &B);
+    font_draw(f, "DEVICE", (float)x0, (float)y, R, G, B);
+    font_draw(f, m->bind_dev == BIND_KEYBOARD ? "< KEYBOARD >" : "< GAMEPAD >", (float)cx[0], (float)y, 255, 255, 255);
+    y += row_h + 4;
+    bool capturing = plat_bind_capturing();
+    for (int b = 0; b < BTN_COUNT; b++, y += row_h) {
+        int row = CR_BUTTON0 + b;
+        hilite(m->bind_row == row, &R, &G, &B);
+        font_draw(f, NAMES[b], (float)x0, (float)y, R, G, B);
+        for (int s = 0; s < BIND_SLOTS; s++) {
+            char lab[24]; plat_bind_label(m->bind_dev, b, s, lab, sizeof lab);
+            bool cur = m->bind_row == row && m->bind_col == s;
+            if (cur && capturing) snprintf(lab, sizeof lab, "...");
+            uint8_t cr = 170, cg = 170, cb = 170;
+            if (cur) hilite(!capturing, &cr, &cg, &cb);
+            if (cur) {
+                r_set_draw_blend(r, R_BLEND_BLEND); r_set_draw_color(r, 255, 255, 255, 0x30);
+                RFRect q = { (float)cx[s] - 3, (float)y - 1, 100, (float)f->h + 2 }; r_fill_rect(r, &q);
+            }
+            font_draw(f, lab, (float)cx[s], (float)y, cr, cg, cb);
+        }
+    }
+    y += 4;
+    hilite(m->bind_row == CR_RESET, &R, &G, &B);
+    font_draw(f, "RESET TO DEFAULTS", (float)x0, (float)y, R, G, B);
+    y += row_h;
+    hilite(m->bind_row == CR_BACK, &R, &G, &B);
+    font_draw(f, "BACK", (float)x0, (float)y, R, G, B);
+    const char *hint = capturing ? (m->bind_dev == BIND_KEYBOARD ? "KEY? ESC CANCELS, DEL CLEARS" : "BUTTON? ESC CANCELS, DEL CLEARS")
+                                 : "LEFT/RIGHT SLOT, CONFIRM SETS";
+    font_draw(f, hint, (float)((sw - font_text_width(f, hint)) / 2), (float)(sh - f->h - 4), 200, 200, 200);
 }
 
 static void draw_main(Menu *m, Ren *r, int sw, int sh)
@@ -465,6 +556,7 @@ void menu_draw(Menu *m, Ren *r, int sw, int sh)
     case MS_INTRO: fill(r, sw, sh, 0, 0, 0, 255); video_draw(m->video, r, sw, sh); break;
     case MS_MAIN: draw_main(m, r, sw, sh); break;
     case MS_OPTIONS: draw_options(m, r, sw, sh); break;
+    case MS_CONTROLS: draw_controls(m, r, sw, sh); break;
     case MS_BRIEFING: draw_briefing(m, r, sw, sh); break;
     case MS_CHARSEL: draw_charsel(m, r, sw, sh); break;
     case MS_CREDITS: draw_credits(m, r, sw, sh); break;

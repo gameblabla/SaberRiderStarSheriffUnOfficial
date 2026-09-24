@@ -31,3 +31,12 @@ bool dc_reset_combo(void)
     uint32_t all = CONT_A | CONT_B | CONT_X | CONT_Y | CONT_START;
     return st && (st->buttons & all) == all;
 }
+
+/* the Dreamcast pad layout is fixed */
+bool plat_bind_supported(void) { return false; }
+void plat_bind_label(int dev, int btn, int slot, char *buf, size_t n) { if (n) buf[0] = 0; }
+void plat_bind_capture(int dev, int btn, int slot) { }
+bool plat_bind_capturing(void) { return false; }
+void plat_bind_cancel(void) { }
+void plat_bind_defaults(int dev) { }
+void plat_bind_save(void) { }

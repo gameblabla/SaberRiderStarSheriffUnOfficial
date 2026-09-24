@@ -15,6 +15,24 @@ Dependencies: SDL3, libvorbisfile, libavcodec/libswscale (FMV), CMake, a C11 com
     ./build/saber_rider SaberRider/data
     ./build/saber_rider SaberRider/data --level 2    # skip the front end: 1 the frontier town, 2 the Grand Prix, 3 Hyperjumper Pass, 4 the Red Palm Jungle
 
+## Windows build (MinGW-w64, static)
+
+`Makefile.win` cross-builds one static `saber_rider.exe` with no DLLs to ship. It needs `x86_64-w64-mingw32-gcc`,
+the mingw-w64 static libvorbis/libogg/zlib, CMake, and curl for the first FFmpeg download.
+
+    make -f Makefile.win -j16          # first run also builds build/win/deps -> build/win/saber_rider.exe
+    make -f Makefile.win package       # build/win/SaberRider/ (exe, assets/, data/*.pck) + release/saber_rider-windows-x86_64-*.zip
+    make -f Makefile.win CONSOLE=1     # build/win/saber_rider-console.exe: keeps a console (stderr / SABER_* debug output)
+
+- **SDL3** is built as a static library from its source tarball. The makefile looks for `third_party/SDL3-*.tar.gz`,
+  then `../SDL3-*.tar.gz`, or uses `SDL3_TARBALL=`.
+- **FFmpeg** is a minimal static build (`FFMPEG_VERSION`, default 7.1.2; `FFMPEG_TARBALL=` for an offline copy). It
+  has only the MPEG-4 and PNG decoders, the MPEG-4 parser and swscale.
+
+Everything goes under `build/win/`, and `make -f Makefile.win distclean` removes it. The exe reads
+`SaberRider/data` under the current folder when it exists, else `data/` next to itself (the package layout).
+The Windows icon comes from `tools/win/` (the demo's own `icon.png`).
+
 ## Dreamcast build
 
 The Dreamcast target uses KallistiOS, the native PowerVR renderer, AICA ADPCM
@@ -399,6 +417,13 @@ dips under the cue and the attack voice, then rises smoothly after the strike.
 Arrows move · **W/A** jump · **S/D** shoot · hold **Q/E** aim (8 directions) · **Enter** pause/start ·
 **X/F** power attack (ours) · down+jump slides · down on a platform + jump drops through. Gamepads: d-pad/stick,
 South jump, North power attack, East/West shoot, shoulders aim, Start pause.
+
+These are the defaults. On PC (Linux and Windows), **OPTIONS > CONTROLS** remaps them. Pick KEYBOARD or GAMEPAD,
+choose one of a button's two slots with left/right, confirm, then press the new key or pad button. The triggers work
+as pad buttons there. Esc cancels, Del/Backspace clears the slot, and waiting 5 s cancels too. A key that another
+slot already holds swaps into it. RESET TO DEFAULTS restores the device's layout. BACK saves `controls.cfg` in SDL's
+pref folder (`~/.local/share/SaberRider/SaberRider/` or `%APPDATA%\SaberRider\SaberRider\`). The left stick always
+moves. The Dreamcast pad layout stays fixed.
 
 ## Debug switches (environment variables)
 

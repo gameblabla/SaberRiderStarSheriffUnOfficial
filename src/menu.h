@@ -9,10 +9,13 @@
 
 enum { MS_SPLASH0 = 0, MS_SPLASH1, MS_SPLASH2, MS_SPLASH3, MS_INTRO = 4, MS_MAIN = 5, MS_OPTIONS = 6, MS_BRIEFING = 7,
        MS_CHARSEL = 8, MS_GAMEOVER = 9, MS_LEVEL = 10, MS_ACCOMPLISHED = 0xf, MS_CREDITS = 0x10,
-       MS_CONTINUE = 0x11 };   /* ours: the arcade CONTINUE? countdown before GAME OVER (the demo stored the option but never used it) */
+       MS_CONTINUE = 0x11,     /* ours: the arcade CONTINUE? countdown before GAME OVER (the demo stored the option but never used it) */
+       MS_CONTROLS = 0x12 };   /* ours: OPTIONS > CONTROLS, key / pad remapping where the platform has it (plat_bind_supported) */
 #define CONTINUE_FROM 20     /* the countdown starts here, one per second */
 
-enum { OPT_EXIT, OPT_LEVEL, OPT_PLAYER, OPT_CONTINUE, OPT_SCREEN, OPT_RATIO, OPT_FILTER, OPT_MUSIC, OPT_CREDITS, OPT_COUNT };
+enum { OPT_EXIT, OPT_LEVEL, OPT_PLAYER, OPT_CONTINUE, OPT_SCREEN, OPT_RATIO, OPT_FILTER, OPT_MUSIC, OPT_CONTROLS, OPT_CREDITS, OPT_COUNT };
+/* CONTROLS rows: the device, one per button, RESET, BACK */
+enum { CR_DEVICE, CR_BUTTON0, CR_RESET = CR_BUTTON0 + BTN_COUNT, CR_BACK, CR_COUNT };
 enum { RATIO_WIDE = 0, RATIO_43 = -1, RATIO_STRETCH = 1 };
 enum { FILTER_NONE, FILTER_CRT, FILTER_DOUBLE, FILTER_DOUBLE_SCAN, FILTER_CRT_SCAN, FILTER_COUNT };
 
@@ -32,6 +35,9 @@ typedef struct {
     int idle_frames;           /* title attract timer */
     float angle;               /* rotating background (DAT_00ac9a88 / DAT_00ac9a8c) */
     int credits_page; float credits_t;
+    int bind_dev, bind_row, bind_col;   /* CONTROLS cursor */
+    float bind_t;              /* how long the current capture has waited */
+    bool bind_wait;            /* a capture ended: ignore the buttons until all are released */
     /* settings (DAT_00aab780 difficulty, DAT_00aab788 lives, DAT_00aab784 continues, DAT_00ace3c0 screen, DAT_00aab770 ratio,
        DAT_00ace3bc filter, DAT_00ac9a9c music test) */
     int difficulty, lives, continues, screen, ratio, filter, music_track;

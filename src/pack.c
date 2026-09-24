@@ -40,6 +40,8 @@ static void *block_alloc(size_t n)
 {
 #ifdef PLAT_DREAMCAST
     return memalign(32, (n + 31) & ~(size_t)31);
+#elif defined(_WIN32)
+    return malloc(n);   /* no aligned_alloc there (and _aligned_malloc needs its own free); nothing on PC DMAs these */
 #else
     return aligned_alloc(32, (n + 31) & ~(size_t)31);
 #endif

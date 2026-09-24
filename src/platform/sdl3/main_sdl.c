@@ -44,6 +44,7 @@ int main(int argc, char **argv)
     }
     SDL_SetRenderLogicalPresentation(ren, APP_SCREEN_W, APP_SCREEN_H, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
     SDL_SetRenderVSync(ren, 1);
+    input_sdl_init();
     if (!app_init((Ren *)ren, data_dir, start_level)) return 1;
     Game *g = app_game();
 

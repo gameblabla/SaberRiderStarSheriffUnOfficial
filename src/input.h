@@ -9,3 +9,16 @@ void input_update(Input *in);
 void plat_input_poll(bool down[BTN_COUNT]);
 static inline bool btn_down(const Input *in, int b) { return (in->state[b] & ~2) == 0; }
 static inline bool btn_pressed(const Input *in, int b) { return in->state[b] == 2; }
+
+/* Control remapping (OPTIONS > CONTROLS). Platforms without it return false from plat_bind_supported() and stub the rest.
+ * Every button has BIND_SLOTS bindings per device; binding a key / pad button that another slot holds swaps the two. */
+#include <stddef.h>
+#define BIND_SLOTS 2
+enum { BIND_KEYBOARD, BIND_PAD, BIND_DEVICES };
+bool plat_bind_supported(void);
+void plat_bind_label(int dev, int btn, int slot, char *buf, size_t n);   /* upper case; "-" when unbound */
+void plat_bind_capture(int dev, int btn, int slot);   /* the next key / pad button pressed goes there (Esc cancels, Del clears) */
+bool plat_bind_capturing(void);
+void plat_bind_cancel(void);
+void plat_bind_defaults(int dev);
+void plat_bind_save(void);

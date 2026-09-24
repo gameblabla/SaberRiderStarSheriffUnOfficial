@@ -1,0 +1,105 @@
+# Windows x86-64 build with MinGW-w64: one static saber_rider.exe (no DLLs to ship).
+#   make -f Makefile.win            deps (first time) + the game -> build/win/saber_rider.exe
+#   make -f Makefile.win deps       only static SDL3 + a minimal FFmpeg in build/win/deps
+#   make -f Makefile.win package    build/win/SaberRider/ (exe + assets + data packs) and release/saber_rider-windows-x86_64-*.zip
+#
+# SDL3 is built from its source tarball (SDL3_TARBALL: third_party/ or the folder above the repo). FFmpeg (only the
+# MPEG-4 + PNG decoders, the MPEG-4 parser and swscale) comes from FFMPEG_TARBALL, downloaded on first use.
+# libvorbisfile / libvorbis / libogg / zlib are the toolchain's static libraries (mingw-w64 packages).
+CROSS    ?= x86_64-w64-mingw32-
+CC       := $(CROSS)gcc
+WINDRES  := $(CROSS)windres
+STRIP    := $(CROSS)strip
+JOBS     ?= $(shell nproc)
+
+WIN      := build/win
+DEPS     := $(abspath $(WIN)/deps)
+SDL3_TARBALL   ?= $(firstword $(wildcard third_party/SDL3-*.tar.gz ../SDL3-*.tar.gz))
+FFMPEG_VERSION ?= 7.1.2
+FFMPEG_TARBALL ?= $(WIN)/ffmpeg-$(FFMPEG_VERSION).tar.xz
+FFMPEG_URL     ?= https://ffmpeg.org/releases/ffmpeg-$(FFMPEG_VERSION).tar.xz
+
+SDL3_LIB   := $(DEPS)/lib/libSDL3.a
+FFMPEG_LIB := $(DEPS)/lib/libavcodec.a
+PKGCONF    := PKG_CONFIG_LIBDIR=$(DEPS)/lib/pkgconfig pkg-config --static
+
+CFLAGS  := -std=gnu11 -Wall -Wextra -Wno-unused-parameter -O2 -Isrc -I$(DEPS)/include
+LDFLAGS := -static -static-libgcc -mwindows
+# -mwindows: no console window; SABER_* debug output then goes nowhere (CONSOLE=1 builds saber_rider-console.exe with one)
+ifeq ($(CONSOLE),1)
+LDFLAGS := -static -static-libgcc -mconsole
+endif
+
+SRC := $(wildcard src/*.c) $(wildcard src/platform/sdl3/*.c) $(wildcard src/platform/common/*.c)
+OBJ := $(SRC:src/%.c=$(WIN)/obj/%.o)
+BIN := $(WIN)/saber_rider$(if $(filter 1,$(CONSOLE)),-console).exe
+PACKS := pack.pck common.pck levels.pck menu.pck level1.pck video.pck
+DATA  ?= SaberRider/data
+
+.PHONY: all deps package clean distclean
+all: $(BIN)
+deps: $(SDL3_LIB) $(FFMPEG_LIB)
+
+# ---------------------------------------------------------------- SDL3 (static, from the tarball)
+$(SDL3_LIB):
+	@test -n "$(SDL3_TARBALL)" || { echo "no SDL3 tarball (put SDL3-x.y.z.tar.gz in third_party/ or pass SDL3_TARBALL=)"; exit 1; }
+	rm -rf $(WIN)/sdl3-src $(WIN)/sdl3-build; mkdir -p $(WIN)/sdl3-src
+	tar xzf $(SDL3_TARBALL) -C $(WIN)/sdl3-src --strip-components=1
+	cmake -S $(WIN)/sdl3-src -B $(WIN)/sdl3-build -G "Unix Makefiles" \
+	    -DCMAKE_TOOLCHAIN_FILE=$(abspath $(WIN)/sdl3-src/build-scripts/cmake-toolchain-mingw64-x86_64.cmake) \
+	    -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$(DEPS) \
+	    -DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
+	cmake --build $(WIN)/sdl3-build -j$(JOBS)
+	cmake --install $(WIN)/sdl3-build
+
+# ---------------------------------------------------------------- FFmpeg (static, decoders the game uses only)
+$(FFMPEG_TARBALL):
+	@mkdir -p $(dir $@)
+	curl -fL -o $@.part $(FFMPEG_URL) && mv $@.part $@
+
+$(FFMPEG_LIB): $(FFMPEG_TARBALL)
+	rm -rf $(WIN)/ffmpeg-src; mkdir -p $(WIN)/ffmpeg-src
+	tar xJf $(FFMPEG_TARBALL) -C $(WIN)/ffmpeg-src --strip-components=1
+	cd $(WIN)/ffmpeg-src && ./configure --prefix=$(DEPS) \
+	    --enable-cross-compile --cross-prefix=$(CROSS) --arch=x86_64 --target-os=mingw32 --pkg-config=false \
+	    --enable-static --disable-shared --disable-programs --disable-doc --disable-debug --disable-network \
+	    --disable-autodetect --enable-w32threads --enable-zlib \
+	    --disable-everything --disable-avdevice --disable-avformat --disable-avfilter --disable-swresample \
+	    --enable-decoder=mpeg4,png --enable-parser=mpeg4video
+	$(MAKE) -C $(WIN)/ffmpeg-src -j$(JOBS)
+	$(MAKE) -C $(WIN)/ffmpeg-src install
+
+# ---------------------------------------------------------------- the game
+$(WIN)/obj/%.o: src/%.c $(SDL3_LIB) $(FFMPEG_LIB)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(WIN)/icon.o: tools/win/saber_rider.rc tools/win/saber_rider.ico
+	@mkdir -p $(dir $@)
+	$(WINDRES) -I tools/win $< -o $@
+
+$(BIN): $(OBJ) $(WIN)/icon.o
+	$(CC) $(LDFLAGS) $^ -o $@ \
+	    $(shell $(PKGCONF) --libs libavcodec libswscale libavutil) \
+	    -lvorbisfile -lvorbis -logg -lz \
+	    $(shell $(PKGCONF) --libs sdl3) -lbcrypt -lm
+
+-include $(OBJ:.o=.d)
+
+# ---------------------------------------------------------------- release folder + zip
+package: $(BIN)
+	@for p in $(PACKS); do test -f $(DATA)/$$p || { echo "missing $(DATA)/$$p"; exit 1; }; done
+	rm -rf $(WIN)/SaberRider; mkdir -p $(WIN)/SaberRider/data release
+	$(STRIP) -o $(WIN)/SaberRider/saber_rider.exe $(BIN)
+	cp -r assets $(WIN)/SaberRider/assets
+	sed 's/$$/\r/' tools/win/README.txt > $(WIN)/SaberRider/README.txt
+	for p in $(PACKS); do cp $(DATA)/$$p $(WIN)/SaberRider/data/; done
+	cd $(WIN) && rm -f ../../release/saber_rider-windows-x86_64-*.zip && \
+	    zip -qr ../../release/saber_rider-windows-x86_64-$$(date +%Y%m%d)-$$(git rev-parse --short HEAD).zip SaberRider
+	@ls -l release/saber_rider-windows-x86_64-*.zip
+
+clean:
+	rm -rf $(WIN)/obj $(WIN)/icon.o $(WIN)/saber_rider*.exe $(WIN)/SaberRider
+
+distclean:
+	rm -rf $(WIN)

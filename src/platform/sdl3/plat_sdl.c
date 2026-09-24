@@ -10,7 +10,15 @@
 const char *plat_getenv(const char *name) { return SDL_getenv(name); }
 uint64_t plat_ticks_ms(void) { return SDL_GetTicks(); }
 const char *plat_base_path(void) { return SDL_GetBasePath(); }
-const char *plat_default_data_dir(void) { return "SaberRider/data"; }
+/* SaberRider/data under the current folder (the repo), else data/ next to the executable (a release) */
+const char *plat_default_data_dir(void)
+{
+    static char buf[1024];
+    const char *base = SDL_GetBasePath();
+    if (SDL_GetPathInfo("SaberRider/data/pack.pck", NULL) || !base) return "SaberRider/data";
+    snprintf(buf, sizeof buf, "%sdata", base);
+    return buf;
+}
 int plat_default_ratio(void) { return 0; }   /* RATIO_WIDE */
 int plat_screen_modes(void) { return 4; }
 int plat_wide_width(int screen) { (void)screen; return 426; }
