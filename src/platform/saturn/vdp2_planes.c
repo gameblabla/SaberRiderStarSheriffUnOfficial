@@ -35,7 +35,7 @@
 #define LS_TABLE(n)  (0x70000u + (uint32_t)(n) * 0x800u)   /* 224 lines x (x, y) */
 #define VRAM(off)    ((volatile uint32_t *)(0x25E00000u + (off)))
 
-typedef struct { char magic[4]; uint16_t nplanes, nbands, npal, nbackdrops; uint32_t ncells, bands_off, names_off, cellpal_off, backdrops_off, layers; } SplHead;
+typedef struct { char magic[4]; uint16_t nplanes, nbands, npal, nbackdrops; uint32_t ncells, bands_off, names_off, cellpal_off, backdrops_off, layers; uint8_t depth[32]; } SplHead;
 typedef struct { uint8_t nbg, prio, first_band, nbands; uint32_t first_cell, ncells; uint8_t line_scroll, pad[3]; } SplPlane;
 typedef struct { uint8_t plane, row0, row1, flags; int32_t rate; uint32_t cols, wrap, chunk_first, nchunks, pad[2]; } SplBand;
 typedef struct { uint32_t tex; int16_t x, y; uint8_t prio, pad[3]; } SplBackdrop;
@@ -58,6 +58,7 @@ static struct {
     const uint32_t *chunks;     /* per chunk: offset, stored length | 0x80000000 LZ4 */
     BandRt band[MAX_BANDS];
     RTex *backdrop[4]; int nbackdrops;
+    uint8_t depth_reg[32];      /* per level layer: the sprite priority register its palette sprites take (0 the front) */
     bool asked, shown, palettes_in;
     float cam_x, cam_y;
 } P;
@@ -170,6 +171,15 @@ static bool load(uint32_t level)
         P.backdrop[P.nbackdrops++] = tex;
     }
     vdp2_sprite_priority_set(1, 1);   /* sprite register 1: the backdrops, under every plane */
+    /* registers 2..7 for the priorities of the sprite layers between planes (layers.py depth_table) */
+    int nreg = 2; uint8_t reg_of[8] = { 0 };
+    memset(P.depth_reg, 0, sizeof P.depth_reg);
+    for (int i = 0; i < 32; i++) {
+        uint8_t v = h->depth[i];
+        if (!v || v > 7) continue;
+        if (!reg_of[v] && nreg < 8) { reg_of[v] = (uint8_t)nreg; vdp2_sprite_priority_set((vdp2_sprite_register_t)nreg, v); nreg++; }
+        P.depth_reg[i] = reg_of[v];
+    }
     P.level = level;
     printf("planes %08X: %d planes, %u cells, %d palettes\n", (unsigned)level, h->nplanes, (unsigned)h->ncells, h->npal);
     return true;
@@ -188,6 +198,14 @@ bool r_layer(Ren *r, uint32_t level, int layer, float cam_x, float cam_y)
     if (layer < 0 || layer >= 32 || !(P.h->layers & (1u << layer))) return false;
     P.asked = true; P.cam_x = cam_x; P.cam_y = cam_y;
     return true;
+}
+
+/* the sprite priority register of level layer `layer`'s sprites (0: the default one, in front of the planes) */
+uint32_t sat_planes_level(void) { return P.level; }
+
+int sat_planes_depth_reg(uint32_t level, int layer)
+{
+    return level == P.level && layer >= 0 && layer < 32 ? P.depth_reg[layer] : 0;
 }
 
 /* ---------------------------------------------------------------- per frame */

@@ -467,6 +467,7 @@ static void draw_backdrops(void);
  * the draw, since the core sets them just before a draw and resets them just after) */
 typedef struct { uint8_t mr, mg, mb, alpha; RBlend blend; uint8_t prio; } TexState;
 static TexState cur;
+static uint8_t depth_reg;   /* the sprite priority register of the replayed draws' layer (8bpp parts; 0 the front) */
 
 static int32_t fx16(float f);   /* float -> 16.16 without soft-float (below) */
 static int16_t pix16(int32_t v) { int i = v >> 16; return (int16_t)(i < -2048 ? -2048 : i > 2047 ? 2047 : i); }   /* floor, clamped */
@@ -686,11 +687,11 @@ static void part_emit(RTex *t, int pi, int ix0, int iy0, int ix1, int iy1, RFlip
     if (fmt == FMT_8BPP && (pm & PM_HALF)) pm = (uint16_t)((pm & ~PM_HALF) | PM_MESH);   /* no VDP1 blending of palette pixels */
     else if (pal_drawn && (pm & PM_HALF)) pm = (uint16_t)((pm & ~PM_HALF) | PM_MESH);
     if (ix1 < c->x || iy1 < c->y || ix0 >= c->x + c->w || iy0 >= c->y + c->h) {
-        if (tracing) printf("    part %d culled (%d,%d)-(%d,%d)\n", pi, ix0, iy0, ix1, iy1);
+        if (tracing && depth_reg) printf("    part %d culled (%d,%d)-(%d,%d)\n", pi, ix0, iy0, ix1, iy1);
         return;
     }
     uint16_t loc = part_resident(t, pi);
-    if (tracing) printf("    part %d fmt %d %dx%d at %d,%d loc %u tint %02X%02X%02X\n", pi, p->fmt, p->wpad, p->h, ix0, iy0, loc, cur.mr, cur.mg, cur.mb);
+    if (tracing && depth_reg) printf("    part %d fmt %d %dx%d at %d,%d loc %u\n", pi, p->fmt, p->wpad, p->h, ix0, iy0, loc);
     if (!loc) return;
     RRect cc = *c;
     if (dclip && !r_rect_intersect(&cc, dclip, &cc)) return;   /* a draw of part of a unit: clip to the destination too */
@@ -706,7 +707,7 @@ static void part_emit(RTex *t, int pi, int ix0, int iy0, int ix1, int iy1, RFlip
     if (fmt == FMT_4BPP) { pm |= PM_LUT; k->colr = loc; k->srca = (uint16_t)(loc + 4); }   /* the table, then the texels */
     else if (fmt == FMT_8BPP) {   /* colour bank: 64 (mode 2), 128 (3) or 256 (4) colours */
         int g = pal_granules(t->npal);
-        pm |= (uint16_t)((g == 1 ? 2 : g == 2 ? 3 : 4) << 3); k->colr = (uint16_t)(bank | cur.prio << 12); k->srca = loc;
+        pm |= (uint16_t)((g == 1 ? 2 : g == 2 ? 3 : 4) << 3); k->colr = (uint16_t)(bank | (cur.prio ? cur.prio : depth_reg) << 12); k->srca = loc;
         pal_drawn = true;
     }
     else { pm |= PM_RGB; k->srca = loc; }
@@ -781,8 +782,8 @@ static void tex_draw(RTex *t, const RFRect *src, const RFRect *dst, double angle
     if (dw < 0) { dw = -dw; flip ^= R_FLIP_H; }   /* r_tex_batch's mirrored tiles */
     const Unit *u = unit_exact(t, sx, sy, sw, sh);
     bool whole = u && u->x == sx && u->y == sy;
-    if (tracing) printf("  tex %08X src %d,%d %dx%d dst %d,%d %dx%d a%u %s ncmd %d\n", (unsigned)t->tag, sx, sy, sw, sh,
-                        fl16(dx), fl16(dy), fl16(dw), fl16(dh), cur.alpha, u ? "unit" : "rect", ncmd);
+    if (tracing && depth_reg) printf("  tex %08X src %d,%d %dx%d dst %d,%d %dx%d a%u %s depth reg %d\n", (unsigned)t->tag, sx, sy, sw, sh,
+                                     fl16(dx), fl16(dy), fl16(dw), fl16(dh), cur.alpha, u ? "unit" : "rect", depth_reg);
     RRect dclip = { fl16(dx), fl16(dy), ce16(dw), ce16(dh) };
     uint64_t abits; memcpy(&abits, &angle, sizeof abits);   /* angle == 0 without a soft-double compare */
     if (!(abits << 1)) {
@@ -813,7 +814,7 @@ static void tex_draw(RTex *t, const RFRect *src, const RFRect *dst, double angle
  * SH-2 while the master runs the next frame (plan 8.3), then handed to VDP1 at the frame end after. A texture's colour
  * mod / alpha / blend are recorded with the draw (the core sets them around it). SABER_NOSLAVE: replay on the master,
  * right at the frame end (no frame of delay: for comparisons). */
-enum { OP_TEX, OP_ROT, OP_FILL, OP_LINE, OP_QUAD, OP_CLIP, OP_VP, OP_CLEAR };
+enum { OP_TEX, OP_ROT, OP_FILL, OP_LINE, OP_QUAD, OP_CLIP, OP_VP, OP_CLEAR, OP_DEPTH };
 typedef struct { uint8_t op, flags, r, g, b, a, blend, prio; RTex *t; union { float f[8]; int32_t i[8]; uint32_t u[8]; } v; } Rec;
 #define REC_MAX 512       /* a frame's draws (level 1: ~80-200; 22 KB a buffer, two of them, in low RAM) */
 static Rec *recbuf[2]; static int rec_n[2];
@@ -839,6 +840,13 @@ static void rec_rect(uint8_t op, const RRect *c)
 void r_set_clip(Ren *r, const RRect *c) { (void)r; rec_rect(OP_CLIP, c); }
 void r_set_viewport(Ren *r, const RRect *v) { (void)r; rec_rect(OP_VP, v); }
 void r_clear(Ren *r) { (void)r; rec_new(OP_CLEAR); }
+/* the level layer of the sprites that follow: its sprite priority register (vdp2_planes.c) for the 8bpp parts */
+void r_set_depth(Ren *r, int layer)
+{
+    (void)r;
+    Rec *e = rec_new(OP_DEPTH); if (!e) return;
+    e->flags = (uint8_t)sat_planes_depth_reg(sat_planes_level(), layer);
+}
 void r_fill_rect(Ren *r, const RFRect *q)
 {
     (void)r;
@@ -927,6 +935,7 @@ static void replay_ops(const Rec *R, int n)
         case OP_CLIP: clip_on = e->flags & 1; if (clip_on) clip = (RRect){ e->v.i[0], e->v.i[1], e->v.i[2], e->v.i[3] }; clip_dirty = true; break;
         case OP_VP:   vp_on = e->flags & 1; if (vp_on) viewport = (RRect){ e->v.i[0], e->v.i[1], e->v.i[2], e->v.i[3] }; clip_dirty = true; break;
         case OP_CLEAR: draw_r = e->r; draw_g = e->g; draw_b = e->b; exec_clear(); break;
+        case OP_DEPTH: depth_reg = e->flags; break;
         default: break;
         }
     }
@@ -972,7 +981,7 @@ static void replay(const Rec *R, int n)
     frame_no++;
     tracing = trace_from > 0 && traced < 6 && frame_no >= (unsigned)trace_from && (frame_no - (unsigned)trace_from) % 10 == 0;
     if (tracing) { traced++; printf("render trace: frame %u\n", (unsigned)frame_no); }
-    ren.prims = 0; ngouraud = 0; uploads_frame = upload_bytes_frame = 0; res.ntex = 0;
+    ren.prims = 0; ngouraud = 0; uploads_frame = upload_bytes_frame = 0; res.ntex = 0; depth_reg = 0;
     ncmd = 0; uclip_active = false; pal_drawn = false; fade_cmd = -1;
     Cmd *k = cmd_new(); k->ctrl = C_SYS_CLIP; k->xc = (int16_t)(scr_w - 1); k->yc = (int16_t)(scr_h - 1);
     k = cmd_new(); k->ctrl = C_USER_CLIP; k->xc = (int16_t)(scr_w - 1); k->yc = (int16_t)(scr_h - 1);

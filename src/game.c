@@ -598,6 +598,7 @@ void game_draw(Game *g)
     const Body *hb = &g->player.ch.body;
     bool in_cabin = g->forest_on && forest_on_deck(L, hb->x, hb->y + hb->oy + hb->hy);
     for (int i = 0; i < L->nlayers; i++) {
+        r_set_depth(g->ren, i);   /* the sprites drawn now sit at this layer (render.h: for hardware planes) */
         if (L->layers[i].is_tilemap) {
             CBlock *cb = L->layers[i].map ? L->layers[i].map->cb : NULL;
             uint8_t r, gr, b;
@@ -635,6 +636,7 @@ void game_draw(Game *g)
         }
     }
     if (g->forest_on && !hero_drawn && g->state != 0xb) draw_hero(g);
+    r_set_depth(g->ren, -1);
     g->cam_y = saved;
     hud_draw(g->ren, g->menu.character, g->menu.difficulty, g->player.lives, g->player.hp, g->power.items);   /* the item count = power attacks left */
     power_draw_hud(&g->power, g->ren, 0x2c, 0x17, 0x1a);

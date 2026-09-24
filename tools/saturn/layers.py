@@ -22,7 +22,10 @@ whole stage but the names, which the runtime (src/platform/saturn/vdp2_planes.c)
 Output ("SPL1" block, big-endian but the magic; the runtime reads it in place):
   0 "SPL1"  4 u16 nplanes, nbands   8 u16 npal, nbackdrops   12 u32 ncells   16 u32 bands_off, names_off
   24 u32 cellpal_off, backdrops_off   32 u32 the level layers the planes draw (bit n: layer n)
-  planes (16 bytes each, at 36): u8 nbg, prio, first_band, nbands; u32 first_cell, ncells; u8 line_scroll, 0, 0, 0
+  36 u8 depth[32]: per level layer, the VDP2 priority its sprites take (0: in front of every plane); a sprite layer
+     between planes takes the priority of the highest plane behind it (VDP2 puts sprites over a plane of equal
+     priority) - which only palette pixels can carry: the sprites drawn there are baked 8bpp (priority_sprites)
+  planes (16 bytes each, at 68): u8 nbg, prio, first_band, nbands; u32 first_cell, ncells; u8 line_scroll, 0, 0, 0
   bands (32 bytes each): u8 plane, row0, row1 (cell rows [row0, row1)), flags (1 static); i32 rate (16.16);
          u32 cols (the band's width in cells), wrap (repeat every `wrap` columns, 0 none); u32 chunk_first, nchunks;
          u32 0, 0
@@ -419,7 +422,7 @@ def bake(level_path: Path, srgb_dir: Path) -> Result:
         report.append(f'backdrop {k}: {ly.name} rows {y0}-{y1}, {img.shape[1]} px wide, priority {bd["prio"]} (VDP1)')
 
     # SPL1: planes, bands, palettes, cell palettes, backdrops, names
-    head_len, plane_len, band_len = 36, 16, 32
+    head_len, plane_len, band_len = 68, 16, 32
     bands_off = head_len + plane_len * len(plan['planes'])
     pal_off = bands_off + band_len * len(bands)
     cellpal_off = pal_off + len(palettes) * 32
@@ -439,8 +442,11 @@ def bake(level_path: Path, srgb_dir: Path) -> Result:
             table += struct.pack('>II', data_at + len(body), len(stored) | flag)
             body += stored + b'\0' * (-len(stored) % 4)
     mask = sum(1 << i for i, ly in enumerate(L.layers) if ly.is_tilemap and ly.name in taken)
+    depth = depth_table(L, plan)
+    report.append('sprite depth priorities: ' + ', '.join(f'layer {i} ({L.layers[i].name}) {v}' for i, v in enumerate(depth) if v))
     spl = bytearray(b'SPL1' + struct.pack('>HHHHIIIIII', len(plan['planes']), len(bands), len(palettes), len(backdrops),
                                           ncells, bands_off, names_off, cellpal_off, backdrops_off, mask))
+    spl += bytes(depth + [0] * (32 - len(depth)))
     first_cell, first_band = 0, 0
     for pi, p in enumerate(plan['planes']):
         nb = len(p['bands'])
@@ -464,6 +470,40 @@ def bake(level_path: Path, srgb_dir: Path) -> Result:
     report.append(f'names: {len(body) // 1024} KB stored; cells: {len(spc)} blocks of up to {CELL_CHUNK * 32 // 1024} KB')
     return Result(bytes(spl), spc, slim_level(level_path.read_bytes(), taken), report, bands, planes_cells,
                   palettes, cell_pal, taken, idx_of, backdrops)
+
+
+def depth_table(L: levl.Level, plan: dict) -> list[int]:
+    """per level layer: the priority of its sprites when a plane with a later layer must cover them, else 0"""
+    plane_layers = []
+    for p in plan['planes']:
+        names = {e if isinstance(e, str) else e[0] for b in p['bands'] for e in b['layers']}
+        plane_layers.append((p['prio'], {i for i, ly in enumerate(L.layers) if ly.name in names}))
+    out = []
+    for i in range(len(L.layers)):
+        if not any(max(idx) > i for _, idx in plane_layers if idx):
+            out.append(0)
+            continue
+        below = [prio for prio, idx in plane_layers if idx and max(idx) < i]
+        out.append(max(below) if below else 1)
+    return out
+
+
+def priority_sprites(level_path: Path, crhc_of_type, sprite_of_crhc, fx_ids: list[int]) -> set[int]:
+    """the graphics of what the level spawns on a sprite layer under a plane: they must be palette sprites (8bpp)"""
+    L = levl.load(level_path)
+    plan = PLANS[L.id]
+    depth = depth_table(L, plan)
+    d = level_path.read_bytes()
+    npacks, nobjs = struct.unpack_from('<II', d, 8)
+    ids: set[int] = set()
+    for k in range(nobjs):
+        o = 0x10 + npacks * 12 + k * 128
+        typ, layer = struct.unpack_from('<I', d, o)[0], struct.unpack_from('<I', d, o + 0x54)[0]
+        if layer < len(depth) and depth[layer] and crhc_of_type(typ):
+            sid = sprite_of_crhc(crhc_of_type(typ))
+            if sid:
+                ids.add(sid)
+    return ids | (set(fx_ids) if ids else set())
 
 
 def vdp1_tiles(level_path: Path, taken: set[str]) -> dict[int, set[int]]:

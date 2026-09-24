@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import re
 from pathlib import Path
 import shutil
 import struct
@@ -83,7 +84,33 @@ def atlas_rects(rel: str) -> list[tuple[int, int, int, int]] | None:
     return rects or None
 
 
-def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log) -> None:
+def levprep(data: Path, work: Path, ids: list[int]) -> None:
+    """the given blocks of the demo's packs, as the game reads them, into work/<ID>.levl"""
+    exe = work / 'levprep'
+    if not exe.exists():
+        subprocess.run(['cc', '-O2', '-std=gnu11', '-Isrc', 'tools/saturn/levprep.c', 'src/pack.c', 'src/lzo1z.c', '-o',
+                        str(exe)], cwd=ROOT, check=True)
+    subprocess.run([exe, data, work, *(f'{i:08X}' for i in ids)], check=True)
+
+
+def priority_textures(data: Path, work: Path, log) -> set[int]:
+    """the graphics of the enemies a planned level spawns under one of its planes (layers.priority_sprites): enemies.c's
+    type -> CRHC table, a CRHC's graphics id at +4"""
+    src = (ROOT / 'src/enemies.c').read_text()
+    table = [int(x, 16) for x in re.findall(r'0x([0-9A-F]{8})', re.search(r'TYPE_CRHC\[28\] = \{(.*?)\};', src, re.S).group(1))]
+    fx = [int(x, 16) for x in re.findall(r'0x([0-9A-F]{8})', re.search(r'FX\[\] = \{(.*?)\};', src, re.S).group(1))]
+    crhc = lambda t: table[t - 2] if 2 <= t <= 29 else 0xD39700C4 if 30 <= t <= 32 else 0x02A38AFB if t == 1 else 0
+    levprep(data, work, list(layers.PLANS) + sorted(set(table) | {0xD39700C4, 0x02A38AFB}))
+    sprite = lambda c: struct.unpack_from('<I', (work / f'{c:08X}.levl').read_bytes(), 4)[0] if (work / f'{c:08X}.levl').exists() else 0
+    ids: set[int] = set()
+    for lid in layers.PLANS:
+        got = layers.priority_sprites(work / f'{lid:08X}.levl', crhc, sprite, fx)
+        log(f'planes {lid:08X}: palette sprites (drawn under a plane): ' + ' '.join(f'{i:08X}' for i in sorted(got)))
+        ids |= got
+    return ids
+
+
+def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log, force8: set[int] = frozenset()) -> None:
     """every pack sprite / cblock / font through the game's own gfx.c (tools/dc/texprep.c), then our PNGs"""
     texprep = work / 'texprep'
     subprocess.run(['cc', '-O2', '-std=gnu11', '-Isrc', 'tools/dc/texprep.c', 'src/gfx.c', 'src/font.c', 'src/pack.c',
@@ -94,7 +121,7 @@ def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log) -> None:
     stats = satbake.Stats()
     for rid in dict.fromkeys(ids):   # first appearance: a graphic in two packs is baked once
         kind, px, meta = satbake.load_srgb(dumps / f'{rid}.srgb')
-        block = satbake.bake(px, meta, stats, name=rid, kind=kind)
+        block = satbake.bake(px, meta, stats, name=rid, kind=kind, force8=int(rid, 16) in force8)
         tex.add(int(rid, 16), 'tex', block)
         log(f'tex {rid} {px.shape[1]}x{px.shape[0]} {len(block) // 1024} KB')
     for source in sorted((ROOT / 'assets').rglob('*.png')):
@@ -110,11 +137,8 @@ def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log) -> None:
 
 def bake_stages(data: Path, work: Path, stage: pckwrite.Pack, log) -> None:
     """every level with a plane layout (layers.PLANS): its planes, backdrops and slim level block"""
-    levprep = work / 'levprep'
-    subprocess.run(['cc', '-O2', '-std=gnu11', '-Isrc', 'tools/saturn/levprep.c', 'src/pack.c', 'src/lzo1z.c', '-o',
-                    str(levprep)], cwd=ROOT, check=True)
     ids = [f'{i:08X}' for i in layers.PLANS]
-    subprocess.run([levprep, data, work, *ids], check=True)
+    levprep(data, work, list(layers.PLANS))
     stats = satbake.Stats()
     for rid in ids:
         res = layers.bake(work / f'{rid}.levl', work / 'srgb')
@@ -166,7 +190,7 @@ def build(args: argparse.Namespace) -> None:
         print(msg, file=logf, flush=True)
 
     tex, snd, files, stage_pack = pckwrite.Pack(), pckwrite.Pack(), pckwrite.Pack(), pckwrite.Pack()
-    bake_textures(data, work, tex, log)
+    bake_textures(data, work, tex, log, priority_textures(data, work, log))
     global preview_dir
     preview_dir = out
     bake_stages(data, work, stage_pack, log)

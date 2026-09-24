@@ -185,6 +185,7 @@ void r_floor_cells_changed(RFloor *f) { if (f) for (int L = 0; L < MAX_LEV; L++)
 
 /* the core draws the level's tile layers (render.h: r_layer) */
 bool r_layer(Ren *r, uint32_t level, int layer, float cam_x, float cam_y) { (void)r; (void)level; (void)layer; (void)cam_x; (void)cam_y; return false; }
+void r_set_depth(Ren *r, int layer) { (void)r; (void)layer; }
 
 void r_floor_destroy(RFloor *f)
 {

@@ -65,3 +65,4 @@ void    r_floor_cells_changed(RFloor *f) { (void)f; }
 void    r_floor_draw(Ren *r, RFloor *f, const RFloorView *v) { (void)f; (void)v; r->prims++; }
 void    r_floor_destroy(RFloor *f) { free(f); }
 bool    r_layer(Ren *r, uint32_t level, int layer, float cam_x, float cam_y) { (void)r; (void)level; (void)layer; (void)cam_x; (void)cam_y; return false; }
+void    r_set_depth(Ren *r, int layer) { (void)r; (void)layer; }

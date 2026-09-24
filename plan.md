@@ -708,6 +708,17 @@ master (for comparisons). Level 1: the master's draw 5-7 ms (was 12-14), 1.00-1.
 1.1-1.6 with 7-8 enemies (the update, 3-5 ms, is the rest). The planes' palettes went from 96 to 64 (35.9 dB): VDP1's
 8bpp sprites needed more than 8 colour banks in a level (April's power attack art found none).
 
-Next for M5: the remaining soft-float in physics / animation (fx); sprites between planes (Hyperjumper's layers 4
-and 7: palette sprites with priority bits); the 224-line framing (the bottom 16 px of the PC view are cut now); a
-thin dark line at y 80 during the power attack's white flash (the backdrop strip's edge).
+**224 lines**: the platform stages keep the bottom of their 240-line view (`game.c`: the camera's y is 240 - sh on
+a shorter screen, 0 on PC); the planes scroll vertically by the camera times their rate (NBG0: x and y per line).
+
+**Sprites between planes** (`r_set_depth`, new in `render.h`; a no-op elsewhere): `game_draw` says which level layer
+the sprites it draws belong to; the planes' block carries each layer's priority (a layer under a plane takes the
+priority of the highest plane behind it: VDP2 puts a sprite over a plane of equal priority), mapped to sprite
+priority registers 2-7. Only palette pixels carry a priority, so the graphics of what a level spawns on such a layer
+are baked all-8bpp (`build_disc.py priority_textures`: the level's objects -> enemies.c's type -> CRHC table -> the
+CRHC's graphics; level 1: 20 textures, the Outrider props and stampede of layers 4 and 7). Checked: the hovering
+Outrider vehicle (layer 7) passes behind the playfield's rocks.
+
+Next for M5: the remaining soft-float in physics / animation (fx; 7-8 enemies still cost a frame now and then); a
+thin dark line at y 80 during the power attack's white flash (the backdrop strip's edge); a side-by-side against
+the PC build along a camera sweep (the builder's preview covers the planes only).
