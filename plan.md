@@ -388,19 +388,16 @@ mednafen headless with a scripted run. The kit's **per-instruction coverage** of
 call counts for `__addsf3`/`__mulsf3`/`__divsf3`/`floorf`/`sinf`…, and per-function cost. That tells how far
 fixed point has to go. Expect soft-float at ~50-150 cycles per operation against ~477k cycles a frame.
 
-### 8.2 Fixed point in the shared core
+### 8.2 Fixed point in the shared core (done: `src/real.h`)
 
 - A `fx` type (int32, 16.16) with `fx_mul` (SH-2 `dmuls.l`), `fx_div` (the DIVU unit), `fx_sin/cos` (LUT, 4096
   steps), `fx_atan2`, `fx_hypot` (no libm in loops; the Dreamcast lesson was that `hypotf` there was a real call).
-- Convert module by module, in the order the profile gives. Likely order: `physics.c`, `character.c`, `enemies.c`,
-  `bullets.c`, `player.c`, the camera, then `mode7.c`/`ramrod.c`/`space.c`. `menu.c`'s floats run once a frame
-  and may stay.
-- **Shared, not a Saturn fork:** the conversion goes into the core so PC, Windows and Dreamcast run the same
-  arithmetic. Behaviour is checked against the current float build with the existing tools: the same
-  `SABER_SCRIPT` input on both, `SABER_TRACE` positions/states compared frame by frame within a tolerance, and
-  `tools/xvfb_record.py` recordings for feel. The RE constants (gravity 480, jump −290, speed 100, the level
-  collision) must keep their exact results.
-- `floorf` on positions (125 uses) mostly becomes `>> 16`.
+- **One source, two arithmetics.** The core's scalar is `real` (`src/real.h`): `float` on PC, Windows and Dreamcast,
+  whose builds keep their exact float behaviour, and `fx` on the Saturn (`REAL_FIXED`, implied by `PLAT_SATURN`), which
+  links no soft-float at all. Plain C operators where both agree (`+ - < ==`, `real * int`, `real / int`); `r_mul`,
+  `r_div`, `r_mul_dt`, `r_sin`… where they don't; constants through `R(1.5f)`. Every float expression keeps its
+  operation order, so the float builds are bit-identical to before the conversion (checked, see M5b).
+- The render API (`render.h`) takes `real` too; the Saturn renderer and its VDP2 planes are integer throughout.
 
 ### 8.3 The slave SH-2
 
@@ -498,8 +495,9 @@ LWRAM is slower for the CPU too: the slave's LZ4 decoder reads LWRAM sequentiall
 
 - `Makefile.saturn` on libyaul's `build.pre.mk` / `build.post.iso-cue.mk` (`YAUL_INSTALL_ROOT=~/.local/x-tools/sh2eb-elf`):
   `SH_SRCS` = `src/*.c` + `src/platform/saturn/*.c` + `src/platform/common/*.c` (as needed) + the Cinepak player
-  files; `-DPLAT_SATURN -DPLAT_LOW_MEMORY -DPLAT_BAKED_ASSETS`; `-O2`, with `-Os` for cold modules if code size
-  bites.
+  files; `-DPLAT_SATURN -DPLAT_LOW_MEMORY -DPLAT_BAKED_ASSETS -DREAL_FIXED -DFX_NO_FLOAT`; `-O2`, with `-Os` for
+  cold modules if code size bites. A step after the link fails the build when any libgcc float / double routine
+  (`__addsf3`, `__fixsfsi`, `__floatsisf`, `__muldf3`…) is in the program, and names the objects that call it.
 - `make -f Makefile.saturn` → ELF; `make -f Makefile.saturn disc` → `build/saturn/saber_rider.cue` + ISO + WAV
   tracks (runs `tools/saturn/build_disc.py`); `rebake`/`repack` like the Dreamcast targets.
 - `tools/release.sh --saturn` → `release/saber_rider-saturn-<date>-<commit>.zip` (cue/bin + README), refusing to
@@ -592,7 +590,7 @@ load and a fixed `regs` command. A pad script reaches level 1.
 
 | | before | after |
 |---|---|---|
-| soft-float | libgcc `fp-bit.c`: 65 % of all instructions in the first in-level profile | `platform/saturn/softfloat_sat.c` (bit-exact vs. the FPU, DIVU for division): draw-side core time 54 → 30 ms/frame, update ~7 → ~5 ms/step |
+| soft-float | libgcc `fp-bit.c`: 65 % of all instructions in the first in-level profile | `platform/saturn/softfloat_sat.c` (bit-exact vs. the FPU, DIVU for division): draw-side core time 54 → 30 ms/frame, update ~7 → ~5 ms/step. Since removed: the Saturn core is fixed point (M5b) |
 | level 1 load | ~50 s (libyaul re-seeks on every read: 420 reads, 17 KB/s) | ~8 s (the drive keeps streaming: 43 seeks) |
 | update, level 1 (5-8 enemies) | | 3-4.6 ms/frame average (< 30 % of a frame), rare spikes to ~15 ms (to look at) |
 | `sizeof(Game)` | 383 KB (`Character` held its type's 2.9 KB of tables in each of 64 enemy slots) | 162 KB (shared `CharDef`) |
@@ -719,6 +717,33 @@ are baked all-8bpp (`build_disc.py priority_textures`: the level's objects -> en
 CRHC's graphics; level 1: 20 textures, the Outrider props and stampede of layers 4 and 7). Checked: the hovering
 Outrider vehicle (layer 7) passes behind the playfield's rocks.
 
-Next for M5: the remaining soft-float in physics / animation (fx; 7-8 enemies still cost a frame now and then); a
+Next for M5: a
 thin dark line at y 80 during the power attack's white flash (the backdrop strip's edge); a side-by-side against
 the PC build along a camera sweep (the builder's preview covers the planes only).
+
+### M5b — no soft-float on the Saturn (`src/real.h`)
+
+The whole core (the front end, the four platform stages, the Grand Prix, Ramrod's fight, the space chase) and the
+render API are on `real`: `float` on PC / Dreamcast, 16.16 on the Saturn. `libc_sat.c` lost its float maths, `%f` and
+`strtof`; `softfloat_sat.c` is gone; `Makefile.saturn` checks the link (none of the objects even references a
+soft-float routine). What it took beyond the mechanical part:
+
+- **Checks.** `Makefile.headless` builds the core twice on the null renderer: float (`build/headless`) and fixed
+  (`FIXED=1`: `-DREAL_FIXED -DFX_NO_FLOAT -Wfloat-conversion -Wdouble-promotion`). `tools/regress.py` records 40
+  scripted / fuzzed cases (menus, every stage, power attacks, bosses, a death, the Grand Prix phases, Ramrod's waves,
+  the space chase) as step traces + draw logs. The float build after the conversion is **identical** to the one
+  before it in all 40 (traces and draw logs, tolerance 0). The fixed build plays the same: stage 1 matches the float
+  run to 0.01 px until a dialog ends one step apart (timers round differently), the Grand Prix keeps within a few
+  units through its phases, Ramrod's waves clear and the cruiser falls at the same moments.
+- **Time.** A step is `FX_DT` = 1093/65536 s (1/60 rounded up, so a timer of n/60 s ends on step n). Rates times dt
+  go through `r_mul_dt` (v/60 exactly, a multiply by 2^32/60).
+- **Range.** 16.16 ends at 32767: squared distances are 64-bit (`r_within2/3`, `r_len2/3`, Mode 7's `dist2`), Mode
+  7's race progress is 64-bit (a lap is 13205 units), headings and phases wrap, level data's off-screen 100000
+  waypoints are named sentinels, "never" timers are `R_MAX`.
+- **Random numbers.** The float `frand()` (24 bits / 2^24) becomes 16 bits of fraction; the draws are the same
+  sequence, their low bits differ, so fuzzed runs part after the first close call.
+
+Level 1 on the Saturn (`bench_level1.env`, mednafen): update **0.7-1.0 ms** a step (was 3-5 with the soft-float),
+the master's draw 4-6 ms, 1.00 fields a frame through the run with up to 8 enemies (a 2-field frame now and then).
+The front end, the loading screens and level 1 look as before (screenshots).
+

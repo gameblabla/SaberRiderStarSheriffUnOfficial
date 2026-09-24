@@ -27,11 +27,10 @@ $(OBJDIR)/%.o: src/%.c
 run: $(BIN)
 	SABER_ASSETS="$(CURDIR)/assets" ./$(BIN) SaberRider/data
 
-# host checks of the shared fixed-point module (src/fx.c) and the Saturn's soft-float (bit-exact against the FPU)
+# host check of the fixed-point module (src/fx.c: the Saturn's arithmetic, real.h)
 test:
 	@mkdir -p $(OBJDIR)
 	$(CC) -O2 -Wall -Wextra -Isrc tools/fx_test.c src/fx.c -lm -o $(OBJDIR)/fx_test && $(OBJDIR)/fx_test
-	$(CC) -O2 -DSF_HOST_TEST tools/saturn/softfloat_test.c -lm -o $(OBJDIR)/softfloat_test && $(OBJDIR)/softfloat_test
 
 clean:
 	rm -rf $(OBJDIR) $(BIN)

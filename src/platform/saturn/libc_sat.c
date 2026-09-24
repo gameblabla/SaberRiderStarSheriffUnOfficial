@@ -2,9 +2,9 @@
  *   - the heaps: TLSF pools over high work RAM (after the program) and low work RAM (the whole 1 MB). malloc puts big
  *     blocks in low RAM (pack blocks, level data: read by the CPUs only), small ones in high RAM; hw_malloc is always
  *     high RAM, the only work RAM the SCU DMA can read (plan 8.5);
- *   - the float maths (soft-float: the SH-2 has no FPU; the core's hot paths use fx.h instead);
- *   - printf / snprintf with %f, %u, %l... (libyaul's reads %f as a 16.16 integer), sscanf / fscanf, fgets, fmemopen,
- *     qsort, strtod, calloc, aligned_alloc.
+ *   - printf / snprintf with %u, %l, %*... (no %f: the core formats its 16.16 reals itself), sscanf / fscanf (integers
+ *     and strings), fgets, fmemopen, qsort, calloc, aligned_alloc.
+ * No float anywhere: the SH-2 has no FPU and the core is in fixed point on the Saturn (real.h).
  * Files on the CD are opened by cd_sat.c's fopen, stdout / stderr go to the log ring (log_sat.c). */
 #include <stdint.h>
 #include <stdbool.h>
@@ -15,7 +15,6 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <math.h>
 #include <mm/tlsf.h>
 
 /* ---------------------------------------------------------------- heaps */
@@ -175,129 +174,8 @@ unsigned long strtoul(const char *s, char **end, int base)
     return neg ? -v : v;
 }
 
-float strtof(const char *s, char **end)
-{
-    const char *p = s;
-    while (isspace((unsigned char)*p)) p++;
-    bool neg = false;
-    if (*p == '+' || *p == '-') neg = *p++ == '-';
-    double v = 0; bool any = false;
-    while (isdigit((unsigned char)*p)) { v = v * 10 + (*p++ - '0'); any = true; }
-    if (*p == '.') {
-        p++;
-        double f = 0.1;
-        while (isdigit((unsigned char)*p)) { v += (*p++ - '0') * f; f *= 0.1; any = true; }
-    }
-    if (any && (*p == 'e' || *p == 'E')) {
-        const char *q = p + 1; bool eneg = false; int e = 0;
-        if (*q == '+' || *q == '-') eneg = *q++ == '-';
-        if (isdigit((unsigned char)*q)) {
-            while (isdigit((unsigned char)*q)) e = e * 10 + (*q++ - '0');
-            while (e-- > 0) v = eneg ? v * 0.1 : v * 10;
-            p = q;
-        }
-    }
-    if (end) *end = (char *)(any ? p : s);
-    return (float)(neg ? -v : v);
-}
-double strtod(const char *s, char **end) { return strtof(s, end); }
-double atof(const char *s) { return strtof(s, NULL); }
-
-/* ---------------------------------------------------------------- maths */
-typedef union { float f; uint32_t u; int32_t i; } FU;
-
-float fabsf(float x) { FU v = { x }; v.u &= 0x7FFFFFFFu; return v.f; }
-float copysignf(float x, float y) { FU a = { x }, b = { y }; a.u = (a.u & 0x7FFFFFFFu) | (b.u & 0x80000000u); return a.f; }
-/* on the bits: float order is integer order once the sign is folded (no soft-float compare; nan compares as a number) */
-static int32_t fkey(float x) { FU v = { x }; if (!(v.u & 0x7F800000u)) return 0; return (v.u & 0x80000000u) ? -(int32_t)(v.u & 0x7FFFFFFFu) : (int32_t)v.u; }
-float fminf(float a, float b) { return fkey(a) <= fkey(b) ? a : b; }
-float fmaxf(float a, float b) { return fkey(a) >= fkey(b) ? a : b; }
-
-/* the fraction bits of 1.m x 2^e: 0x007FFFFF >> e as a table (a variable shift is a libgcc loop on the SH-2) */
-static const uint32_t FRAC_MASK[23] = {
-    0x7FFFFF, 0x3FFFFF, 0x1FFFFF, 0xFFFFF, 0x7FFFF, 0x3FFFF, 0x1FFFF, 0xFFFF, 0x7FFF, 0x3FFF, 0x1FFF, 0xFFF, 0x7FF,
-    0x3FF, 0x1FF, 0xFF, 0x7F, 0x3F, 0x1F, 0xF, 0x7, 0x3, 0x1 };
-
-float truncf(float x)
-{
-    FU v = { x };
-    int e = (int)((v.u >> 23) & 0xFF) - 127;
-    if (e >= 23) return x;
-    if (e < 0) { v.u &= 0x80000000u; return v.f; }
-    v.u &= ~FRAC_MASK[e];
-    return v.f;
-}
-/* truncation moved x (its bits changed) towards zero: one more step for the negatives (floor) / positives (ceil) */
-float floorf(float x) { FU a = { x }, t = { truncf(x) }; return (a.u & 0x80000000u) && a.u != t.u && (a.u & 0x7FFFFFFFu) ? t.f - 1.0f : t.f; }
-float ceilf(float x) { FU a = { x }, t = { truncf(x) }; return !(a.u & 0x80000000u) && a.u != t.u ? t.f + 1.0f : t.f; }
-float roundf(float x) { float t = truncf(x), d = x - t; return d >= 0.5f ? t + 1.0f : d <= -0.5f ? t - 1.0f : t; }
-long lroundf(float x) { return (long)roundf(x); }
-float fmodf(float x, float y) { return y == 0.0f ? 0.0f : x - truncf(x / y) * y; }
-float remainderf(float x, float y)
-{
-    if (y == 0.0f) return 0.0f;
-    float q = x / y, n = roundf(q);
-    if (fabsf(q - truncf(q)) == 0.5f) n = 2.0f * roundf(q * 0.5f);   /* halfway: to even */
-    return x - n * y;
-}
-
-float sqrtf(float x)
-{
-    FU v = { x };
-    if (v.i <= 0 || (v.u >> 23) == 0xFF) return v.i < 0 ? 0.0f : x;
-    v.u = (v.u >> 1) + 0x1FBD1DF5u;   /* within ~4 %, then three Newton steps */
-    float y = v.f;
-    y = 0.5f * (y + x / y);
-    y = 0.5f * (y + x / y);
-    return 0.5f * (y + x / y);
-}
-float hypotf(float x, float y)
-{
-    x = fabsf(x); y = fabsf(y);
-    float a = x > y ? x : y, b = x > y ? y : x;
-    if (a == 0.0f) return 0.0f;
-    float r = b / a;
-    return a * sqrtf(1.0f + r * r);
-}
-
-/* sin / cos: x reduced by k * pi/2 (two-part pi/2), polynomials on [-pi/4, pi/4] (fdlibm's kernel coefficients) */
-static float ksin(float r) { float z = r * r; return r + r * z * (-1.6666654611e-01f + z * (8.3321608736e-03f + z * -1.9515295891e-04f)); }
-static float kcos(float r) { float z = r * r; return 1.0f - 0.5f * z + z * z * (4.1666645683e-02f + z * (-1.3887316255e-03f + z * 2.4433157118e-05f)); }
-static float reduce(float x, int *q)
-{
-    float k = roundf(x * 0.63661977236758134f);
-    *q = (int)(long)k;
-    return (x - k * 1.5707963705062866f) + k * 4.3711388286737929e-08f;
-}
-float sinf(float x)
-{
-    int q; float r = reduce(x, &q);
-    switch (q & 3) { case 0: return ksin(r); case 1: return kcos(r); case 2: return -ksin(r); default: return -kcos(r); }
-}
-float cosf(float x)
-{
-    int q; float r = reduce(x, &q);
-    switch (q & 3) { case 0: return kcos(r); case 1: return -ksin(r); case 2: return -kcos(r); default: return ksin(r); }
-}
-float tanf(float x) { float c = cosf(x); return c == 0.0f ? 0.0f : sinf(x) / c; }
-
-/* atan: cephes atanf (range reduction by tan(pi/8), tan(3pi/8)) */
-float atanf(float x)
-{
-    float a = fabsf(x), y0 = 0.0f;
-    if (a > 2.414213562373095f) { y0 = 1.5707963267948966f; a = -1.0f / a; }
-    else if (a > 0.4142135623730950f) { y0 = 0.7853981633974483f; a = (a - 1.0f) / (a + 1.0f); }
-    float z = a * a;
-    float y = y0 + ((((8.05374449538e-2f * z - 1.38776856032e-1f) * z + 1.99777106478e-1f) * z - 3.33329491539e-1f) * z * a + a);
-    return x < 0 ? -y : y;
-}
-float atan2f(float y, float x)
-{
-    if (x == 0.0f) return y > 0 ? 1.5707963267948966f : y < 0 ? -1.5707963267948966f : 0.0f;
-    float t = atanf(y / x);
-    if (x > 0) return t;
-    return y >= 0 ? t + 3.14159265358979f : t - 3.14159265358979f;
-}
+/* No strtof / atof and no float maths here: the core is in 16.16 fixed point on the Saturn (real.h: REAL_FIXED,
+ * FX_NO_FLOAT) and the link carries no soft-float at all (Makefile.saturn checks the symbols). */
 
 /* ---------------------------------------------------------------- printf */
 typedef struct { char *buf; size_t cap, n; FILE *f; } Out;
@@ -314,28 +192,6 @@ static void out_str(Out *o, const char *s, size_t n)
     while (n--) out_ch(o, *s++);
 }
 static void out_pad(Out *o, char c, int n) { while (n-- > 0) out_ch(o, c); }
-
-/* the digits of a double with prec decimals into buf (no sign), fixed notation */
-static int fmt_fixed(char *buf, int cap, double v, int prec)
-{
-    if (prec > 9) prec = 9;
-    double scale = 1; for (int i = 0; i < prec; i++) scale *= 10;
-    double r = v * scale + 0.5;
-    if (r > 1.8e19) { int n = 0; buf[n++] = 'i'; buf[n++] = 'n'; buf[n++] = 'f'; return n; }
-    unsigned long long whole = (unsigned long long)r;
-    unsigned long long ip = whole, fp = 0;
-    if (prec) { unsigned long long sc = (unsigned long long)scale; ip = whole / sc; fp = whole % sc; }
-    char tmp[32]; int n = 0;
-    do { tmp[n++] = (char)('0' + ip % 10); ip /= 10; } while (ip && n < 30);
-    int k = 0;
-    while (n && k < cap) buf[k++] = tmp[--n];
-    if (prec && k < cap) {
-        buf[k++] = '.';
-        char d[12]; for (int i = prec - 1; i >= 0; i--) { d[i] = (char)('0' + fp % 10); fp /= 10; }
-        for (int i = 0; i < prec && k < cap; i++) buf[k++] = d[i];
-    }
-    return k;
-}
 
 static int vformat(Out *o, const char *fmt, va_list ap)
 {
@@ -387,23 +243,10 @@ static int vformat(Out *o, const char *fmt, va_list ap)
             while (k) buf[n++] = t[--k];
             break;
         }
-        case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': {
-            double v = va_arg(ap, double);
-            if (v < 0) { sign = '-'; v = -v; } else sign = plus ? '+' : space ? ' ' : 0;
-            if (prec < 0) prec = 6;
-            if (c == 'g' || c == 'G') {   /* close enough for logs: fixed with trailing zeros dropped */
-                n = fmt_fixed(buf, sizeof buf, v, prec > 6 ? 6 : prec);
-                if (memchr(buf, '.', n)) { while (n && buf[n - 1] == '0') n--; if (n && buf[n - 1] == '.') n--; }
-            } else if (c == 'e' || c == 'E') {
-                int e = 0;
-                if (v != 0) { while (v >= 10) { v /= 10; e++; } while (v < 1) { v *= 10; e--; } }
-                n = fmt_fixed(buf, sizeof buf - 6, v, prec);
-                buf[n++] = c; buf[n++] = e < 0 ? '-' : '+'; if (e < 0) e = -e;
-                if (e >= 100) buf[n++] = (char)('0' + e / 100);
-                buf[n++] = (char)('0' + e / 10 % 10); buf[n++] = (char)('0' + e % 10);
-            } else n = fmt_fixed(buf, sizeof buf, v, prec);
+        case 'f': case 'F': case 'e': case 'E': case 'g': case 'G':   /* no floats on the Saturn (real.h's RS() formats a real) */
+            (void)va_arg(ap, unsigned long long);   /* a double's 8 bytes, skipped without touching them as a float */
+            buf[n++] = '?';
             break;
-        }
         case 'c': buf[n++] = (char)va_arg(ap, int); break;
         case 's': {
             s = va_arg(ap, const char *); if (!s) s = "(null)";
@@ -491,20 +334,6 @@ static int vscan(In *in, const char *fmt, va_list ap)
                 if (lng > 0) *va_arg(ap, long *) = v; else if (lng < 0) *va_arg(ap, short *) = (short)v; else *va_arg(ap, int *) = (int)v;
                 assigned++;
             }
-        } else if (c == 'f' || c == 'g' || c == 'e' || c == 'E' || c == 'G') {
-            bool dot = false, exp = false;
-            while (n < width && n < 62) {
-                int ch = in_peek(in);
-                if (isdigit(ch)) ;
-                else if ((ch == '-' || ch == '+') && (n == 0 || tok[n - 1] == 'e' || tok[n - 1] == 'E')) ;
-                else if (ch == '.' && !dot && !exp) dot = true;
-                else if ((ch == 'e' || ch == 'E') && !exp && n) exp = true;
-                else break;
-                tok[n++] = (char)ch; in_next(in);
-            }
-            tok[n] = 0;
-            if (!n) break;
-            if (!skip) { float v = strtof(tok, NULL); if (lng > 0) *va_arg(ap, double *) = v; else *va_arg(ap, float *) = v; assigned++; }
         } else if (c == 's') {
             char *d = skip ? NULL : va_arg(ap, char *);
             while (n < width) { int ch = in_peek(in); if (ch == EOF || isspace(ch)) break; if (d) *d++ = (char)ch; n++; in_next(in); }
