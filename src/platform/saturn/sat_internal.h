@@ -22,5 +22,15 @@ uint32_t sat_timer_us(void);          /* microseconds since boot (wraps after ~7
 uint32_t sat_vblanks(void);           /* vertical blanks since boot */
 void     sat_vblank_tick(void);       /* from the vblank-out handler */
 
+/* render_sat.c: VDP1 */
+typedef struct Ren Ren;
+Ren *rsat_renderer(void);
+void rsat_init(void);
+void rsat_set_screen(int w, int h);
+void rsat_frame_begin(void);
+void rsat_frame_end(void);
+int  rsat_prims(void);
+void rsat_stats(unsigned *parts_resident, unsigned *vram_used, unsigned *uploads, unsigned *evicted);
+
 /* input_sat.c */
 bool sat_reset_combo(void);           /* A+B+C+Start held on pad 1 */

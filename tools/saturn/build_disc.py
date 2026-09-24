@@ -59,6 +59,24 @@ def image_block(path: Path, crop) -> bytes:
     return b'RGBA' + struct.pack('<6H16x', px.shape[1], px.shape[0], x, y, w, h) + part[..., ::-1].tobytes()
 
 
+def atlas_rects(rel: str) -> list[tuple[int, int, int, int]] | None:
+    """the rectangles the game draws out of one of our atlases (its .txt layout), so each is stored drawable"""
+    root = ROOT / 'assets'
+    rects: list[tuple[int, int, int, int]] = []
+    if rel == 'mode7.png':   # name x y w h frames: frames side by side
+        for line in (root / 'mode7.txt').read_text().splitlines():
+            f = line.split()
+            if len(f) == 6:
+                x, y, w, h, n = map(int, f[1:])
+                rects += [(x + i * w, y, w, h) for i in range(n)]
+    elif rel in ('ramrod/atlas.png', 'space/atlas.png'):   # name frame x y w h ax ay
+        for line in (root / rel).with_suffix('.txt').read_text().splitlines():
+            f = line.split()
+            if len(f) == 8:
+                rects.append(tuple(map(int, f[2:6])))
+    return rects or None
+
+
 def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log) -> None:
     """every pack sprite / cblock / font through the game's own gfx.c (tools/dc/texprep.c), then our PNGs"""
     texprep = work / 'texprep'
@@ -70,15 +88,16 @@ def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log) -> None:
     stats = satbake.Stats()
     for rid in dict.fromkeys(ids):   # first appearance: a graphic in two packs is baked once
         kind, px, meta = satbake.load_srgb(dumps / f'{rid}.srgb')
-        block = satbake.bake(px, meta, stats, name=rid)
+        block = satbake.bake(px, meta, stats, name=rid, kind=kind)
         tex.add(int(rid, 16), 'tex', block)
         log(f'tex {rid} {px.shape[1]}x{px.shape[0]} {len(block) // 1024} KB')
     for source in sorted((ROOT / 'assets').rglob('*.png')):
         rel = source.relative_to(ROOT / 'assets')
         if unused(rel):
             continue
-        block = satbake.bake(np.array(Image.open(source).convert('RGBA')), b'', stats, name=rel.as_posix())
-        tex.add(namehash(rel.as_posix()), 'tex', block, lz4=True)
+        block = satbake.bake(np.array(Image.open(source).convert('RGBA')), b'', stats, name=rel.as_posix(),
+                             rects=atlas_rects(rel.as_posix()))
+        tex.add(namehash(rel.as_posix()), 'tex', block)
         log(f'tex {rel} {len(block) // 1024} KB')
     log(stats.report())
 

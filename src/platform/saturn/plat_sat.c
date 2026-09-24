@@ -70,6 +70,9 @@ void plat_apply_screen(Ren *r, int sw, int sh, int ratio, int screen)
 {
     (void)r; (void)screen;
     view.sw = sw; view.sh = sh; view.ratio = ratio;
+#ifndef SAT_RENDER_NULL
+    rsat_set_screen(sw, sh);
+#endif
 }
 
 /* no image decoding on the console: the disc's images are baked (PLAT_BAKED_ASSETS, assets.c) */

@@ -6,18 +6,14 @@
 #include "../../app.h"
 #include "sat_internal.h"
 
-#ifdef SAT_RENDER_NULL   /* bring-up: platform/null/render_null.c, nothing on screen */
+#ifdef SAT_RENDER_NULL   /* bring-up / CPU profiles: platform/null/render_null.c, nothing on screen */
 Ren *rnull_renderer(void);
 int  rnull_prims(void);
 #define rsat_renderer rnull_renderer
 #define rsat_prims    rnull_prims
+static void rsat_init(void) { }
 static void rsat_frame_begin(void) { }
 static void rsat_frame_end(void) { }
-#else
-Ren *rsat_renderer(void);
-void rsat_frame_begin(void);
-void rsat_frame_end(void);
-int  rsat_prims(void);
 #endif
 
 static void vblank_out(void *work)
@@ -63,6 +59,7 @@ static void __attribute__((noreturn, noinline)) game_main(void)
     sat_timer_init();
     printf("saber rider: saturn build " __DATE__ " " __TIME__ "\n");
     cd_sat_init();
+    rsat_init();
     report_memory("boot");
 
     const char *lv = plat_getenv("SABER_LEVEL");
