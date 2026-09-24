@@ -9,7 +9,7 @@
  * rate. A frame without any plane (menus) turns them off and gives the colour RAM back.
  *
  * Video memory: the cells from 0 (banks A0, A1, B0), a 16 KB name page per NBG in B1 at 0x60000 + nbg * 0x4000,
- * the line scroll tables at 0x70000 (NBG0) and 0x70400 (NBG1). The access cycle patterns follow the layout: the
+ * the line scroll tables (x, y per line) at 0x70000 (NBG0) and 0x70800 (NBG1). The access cycle patterns follow the layout: the
  * name reads in B1 (NBGn at Tn), each plane's character reads at the same slot in every bank its cells are in, the
  * other slots CPU. mednafen only checks that a bank has a slot for what it reads; real hardware has placement rules
  * too (plan 11: check on a console). */
@@ -32,7 +32,7 @@
 #define MAX_ROWS     32
 #define CELLS_END    0x60000u      /* the cells may use A0, A1, B0 */
 #define PAGE(nbg)    (0x60000u + (uint32_t)(nbg) * 0x4000u)
-#define LS_TABLE(n)  (0x70000u + (uint32_t)(n) * 0x400u)
+#define LS_TABLE(n)  (0x70000u + (uint32_t)(n) * 0x800u)   /* 224 lines x (x, y) */
 #define VRAM(off)    ((volatile uint32_t *)(0x25E00000u + (off)))
 
 typedef struct { char magic[4]; uint16_t nplanes, nbands, npal, nbackdrops; uint32_t ncells, bands_off, names_off, cellpal_off, backdrops_off, layers; } SplHead;
@@ -43,7 +43,7 @@ typedef struct { uint32_t tex; int16_t x, y; uint8_t prio, pad[3]; } SplBackdrop
 typedef struct {
     const SplBand *b;
     int lo, hi;                 /* the columns in the name page: [lo, hi), -1 none */
-    int scroll;                 /* this frame's */
+    int scroll, yscroll;        /* this frame's (level.c: a layer scrolls by the camera times its rate, both ways) */
     int chunk;                  /* the decoded chunk, -1 none */
     uint16_t names[CHUNK_COLS * MAX_ROWS];
 } BandRt;
@@ -122,7 +122,7 @@ static void setup_screens(void)
         vdp2_scrn_priority_set(scrn_of(pl->nbg), pl->prio);
         if (pl->line_scroll && pl->nbg < 2) {
             const vdp2_scrn_ls_format_t ls = { .scroll_screen = scrn_of(pl->nbg), .table_base = VDP2_VRAM_ADDR(0, LS_TABLE(pl->nbg)),
-                                               .interval = 0, .type = VDP2_SCRN_LS_TYPE_HORZ };
+                                               .interval = 0, .type = VDP2_SCRN_LS_TYPE_HORZ | VDP2_SCRN_LS_TYPE_VERT };
             vdp2_scrn_ls_set(&ls);
         }
         volatile uint32_t *pg = VRAM(PAGE(pl->nbg));
@@ -231,6 +231,8 @@ static void update_band(BandRt *br, int sw)
     if (ox < 0) ox = 0;
     int scroll = (int)ceilf(ox);   /* level.c: a cell at cx * tw + floor(-ox) */
     br->scroll = scroll;
+    float oy = (b->flags & 1) ? 0.0f : P.cam_y * ((float)b->rate / 65536.0f);
+    br->yscroll = oy > 0 ? (int)ceilf(oy) : 0;
     int c0 = scroll >> 3, c1 = (scroll + sw + 7) >> 3;   /* [c0, c1) */
     if (br->lo < 0 || c0 >= br->hi || c1 <= br->lo || c1 - c0 > 64) {
         for (int c = c0; c < c1; c++) write_column(br, c);
@@ -255,26 +257,30 @@ void sat_planes_frame(int sw, bool delayed)
     P.asked = false;
     if (!P.palettes_in) load_palettes();
     for (int i = 0; i < P.h->nbands; i++) update_band(&P.band[i], sw);
-    int oy = (int)ceilf(P.cam_y > 0 ? P.cam_y : 0);   /* the camera shake (cam_y is 0 in the platform stages) */
     vdp2_scrn_disp_t disp = VDP2_SCRN_DISP_NONE;
     for (int i = 0; i < P.h->nplanes; i++) {
         const SplPlane *pl = &P.planes[i];
         vdp2_scrn_t s = scrn_of(pl->nbg);
         disp |= (vdp2_scrn_disp_t)(VDP2_SCRN_DISPTP_NBG0 << pl->nbg);   /* DISPTP: colour 0 transparent (DISP_ also sets TPON) */
-        vdp2_scrn_scroll_y_set(s, (fix16_t)(oy << 16));
         if (pl->nbands == 1 || !(pl->line_scroll && pl->nbg < 2)) {
             vdp2_scrn_scroll_x_set(s, (fix16_t)((P.band[pl->first_band].scroll & 511) << 16));
+            vdp2_scrn_scroll_y_set(s, (fix16_t)((P.band[pl->first_band].yscroll & 511) << 16));
             continue;
         }
         vdp2_scrn_scroll_x_set(s, 0);
-        volatile uint32_t *t = VRAM(LS_TABLE(pl->nbg));   /* per screen line: the scroll of the band at that plane row */
+        vdp2_scrn_scroll_y_set(s, 0);
+        /* per screen line (x, y): the band whose rows that line shows (the lower one where two do: the moving band's
+         * first lines over the backdrop) */
+        volatile uint32_t *t = VRAM(LS_TABLE(pl->nbg));
         for (int y = 0; y < SAT_SCREEN_H; y++) {
-            int row = (y + oy) >> 3, sc = 0;
+            int sx = 0, sy = 0;
             for (int k = 0; k < pl->nbands; k++) {
-                const SplBand *b = P.band[pl->first_band + k].b;
-                if (row >= b->row0 && row < b->row1) { sc = P.band[pl->first_band + k].scroll; break; }
+                const BandRt *br = &P.band[pl->first_band + k];
+                int prow = y + br->yscroll;
+                if (prow >= br->b->row0 * 8 && prow < br->b->row1 * 8) { sx = br->scroll; sy = br->yscroll; }
             }
-            t[y] = (uint32_t)(sc & 511) << 16;
+            /* with vertical line scroll the table gives the line's plane row itself (not an offset added to it) */
+            t[y * 2] = (uint32_t)(sx & 511) << 16; t[y * 2 + 1] = (uint32_t)((y + sy) & 511) << 16;
         }
     }
     if (!P.shown) {

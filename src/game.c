@@ -537,7 +537,9 @@ void game_update(Game *g, float dt)
     float maxx = g->level.width - g->sw; if (maxx < 0) maxx = 0;
     if (g->cam_x < 0) g->cam_x = 0;
     if (g->cam_x > maxx) g->cam_x = maxx;
-    g->cam_y = 0;
+    /* the platform stages were made for a 240-line view from the level's top; a shorter screen (the Saturn's 224 lines,
+       plan 3) keeps the bottom of that view (the ground, the heroes' feet) and loses the top of the sky */
+    g->cam_y = g->sh < 240 ? (float)(240 - g->sh) : 0.0f;
 }
 
 static void draw_collision(Game *g)
