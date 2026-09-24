@@ -116,6 +116,8 @@ void    r_floor_destroy(RFloor *f);
  * id) for this camera position this frame, and the core draws nothing for it; false (every other backend) means the
  * core draws the tiles. */
 bool r_layer(Ren *r, uint32_t level, int layer, real cam_x, real cam_y);
+/* whether r_layer will hold that layer of that level (a stage loading its tile sheets skips the ones it won't draw) */
+bool r_layer_held(Ren *r, uint32_t level, int layer);
 /* The level layer the sprites that follow belong to (-1: none, in front of everything: HUD, menus). A backend whose
  * layers aren't drawn in the core's order (hardware planes composited by priority) places them by it; the others ignore
  * it (painter's order already holds). */

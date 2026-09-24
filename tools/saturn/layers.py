@@ -74,6 +74,52 @@ PLANS = {
         # scrolls up by 0.3 x the camera's 16-19 px on the Saturn's 224 lines, its lines then start above row 80)
         backdrops=[dict(layer='SkyBG', rows=(72, 96), prio=1)],
     ),
+    # Stages 3-5 reuse level 1's block with tile layers of their own (night_level.c's route, forest.lvl, lab.lvl): baked
+    # from the layers as the game builds them (dump: SABER_DUMPLAYERS on the headless build, build_disc.py), under their
+    # own set id (game.c PLANES_ID). The layers a plan leaves out stay the core's (VDP1).
+    # Stage 3, "the front at night": level 1's layout in the night palette (night.c night_layer_tint, baked in here),
+    # the night sky and the moon (VDP1 palette sprites) under every plane instead of SkyBG.
+    0x4E540003: dict(
+        dump=3,
+        planes=[
+            dict(nbg=0, prio=2, bands=[dict(rows=(10, 22), rate=0.3, layers=['FarMountains', 'Mountains'])]),
+            dict(nbg=1, prio=3, bands=[dict(rows=(0, 32), rate=0.4, layers=['NearMountains'])]),
+            dict(nbg=2, prio=4, bands=[dict(rows=(0, 32), rate=0.875, layers=['MidBG', ('Cars MidBG', 'anchored')])]),
+            dict(nbg=3, prio=5, bands=[dict(rows=(0, 32), rate=1.0, layers=['Playfield', 'Platforms', 'Cars'])]),
+        ],
+        tint={'FarMountains': (58, 62, 118), 'Mountains': (66, 70, 130), 'NearMountains': (76, 80, 142),
+              'MidBG': (88, 90, 150), 'Cars MidBG': (88, 90, 150), 'Playfield': (112, 110, 168),
+              'Platforms': (116, 114, 172), 'Cars': (116, 114, 172)},
+        palette_pngs=['stage3/native/stage3_night_sky.png', 'stage3/native/stage3_red_moon.png', 'hyperjumper/*.png'],
+    ),
+    # Stage 4, the forest (forest.lvl): seven background layers at seven rates on four planes. The sky shows only above
+    # the far foliage (opaque from its jagged top down): NBG0 is the sky's top rows at its own rate, then the foliage over
+    # the sky as one colour a row; the tree trunks and the canopy, the two hedges share a plane each at a rate between
+    # theirs (the slower layer is still wide enough for the level at it). ForegroundStuff (the cabin rails) and
+    # ForegroundStuf2 stay VDP1, over the sprites.
+    0x46520004: dict(
+        dump=4,
+        planes=[
+            dict(nbg=0, prio=2, bands=[
+                dict(rows=(0, 8), rate=0.03, layers=['SkyBG']),
+                dict(rows=(8, 30), rate=0.1, layers=[('SkyBG', 'flat', 64), 'FarMountains']),
+            ]),
+            dict(nbg=1, prio=3, bands=[dict(rows=(0, 22), rate=0.26, layers=['Mountains', 'NearMountains'])]),
+            dict(nbg=2, prio=4, bands=[dict(rows=(12, 30), rate=0.52, layers=['MidBG', 'Cars MidBG'])]),
+            dict(nbg=3, prio=5, bands=[dict(rows=(0, 30), rate=1.0, layers=['Playfield'])]),
+        ],
+        palette_pngs=['hyperjumper/*.png'],
+    ),
+    # Stage 5, the cavern laboratory (lab.lvl): four layers, a plane each
+    0x4C420005: dict(
+        dump=5,
+        planes=[
+            dict(nbg=0, prio=2, bands=[dict(rows=(0, 30), rate=0.2, layers=['SkyBG'])]),
+            dict(nbg=1, prio=3, bands=[dict(rows=(0, 26), rate=0.5, layers=['Mountains'])]),
+            dict(nbg=2, prio=4, bands=[dict(rows=(0, 26), rate=1.0, layers=['MidBG'])]),
+            dict(nbg=3, prio=5, bands=[dict(rows=(16, 30), rate=1.0, layers=['Playfield'])]),
+        ],
+    ),
 }
 BACKDROP_XOR = 0x42440000   # a backdrop's texture id: level id ^ this ^ its number
 
@@ -85,8 +131,9 @@ def rgb555(px: np.ndarray) -> np.ndarray:
     return np.where(px[..., 3] >= 128, 0x8000 | b << 10 | g << 5 | r, 0).astype(np.uint16)
 
 
-def layer_image(ly: levl.Layer, bank: levl.Bank, rows: int) -> np.ndarray:
-    """a whole tile layer as RGB555 (0 transparent), its map's full width, `rows` pixel rows from the top"""
+def layer_image(ly: levl.Layer, bank: levl.Bank, rows: int, tint=None) -> np.ndarray:
+    """a whole tile layer as RGB555 (0 transparent), its map's full width, `rows` pixel rows from the top; a cell with
+    bit 31 is the tile mirrored (stage 3's scenes); tint: the colours times (r, g, b) / 255 (the core's colour mod)"""
     tw, th = bank.tw, bank.th
     w = ly.used_w if ly.extra == 1 else ly.w
     out = np.zeros((rows, w * tw), np.uint16)
@@ -94,15 +141,22 @@ def layer_image(ly: levl.Layer, bank: levl.Bank, rows: int) -> np.ndarray:
     ncells = len(bank.cells)
     for cy in range(min(ly.h, -(-rows // th))):
         for cx in range(w):
-            v = int(ly.cells[cy, cx]) & 0x7FFFFFFF
+            raw = int(ly.cells[cy, cx])
+            v = raw & 0x7FFFFFFF
             if not v:
                 continue
             t = int(bank.cells[(v - 1) % ncells])
             if t == 0xFFFF:
                 continue
             if t not in tiles:
-                tiles[t] = rgb555(bank.tile(t))
+                px = bank.tile(t)
+                if tint:
+                    px = px.copy()
+                    px[..., :3] = (px[..., :3].astype(np.uint32) * np.array(tint, np.uint32) // 255).astype(np.uint8)
+                tiles[t] = rgb555(px)
             tile = tiles[t][:rows - cy * th]
+            if raw >> 31:
+                tile = tile[:, ::-1]
             dst = out[cy * th:cy * th + tile.shape[0], cx * tw:cx * tw + tw]
             np.copyto(dst, tile, where=tile != 0)
     return out
@@ -146,7 +200,7 @@ class Band:
     notes: list[str] = field(default_factory=list)
 
 
-def compose_band(L: levl.Level, bank_of, plane: int, spec: dict) -> Band:
+def compose_band(L: levl.Level, bank_of, plane: int, spec: dict, tint: dict | None = None) -> Band:
     r0, r1 = spec['rows']
     rate = spec['rate']
     y0, y1 = r0 * 8, r1 * 8
@@ -155,7 +209,7 @@ def compose_band(L: levl.Level, bank_of, plane: int, spec: dict) -> Band:
     for entry in spec['layers']:
         name, mode, *arg = (entry, '') if isinstance(entry, str) else entry
         ly = by_name[name]
-        full = layer_image(ly, bank_of(ly.cblock), y1)[y0:y1]
+        full = layer_image(ly, bank_of(ly.cblock), y1, (tint or {}).get(name))[y0:y1]
         imgs.append((ly, mode, full, arg))
     static = rate == 0.0
     if static:
@@ -331,7 +385,7 @@ def cell_bytes(idx: np.ndarray) -> bytes:
 class Result:
     spl: bytes
     spc: list[bytes]
-    slim: bytes
+    slim: bytes | None         # the level block without the planes' maps (None: a stage's own layers, level 1's block)
     report: list[str]
     bands: list[Band]
     cells: list[Cells]
@@ -353,14 +407,19 @@ def pack_chunk(raw: bytes) -> tuple[bytes, int]:
     return (z, 0x80000000) if len(z) < len(raw) else (raw, 0)
 
 
-def bake(level_path: Path, srgb_dir: Path) -> Result:
-    L = levl.load(level_path)
+def bake(level_path: Path, srgb_dir: Path, dump: Path | None = None) -> Result:
+    """level_path: the level block (LEVL); dump: the stage's layers as the game built them instead (plan 'dump')"""
+    if dump:
+        L, files = levl.load_dump(dump)
+    else:
+        L, files = levl.load(level_path), {}
     plan = PLANS[L.id]
     banks: dict[int, levl.Bank] = {}
 
     def bank_of(i: int) -> levl.Bank:
         if i not in banks:
-            banks[i] = levl.load_bank(srgb_dir / f'{i:08X}.srgb')
+            f = files.get(i)
+            banks[i] = levl.png_bank(f, i) if f else levl.load_bank(srgb_dir / f'{i:08X}.srgb')
         return banks[i]
 
     report: list[str] = []
@@ -371,7 +430,7 @@ def bake(level_path: Path, srgb_dir: Path) -> Result:
         cells = Cells()
         planes_cells.append(cells)
         for spec in p['bands']:
-            b = compose_band(L, bank_of, pi, spec)
+            b = compose_band(L, bank_of, pi, spec, plan.get('tint'))
             for e in spec['layers']:
                 taken.add(e if isinstance(e, str) else e[0])
             rows, cols = b.img.shape[0] // 8, b.img.shape[1] // 8
@@ -468,7 +527,7 @@ def bake(level_path: Path, srgb_dir: Path) -> Result:
     assert len(spl) == names_off
     spl += table + body
     report.append(f'names: {len(body) // 1024} KB stored; cells: {len(spc)} blocks of up to {CELL_CHUNK * 32 // 1024} KB')
-    return Result(bytes(spl), spc, slim_level(level_path.read_bytes(), taken), report, bands, planes_cells,
+    return Result(bytes(spl), spc, None if dump else slim_level(level_path.read_bytes(), taken), report, bands, planes_cells,
                   palettes, cell_pal, taken, idx_of, backdrops)
 
 
@@ -564,8 +623,10 @@ def band_pixels(res: Result, b: Band) -> np.ndarray:
             out[r * 8:r * 8 + 8, c * 8:c * 8 + 8] = px
     b._pixels = out
     return out
-def preview(res: Result, level_path: Path, srgb_dir: Path, cams: list[float], sw: int = 320, sh: int = 224) -> np.ndarray:
-    L = levl.load(level_path)
+def preview(res: Result, level_path: Path, srgb_dir: Path, cams: list[float], sw: int = 320, sh: int = 224,
+            dump: Path | None = None) -> np.ndarray:
+    L, files = levl.load_dump(dump) if dump else (levl.load(level_path), {})
+    tint = PLANS[L.id].get('tint') or {}
     banks: dict[int, levl.Bank] = {}
     rows_out = []
     for cam in cams:
@@ -574,8 +635,12 @@ def preview(res: Result, level_path: Path, srgb_dir: Path, cams: list[float], sw
         for ly in L.layers:
             if ly.is_tilemap and ly.name in res.taken:
                 if ly.cblock not in banks:
-                    banks[ly.cblock] = levl.load_bank(srgb_dir / f'{ly.cblock:08X}.srgb')
-                levl.render_layer(ly, banks[ly.cblock], levl.layer_offset(ly, cam), sw, sh, pc)
+                    f = files.get(ly.cblock)
+                    banks[ly.cblock] = levl.png_bank(f, ly.cblock) if f else levl.load_bank(srgb_dir / f'{ly.cblock:08X}.srgb')
+                one = levl.render_layer(ly, banks[ly.cblock], levl.layer_offset(ly, cam), sw, sh)
+                if ly.name in tint:
+                    one[..., :3] = (one[..., :3].astype(np.uint32) * np.array(tint[ly.name], np.uint32) // 255).astype(np.uint8)
+                np.copyto(pc, one, where=one[..., 3:4] >= 128)
         sat = np.zeros((sh, sw), np.uint16)
         for _, x, y, _, img in res.backdrops:   # under the planes
             part = rgb555(img)[:, :sw][:max(0, sh - y)]

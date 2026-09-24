@@ -16,7 +16,7 @@ bool level_load(Level *L, uint32_t id)
     bool host = e && !memcmp(e->data, "LEVh", 4);
     if (!e || (memcmp(e->data, "LEVL", 4) && !host)) { fprintf(stderr, "level %08X not found\n", id); return false; }
     const uint8_t *d = e->data, *p;
-    L->id = id;
+    L->id = L->planes_id = id;
     if (rd32(d + 4) != 0) { fprintf(stderr, "level %08X: not TILE mode\n", id); return false; }
     L->npacks = rd32(d + 8); L->nobjs = rd32(d + 12);
     p = d + 0x10;
@@ -93,7 +93,7 @@ uint8_t level_cell(const Level *L, int cx, int cy)
  * the wrap layer (extra==1, SkyBG) repeats horizontally. */
 void level_draw_layer(const Level *L, int li, real cam_x, real cam_y, int sw, int sh)
 {
-    if (r_layer(gfx_renderer(), L->id, li, cam_x, cam_y)) return;   /* held by the backend (the Saturn's VDP2 planes) */
+    if (r_layer(gfx_renderer(), L->planes_id, li, cam_x, cam_y)) return;   /* held by the backend (the Saturn's VDP2 planes) */
     const Layer *ly = &L->layers[li];
     const TileMap *m = ly->map;
     if (!m || !m->cb) return;
@@ -136,4 +136,22 @@ void level_draw_layer(const Level *L, int li, real cam_x, real cam_y, int sw, in
         }
     }
     cblock_batch_end();
+}
+
+void level_dump_layers(const Level *L, const char *path)
+{
+    FILE *f = fopen(path, "w");
+    if (!f) { fprintf(stderr, "can't write %s\n", path); return; }
+    fprintf(f, "level %08X planes %08X width %s layers %d\n", (unsigned)L->id, (unsigned)L->planes_id, RS(L->width, 0), L->nlayers);
+    for (int i = 0; i < L->nlayers; i++) {
+        const Layer *ly = &L->layers[i];
+        const TileMap *m = ly->map;
+        const CBlock *cb = m ? m->cb : NULL;
+        fprintf(f, "layer %d %s map %d parallax %s extra %d", i, ly->name, ly->is_tilemap && m && m->w > 0, RS(ly->parallax, 5), ly->extra);
+        if (!ly->is_tilemap || !m || m->w <= 0 || !cb) { fprintf(f, "\n"); continue; }
+        fprintf(f, " w %d h %d used_w %d cblock %08X tw %d th %d file %s\n", m->w, m->h, m->used_w, (unsigned)cb->id, cb->tw, cb->th,
+                cb->file ? cb->file : "-");
+        for (int k = 0; k < m->w * m->h; k++) fprintf(f, "%X%c", (unsigned)m->cells[k], (k + 1) % m->w ? ' ' : '\n');
+    }
+    fclose(f);
 }

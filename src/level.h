@@ -39,6 +39,7 @@ typedef struct {
 
 typedef struct {
     uint32_t id;
+    uint32_t planes_id;         /* the tile layers' set for a backend that holds them (r_layer): the level id, or a stage's own */
     char packs[4][12]; int npacks;
     LevelObject objs[LVL_MAX_OBJECTS]; int nobjs;
     Layer layers[LVL_MAX_LAYERS]; int nlayers;
@@ -62,4 +63,6 @@ typedef struct {
 
 bool level_load(Level *L, uint32_t id);
 void level_draw_layer(const Level *L, int layer, real cam_x, real cam_y, int screen_w, int screen_h);
+/* debug (SABER_DUMPLAYERS, tools/saturn/layers.py): the tile layers as the stage built them, as text */
+void level_dump_layers(const Level *L, const char *path);
 uint8_t level_cell(const Level *L, int cx, int cy);

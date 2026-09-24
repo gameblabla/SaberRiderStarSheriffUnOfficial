@@ -116,4 +116,5 @@ void    r_floor_draw(Ren *r, RFloor *f, const RFloorView *v)
 }
 void    r_floor_destroy(RFloor *f) { free(f); }
 bool    r_layer(Ren *r, uint32_t level, int layer, real cam_x, real cam_y) { (void)r; (void)level; (void)layer; (void)cam_x; (void)cam_y; return false; }
+bool    r_layer_held(Ren *r, uint32_t level, int layer) { (void)r; (void)level; (void)layer; return false; }
 void    r_set_depth(Ren *r, int layer) { (void)r; (void)layer; }

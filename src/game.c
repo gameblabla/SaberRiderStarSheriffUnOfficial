@@ -75,6 +75,9 @@ static bool level_start(Game *g)
     uint32_t lvl = 0x12DAD1A7;
     if (t && !memcmp(t->data, "TLVL", 4)) lvl = t->data[8] | t->data[9] << 8 | t->data[10] << 16 | (uint32_t)t->data[11] << 24;
     if (!level_load(&g->level, lvl)) return false;
+    /* stages 3-5 reuse level 1's block with layers of their own: their own set for a backend's planes (the Saturn's) */
+    static const uint32_t PLANES_ID[6] = { 0, 0, 0, 0x4E540003u, 0x46520004u, 0x4C420005u };
+    if (stage >= 3 && stage <= 5) g->level.planes_id = PLANES_ID[stage];
     g->night_on = (stage == 3);
     if (g->night_on && !night_init(&g->night, &g->level, g->menu.difficulty)) return false;
     g->forest_on = (stage == 4);
@@ -82,6 +85,7 @@ static bool level_start(Game *g)
     if (g->forest_on) { memset(&g->night, 0, sizeof g->night); g->night.manual = true; night_boss_load(&g->night, &g->level, g->menu.difficulty); }   /* Hyperjumper returns in the finale */
     g->lab_on = (stage == 5);
     if (g->lab_on && !forest_load(&g->lab, &g->level, "lab", "lab.lvl", 0x4C420000u)) return false;
+    if (plat_getenv("SABER_DUMPLAYERS")) level_dump_layers(&g->level, plat_getenv("SABER_DUMPLAYERS"));   /* debug: tools/saturn/layers.py */
     g->world.gx = 0; g->world.gy = R(480.0f);
     g->world.world_min_x = 0; g->world.world_max_x = g->level.width;
     real px = R(100), py = R(155);
@@ -591,7 +595,7 @@ void game_draw(Game *g)
     bool power_shake = g->power.phase == PW_FLASH && g->power.t < R(0.35f) && !g->power.bomb;
     real shake = g->enemies.cam_shake || power_shake ? r_int(rand() % 4) : R(0.0f);
     real saved = g->cam_y; g->cam_y += shake;
-    if (g->night_on) night_draw_background(&g->night, g->cam_x, g->sw, g->sh);   /* night sky + red moon, behind every layer */
+    if (g->night_on) { r_set_depth(g->ren, 0); night_draw_background(&g->night, g->cam_x, g->sw, g->sh); }   /* night sky + red moon, behind every layer (and every hardware plane) */
     bool hero_drawn = false;
     const Body *hb = &g->player.ch.body;
     bool in_cabin = g->forest_on && forest_on_deck(L, hb->x, hb->y + hb->oy + hb->hy);

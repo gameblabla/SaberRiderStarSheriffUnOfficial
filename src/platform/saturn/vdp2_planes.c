@@ -200,6 +200,14 @@ bool r_layer(Ren *r, uint32_t level, int layer, fx cam_x, fx cam_y)
     return true;
 }
 
+bool r_layer_held(Ren *r, uint32_t level, int layer)
+{
+    (void)r;
+    if (layer < 0 || layer >= 32) return false;
+    const PackEntry *e = packs_find_type(level ^ SPL_XOR, RES_DATA);
+    return e && e->size >= sizeof(SplHead) && !memcmp(e->data, "SPL1", 4) && (((const SplHead *)e->data)->layers & (1u << layer));
+}
+
 /* the sprite priority register of level layer `layer`'s sprites (0: the default one, in front of the planes) */
 uint32_t sat_planes_level(void) { return P.level; }
 

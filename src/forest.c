@@ -62,14 +62,16 @@ bool forest_load(Forest *f, Level *L, const char *dir, const char *file, uint32_
         char sn[17] = { 0 }, pn[17] = { 0 }; memcpy(sn, sname, 16); memcpy(pn, png, 16);
         slot[k] = -1;
         for (int i = 0; i < L->nlayers; i++) if (L->layers[i].is_tilemap && !strcmp(L->layers[i].name, sn)) slot[k] = i;
-        CBlock *cb = load_sheet(dir, pn, sheet_ids + (uint32_t)k);
-        if (slot[k] < 0 || !cb) { fprintf(stderr, "%s: layer %s unusable\n", dir, sn); r.ok = false; break; }
+        /* a layer the renderer holds itself (the Saturn's VDP2 planes: game.c sets L->planes_id first) needs no sheet */
+        bool held = slot[k] >= 0 && r_layer_held(gfx_renderer(), L->planes_id, slot[k]);
+        CBlock *cb = held ? NULL : load_sheet(dir, pn, sheet_ids + (uint32_t)k);
+        if (slot[k] < 0 || (!cb && !held)) { fprintf(stderr, "%s: layer %s unusable\n", dir, sn); r.ok = false; break; }
         f->cells[k] = malloc((size_t)w * h * 4);
         if (!f->cells[k]) { r.ok = false; break; }
         memcpy(f->cells[k], cells, (size_t)w * h * 4);
         le32_to_host(f->cells[k], (size_t)w * h);
         TileMap *m = &f->maps[k];
-        m->w = m->used_w = (int)w; m->h = (int)h; m->cblock_id = cb->id; m->cells = f->cells[k]; m->cb = cb;
+        m->w = m->used_w = (int)w; m->h = (int)h; m->cblock_id = sheet_ids + (uint32_t)k; m->cells = f->cells[k]; m->cb = cb;
         par[k] = p;
     }
     uint32_t cols = u32(&r), rows = u32(&r);

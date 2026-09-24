@@ -20,6 +20,7 @@ The source packs and assets are never modified.
 from __future__ import annotations
 
 import argparse
+import os
 import importlib.util
 import re
 from pathlib import Path
@@ -100,14 +101,20 @@ def priority_textures(data: Path, work: Path, log) -> set[int]:
     table = [int(x, 16) for x in re.findall(r'0x([0-9A-F]{8})', re.search(r'TYPE_CRHC\[28\] = \{(.*?)\};', src, re.S).group(1))]
     fx = [int(x, 16) for x in re.findall(r'0x([0-9A-F]{8})', re.search(r'FX\[\] = \{(.*?)\};', src, re.S).group(1))]
     crhc = lambda t: table[t - 2] if 2 <= t <= 29 else 0xD39700C4 if 30 <= t <= 32 else 0x02A38AFB if t == 1 else 0
-    levprep(data, work, list(layers.PLANS) + sorted(set(table) | {0xD39700C4, 0x02A38AFB}))
+    levels = [lid for lid, plan in layers.PLANS.items() if 'dump' not in plan]   # a stage of its own spawns from code
+    levprep(data, work, levels + sorted(set(table) | {0xD39700C4, 0x02A38AFB}))
     sprite = lambda c: struct.unpack_from('<I', (work / f'{c:08X}.levl').read_bytes(), 4)[0] if (work / f'{c:08X}.levl').exists() else 0
     ids: set[int] = set()
-    for lid in layers.PLANS:
+    for lid in levels:
         got = layers.priority_sprites(work / f'{lid:08X}.levl', crhc, sprite, fx)
         log(f'planes {lid:08X}: palette sprites (drawn under a plane): ' + ' '.join(f'{i:08X}' for i in sorted(got)))
         ids |= got
     return ids
+
+
+def palette_pngs() -> list[str]:
+    """our PNGs drawn under a plane (layers.PLANS palette_pngs: stage 3's sky and moon, Hyperjumper's passes): 8bpp"""
+    return [g for plan in layers.PLANS.values() for g in plan.get('palette_pngs', [])]
 
 
 def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log, force8: set[int] = frozenset()) -> None:
@@ -129,7 +136,7 @@ def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log, force8: set[i
         if unused(rel):
             continue
         block = satbake.bake(np.array(Image.open(source).convert('RGBA')), b'', stats, name=rel.as_posix(),
-                             rects=atlas_rects(rel.as_posix()))
+                             rects=atlas_rects(rel.as_posix()), force8=any(rel.match(g) for g in palette_pngs()))
         tex.add(namehash(rel.as_posix()), 'tex', block)
         log(f'tex {rel} {len(block) // 1024} KB')
     log(stats.report())
@@ -138,21 +145,23 @@ def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log, force8: set[i
 def bake_stages(data: Path, work: Path, stage: pckwrite.Pack, log) -> None:
     """every level with a plane layout (layers.PLANS): its planes, backdrops and slim level block"""
     ids = [f'{i:08X}' for i in layers.PLANS]
-    levprep(data, work, list(layers.PLANS))
+    levprep(data, work, [lid for lid, plan in layers.PLANS.items() if 'dump' not in plan] + [0x12DAD1A7])
     stats = satbake.Stats()
     for rid in ids:
-        res = layers.bake(work / f'{rid}.levl', work / 'srgb')
+        dump = stage_dump(data, work, layers.PLANS[int(rid, 16)].get('dump'))
+        res = layers.bake(work / f'{rid}.levl', work / 'srgb', dump)
         for line in res.report:
             log(f'planes {rid}: {line}')
         lid = int(rid, 16)
-        stage.add(lid, 'data', res.slim, lz4=True)
+        if res.slim:
+            stage.add(lid, 'data', res.slim, lz4=True)
         stage.add(lid ^ SPL_XOR, 'data', res.spl)
         for k, cells in enumerate(res.spc):
             stage.add(lid ^ (SPC_XOR + k), 'data', cells, lz4=True)
         for tid, _, _, _, img in res.backdrops:
             stage.add(tid, 'tex', satbake.bake(img, b'', stats, name=f'backdrop {tid:08X}', force8=True))
         # a tile bank the planes draw from and VDP1 too: its texture with only VDP1's tiles (the planes have the rest)
-        for bank, cells in layers.vdp1_tiles(work / f'{rid}.levl', res.taken).items():
+        for bank, cells in ({} if dump else layers.vdp1_tiles(work / f'{rid}.levl', res.taken)).items():
             if (bank, 'tex') in stage:
                 continue
             kind, px, meta = satbake.load_srgb(work / 'srgb' / f'{bank:08X}.srgb')
@@ -165,8 +174,20 @@ def bake_stages(data: Path, work: Path, stage: pckwrite.Pack, log) -> None:
         if not preview_dir:
             continue
         from PIL import Image
-        Image.fromarray(layers.preview(res, work / f'{rid}.levl', work / 'srgb', [0, 1500, 3000, 5000, 8000])).save(
+        Image.fromarray(layers.preview(res, work / f'{rid}.levl', work / 'srgb', [0, 1500, 3000, 5000, 6000], dump=dump)).save(
             preview_dir / f'planes_{rid}.png')
+
+
+def stage_dump(data: Path, work: Path, stage: int | None) -> Path | None:
+    """a stage's tile layers as the game builds them (stages 3-5: level.c level_dump_layers, on the headless build)"""
+    if stage is None:
+        return None
+    exe = ROOT / 'build/headless/saber_headless'
+    subprocess.run(['make', '-f', 'Makefile.headless', '-j8'], cwd=ROOT, check=True, capture_output=True)
+    out = work / f'stage{stage}.layers'
+    env = dict(os.environ, SABER_ASSETS=str(ROOT / 'assets'), SABER_FRAMES='1', SABER_DUMPLAYERS=str(out))
+    subprocess.run([exe, data, str(stage)], cwd=ROOT, env=env, check=True, capture_output=True)
+    return out
 
 
 preview_dir: Path | None = None

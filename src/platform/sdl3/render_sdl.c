@@ -85,4 +85,5 @@ void    r_floor_cells_changed(RFloor *f) { (void)f; }   /* the raster reads the 
 void    r_floor_draw(Ren *r, RFloor *f, const RFloorView *v) { floor_soft_draw(r, f, v); }
 void    r_floor_destroy(RFloor *f) { floor_soft_destroy(f); }
 bool    r_layer(Ren *r, uint32_t level, int layer, float cam_x, float cam_y) { (void)r; (void)level; (void)layer; (void)cam_x; (void)cam_y; return false; }
+bool    r_layer_held(Ren *r, uint32_t level, int layer) { (void)r; (void)level; (void)layer; return false; }
 void    r_set_depth(Ren *r, int layer) { (void)r; (void)layer; }

@@ -110,14 +110,15 @@ def render_layer(ly: Layer, bank: Bank, ox: float, sw: int, sh: int, out: np.nda
             mx = cx % ly.used_w if wrap else cx
             if mx < 0 or mx >= ly.w:
                 continue
-            v = int(ly.cells[cy, mx]) & 0x7FFFFFFF
+            raw = int(ly.cells[cy, mx])
+            v = raw & 0x7FFFFFFF
             if not v:
                 continue
             t = int(bank.cells[(v - 1) % ncells])
             if t == 0xFFFF:
                 continue
             x, y = cx * tw + fx, cy * th
-            tile = bank.tile(t)
+            tile = bank.tile(t)[:, ::-1] if raw >> 31 else bank.tile(t)
             x0, y0, x1, y1 = max(x, 0), max(y, 0), min(x + tw, sw), min(y + th, sh)
             if x1 <= x0 or y1 <= y0:
                 continue
@@ -125,3 +126,39 @@ def render_layer(ly: Layer, bank: Bank, ox: float, sw: int, sh: int, out: np.nda
             m = src[..., 3:4] >= 128
             out[y0:y1, x0:x1] = np.where(m, src, out[y0:y1, x0:x1])
     return out
+
+
+def png_bank(path: Path, bank_id: int, tw: int = 16, th: int = 16) -> Bank:
+    """a PNG tile sheet as gfx.c cblock_from_png makes it: tiles in reading order, map cell index = tile"""
+    from PIL import Image
+    px = np.asarray(Image.open(path).convert('RGBA'))
+    cols, rows = px.shape[1] // tw, px.shape[0] // th
+    return Bank(bank_id, px, tw, th, cols * rows, cols, np.arange(cols * rows, dtype=np.uint16))
+
+
+def load_dump(path: Path) -> tuple[Level, dict[int, Path | None]]:
+    """a stage's tile layers as the game built them (SABER_DUMPLAYERS, level.c level_dump_layers): the level (its id is
+    the stage's plane set) and per tile bank its PNG sheet (None: a pack bank, texprep's .srgb)"""
+    lines = path.read_text().splitlines()
+    head = lines[0].split()
+    L = Level(int(head[3], 16))
+    L.width = float(head[5])
+    files: dict[int, Path | None] = {}
+    i = 1
+    while i < len(lines):
+        f = lines[i].split()
+        i += 1
+        assert f[0] == 'layer'
+        name = ' '.join(f[2:f.index('map')])
+        rest = f[f.index('map'):]
+        kv = dict(zip(rest[0::2], rest[1::2]))
+        ly = Layer(name, kv['map'] == '1', float(kv['parallax']), int(kv['extra']))
+        L.layers.append(ly)
+        if not ly.is_tilemap:
+            continue
+        ly.w, ly.h, ly.used_w, ly.cblock = int(kv['w']), int(kv['h']), int(kv['used_w']), int(kv['cblock'], 16)
+        rows = [[int(v, 16) for v in lines[i + r].split()] for r in range(ly.h)]
+        i += ly.h
+        ly.cells = np.array(rows, np.uint32).reshape(ly.h, ly.w)
+        files[ly.cblock] = None if kv['file'] == '-' else Path(kv['file'])
+    return L, files

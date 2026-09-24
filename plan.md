@@ -721,6 +721,17 @@ Next for M5: a
 thin dark line at y 80 during the power attack's white flash (the backdrop strip's edge); a side-by-side against
 the PC build along a camera sweep (the builder's preview covers the planes only).
 
+**Stages 3-5** (`layers.PLANS`, set ids in `game.c` `PLANES_ID`): they reuse level 1's block with tile layers of
+their own - stage 3's night route rebuilt from level-1 pieces (`night_level.c`), the forest and the lab (`forest.lvl`,
+`lab.lvl`, PNG sheets). `build_disc.py` runs the headless build with `SABER_DUMPLAYERS` to get each stage's layers as
+the game builds them and bakes those. Stage 3: level 1's layout in the night palette (baked into the cells), the night
+sky and moon VDP1 palette sprites under every plane (`r_set_depth(0)`); stage 4: seven background layers on four
+planes (the sky's top rows, then the foliage with the sky one colour a row behind it; trunks + canopy at 0.26, the two
+hedges at 0.52), the cabin rails and ForegroundStuf2 on VDP1; stage 5: a plane per layer. Cells 3623 / 9798 / 11723
+(of 12288 that fit), 49.5 / 40.1 / 46.9 dB. A stage no longer loads the sheets the planes hold (`r_layer_held`); the
+Hyperjumper and stage 3's sky / moon PNGs are baked 8bpp (they sit between planes). In mednafen all three run at one
+field a frame, draw 2-5 ms.
+
 ### M5b — no soft-float on the Saturn (`src/real.h`)
 
 The whole core (the front end, the four platform stages, the Grand Prix, Ramrod's fight, the space chase) and the
