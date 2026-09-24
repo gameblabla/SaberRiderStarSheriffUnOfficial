@@ -16,7 +16,7 @@ struct Video {
     pvr_ptr_t tex; size_t tex_bytes; int tw, th;
     pvr_poly_hdr_t hdr __attribute__((aligned(32)));
     float u0, v0, u1, v1;
-    int w, h;                  /* content size */
+    int w, h;                  /* source display size (may differ from the converted texture) */
     kthread_t *worker; volatile bool quit;
     bool finished, started, audio_ready;
 };
@@ -56,11 +56,13 @@ static Video *open_path(const char *path)
         /* the packer's strided layout: one global stride register; only videos use it */
         fmt |= PVR_TXRFMT_X32_STRIDE | PVR_TXRFMT_NONTWIDDLED;
         PVR_SET(PVR_TEXTURE_MODULO, info->tex_width / 32);
-        v->u0 = 0; v->v0 = 0; v->u1 = (float)info->content_width / v->tw; v->v1 = (float)info->content_height / v->th;
+        v->u0 = 0.5f / v->tw; v->v0 = 0.5f / v->th;
+        v->u1 = ((float)info->content_width - 0.5f) / v->tw;
+        v->v1 = ((float)info->content_height - 0.5f) / v->th;
     } else {
         fmt |= PVR_TXRFMT_TWIDDLED;
-        v->u0 = (float)(info->tex_width - info->content_width) / (2.0f * info->tex_width);
-        v->v0 = (float)(info->tex_height - info->content_height) / (2.0f * info->tex_height);
+        v->u0 = ((float)(info->tex_width - info->content_width) * 0.5f + 0.5f) / info->tex_width;
+        v->v0 = ((float)(info->tex_height - info->content_height) * 0.5f + 0.5f) / info->tex_height;
         v->u1 = 1.0f - v->u0; v->v1 = 1.0f - v->v0;
     }
     rdc_compile(&v->hdr, v->tex, fmt, v->tw, v->th, R_BLEND_NONE, true, false, false);
@@ -101,7 +103,11 @@ Video *video_open(Ren *r, uint32_t id)
 {
     (void)r;
     char path[64]; snprintf(path, sizeof path, "/cd/video/%08lX.dcmv", (unsigned long)id);
-    return open_path(path);
+    Video *v = open_path(path);
+    /* The briefing source is 768x312. Conversion reduces every movie to a
+     * 320x240 texture, but the room screen is sized from the source video. */
+    if (v && id == 0x2FE798C3u) { v->w = 768; v->h = 312; }
+    return v;
 }
 
 Video *video_open_file(Ren *r, const char *path, float fps)

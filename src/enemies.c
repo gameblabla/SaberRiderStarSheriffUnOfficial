@@ -659,7 +659,13 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
     float amp = c->state == CS_FALL ? 10.0f : c->state == CS_SLIDE ? 13.0f : 16.0f;
     b->flags = 0x0f | PHYS_NO_GRAVITY;
     b->vy = sinf((float)(E->frame % 66) * 0.0952f) * amp;
-    if (E->boss_phase == 0) { E->boss_phase = 1; E->cam_locked = true; music_play(8, true); sfx_play(0x13, 0); }
+    if (E->boss_phase == 0) {
+        E->boss_phase = 1; E->cam_locked = true;
+        /* The far-to-mid pass resets boss_phase to zero. Restarting ADX here
+         * stopped and reopened the same track, blocking the gameplay frame. */
+        if (!E->boss_music_started) { music_play(8, true); E->boss_music_started = true; }
+        sfx_play(0x13, 0);
+    }
     if (plat_getenv("SABER_TRACE") && (E->frame % 10) == 0)
         fprintf(stderr, "boss st=%d layer=%d x=%.0f y=%.0f vx=%.0f cam=%.0f phase=%d dir=%d aim=%d hp=%d anim=%d\n", c->state, e->layer, b->x, b->y, b->vx, cam_x, E->boss_phase, e->dir, c->aim, e->hp, c->anim);
 

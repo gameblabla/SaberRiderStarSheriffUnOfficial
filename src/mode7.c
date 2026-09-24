@@ -402,7 +402,6 @@ Mode7 *mode7_create(Ren *ren, int sw, int sh, int difficulty, int lives, bool re
     dialog_set_hero(HERO_FIREBALL);   /* the Grand Prix is Fireball's story whoever was picked: everyone rides in his buggy */
     start_race(m);
     m->phase = PH_INTRO; m->phase_t = 0;
-    play_music(m, 10, true);
     m->intro_pending = true;
     if (plat_getenv("SABER_M7PHASE")) {   /* debug: 1 race (no story), 2 pursuit, 3 boss, 4 the finish -> briefing */
         int ph = atoi(plat_getenv("SABER_M7PHASE")); m->intro_pending = false;
@@ -787,7 +786,6 @@ static void begin_pursuit(Mode7 *m)
     b->kind = K_BOSS; b->spr = S_LEADER; b->scale = 1.25f; b->hp = b->hp_max = m->boss_hp_max = m->difficulty == 0 ? 60 : m->difficulty == 1 ? 80 : 100;
     b->x = WORLD * 0.5f; b->y = m->py - 1500; b->state = B_FLEE; b->heading = -PI / 2; b->speed = 300; b->t = -10; b->t2 = 3; b->solid = true;
     m->boss_i = (int)(b - m->ents); m->gap = 1500;
-    play_music(m, 14, true);
     set_msg(m, "CATCH THE HORNET LEADER", 3.0f);
 }
 
@@ -798,7 +796,6 @@ static void begin_boss(Mode7 *m)
     b->state = B_RUN; b->t = 0; b->t2 = 1.5f; b->t3 = 5; b->knock = 0; b->anim = 0;
     for (int i = 0; i < MAX_ENT; i++) if (m->ents[i].kind == K_ESCORT || m->ents[i].kind == K_MINE || m->ents[i].kind == K_ESHOT) m->ents[i].kind = K_NONE;
     m->pursuit_spawn_t = 7.0f;
-    play_music(m, 17, true);
 }
 
 static void begin_victory(Mode7 *m)
@@ -830,6 +827,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
 
     switch (m->phase) {
     case PH_INTRO:
+        play_music(m, 10, true);   /* title_start has finished before the mode updates */
         if (m->intro_pending) { m->intro_pending = false; dialog_open_script(&m->dlg, SCRIPT_INTRO); }
         if (m->dlg.active) dialog_update(&m->dlg, in, dt);
         else { m->phase = PH_INSTRUCTIONS; m->phase_t = 0; }
@@ -840,6 +838,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         if (m->phase_t >= INSTR_MIN_DUR) { m->phase = PH_COUNTDOWN; m->phase_t = 0; m->countdown = 3.99f; }
         break; }
     case PH_COUNTDOWN: {
+        play_music(m, 10, true);   /* also covers a direct debug start */
         int before = (int)m->countdown; m->countdown -= dt; int after = (int)m->countdown;
         if (after != before) sfx_play(0, 0);
         update_racers(m, dt); standings(m);
@@ -899,6 +898,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         if (m->phase_t >= BRIEF_TEXT_DUR + BRIEF_ZOOM_DUR) { m->phase = PH_PURSUIT; m->phase_t = 0; m->white = 1; begin_pursuit(m); }
         break; }
     case PH_PURSUIT: {
+        play_music(m, 14, true);
         if (m->white > 0) m->white = clampf(m->white - dt / PURSUIT_FADE, 0, 1);
         player_drive(m, in, dt, true);
         update_ents(m, dt);
@@ -922,6 +922,7 @@ void mode7_update(Mode7 *m, const Input *in, float dt)
         else { m->phase = PH_BOSS; m->phase_t = 0; begin_boss(m); set_msg(m, "DESTROY THE HORNET LEADER", 3.0f); }
         break;
     case PH_BOSS: {
+        play_music(m, 17, true);
         player_drive(m, in, dt, true);
         update_ents(m, dt);
         Ent *b = &m->ents[m->boss_i];

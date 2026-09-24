@@ -54,6 +54,7 @@ typedef struct {
     bool cam_locked, cam_shake;      /* camera flags driven by the horse convoy (FUN_00414eb0) */
     bool release_request;            /* set when the last convoy horse is gone */
     int boss_phase;                  /* +0x40028 */
+    bool boss_music_started;
     bool boss_done;                  /* boss slot expired -> level complete (state 0xe) */
     int frame, tick;
     int difficulty;                  /* stage 4's shield: shots it takes */

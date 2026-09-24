@@ -57,6 +57,7 @@ static bool level_start(Game *g)
     memset(g, 0, sizeof *g);
     g->ren = ren; g->sw = sw; g->sh = sh; g->menu = menu; g->in_level = true; g->stage = stage; g->carry_lives = carry; g->continues_left = conts; g->mode7_phase2 = mode7_phase2;
     if (stage == 2) {   /* the Mode-7 Grand Prix: its own world, HUD and flow */
+        music_stop();   /* finish the previous stage's jingle before the title card */
         g->mode7 = mode7_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives, mode7_phase2);
         if (g->mode7) title_start(g);
         return g->mode7 != NULL;

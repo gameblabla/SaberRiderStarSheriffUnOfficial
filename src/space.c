@@ -793,6 +793,20 @@ static void update_shots(Space *s, float dt)
     s->clink_t -= dt;
     for (int i = 0; i < MAX_SHOT; i++) {
         Shot *sh = &s->shot[i]; if (!sh->on) continue;
+        if (sh->kind == S_ORB && alive(s) && sh->x > s->px + 6) {
+            /* The red plasma keeps tracking Ramrod until it passes him. A
+             * shot aimed only when fired can miss the whole 4:3 playfield as
+             * soon as the player moves while it crosses the screen. */
+            float want = atan2f(s->py - sh->y, s->px - sh->x);
+            float have = atan2f(sh->vy, sh->vx);
+            float turn = atan2f(sinf(want - have), cosf(want - have));
+            float limit = 2.4f * dt;
+            if (turn > limit) turn = limit;
+            if (turn < -limit) turn = -limit;
+            float speed = hypotf(sh->vx, sh->vy);
+            sh->vx = cosf(have + turn) * speed;
+            sh->vy = sinf(have + turn) * speed;
+        }
         sh->x += sh->vx * dt; sh->y += sh->vy * dt; sh->life -= dt;
         if (sh->kind == S_TORPEDO) {
             bool hit = sh->life <= 0 || boss_solid(s, sh->x + 5, sh->y);

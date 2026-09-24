@@ -41,7 +41,7 @@ PACKS = ('pack.pck', 'common.pck', 'levels.pck', 'menu.pck', 'level1.pck')
 UNUSED = ('old_april.png', 'stage2_victory.png', 'stage2_victory_og.png', 'mode7_alt.png', 'april_victory_stage1.png',
           'colt_victory_stage1.png', 'fireball_victory_stage1.png', 'saber_victory_stage1.png',
           'stage3_night_sky.png', 'stage3_red_moon.png', 'stage3_static_*.png', 'stage3/native/stage3_static_*.png',
-          'stage3/native/manifest.json')
+          'stage3/native/manifest.json', 'lab/source/*.png')
 # images whose pixels the game reads (floor materials, hit masks): their RGBA goes to files.pck besides the texture
 IMAGES = ('mode7.png', 'ramrod/floor.png', 'space/boss.png')
 PAD_TO_MIB = 650   # the padded image size: an 80-minute CD-R holds ~700 MiB, less the second session's lead-in/out
