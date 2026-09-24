@@ -181,11 +181,22 @@ bool stage3_world_build(Level *L, Stage3World *w)
     for (int k = 0; k < 4; k++) ok = ok && w->cells[li[k]];
     if (!ok) { stage3_world_free(w); return false; }
 
-    /* the plain ground strip (level-1 columns 114.. repeat every 6 tiles) and its solid floor */
+    /* The source dirt is only six tiles wide. Repeating it unchanged makes the
+     * same large pebble clusters form conspicuous vertical bands across the
+     * desert. Reverse selected whole motifs, including their individual tile
+     * pixels, so each motif remains internally continuous while the long run
+     * has a less mechanical rhythm. Collision remains a plain solid floor. */
     const TileMap *pf = L->layers[li[L_PLAYFIELD]].map;
     uint32_t *g = w->cells[li[L_PLAYFIELD]];
-    for (int c = 0; c < tcols; c++)
-        for (int r = 11; r <= 14 && r < pf->h; r++) g[r * tcols + c] = pf->cells[r * pf->w + 114 + c % 6];
+    for (int c = 0; c < tcols; c++) {
+        unsigned motif = (unsigned)c / 6;
+        bool reverse = ((motif * 1103515245u + 12345u) >> 29) & 1u;
+        int sc = 114 + (reverse ? 5 - c % 6 : c % 6);
+        for (int r = 11; r <= 14 && r < pf->h; r++) {
+            uint32_t v = pf->cells[r * pf->w + sc];
+            g[r * tcols + c] = reverse && v ? v | STAGE3_CELL_FLIP : v;
+        }
+    }
     int floor_row = 208 / L->cellh;
     for (int r = floor_row; r < rows; r++) for (int c = 0; c < cols; c++) w->collision[r * cols + c] = 15;
 
