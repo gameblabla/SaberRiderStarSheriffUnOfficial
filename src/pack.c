@@ -39,7 +39,10 @@ static ResType type_of(const char *s, size_t n)
 }
 
 /* block buffers are 32-byte aligned (DMA to video / sound memory) */
-static void *block_alloc(size_t n)
+static bool (*evict_hook)(void);
+void packs_set_evict_hook(bool (*hook)(void)) { evict_hook = hook; }
+
+static void *block_alloc_once(size_t n)
 {
 #ifdef PLAT_DREAMCAST
     return memalign(32, (n + 31) & ~(size_t)31);
@@ -48,6 +51,15 @@ static void *block_alloc(size_t n)
 #else
     return aligned_alloc(32, (n + 31) & ~(size_t)31);
 #endif
+}
+
+/* out of memory: textures not drawn lately make room (a level's blocks after the menus') */
+static void *block_alloc(size_t n)
+{
+    void *p;
+    while (!(p = block_alloc_once(n)))
+        if (!evict_hook || !evict_hook()) return NULL;
+    return p;
 }
 
 static bool read_at(FILE *f, uint32_t off, void *dst, size_t n)
@@ -120,7 +132,8 @@ static bool entry_load(const Pack *p, PackEntry *pe)
     if (log) fprintf(stderr, "pack: read %s %08X (%u KB) at %u ms\n", p->name, pe->id, (unsigned)(pe->stored / 1024), (unsigned)plat_ticks_ms());
     g_reads++;
     uint8_t *raw = block_alloc(pe->stored + 16);
-    if (!raw || !read_at(p->f, pe->off, raw, pe->stored)) { fprintf(stderr, "pack: block %08X read failed\n", pe->id); free(raw); return false; }
+    if (!raw) { fprintf(stderr, "pack: block %08X: no memory for %u bytes\n", pe->id, (unsigned)pe->stored); return false; }
+    if (!read_at(p->f, pe->off, raw, pe->stored)) { fprintf(stderr, "pack: block %08X read failed\n", pe->id); free(raw); return false; }
     if (pe->stored == pe->declen) { pe->data = raw; pe->size = pe->declen; pe->owned = true; return true; }
     uint8_t *buf = block_alloc(pe->declen + 16);
     int r = !buf ? -1
@@ -129,7 +142,7 @@ static bool entry_load(const Pack *p, PackEntry *pe)
 #endif
           : lzo1z_decompress(raw, pe->stored, buf, pe->declen + 16);
     free(raw);
-    if (r < 0) { fprintf(stderr, "pack: block %08X decompress failed\n", pe->id); free(buf); return false; }
+    if (r < 0) { fprintf(stderr, buf ? "pack: block %08X decompress failed\n" : "pack: block %08X: no memory to decompress\n", pe->id); free(buf); return false; }
     pe->data = buf; pe->size = (uint32_t)r; pe->owned = true;
     return true;
 }

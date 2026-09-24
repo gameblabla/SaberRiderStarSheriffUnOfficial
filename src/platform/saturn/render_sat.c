@@ -1,17 +1,25 @@
 /* platform/render.h on the Saturn: every draw is a VDP1 command (plan 4.4).
  *
  * Textures are "SAT1" blocks (tools/saturn/satbake.py): the rectangles the game draws out of a texture ("units": a
- * sprite frame, a tile, a glyph) are stored as VDP1-ready "parts" (4bpp with a colour lookup table, or 16bpp RGB),
+ * sprite frame, a tile, a glyph) are stored as VDP1-ready "parts" (4bpp with a colour lookup table, 8bpp indices into
+ * the texture's palette, or 16bpp RGB),
  * LZ4-compressed. A texture keeps its block in work RAM (low RAM for big ones); a part is decoded into video memory the
  * first time it is drawn and stays there until the space is needed (least recently used first; never a part drawn in
  * this frame or the one VDP1 may still be drawing). Runtime RGBA textures (rtex_create) are turned into such a block.
  *
- * The frame's commands are built in high work RAM and DMA'd to VDP1 at rsat_frame_end. Pixels are RGB (the colour
- * tables hold RGB555 with bit 15 set), so no CRAM is used yet. VDP1 has no general alpha or colour multiply:
+ * The frame's commands are built in high work RAM and DMA'd to VDP1 at rsat_frame_end. The framebuffer mixes RGB pixels
+ * (bit 15 set: 4bpp colour tables and 16bpp parts) and palette pixels (8bpp parts: VDP1 colour-bank mode, the colour
+ * code pointing into VDP2 colour RAM, where each 8bpp texture's palette gets a 64/128/256-entry bank while it is drawn).
+ * VDP1 has no general alpha or colour multiply:
  *   alpha:  < 32 not drawn, < 96 mesh + half-transparency (~25 %), < 192 half-transparency, else opaque;
+ *           palette pixels can't be blended by VDP1: an 8bpp part uses mesh instead, and so does a translucent
+ *           polygon once palette pixels may be under it (half-transparency over them draws opaque);
+ *   fades:  a translucent full-screen fill that ends the frame is the VDP2 colour offset instead (plan 4.4);
  *   add:    half-transparency (VDP2 colour calculation comes with the palette sprites, plan 4.4);
- *   colour mod: gouraud shading, which adds or subtracts per channel (an approximation of the multiply). */
+ *   colour mod: gouraud shading, which adds or subtracts per channel (an approximation of the multiply); an 8bpp
+ *           texture gets a tinted copy of its palette instead (exact). */
 #include "../render.h"
+#include "../plat.h"
 #include "sat_internal.h"
 #include "../dreamcast/dcfmv/lz4_mini.h"
 #include <yaul.h>
@@ -34,6 +42,7 @@ typedef struct __attribute__((packed)) { uint16_t ctrl, link, pmod, colr, srca, 
 enum { C_NORMAL = 0, C_SCALED = 1, C_DISTORTED = 2, C_POLYGON = 4, C_POLYLINE = 5, C_LINE = 6, C_USER_CLIP = 8, C_SYS_CLIP = 9, C_LOCAL = 10, C_END = 0x8000 };
 enum { PM_ECD = 0x80, PM_SPD = 0x40, PM_MESH = 0x100, PM_CLIP = 0x400, PM_PCLP = 0x800,
        PM_LUT = 1 << 3, PM_RGB = 5 << 3, PM_HALF = 3, PM_GOURAUD = 4 };
+enum { FMT_4BPP = 0, FMT_16BPP = 1, FMT_8BPP = 2 };
 
 /* ---------------------------------------------------------------- textures */
 typedef struct { uint16_t x, y, w, h, first, n; } Unit;
@@ -47,6 +56,7 @@ struct RTex {
     const Unit *units; int nunits;
     const Part *parts; int nparts;
     uint16_t *loc;              /* per part: its VDP1 address / 8, 0 while not in video memory */
+    const uint8_t *pal; int npal; /* the 8bpp parts' palette (big-endian RGB555 of indices 1..npal) */
     uint8_t mr, mg, mb, alpha; RBlend blend; uint32_t tag;
     bool owned_block;           /* built here (runtime texture) */
 };
@@ -67,7 +77,8 @@ typedef struct { uint32_t off, size; RTex *t; uint16_t part; uint32_t used; } Sl
 static Slot slots[MAX_SLOTS]; static int nslots;
 static uint32_t frame_no = 2;
 static uint8_t *staging;
-static unsigned uploads_frame, upload_bytes_frame, evictions;
+static unsigned uploads_frame, upload_bytes_frame, evictions, cram_uploads;
+static int trace_from, traced; static bool tracing;   /* SABER_RTRACE=n: every draw of frames n, n+10, ... n+50 */
 
 static int slot_find(uint32_t off)
 {
@@ -114,6 +125,27 @@ static bool vram_alloc(uint32_t size, RTex *t, int part, uint32_t *off)
     }
 }
 
+/* what the cache holds, per texture (debug: printed once when an allocation fails) */
+static void vram_dump(void)
+{
+    uint32_t used = 0, gaps = 0, at = TEX_OFF;
+    for (int i = 0; i < nslots; i++) { used += slots[i].size; gaps += slots[i].off - at; at = slots[i].off + slots[i].size; }
+    gaps += TEX_END - at;
+    printf("  vram: %u KB in parts, %u KB free in gaps, frame %u, %u palette uploads\n", (unsigned)(used / 1024), (unsigned)(gaps / 1024),
+           (unsigned)frame_no, cram_uploads);
+    for (int i = 0; i < nslots; i++) {
+        RTex *t = slots[i].t;
+        bool seen = false;
+        for (int k = 0; k < i && !seen; k++) seen = slots[k].t == t;
+        if (seen) continue;
+        uint32_t bytes = 0, newest = 0; int n = 0;
+        for (int k = i; k < nslots; k++)
+            if (slots[k].t == t) { bytes += slots[k].size; n++; if (slots[k].used > newest) newest = slots[k].used; }
+        printf("    %08X %dx%d: %d parts %u KB, last used frame %u\n", t ? (unsigned)t->tag : 0u, t ? t->w : 0, t ? t->h : 0,
+               n, (unsigned)(bytes / 1024), (unsigned)newest);
+    }
+}
+
 static void vram_copy(uint32_t off, const uint8_t *src, uint32_t n)
 {
     volatile uint32_t *d = (volatile uint32_t *)(VDP1_VRAM_BASE + off);
@@ -123,7 +155,63 @@ static void vram_copy(uint32_t off, const uint8_t *src, uint32_t n)
 
 static uint32_t part_raw_size(const Part *p)
 {
-    return (p->fmt & 0x7F) == 0 ? 32u + (uint32_t)p->wpad * p->h / 2 : (uint32_t)p->wpad * p->h * 2;
+    switch (p->fmt & 0x7F) {
+    case FMT_4BPP: return 32u + (uint32_t)p->wpad * p->h / 2;
+    case FMT_8BPP: return (uint32_t)p->wpad * p->h;
+    default:       return (uint32_t)p->wpad * p->h * 2;
+    }
+}
+
+/* ---------------------------------------------------------------- colour RAM: the 8bpp textures' palettes
+ * CRAM mode 1 (2048 RGB555 entries) in 32 granules of 64; a palette takes 1, 2 or 4 aligned granules (VDP1's 64-, 128-
+ * and 256-colour bank modes). A bank stays until the space is needed and it was neither used in this frame, nor in the
+ * one VDP1 is drawing, nor in the one on screen. */
+#define CRAM_GRAN 32
+typedef struct { RTex *t; uint32_t tint, used; uint8_t n; } CSlot;   /* at its first granule; n 0: free */
+static CSlot cslots[CRAM_GRAN];
+static int8_t cowner[CRAM_GRAN];   /* granule -> its bank's first granule, -1 free */
+
+static int pal_granules(int npal) { return npal < 64 ? 1 : npal < 128 ? 2 : 4; }
+
+static void cram_release(int g)
+{
+    for (int k = 0; k < cslots[g].n; k++) cowner[g + k] = -1;
+    cslots[g].n = 0; cslots[g].t = NULL;
+}
+
+/* the colour code of t's palette tinted by (r, g, b) / 255, uploading it if needed; -1 if colour RAM is full */
+static int cram_bank(RTex *t, uint8_t r, uint8_t g, uint8_t b)
+{
+    uint32_t tint = (uint32_t)r << 16 | (uint32_t)g << 8 | b;
+    for (int i = 0; i < CRAM_GRAN; i++)
+        if (cslots[i].n && cslots[i].t == t && cslots[i].tint == tint) { cslots[i].used = frame_no; return i * 64; }
+    int need = pal_granules(t->npal);
+    for (;;) {
+        for (int base = 0; base < CRAM_GRAN; base += need) {
+            bool free_run = true;
+            for (int k = 0; k < need && free_run; k++) free_run = cowner[base + k] < 0;
+            if (!free_run) continue;
+            for (int k = 0; k < need; k++) cowner[base + k] = (int8_t)base;
+            cslots[base] = (CSlot){ t, tint, frame_no, (uint8_t)need };
+            volatile uint16_t *c = (volatile uint16_t *)VDP2_CRAM_ADDR(base * 64);
+            c[0] = 0;
+            for (int k = 0; k < t->npal; k++) {
+                uint16_t v = be16(t->pal + 2 * k);
+                if (tint != 0xFFFFFF) {
+                    unsigned R = (v & 31) * r / 255, G = (v >> 5 & 31) * g / 255, B = (v >> 10 & 31) * b / 255;
+                    v = (uint16_t)(B << 10 | G << 5 | R);
+                }
+                c[k + 1] = v;
+            }
+            cram_uploads++;
+            return base * 64;
+        }
+        int victim = -1;
+        for (int i = 0; i < CRAM_GRAN; i++)
+            if (cslots[i].n && cslots[i].used + 2 < frame_no && (victim < 0 || cslots[i].used < cslots[victim].used)) victim = i;
+        if (victim < 0) return -1;
+        cram_release(victim);
+    }
 }
 
 /* the part's address in video memory / 8 (uploading it if needed), 0 if there is no room */
@@ -137,7 +225,11 @@ static uint16_t part_resident(RTex *t, int i)
     }
     uint32_t raw = part_raw_size(p), off;
     if (raw > STAGING_SIZE || !vram_alloc(raw, t, i, &off)) {
-        static int warned; if (!warned++) printf("render: no video memory for a %u byte part (%d parts resident)\n", (unsigned)raw, nslots);
+        static int warned;
+        if (!warned++) {
+            printf("render: no video memory for a %u byte part of %08X (%d parts resident)\n", (unsigned)raw, (unsigned)t->tag, nslots);
+            vram_dump();
+        }
         return 0;
     }
     const uint8_t *src = t->block + p->off;
@@ -154,10 +246,13 @@ static uint16_t part_resident(RTex *t, int i)
     return t->loc[i];
 }
 
+/* a texture going away: its video memory and colour RAM are orphaned, not freed, so the frames VDP1 may still draw (or
+ * show) keep them; the allocators reclaim them like any slot not used lately */
 static void tex_free_vram(RTex *t)
 {
+    for (int i = 0; i < CRAM_GRAN; i++) if (cslots[i].n && cslots[i].t == t) cslots[i].t = NULL;
     for (int i = 0; i < t->nparts; i++)
-        if (t->loc[i]) { int s = slot_find((uint32_t)t->loc[i] * 8); if (s >= 0) { slots[s].t = NULL; slot_remove(s); } t->loc[i] = 0; }
+        if (t->loc[i]) { int s = slot_find((uint32_t)t->loc[i] * 8); if (s >= 0) slots[s].t = NULL; t->loc[i] = 0; }
 }
 
 /* ---------------------------------------------------------------- texture objects */
@@ -178,14 +273,14 @@ static RTex *tex_from_block(Ren *r, uint8_t *block, size_t size, bool owned)
     RTex *t = calloc(1, sizeof *t);
     if (!t) return NULL;
     t->r = r; t->w = le16(block + 4); t->h = le16(block + 6);
-    t->nunits = le16(block + 8); t->nparts = le16(block + 10);
+    t->nunits = le16(block + 8); t->nparts = le16(block + 10); t->npal = le16(block + 14);
     uint32_t uoff = le32(block + 24), poff = le32(block + 28);
     t->block = block; t->size = size; t->owned_block = owned;
     /* the tables into host structs (the block's are big-endian and packed) */
     Unit *u = malloc(sizeof(Unit) * (size_t)(t->nunits ? t->nunits : 1));
     Part *p = malloc(sizeof(Part) * (size_t)(t->nparts ? t->nparts : 1));
     t->loc = calloc((size_t)(t->nparts ? t->nparts : 1), sizeof *t->loc);
-    if (!u || !p || !t->loc || uoff + 12u * t->nunits > size || poff + 20u * t->nparts > size) {
+    if (!u || !p || !t->loc || uoff + 12u * t->nunits > size || poff + 20u * t->nparts + 2u * t->npal > size || t->npal > 255) {
         free(u); free(p); free(t->loc); free(t); return NULL;
     }
     for (int i = 0; i < t->nunits; i++) {
@@ -196,7 +291,7 @@ static RTex *tex_from_block(Ren *r, uint8_t *block, size_t size, bool owned)
         const uint8_t *d = block + poff + 20 * i;
         p[i] = (Part){ be16(d), be16(d + 2), be16(d + 4), be16(d + 6), be16(d + 8), d[10], 0, be32(d + 12), be32(d + 16) };
     }
-    t->units = u; t->parts = p;
+    t->units = u; t->parts = p; t->pal = block + poff + 20 * t->nparts;
     t->mr = t->mg = t->mb = t->alpha = 255; t->blend = R_BLEND_BLEND;
     return t;
 }
@@ -274,7 +369,7 @@ void rtex_update(RTex *t, const uint32_t *px, int pitch_bytes)
     if (!n) { free(b); return; }
     tex_free_vram(t);
     free(t->block); free((void *)t->units); free((void *)t->parts); free(t->loc);
-    t->block = n->block; t->size = n->size; t->units = n->units; t->parts = n->parts; t->loc = n->loc;
+    t->block = n->block; t->size = n->size; t->units = n->units; t->parts = n->parts; t->loc = n->loc; t->pal = n->pal; t->npal = n->npal;
     t->nunits = n->nunits; t->nparts = n->nparts;
     free(n);
 }
@@ -301,6 +396,8 @@ static uint16_t back_color = 0x8000;
 static RRect clip, viewport; static bool clip_on, vp_on;
 static int scr_w = 320, scr_h = SAT_SCREEN_H;
 static bool uclip_active; static RRect uclip_cur;   /* the user clip rectangle set in the list */
+static bool pal_drawn;                              /* palette pixels may be in the framebuffer (drawn this frame) */
+static int fade_cmd = -1; static uint8_t fade_r, fade_g, fade_b, fade_a;   /* a full-screen translucent fill */
 
 static Cmd *cmd_new(void)
 {
@@ -384,6 +481,7 @@ static void polygon(float x0, float y0, float x1, float y1, float x2, float y2, 
     RRect c; if (!draw_clip(&c)) return;
     uint16_t pm = PM_ECD | PM_SPD;
     if (!blend_bits(A, bl, &pm)) return;
+    if (pal_drawn && (pm & PM_HALF)) pm = (uint16_t)((pm & ~PM_HALF) | PM_MESH);
     float ox = vp_on ? viewport.x : 0, oy = vp_on ? viewport.y : 0;
     float minx = fminf(fminf(x0, x1), fminf(x2, x3)) + ox, maxx = fmaxf(fmaxf(x0, x1), fmaxf(x2, x3)) + ox;
     float miny = fminf(fminf(y0, y1), fminf(y2, y3)) + oy, maxy = fmaxf(fmaxf(y0, y1), fmaxf(y2, y3)) + oy;
@@ -401,7 +499,7 @@ void r_clear(Ren *r)
     (void)r;
     back_color = rgb555(draw_r, draw_g, draw_b);
     ncmd = 3;   /* keep the preamble: everything drawn so far is covered */
-    uclip_active = false;
+    uclip_active = false; pal_drawn = false; fade_cmd = -1;
 }
 
 void r_fill_rect(Ren *r, const RFRect *q)
@@ -410,7 +508,15 @@ void r_fill_rect(Ren *r, const RFRect *q)
     RFRect f = q ? *q : (RFRect){ 0, 0, vp_on ? (float)viewport.w : (float)scr_w, vp_on ? (float)viewport.h : (float)scr_h };
     if (f.w <= 0 || f.h <= 0) return;
     float x1 = f.x + f.w - 1, y1 = f.y + f.h - 1;
+    int before = ncmd;
     polygon(f.x, f.y, x1, f.y, x1, y1, f.x, y1, draw_r, draw_g, draw_b, draw_a, draw_blend);
+    /* a translucent fill of the whole screen: if nothing is drawn after it, rsat_frame_end makes it a colour offset */
+    RRect c;
+    if (ncmd == before + 1 && draw_blend == R_BLEND_BLEND && draw_a < 255 && draw_clip(&c) && c.x == 0 && c.y == 0 &&
+        c.w == scr_w && c.h == scr_h && f.x + (vp_on ? viewport.x : 0) <= 0 && f.y + (vp_on ? viewport.y : 0) <= 0 &&
+        f.x + (vp_on ? viewport.x : 0) + f.w >= scr_w && f.y + (vp_on ? viewport.y : 0) + f.h >= scr_h) {
+        fade_cmd = before; fade_r = draw_r; fade_g = draw_g; fade_b = draw_b; fade_a = draw_a;
+    }
 }
 void r_fill_rects(Ren *r, const RFRect *q, int n) { for (int i = 0; i < n; i++) r_fill_rect(r, &q[i]); }
 
@@ -419,6 +525,7 @@ static void line_cmd(int type, const float *xy, int n)
     RRect c; if (!draw_clip(&c)) return;
     uint16_t pm = PM_ECD | PM_SPD;
     if (!blend_bits(draw_a, draw_blend, &pm)) return;
+    if (pal_drawn && (pm & PM_HALF)) pm = (uint16_t)((pm & ~PM_HALF) | PM_MESH);
     float ox = vp_on ? viewport.x : 0, oy = vp_on ? viewport.y : 0;
     pm |= clip_bits(&c, -4096, -4096, 4096, 4096);
     Cmd *k = cmd_new(); if (!k) return;
@@ -484,27 +591,44 @@ static void map_pt(const Map *m, float u, float v, float *x, float *y)
 static void draw_part(RTex *t, int pi, const Map *m, const RRect *c, bool partial)
 {
     const Part *p = &t->parts[pi];
+    int fmt = p->fmt & 0x7F;
     uint16_t pm = PM_ECD;
     if (!blend_bits(t->alpha, t->blend, &pm)) return;
+    if (fmt == FMT_8BPP && (pm & PM_HALF)) pm = (uint16_t)((pm & ~PM_HALF) | PM_MESH);   /* no VDP1 blending of palette pixels */
+    else if (pal_drawn && (pm & PM_HALF)) pm = (uint16_t)((pm & ~PM_HALF) | PM_MESH);
     /* the part's corners on the screen (its padded width: the padding is transparent) */
     float ax, ay, bx, by, cxx, cyy, dxx, dyy;
     map_pt(m, p->x, p->y, &ax, &ay); map_pt(m, p->x + p->wpad, p->y, &bx, &by);
     map_pt(m, p->x + p->wpad, p->y + p->h, &cxx, &cyy); map_pt(m, p->x, p->y + p->h, &dxx, &dyy);
     float minx = fminf(fminf(ax, bx), fminf(cxx, dxx)), maxx = fmaxf(fmaxf(ax, bx), fmaxf(cxx, dxx));
     float miny = fminf(fminf(ay, by), fminf(cyy, dyy)), maxy = fmaxf(fmaxf(ay, by), fmaxf(cyy, dyy));
-    if (maxx <= c->x || maxy <= c->y || minx >= c->x + c->w || miny >= c->y + c->h) return;
+    if (maxx <= c->x || maxy <= c->y || minx >= c->x + c->w || miny >= c->y + c->h) {
+        if (tracing) printf("    part %d culled (%d,%d)-(%d,%d)\n", pi, (int)minx, (int)miny, (int)maxx, (int)maxy);
+        return;
+    }
     uint16_t loc = part_resident(t, pi);
+    if (tracing) printf("    part %d fmt %d %dx%d at %d,%d loc %u tint %02X%02X%02X\n", pi, p->fmt, p->wpad, p->h, (int)minx, (int)miny, loc, t->mr, t->mg, t->mb);
     if (!loc) return;
     RRect cc = *c;
     if (partial) {   /* a draw of part of a unit: clip to the destination rectangle too */
         RRect d = { (int)floorf(m->dx), (int)floorf(m->dy), (int)ceilf(m->dw), (int)ceilf(m->dh) };
         if (!r_rect_intersect(&cc, &d, &cc)) return;
     }
+    int bank = 0;
+    if (fmt == FMT_8BPP && (bank = cram_bank(t, t->mr, t->mg, t->mb)) < 0) {
+        static int warned; if (!warned++) printf("render: colour RAM full (texture %08X)\n", (unsigned)t->tag);
+        return;
+    }
     pm |= clip_bits(&cc, (int)minx, (int)miny, (int)maxx - 1, (int)maxy - 1);
-    uint16_t gr = gouraud_for(t->mr, t->mg, t->mb);
+    uint16_t gr = fmt == FMT_8BPP ? 0 : gouraud_for(t->mr, t->mg, t->mb);
     if (gr) pm |= PM_GOURAUD;
     Cmd *k = cmd_new(); if (!k) return;
-    if ((p->fmt & 0x7F) == 0) { pm |= PM_LUT; k->colr = loc; k->srca = (uint16_t)(loc + 4); }   /* the table, then the texels */
+    if (fmt == FMT_4BPP) { pm |= PM_LUT; k->colr = loc; k->srca = (uint16_t)(loc + 4); }   /* the table, then the texels */
+    else if (fmt == FMT_8BPP) {   /* colour bank: 64 (mode 2), 128 (3) or 256 (4) colours */
+        int g = pal_granules(t->npal);
+        pm |= (uint16_t)((g == 1 ? 2 : g == 2 ? 3 : 4) << 3); k->colr = (uint16_t)bank; k->srca = loc;
+        pal_drawn = true;
+    }
     else { pm |= PM_RGB; k->srca = loc; }
     k->pmod = pm; k->grda = gr;
     k->size = (uint16_t)((p->wpad / 8) << 8 | p->h);
@@ -540,6 +664,8 @@ static void tex_draw(RTex *t, const RFRect *src, const RFRect *dst, double angle
         m.cx = m.dx + (center ? center->x : m.dw * 0.5f); m.cy = m.dy + (center ? center->y : m.dh * 0.5f);
     }
     const Unit *u = unit_exact(t, (int)s.x, (int)s.y, (int)s.w, (int)s.h);
+    if (tracing) printf("  tex %08X src %d,%d %dx%d dst %d,%d %dx%d a%u %s ncmd %d\n", (unsigned)t->tag, (int)s.x, (int)s.y, (int)s.w, (int)s.h,
+                        (int)d.x, (int)d.y, (int)d.w, (int)d.h, t->alpha, u ? "unit" : "rect", ncmd);
     if (u && u->x == s.x && u->y == s.y) {
         for (int i = 0; i < u->n; i++) draw_part(t, u->first + i, &m, &c, false);
         return;
@@ -572,24 +698,45 @@ void rsat_init(void)
         .erase_points = { { 0, 0 }, { SAT_WIDE_W - 1, SAT_SCREEN_H - 1 } } };
     vdp1_env_set(&env);
     vdp2_sprite_priority_set(0, 6);
+    vdp2_cram_mode_set(1);
+    const char *tr = plat_getenv("SABER_RTRACE");
+    trace_from = tr ? atoi(tr) : 0;
+    for (int i = 0; i < CRAM_GRAN; i++) cowner[i] = -1;
     cmds = hw_memalign(32, sizeof(Cmd) * CMD_MAX);
     staging = hw_memalign(32, STAGING_SIZE);
     if (!cmds || !staging) printf("render: no RAM for the command list\n");
-    vdp1_sync_interval_set(0);
+    vdp1_sync_interval_set(-1);   /* variable: the framebuffers change once VDP1 has finished the frame (AUTO (0) changes
+                                   * them every field and cuts off a frame VDP1 needs longer for) */
 }
 
 void rsat_frame_begin(void)
 {
     frame_no++;
+    tracing = trace_from > 0 && traced < 6 && frame_no >= (unsigned)trace_from && (frame_no - (unsigned)trace_from) % 10 == 0;
+    if (tracing) { traced++; printf("render trace: frame %u\n", (unsigned)frame_no); }
     ren.prims = 0; ngouraud = 0; uploads_frame = upload_bytes_frame = 0;
-    ncmd = 0; uclip_active = false;
+    ncmd = 0; uclip_active = false; pal_drawn = false; fade_cmd = -1;
     Cmd *k = cmd_new(); k->ctrl = C_SYS_CLIP; k->xc = (int16_t)(scr_w - 1); k->yc = (int16_t)(scr_h - 1);
     k = cmd_new(); k->ctrl = C_USER_CLIP; k->xc = (int16_t)(scr_w - 1); k->yc = (int16_t)(scr_h - 1);
     k = cmd_new(); k->ctrl = C_LOCAL;
 }
 
+/* the colour offset (VDP2, every layer): the fade fill ending the frame, lerp towards its colour approximated as an add */
+static void colour_offset(void)
+{
+    vdp2_ioregs_t *regs = vdp2_regs_get();
+    if (fade_cmd < 0 || fade_cmd != ncmd - 1) { regs->clofen = 0; return; }
+    ncmd--;   /* the fill's polygon: not drawn */
+    int a = fade_a;
+    int orr = a * (fade_r * 2 - 255) / 255, og = a * (fade_g * 2 - 255) / 255, ob = a * (fade_b * 2 - 255) / 255;
+    regs->clofen = 0x7F;   /* NBG0-3, RBG0, back screen, sprites */
+    regs->clofsl = 0;      /* offset A */
+    regs->coar = (uint16_t)(orr & 0x1FF); regs->coag = (uint16_t)(og & 0x1FF); regs->coab = (uint16_t)(ob & 0x1FF);
+}
+
 void rsat_frame_end(void)
 {
+    colour_offset();
     Cmd *k = &cmds[ncmd++]; memset(k, 0, sizeof *k); k->ctrl = C_END;
     vdp2_scrn_back_color_set(VDP2_VRAM_ADDR(3, 0x01FFFE), (rgb1555_t){ .raw = back_color });
     vdp1_sync_wait();

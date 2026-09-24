@@ -434,7 +434,20 @@ static bool evict_one(void)
     return true;
 }
 
-bool gfx_init(Ren *r) { R = r; r_set_evict_hook(evict_one); return true; }
+/* a pack block that doesn't fit (a level after the menus): any texture, drawn longest ago first. A backend whose GPU may
+ * still be drawing it keeps its video memory until then (the Saturn's render_sat.c does). */
+static bool evict_any(void)
+{
+    if (evict_one()) return true;
+    uint32_t best = UINT32_MAX; RTex **victim = NULL;
+    for (int i = 0; i < g_nspr; i++) if ((g_spr[i].from_pack || g_spr[i].file) && g_spr[i].tex && g_spr[i].last_used <= best) { best = g_spr[i].last_used; victim = &g_spr[i].tex; }
+    for (int i = 0; i < g_ncb; i++) if ((g_cb[i].from_pack || g_cb[i].file) && g_cb[i].tex && g_cb[i].last_used <= best) { best = g_cb[i].last_used; victim = &g_cb[i].tex; }
+    if (!victim) return false;
+    rtex_destroy(*victim); *victim = NULL;
+    return true;
+}
+
+bool gfx_init(Ren *r) { R = r; r_set_evict_hook(evict_one); packs_set_evict_hook(evict_any); return true; }
 
 void gfx_flush(void)
 {

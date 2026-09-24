@@ -613,3 +613,55 @@ Further modules move to fx where a stage's profile shows float cost (Mode 7, coc
 Decisions taken for the open questions of section 14 (defaults of this plan, revisit on request): power clips stop
 CD-DA and resume; briefing Plan A with Plan B as fallback; 30 fps accepted as the floor for Mode 7 / space; RATIO
 switch by re-init from OPTIONS.
+
+### M3 — asset baker v1 (`tools/saturn/satbake.py`, `build/saturn/bake.log`)
+
+Every texture is cut into the rectangles the game draws out of it (sprite frames, cblock tiles, glyphs, atlas entries),
+each unit's opaque box into VDP1-sized parts (≤ 504 px wide, ≤ 255 rows, ≤ 32 KB raw), each part stored LZ4 where that
+is smaller, as:
+
+- **4bpp + colour table** (VDP1 LUT mode, RGB entries) where a band of rows has ≤ 15 colours (exact);
+- **8bpp palette** (VDP1 colour-bank mode through VDP2 CRAM) when the texture has ≤ 255 colours, or quantises to 255
+  (weighted k-means from a median-cut start) at ≥ 40 dB PSNR against its 15-bit colours;
+- **16bpp RGB** otherwise.
+
+| | 16bpp parts (raw) | 8bpp parts | stored on disc |
+|---|---|---|---|
+| before (4bpp / 16bpp only) | 10 MB | — | 4.4 MB |
+| now | 4.2 MB | 2.7 MB | 4.2 MB |
+
+Every pack texture but one (`0C5FAD65`, 2126 colours) is now 4bpp/8bpp; the spiral (512x512, 31 colours) went from
+464 KB of 16bpp (more than VDP1's texture memory) to 256 KB of 8bpp. Quantised: forest/play, the ramrod cockpit and
+sky, space planet and far ship, three stage-3 victory paintings (40-49 dB). Left 16bpp (34-39 dB): the other victory
+paintings (202 KB each, alone on their screen), `mode7.png` and `ramrod/atlas.png` (per-frame palettes for those two
+come with M9/M10). Not done yet: per-cell palette packing for the VDP2 planes (with M5), contact sheets.
+
+### M4 — VDP1 + front end (`src/platform/saturn/render_sat.c`)
+
+The front end runs from the splashes through notice, title zoom, main menu, OPTIONS (+ backer credits), briefing
+(text box, hero pieces) and character select to the level's LOADING screen, checked in mednafen screenshots
+(`tools/saturn/mednafen_run.py --shots`). What it took:
+
+- **VDP1 frame change**: `vdp1_sync_interval_set(-1)` (variable). The former AUTO mode (0) swapped the framebuffers
+  every field and cut off frames VDP1 needed longer for: the main menu lost the lower logo and its text, every frame.
+  The front end runs at ~34 fps in mednafen (the game steps by elapsed fields, so its speed is unchanged).
+- **CRAM palettes**: CRAM mode 1, 32 granules of 64 colours; an 8bpp texture's palette gets a 64/128/256-colour bank
+  (VDP1 colour-bank modes 2/3/4) while it is drawn, reused LRU once neither the frame being built, drawn nor shown uses
+  it. Colour mod on an 8bpp texture = a tinted copy of its palette (exact; the OPTIONS spiral at 40 %).
+- **Palette pixels can't be blended by VDP1** (half-transparency over them draws opaque, checked in mednafen's
+  `vdp1_common.h`): 8bpp parts use mesh for alpha, and so does a translucent polygon once palette pixels were drawn.
+  A translucent **full-screen fill that ends the frame** (the core's fades) becomes the **VDP2 colour offset** (plan 4.4).
+- **Memory**: a destroyed texture's VRAM / CRAM stay reserved until the frames in flight are done; pack block reads
+  can evict textures (core: `packs_set_evict_hook`, gfx.c `evict_any`), so level 1's 700 KB LEVL block loads after
+  the menus.
+- Debug: `SABER_RTRACE=n` logs every draw of frames n, n+10 … n+50 (parts, formats, VRAM, tint); a failed VRAM
+  allocation dumps the cache per texture.
+
+Open for M4: a side-by-side against PC screenshots (no SDL3 in the cloud session this was done in); VDP1 draw time per
+screen; the briefing/intro videos (M7). **Level 1 does not fit yet with the VDP1 renderer**: the tile banks' RAM copies
+next to the 623 KB LEVL map exhaust both heaps (`D8B018EE`: 301 KB). That is M5 (planes streamed from compressed
+columns, LEVL replaced by the plane streams, plan 4.3 / 8.4).
+
+Testing notes: the disc's area code includes North America, so mednafen picks the US BIOS; with only `sega_101.bin`,
+set `ss.region_autodetect 0` and `ss.region_default jp` (the headless kit's `set` command, kept in
+`mednafen-headless.cfg`).

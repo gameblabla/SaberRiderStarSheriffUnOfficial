@@ -46,6 +46,9 @@ const PackEntry *packs_peek_type(uint32_t id, ResType t);
 void  packs_release(uint32_t id);
 void  packs_release_type(uint32_t id, ResType t);
 void  packs_close(void);
+/* called when a block doesn't fit in memory: frees something (gfx.c drops the texture drawn longest ago) and returns
+ * true, or false when there is nothing left to free */
+void  packs_set_evict_hook(bool (*hook)(void));
 /* blocks read from the packs so far (SABER_PERF: a read in the middle of a level is a stall) */
 unsigned packs_reads(void);
 uint32_t hex_id(const char *s8);
