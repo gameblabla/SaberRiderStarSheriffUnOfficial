@@ -12,8 +12,9 @@
  * code pointing into VDP2 colour RAM, where each 8bpp texture's palette gets a 64/128/256-entry bank while it is drawn).
  * VDP1 has no general alpha or colour multiply:
  *   alpha:  < 32 not drawn, < 96 mesh + half-transparency (~25 %), < 192 half-transparency, else opaque;
- *           palette pixels can't be blended by VDP1: an 8bpp part uses mesh instead, and so does a translucent
- *           polygon once palette pixels may be under it (half-transparency over them draws opaque);
+ *           VDP1 blends only over RGB pixels (half-transparency over palette or transparent pixels draws opaque): an
+ *           8bpp part uses mesh instead, and so does anything translucent once palette pixels may be under it, or the
+ *           VDP2 planes (the framebuffer then starts out transparent);
  *   fades:  a translucent full-screen fill that ends the frame is the VDP2 colour offset instead (plan 4.4);
  *   add:    half-transparency (VDP2 colour calculation comes with the palette sprites, plan 4.4);
  *   colour mod: gouraud shading, which adds or subtracts per channel (an approximation of the multiply); an 8bpp
@@ -1018,7 +1019,10 @@ static void draw_backdrops(void)
         tex_draw(backdrop[i], NULL, &d, 0, NULL, R_FLIP_NONE);
     }
     vp_on = vp; clip_on = cl; clip_dirty = true;
-    pal_drawn = false;   /* under the planes: nothing is blended over them */
+    /* With the planes on, the framebuffer starts out transparent (the clear above) or palette pixels (the backdrops):
+     * VDP1 half-transparency over either draws the pixel opaque - a translucent fill would cover the planes (the power
+     * attack's flash went solid, or left the backdrop strip opaque). Everything translucent is meshed instead. */
+    pal_drawn = clear_fb;
 }
 
 /* the colour offset (VDP2, every layer): the fade fill ending the frame, lerp towards its colour approximated as an add */
