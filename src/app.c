@@ -9,7 +9,10 @@
 static Game g;   /* static: several hundred KB, too big for a console's main stack */
 static const char *script; static int script_n; static char script_keys[16];
 static int shot_frames = -1; static char shot_path[256];
+#ifndef REAL_FIXED
 static double acc;
+#endif
+static int acc_fields;
 static bool shot_now;
 
 Game *app_game(void) { return &g; }
@@ -36,8 +39,11 @@ bool app_init(Ren *ren, const char *data_dir, int start_level)
     script = plat_getenv("SABER_SCRIPT");
     /* debug: SABER_SHOT=path,camx,steps -> save a screenshot after N fixed steps and quit */
     if (plat_getenv("SABER_SHOT")) {
-        float cx = -1; int n = 1;
-        sscanf(plat_getenv("SABER_SHOT"), "%255[^,],%f,%d", shot_path, &cx, &n);
+        const char *s = plat_getenv("SABER_SHOT"), *c = strchr(s, ','), *e = NULL;
+        size_t len = c ? (size_t)(c - s) : strlen(s); if (len > 255) len = 255;
+        memcpy(shot_path, s, len); shot_path[len] = 0;
+        real cx = R(-1); int n = 1;
+        if (c) { cx = r_parse(c + 1, &e); if (*e == ',') n = atoi(e + 1); }
         if (cx >= 0) g.cam_x = cx;
         shot_frames = n;
     }
@@ -65,16 +71,39 @@ static void script_step(void)
     }
 }
 
+static int fast = -1;
+static bool fuzz, fuzz_read;
+static void one_step(void);
+
+#ifndef REAL_FIXED
 int app_update(double elapsed)
 {
     int steps = 0;
     const double step = 1.0 / 60.0;
     acc += elapsed;
     if (acc > 0.25) acc = 0.25;
-    static int fast = -1; if (fast < 0) fast = plat_getenv("SABER_FAST") ? atoi(plat_getenv("SABER_FAST")) : 0;
+    if (fast < 0) fast = plat_getenv("SABER_FAST") ? atoi(plat_getenv("SABER_FAST")) : 0;
     if (fast > 0) acc = step * fast;   /* debug: n fixed steps per drawn frame (long headless runs) */
-    static bool fuzz = false, fuzz_read; if (!fuzz_read) { fuzz = plat_getenv("SABER_FUZZ") != NULL; fuzz_read = true; }
-    while (acc >= step) {
+    while (acc >= step) { one_step(); acc -= step; steps++; }
+    return steps;
+}
+#endif
+
+int app_update_fields(int fields)
+{
+    int steps = 0;
+    acc_fields += fields;
+    if (acc_fields > 15) acc_fields = 15;   /* a quarter of a second */
+    if (fast < 0) fast = plat_getenv("SABER_FAST") ? atoi(plat_getenv("SABER_FAST")) : 0;
+    if (fast > 0) acc_fields = fast;
+    while (acc_fields >= 1) { one_step(); acc_fields--; steps++; }
+    return steps;
+}
+
+static void one_step(void)
+{
+    if (!fuzz_read) { fuzz = plat_getenv("SABER_FUZZ") != NULL; fuzz_read = true; }
+    {
         if (script) script_step();
         if (fuzz) {   /* debug: random inputs, hold each for a few frames */
             static int hold; static unsigned mask;
@@ -83,11 +112,9 @@ int app_update(double elapsed)
             if (g.in.raw[BTN_LEFT] && g.in.raw[BTN_RIGHT]) g.in.raw[BTN_LEFT] = false;
             g.in.raw[BTN_PAUSE] = false; g.in.raw[BTN_POWER] = false;
         }
-        game_update(&g, (float)step); audio_update(); acc -= step;
+        game_update(&g, R_DT); audio_update();
         if (shot_frames > 0) shot_frames--;   /* SABER_SHOT counts fixed steps, not rendered frames */
-        steps++;
     }
-    return steps;
 }
 
 void app_draw(void)
@@ -107,6 +134,13 @@ bool app_perf_on(void)
     return on;
 }
 
+static char *ms2(char *buf, uint32_t us)   /* microseconds as milliseconds with 2 decimals */
+{
+    uint32_t h = (us + 5) / 10;
+    snprintf(buf, 12, "%u.%02u", (unsigned)(h / 100), (unsigned)(h % 100));
+    return buf;
+}
+
 void app_perf(uint32_t upd_us, uint32_t draw_us, uint32_t frame_us, int steps, int prims)
 {
     static uint32_t n, su, sd, mu, md, mf, prims_max, skip, dbl, quiet; static unsigned reads0;
@@ -119,9 +153,10 @@ void app_perf(uint32_t upd_us, uint32_t draw_us, uint32_t frame_us, int steps, i
     if (steps == 0) skip++; else if (steps > 1) dbl++;
     if (++n < 60) return;
     unsigned reads = packs_reads();
-    fprintf(stderr, "perf: cam %5.0f enemies %2d | update %5.2f/%5.2f ms | draw %5.2f/%5.2f ms | frame max %5.2f ms | "
+    char a[12], b[12], c[12], d[12], e[12];
+    fprintf(stderr, "perf: cam %5s enemies %2d | update %5s/%5s ms | draw %5s/%5s ms | frame max %5s ms | "
                     "steps 0x%u 2+x%u | prims %u | pack reads %u\n",
-            g.in_level ? g.cam_x : -1.0f, g.enemies.count, su / 60000.0, mu / 1000.0, sd / 60000.0, md / 1000.0, mf / 1000.0,
+            RS(g.in_level ? g.cam_x : R(-1), 0), g.enemies.count, ms2(a, su / 60), ms2(b, mu), ms2(c, sd / 60), ms2(d, md), ms2(e, mf),
             skip, dbl, prims_max, reads - reads0);
     reads0 = reads; n = su = sd = mu = md = mf = prims_max = skip = dbl = 0; quiet = 2;
 }

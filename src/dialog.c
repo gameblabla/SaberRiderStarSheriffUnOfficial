@@ -7,7 +7,6 @@
 #include "heroes.h"
 #include <string.h>
 #include <stdio.h>
-#include <math.h>
 
 /* box tilesets (ARGB4444): default/GREEN 8D39AA67, PURPLE A2122E71, RED 1495B0AB, BLUE 84652CBC (FUN_0042a5e0 matches "PU"/"RE"/"BL");
  * the text tint is the box's colour argument (0x80 = neutral): PU 80807468, BL 80807060, RE 80707480 */
@@ -146,7 +145,7 @@ bool dialog_open_text(Dialog *d, const char *text, int color)
 
 #define DLG_OPEN_FRAMES 12      /* box grow/shrink (FUN_00475480 arg 0xc) */
 #define DLG_CLOSE_FRAMES 22     /* FUN_0042bc60: DAT_00ac9bd8 = -22 */
-#define DLG_CHARS_PER_FRAME (50.0f / DLG_OPEN_FRAMES)   /* FUN_00475610: 0x7ca0f4 / open frames */
+#define DLG_CHARS_PER_FRAME (R(50.0f) / DLG_OPEN_FRAMES)   /* FUN_00475610: 0x7ca0f4 / open frames */
 
 void dialog_close(Dialog *d) { if (d->active && d->t > 0) { d->t = -DLG_CLOSE_FRAMES; d->box = -DLG_OPEN_FRAMES; d->closing = true; d->frame = DLG_CLOSE_FRAMES; } }
 
@@ -154,7 +153,7 @@ bool dialog_text_done(const Dialog *d) { return d->active && d->page == d->npage
 
 /* FUN_0042d690 (state 0xd) + FUN_0042b250 + FUN_00476de0: START closes the page at once, an action button once the
  * text is complete; a held action button types 3x faster. Pages close over 22 frames and the next one opens. */
-void dialog_update(Dialog *d, const Input *in, float dt)
+void dialog_update(Dialog *d, const Input *in, real dt)
 {
     (void)dt;
     if (!d->active) return;
@@ -176,7 +175,7 @@ void dialog_update(Dialog *d, const Input *in, float dt)
     if (d->done) return;
     bool held = btn_down(in, BTN_SHOOT) || btn_down(in, BTN_JUMP);
     d->chars += DLG_CHARS_PER_FRAME * (held ? 3 : 1);
-    if (d->chars >= (float)strlen(d->pages[d->page].text)) { d->chars = (float)strlen(d->pages[d->page].text); d->done = true; }
+    if (d->chars >= r_int((int)strlen(d->pages[d->page].text))) { d->chars = r_int((int)strlen(d->pages[d->page].text)); d->done = true; }
 }
 
 /* word-wrapped text into at most `maxn` lines of at most `maxw` pixels */
@@ -225,15 +224,15 @@ static void paginate(Dialog *d)
 }
 
 /* FUN_00474610: 16 px corner tiles, edges and centre stretched; corners shrink when the box is smaller than two tiles */
-static void draw_box(Sprite *ts, float x0, float y0, float x1, float y1)
+static void draw_box(Sprite *ts, real x0, real y0, real x1, real y1)
 {
     if (!ts || ts->frames < 9) return;
-    float w = x1 - x0, h = y1 - y0;
+    real w = x1 - x0, h = y1 - y0;
     if (w <= 0 || h <= 0) return;
-    float cw = (float)ts->w, ch = (float)ts->h;
-    if (cw * 2 > w) cw = w * 0.5f;
-    if (ch * 2 > h) ch = h * 0.5f;
-    float mx = w - 2 * cw, my = h - 2 * ch;
+    real cw = r_int(ts->w), ch = r_int(ts->h);
+    if (cw * 2 > w) cw = w / 2;   /* * 0.5f */
+    if (ch * 2 > h) ch = h / 2;
+    real mx = w - 2 * cw, my = h - 2 * ch;
     sprite_draw_scaled(ts, 0, x0, y0, cw, ch);
     if (mx > 0) sprite_draw_scaled(ts, 1, x0 + cw, y0, mx, ch);
     sprite_draw_scaled(ts, 2, x1 - cw, y0, cw, ch);
@@ -260,18 +259,18 @@ void dialog_draw(const Dialog *d, Ren *r, int sw, int sh)
     int x0 = av ? (sw - 226) / 2 : (sw - 274) / 2, x1 = sw - (sw - 274) / 2;
     int y0 = sh - 64, y1 = sh - 16;
     int k = d->box > 0 ? (d->box < DLG_OPEN_FRAMES ? d->box : DLG_OPEN_FRAMES) : -d->box;
-    float s = (float)k / DLG_OPEN_FRAMES;
-    float cx = (x0 + x1) * 0.5f, cy = (y0 + y1) * 0.5f;
-    float hw = (x1 - x0) * 0.5f * s, hh = (y1 - y0) * 0.5f * s;
-    draw_box(sprite_get(TILESET[pg->color]), floorf(cx - hw), floorf(cy - hh), floorf(cx + hw), floorf(cy + hh));
-    if (av) sprite_draw(av, 0, (float)(x0 - av->w + 6), (float)(y0 - 8), false);
+    real s = r_int(k) / DLG_OPEN_FRAMES;
+    real cx = r_int(x0 + x1) / 2, cy = r_int(y0 + y1) / 2;   /* / 2: * 0.5f */
+    real hw = r_mul(r_int(x1 - x0) / 2, s), hh = r_mul(r_int(y1 - y0) / 2, s);
+    draw_box(sprite_get(TILESET[pg->color]), r_floorr(cx - hw), r_floorr(cy - hh), r_floorr(cx + hw), r_floorr(cy + hh));
+    if (av) sprite_draw(av, 0, r_int(x0 - av->w + 6), r_int(y0 - 8), false);
     if (d->box < DLG_OPEN_FRAMES || !f) return;
     char lines[DLG_WRAP_MAX][80]; int n = wrap(f, pg->text, x1 - x0 - 16, lines, DLG_MAX_LINES);
-    int remaining = (int)d->chars, ly = y0 + 4;
+    int remaining = r_trunc(d->chars), ly = y0 + 4;
     for (int i = 0; i < n && remaining > 0; i++) {
         int l = (int)strlen(lines[i]);
-        font_draw_n(f, lines[i], remaining < l ? remaining : l, (float)(x0 + 8), (float)(ly + i * 10), TEXTRGB[pg->color][0], TEXTRGB[pg->color][1], TEXTRGB[pg->color][2]);
+        font_draw_n(f, lines[i], remaining < l ? remaining : l, r_int(x0 + 8), r_int(ly + i * 10), TEXTRGB[pg->color][0], TEXTRGB[pg->color][1], TEXTRGB[pg->color][2]);
         remaining -= l + 1;
     }
-    if (d->done && (d->t & 16)) { char m[2] = { 0x7f, 0 }; font_draw(f, m, (float)(x1 - 20), (float)(y1 - 10), TEXTRGB[pg->color][0], TEXTRGB[pg->color][1], TEXTRGB[pg->color][2]); }
+    if (d->done && (d->t & 16)) { char m[2] = { 0x7f, 0 }; font_draw(f, m, r_int(x1 - 20), r_int(y1 - 10), TEXTRGB[pg->color][0], TEXTRGB[pg->color][1], TEXTRGB[pg->color][2]); }
 }

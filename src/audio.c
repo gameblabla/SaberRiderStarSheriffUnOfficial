@@ -4,16 +4,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include <math.h>
 
 /* ---- mix levels ----
  * The original (FUN_00563900 / FUN_00563780) sums the music at vol/256 and every sfx voice at unity into 16-bit
  * and hard-clips at +-0x7fbc. The material is mastered hot (most sfx peak at 0 dBFS, the music tracks at
  * 0..+1 dB), so a voice line over a gunshot over the level track clips audibly. Instead of reproducing that,
  * each bus gets some headroom (and the PC backend runs a peak limiter on the mix). */
-#define GAIN_SFX   0.60f   /* game sfx: -4.4 dB */
-#define GAIN_VOICE 0.80f   /* dialog / video speech: -1.9 dB */
-#define GAIN_MUSIC 0.90f   /* on top of the music table's per-track volume and the fade */
+#define GAIN_SFX   R(0.60f)   /* game sfx: -4.4 dB */
+#define GAIN_VOICE R(0.80f)   /* dialog / video speech: -1.9 dB */
+#define GAIN_MUSIC R(0.90f)   /* on top of the music table's per-track volume and the fade */
 
 /* ---- sfx ---- */
 static const uint32_t SFX_TABLE[32] = {   /* 0x7c5480 */
@@ -24,7 +23,7 @@ static const uint32_t SFX_TABLE[32] = {   /* 0x7c5480 */
 static const uint32_t MUSIC_TABLE[18] = {   /* 0x7c53a0 */
     0xD9F22466, 0x70090142, 0x39E19337, 0x086C02EE, 0x3E0E8A02, 0xEABD3205, 0xAF162C58, 0xC93B9F7F, 0xB10AB207,
     0x25930DD9, 0xD50E6105, 0xD518620C, 0xD52263F3, 0xD52C64FE, 0xD53665E9, 0xD54066D0, 0xD54A67DF, 0xD55468CA };
-static const float MUSIC_VOL[18] = { 1, 1, 1, 1, 1, 0.85f, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };   /* 0x7c53a8 */
+static const real MUSIC_VOL[18] = { R(1), R(1), R(1), R(1), R(1), R(0.85f), R(1), R(1), R(1), R(1), R(1), R(1), R(1), R(1), R(1), R(1), R(1), R(1) };   /* 0x7c53a8 */
 
 typedef struct { int table_idx; int frame; } Delayed;
 static Delayed delayed[64]; static int ndelayed;
@@ -115,38 +114,38 @@ void sfx_play_file(const char *path) { if (path) aud_play(aud_sample_file(path),
 
 /* a looping sample: audio_update fades it in while it is wanted and out (~0.15 s) when it is not, then stops it
  * so a re-start begins from the loop's head */
-static int loop_voice = -1; static AudSample *loop_smp; static float loop_gain; static bool loop_want;
+static int loop_voice = -1; static AudSample *loop_smp; static real loop_gain; static bool loop_want;
 void sfx_loop(const char *path)
 {
     if (!path) { loop_want = false; return; }
     AudSample *s = aud_sample_file(path); if (!s) return;
     if (loop_voice >= 0 && loop_smp != s) { aud_stop(loop_voice); loop_voice = -1; }
-    if (loop_voice < 0) { loop_gain = 0; loop_voice = aud_play(s, 0.0f, true); if (loop_voice < 0) return; }
+    if (loop_voice < 0) { loop_gain = 0; loop_voice = aud_play(s, R(0.0f), true); if (loop_voice < 0) return; }
     loop_smp = s; loop_want = true;
 }
 static void service_loop(void)
 {
     if (loop_voice < 0) return;
-    float target = loop_want ? 1.0f : 0.0f;
-    loop_gain += (target - loop_gain) * (loop_want ? 0.35f : 0.2f);
-    if (!loop_want && loop_gain < 0.02f) { loop_gain = 0; aud_stop(loop_voice); loop_voice = -1; return; }
-    aud_set_gain(loop_voice, loop_gain * GAIN_SFX);
+    real target = loop_want ? R(1.0f) : R(0.0f);
+    loop_gain += r_mul(target - loop_gain, loop_want ? R(0.35f) : R(0.2f));
+    if (!loop_want && loop_gain < R(0.02f)) { loop_gain = 0; aud_stop(loop_voice); loop_voice = -1; return; }
+    aud_set_gain(loop_voice, r_mul(loop_gain, GAIN_SFX));
 }
 
 /* ---- music ---- */
-static float music_track_vol = 1.0f, music_fade = 1.0f;   /* 0x7c53a8 per-track volume x FUN_00425e70 fade */
-static float music_duck = 1.0f, music_duck_target = 1.0f;
+static real music_track_vol = R(1.0f), music_fade = R(1.0f);   /* 0x7c53a8 per-track volume x FUN_00425e70 fade */
+static real music_duck = R(1.0f), music_duck_target = R(1.0f);
 
 static void apply_music_gain(void)
 {
     /* the mixer's 0..255 stream volume is not linear: a 1 s fade in the original is inaudible after ~0.7 s,
      * which a squared curve reproduces (measured on a pulse capture of the original's character select) */
-    float v = music_fade < 0.001f ? 0 : music_fade > 0.999f ? 1.0f : music_fade;
-    aud_music_gain(v * v * music_track_vol * GAIN_MUSIC * music_duck);
+    real v = music_fade < R(0.001f) ? 0 : music_fade > R(0.999f) ? R(1.0f) : music_fade;
+    aud_music_gain(r_mul(r_mul(r_mul(r_mul(v, v), music_track_vol), GAIN_MUSIC), music_duck));
 }
 
-void music_set_volume(float v) { music_fade = v < 0 ? 0 : v > 1 ? 1 : v; apply_music_gain(); }
-void music_set_duck(float v) { music_duck_target = v < 0 ? 0 : v > 1 ? 1 : v; }
+void music_set_volume(real v) { music_fade = v < 0 ? 0 : v > R(1) ? R(1) : v; apply_music_gain(); }
+void music_set_duck(real v) { music_duck_target = v < 0 ? 0 : v > R(1) ? R(1) : v; }
 void music_pause(bool pause) { aud_music_pause(pause); }
 void music_stop(void) { aud_music_stop(); }
 
@@ -154,7 +153,7 @@ void music_play(int index, bool loop)
 {
     aud_music_stop();
     if (index < 0 || index >= 18) return;
-    music_track_vol = MUSIC_VOL[index]; music_fade = 1.0f; music_duck = music_duck_target = 1.0f;
+    music_track_vol = MUSIC_VOL[index]; music_fade = R(1.0f); music_duck = music_duck_target = R(1.0f);
     apply_music_gain();
     if (aud_music_play(MUSIC_TABLE[index], loop)) apply_music_gain();
 }
@@ -163,9 +162,9 @@ void audio_update(void)
 {
     /* A fast dip makes the sting and line intelligible; the longer return avoids a volume jump at the hit.
      * This only changes gain: the music keeps its place through the whole cut-in. */
-    float step = music_duck_target < music_duck ? 0.28f : 0.075f;
-    music_duck += (music_duck_target - music_duck) * step;
-    if (fabsf(music_duck_target - music_duck) < 0.001f) music_duck = music_duck_target;
+    real step = music_duck_target < music_duck ? R(0.28f) : R(0.075f);
+    music_duck += r_mul(music_duck_target - music_duck, step);
+    if (r_abs(music_duck_target - music_duck) < R(0.001f)) music_duck = music_duck_target;
     apply_music_gain();
     frame_counter++;
     for (int i = 0; i < ndelayed; ) {

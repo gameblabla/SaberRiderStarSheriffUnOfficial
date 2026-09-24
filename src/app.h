@@ -12,8 +12,12 @@
 #endif
 
 bool  app_init(Ren *ren, const char *data_dir, int start_level);
-/* advance by `elapsed` seconds of real time; returns the fixed steps it ran (0..n) */
+/* advance by `elapsed` seconds of real time; returns the fixed steps it ran (0..n) (the PC and the Dreamcast) */
+#ifndef REAL_FIXED
 int   app_update(double elapsed);
+#endif
+/* the same by whole 60 Hz fields (the Saturn's vblanks; the headless build): no float */
+int   app_update_fields(int fields);
 /* draw the frame (the backend presents it) */
 void  app_draw(void);
 /* the SABER_SHOT path when the frame just drawn is to be saved (then quit), else NULL */

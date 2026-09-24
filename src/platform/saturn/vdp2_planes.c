@@ -60,7 +60,7 @@ static struct {
     RTex *backdrop[4]; int nbackdrops;
     uint8_t depth_reg[32];      /* per level layer: the sprite priority register its palette sprites take (0 the front) */
     bool asked, shown, palettes_in;
-    float cam_x, cam_y;
+    fx cam_x, cam_y;
 } P;
 
 static uint32_t be32(const void *p) { const uint8_t *b = p; return (uint32_t)b[0] << 24 | (uint32_t)b[1] << 16 | (uint32_t)b[2] << 8 | b[3]; }
@@ -186,7 +186,7 @@ static bool load(uint32_t level)
 }
 
 /* ---------------------------------------------------------------- the core's question */
-bool r_layer(Ren *r, uint32_t level, int layer, float cam_x, float cam_y)
+bool r_layer(Ren *r, uint32_t level, int layer, fx cam_x, fx cam_y)
 {
     (void)r;
     if (level != P.level) {
@@ -245,12 +245,12 @@ static void write_column(BandRt *br, int col)
 static void update_band(BandRt *br, int sw)
 {
     const SplBand *b = br->b;
-    float ox = (b->flags & 1) ? 0.0f : P.cam_x * ((float)b->rate / 65536.0f);
+    fx ox = (b->flags & 1) ? 0 : fx_mul(P.cam_x, (fx)b->rate);   /* level.c's offset: the camera times the layer's parallax */
     if (ox < 0) ox = 0;
-    int scroll = (int)ceilf(ox);   /* level.c: a cell at cx * tw + floor(-ox) */
+    int scroll = fx_ceil(ox);   /* level.c: a cell at cx * tw + floor(-ox) */
     br->scroll = scroll;
-    float oy = (b->flags & 1) ? 0.0f : P.cam_y * ((float)b->rate / 65536.0f);
-    br->yscroll = oy > 0 ? (int)ceilf(oy) : 0;
+    fx oy = (b->flags & 1) ? 0 : fx_mul(P.cam_y, (fx)b->rate);
+    br->yscroll = oy > 0 ? fx_ceil(oy) : 0;
     int c0 = scroll >> 3, c1 = (scroll + sw + 7) >> 3;   /* [c0, c1) */
     if (br->lo < 0 || c0 >= br->hi || c1 <= br->lo || c1 - c0 > 64) {
         for (int c = c0; c < c1; c++) write_column(br, c);
@@ -264,8 +264,8 @@ static void update_band(BandRt *br, int sw)
 void sat_planes_frame(int sw, bool delayed)
 {
     /* delayed: the list going to VDP1 is the frame before's (the slave replayed it): so are the planes */
-    static bool prev_asked; static float prev_x, prev_y;
-    bool asked = P.asked; float cx = P.cam_x, cy = P.cam_y;
+    static bool prev_asked; static fx prev_x, prev_y;
+    bool asked = P.asked; fx cx = P.cam_x, cy = P.cam_y;
     if (delayed) { P.asked = prev_asked; P.cam_x = prev_x; P.cam_y = prev_y; prev_asked = asked; prev_x = cx; prev_y = cy; }
     if (!P.asked) {   /* no level on screen: planes off, colour RAM back to VDP1 */
         if (P.shown) { vdp2_scrn_display_set(VDP2_SCRN_DISP_NONE); rsat_set_backdrops(NULL, NULL, NULL, 0, false); P.shown = false; }

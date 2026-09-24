@@ -6,10 +6,15 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
-static float rdf(const uint8_t *p) { uint32_t v = rd32(p); float f; memcpy(&f, &v, 4); return f; }
+static real rdf(const uint8_t *p) { return r_bits(rd32(p)); }
+/* a diagonal aim's muzzle offset: 0.7 x the straight one (in fixed point 7/10 exactly, for whole-pixel muzzles) */
+#ifdef REAL_FIXED
+static real diag(real mx) { return mx * 7 / 10; }
+#else
+static real diag(real mx) { return 0.7f * mx; }
+#endif
 
 /* the shared tables of a character type, parsed on first use (a handful of types a game) */
 #define MAX_DEFS 48
@@ -33,9 +38,9 @@ static const CharDef *chardef_get(uint32_t crhc_id, const uint8_t *d)
     hero_patch_def(def);   /* a recreated hero's table changes (April) */
     if (plat_getenv("SABER_ANIMS"))   /* debug: dump the table */
         for (int i = 0; i < CHAR_CRHC_ANIMS; i++)
-            fprintf(stderr, "crhc %08X anim %2d: cells %d-%d loop %d dt %.3f flags %x muzzle %.0f,%.0f hurt %.0f,%.0f %.0fx%.0f\n", crhc_id, i, def->anims[i].first,
-                    def->anims[i].last, def->anims[i].loop, def->anims[i].frame_time, def->anims[i].flags, def->muzzle[i][0], def->muzzle[i][1],
-                    def->hurt[i].ox, def->hurt[i].oy, def->hurt[i].hw, def->hurt[i].hh);
+            fprintf(stderr, "crhc %08X anim %2d: cells %d-%d loop %d dt %s flags %x muzzle %s,%s hurt %s,%s %sx%s\n", crhc_id, i, def->anims[i].first,
+                    def->anims[i].last, def->anims[i].loop, RS(def->anims[i].frame_time, 3), def->anims[i].flags, RS(def->muzzle[i][0], 0), RS(def->muzzle[i][1], 0),
+                    RS(def->hurt[i].ox, 0), RS(def->hurt[i].oy, 0), RS(def->hurt[i].hw, 0), RS(def->hurt[i].hh, 0));
     g_defs[g_ndefs++] = def;
     return def;
 }
@@ -68,7 +73,7 @@ bool character_init(Character *c, uint32_t crhc_id, bool enemy)
 void character_reset(Character *c, bool enemy)
 {
     c->state = CS_FALL; c->coll = 0; c->facing = 1; c->aim = AIM_R;
-    c->slide_t = 0; c->drop_target_y = -10000.0f;
+    c->slide_t = 0; c->drop_target_y = R(-10000);
     c->flags = enemy ? 0x102 : 0x002;
     c->alert_t = c->alert_time;
     c->hit_t = 0; c->base_ox = c->base_oy = 0; c->muzzle_x = c->muzzle_y = 0;
@@ -100,8 +105,8 @@ void character_set_anim(Character *c, int anim)
 {
     if (anim < 0 || anim >= CHAR_MAX_ANIMS) return;
     if (c->flags & CF_HIT) {
-        c->hit_t -= 1.0f;
-        if (c->hit_t < 0.01f) { c->flags &= ~(CF_HIT | CF_HIT_ALT); c->hit_t = 0; }
+        c->hit_t -= R(1);
+        if (c->hit_t < R(0.01)) { c->flags &= ~(CF_HIT | CF_HIT_ALT); c->hit_t = 0; }
     }
     if (c->anim != anim) {
         c->anim = (uint8_t)anim;
@@ -109,17 +114,18 @@ void character_set_anim(Character *c, int anim)
     }
     uint32_t af = c->def->anim_flags[anim];
     if (af & 1) {
-        float mx = c->def->muzzle[anim][0], my = c->def->muzzle[anim][1], x, y;
+        real mx = c->def->muzzle[anim][0], my = c->def->muzzle[anim][1], x, y;
         if (af & 2) {
+            real d = diag(mx);
             switch (c->aim) {
-            case AIM_L:  x = -mx;       y = 0;          break;
-            case AIM_UL: x = -0.7f*mx;  y = -0.7f*mx;   break;
-            case AIM_U:  x = 0;         y = -mx;        break;
-            case AIM_UR: x = 0.7f*mx;   y = -0.7f*mx;   break;
-            case AIM_DR: x = 0.7f*mx;   y = 0.7f*mx;    break;
-            case AIM_D:  x = 0;         y = mx;         break;
-            case AIM_DL: x = -0.7f*mx;  y = 0.7f*mx;    break;
-            default:     x = mx;        y = 0;          break;
+            case AIM_L:  x = -mx;  y = 0;    break;
+            case AIM_UL: x = -d;   y = -d;   break;
+            case AIM_U:  x = 0;    y = -mx;  break;
+            case AIM_UR: x = d;    y = -d;   break;
+            case AIM_DR: x = d;    y = d;    break;
+            case AIM_D:  x = 0;    y = mx;   break;
+            case AIM_DL: x = -d;   y = d;    break;
+            default:     x = mx;   y = 0;    break;
             }
         } else { x = mx; y = 0; }
         c->muzzle_x = x + c->base_ox; c->muzzle_y = y + my + c->base_oy;
@@ -139,17 +145,18 @@ void character_set_overlay(Character *c, int anim)
     }
     uint32_t af = c->def->anim_flags[anim];
     if (af & 1) {
-        float mx = c->def->muzzle[anim][0], my = c->def->muzzle[anim][1], x, y;
+        real mx = c->def->muzzle[anim][0], my = c->def->muzzle[anim][1], x, y;
         if (af & 2) {
+            real d = diag(mx);
             switch (c->aim) {
-            case AIM_L:  x = -mx;       y = 0;          break;
-            case AIM_UL: x = -0.7f*mx;  y = -0.7f*mx;   break;
-            case AIM_U:  x = 0;         y = -mx;        break;
-            case AIM_UR: x = 0.7f*mx;   y = -0.7f*mx;   break;
-            case AIM_DR: x = 0.7f*mx;   y = 0.7f*mx;    break;
-            case AIM_D:  x = 0;         y = mx;         break;
-            case AIM_DL: x = -0.7f*mx;  y = 0.7f*mx;    break;
-            default:     x = mx;        y = 0;          break;
+            case AIM_L:  x = -mx;  y = 0;    break;
+            case AIM_UL: x = -d;   y = -d;   break;
+            case AIM_U:  x = 0;    y = -mx;  break;
+            case AIM_UR: x = d;    y = -d;   break;
+            case AIM_DR: x = d;    y = d;    break;
+            case AIM_D:  x = 0;    y = mx;   break;
+            case AIM_DL: x = -d;   y = d;    break;
+            default:     x = mx;   y = 0;    break;
             }
         } else { x = mx; y = 0; }
         c->muzzle_x = x + c->base_ox; c->muzzle_y = y + my + c->base_oy;
@@ -157,7 +164,7 @@ void character_set_overlay(Character *c, int anim)
 }
 
 /* SpriteAnimation::update for one entity */
-void character_animate(Character *c, float dt)
+void character_animate(Character *c, real dt)
 {
     if (c->anim >= CHAR_MAX_ANIMS) return;
     const AnimDef *a = &c->def->anims[c->anim];
@@ -175,10 +182,10 @@ void character_animate(Character *c, float dt)
 }
 
 /* FUN_0041bc40: state -> animation + horizontal velocity, drop-through handling */
-void character_resolve(Character *c, float dt)
+void character_resolve(Character *c, real dt)
 {
     Body *b = &c->body;
-    float vx = 0;
+    real vx = 0;
     int L = c->facing == 0;
     bool shoot = (c->flags & CF_SHOOT) != 0;
     int anim = -1;
@@ -209,7 +216,7 @@ void character_resolve(Character *c, float dt)
     case CS_DROP:
         if (c->coll & COLL_DOWN) {
             c->flags |= CF_DROPPING;
-            c->drop_target_y = b->y + 20.0f;
+            c->drop_target_y = b->y + R(20);
             vx = 0;
         }
         goto keep_vx;
@@ -221,7 +228,7 @@ void character_resolve(Character *c, float dt)
         anim = L ? (shoot ? 0x2a : 0x28) : (shoot ? 0x2b : 0x29);
         break;
     case CS_SLIDE:
-        vx = (c->slide_t / c->slide_time) * c->slide_speed;
+        vx = r_mul(r_div(c->slide_t, c->slide_time), c->slide_speed);
         if (L) vx = -vx;
         anim = L ? 0x2c : 0x2d;
         c->slide_t -= dt;
@@ -241,11 +248,11 @@ keep_vx:
     /* drop-through one-way platforms: ignore floors until below the target */
     if (b->y < c->drop_target_y) { b->flags |= PHYS_IGNORE_DOWN; return; }
     b->flags &= ~PHYS_IGNORE_DOWN;
-    c->drop_target_y = -10000.0f;
+    c->drop_target_y = R(-10000);
 }
 
 /* anim flags low byte = sprite draw flags: 1 mirror X, 2 mirror Y, 8 draw whole cblock frame (else one cell) */
-static void draw_cell(const Character *c, int idx, int aflags, float x, float y)
+static void draw_cell(const Character *c, int idx, int aflags, real x, real y)
 {
     bool flip = (aflags & 1) != 0;
     if (c->spr) { sprite_draw(c->spr, idx, x, y, flip); return; }
@@ -257,30 +264,30 @@ static void draw_cell(const Character *c, int idx, int aflags, float x, float y)
     cblock_draw_tile(c->cb, t, x, y, flip);
 }
 
-void character_draw(const Character *c, float cam_x, float cam_y)
+void character_draw(const Character *c, real cam_x, real cam_y)
 {
     if (c->anim >= CHAR_MAX_ANIMS) return;
-    float x = floorf(c->body.x - c->origin_x - cam_x), y = floorf(c->body.y - c->origin_y - cam_y);
-    if ((c->flags & CF_HIT) && c->hit_t > 0.01f && (plat_ticks_ms() / 16 & 2)) return;   /* invulnerability blink (effect flag 0x10 every other 2 frames) */
+    real x = r_floorr(c->body.x - c->origin_x - cam_x), y = r_floorr(c->body.y - c->origin_y - cam_y);
+    if ((c->flags & CF_HIT) && c->hit_t > R(0.01) && (plat_ticks_ms() / 16 & 2)) return;   /* invulnerability blink (effect flag 0x10 every other 2 frames) */
     draw_cell(c, c->frame, (int)(c->def->anims[c->anim].flags & 0xff), x, y);
     /* the torso is its own sprite object placed at the base offset (up/down aims, 1 px walk bob) */
-    float oy = c->base_oy;
-    if (c->walk_bob) { int k = c->frame - (int)c->def->anims[c->anim].first; if (k >= 0 && k < 8) oy += (float)c->torso_bob[k]; }   /* the hip drops with the legs frame */
+    real oy = c->base_oy;
+    if (c->walk_bob) { int k = c->frame - (int)c->def->anims[c->anim].first; if (k >= 0 && k < 8) oy += r_int(c->torso_bob[k]); }   /* the hip drops with the legs frame */
     if (c->overlay) draw_cell(c, c->ov_frame, (int)(c->def->anims[c->overlay].flags & 0xff), x + c->base_ox, y + oy);
 }
 
 /* FUN_0041c530: player state -> legs anim, torso overlay anim, muzzle base offset, horizontal velocity */
-void player_resolve(Character *c, float dt)
+void player_resolve(Character *c, real dt)
 {
     Body *b = &c->body;
     bool L = c->facing == 0;
     bool shoot = (c->flags & CF_SHOOT) != 0;
     int aim = c->aim;
     int body = -1, ov = 0;
-    float vx = 0;
+    real vx = 0;
     c->base_ox = c->base_oy = 0;
-#define UPBASE()   do { c->base_ox = L ? 4.0f : -4.0f; c->base_oy = -29.0f; } while (0)
-#define DOWNBASE() do { c->base_ox = L ? 4.0f : -4.0f; c->base_oy = -8.0f; } while (0)
+#define UPBASE()   do { c->base_ox = L ? R(4) : R(-4); c->base_oy = R(-29); } while (0)
+#define DOWNBASE() do { c->base_ox = L ? R(4) : R(-4); c->base_oy = R(-8); } while (0)
     if (c->state != CS_IDLE) c->idle_t = 0;
     switch (c->state) {
     case CS_IDLE:
@@ -322,20 +329,20 @@ void player_resolve(Character *c, float dt)
         if (c->coll & COLL_DOWN) { b->vy += c->jump_vel; body = L ? 0x2e : 0x2f; ov = 0; c->flags |= CF_IN_JUMP; }
         goto keep_vx;
     case CS_DROP:
-        if (c->coll & COLL_DOWN) { c->flags |= CF_DROPPING; c->drop_target_y = b->y + 20.0f; vx = 0; }
+        if (c->coll & COLL_DOWN) { c->flags |= CF_DROPPING; c->drop_target_y = b->y + R(20); vx = 0; }
         goto keep_vx;
     case CS_CROUCH:
         body = L ? (shoot ? 0x2a : 0x28) : (shoot ? 0x2b : 0x29); ov = 0;
         break;
     case CS_SLIDE:
-        vx = (c->slide_t / c->slide_time) * c->slide_speed; if (L) vx = -vx;
+        vx = r_mul(r_div(c->slide_t, c->slide_time), c->slide_speed); if (L) vx = -vx;
         body = L ? 0x2c : 0x2d; ov = 0;
         c->slide_t -= dt; if (c->slide_t <= 0) c->state = CS_IDLE;
         break;
     case CS_AIM: {
         static const uint8_t tab[8][2] = { {4,12},{5,13},{0,0},{8,16},{7,15},{9,17},{0,0},{6,14} };
-        if (aim == 2) { c->base_oy = -30.0f; body = 3; ov = shoot ? 0x22 : 0x1a; }
-        else if (aim == 6) { c->base_oy = -9.0f; body = 3; ov = shoot ? 0x23 : 0x1b; }
+        if (aim == 2) { c->base_oy = R(-30); body = 3; ov = shoot ? 0x22 : 0x1a; }
+        else if (aim == 6) { c->base_oy = R(-9); body = 3; ov = shoot ? 0x23 : 0x1b; }
         else { body = tab[aim & 7][shoot ? 1 : 0]; ov = 0; }
         break; }
     case CS_DEAD:
@@ -350,7 +357,7 @@ void player_resolve(Character *c, float dt)
 keep_vx:
     if (b->y < c->drop_target_y) { b->flags |= PHYS_IGNORE_DOWN; return; }
     b->flags &= ~PHYS_IGNORE_DOWN;
-    c->drop_target_y = -10000.0f;
+    c->drop_target_y = R(-10000);
 #undef UPBASE
 #undef DOWNBASE
 }

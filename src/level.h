@@ -9,9 +9,9 @@
 
 typedef struct {
     uint32_t type;
-    float x, y;
-    float wp[3][2];          /* waypoints (+0x0c..) */
-    float spawn_x, spawn_y;  /* +0x4c,+0x50 */
+    real x, y;               /* fixed point: saturated at +-32768 (the data's +-100000 "off screen" waypoints) */
+    real wp[3][2];          /* waypoints (+0x0c..) */
+    real spawn_x, spawn_y;  /* +0x4c,+0x50 */
     uint32_t layer;          /* +0x54 */
     uint16_t a;              /* +0x58 */
     uint8_t  n_wp;           /* +0x5a */
@@ -32,7 +32,7 @@ typedef struct {
 typedef struct {
     char  name[16];
     bool  is_tilemap;
-    float parallax;
+    real parallax;
     int   extra;             /* 1 on SkyBG: wraps horizontally */
     TileMap *map;            /* NULL for sprite layers */
 } Layer;
@@ -43,11 +43,23 @@ typedef struct {
     LevelObject objs[LVL_MAX_OBJECTS]; int nobjs;
     Layer layers[LVL_MAX_LAYERS]; int nlayers;
     TileMap maps[LVL_MAX_LAYERS]; int nmaps;
-    float width, height;
+    real width, height;
     int cols, rows, cellw, cellh;
     const uint8_t *collision;   /* cols*rows: bit1 blocks right, bit2 left, bit4 down(floor), bit8 up */
 } Level;
 
+/* the level data's +-100000 waypoints: just outside the screen's right / left edge (enemies.c). Fixed point saturates
+ * them (r_bits) to +-32768, beyond any level. */
+#ifdef REAL_FIXED
+#define WP_OFF_R   FX_MAX
+#define WP_OFF_L   (-FX_MAX)
+#define WP_OFF_TEST FX(32000)   /* beyond it: off screen */
+#else
+#define WP_OFF_R   100000.0f
+#define WP_OFF_L   -100000.0f
+#define WP_OFF_TEST 99999.0f
+#endif
+
 bool level_load(Level *L, uint32_t id);
-void level_draw_layer(const Level *L, int layer, float cam_x, float cam_y, int screen_w, int screen_h);
+void level_draw_layer(const Level *L, int layer, real cam_x, real cam_y, int screen_w, int screen_h);
 uint8_t level_cell(const Level *L, int cx, int cy);

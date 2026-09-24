@@ -32,6 +32,52 @@ fx fx_muldiv(fx a, fx b, fx c)
     return div64_32((int64_t)a * b, c);
 }
 
+fx fx_from_f32bits(uint32_t bits)
+{
+    int e = (int)(bits >> 23 & 0xFF);
+    if (e == 0) return 0;                                   /* zero, denormals */
+    uint32_t m = (bits & 0x7FFFFF) | 0x800000, r;
+    int sh = e - 134;                                       /* value * 65536 = m * 2^(e - 127 - 23 + 16) */
+    if (e == 0xFF || sh > 7) r = 0x7FFFFFFF;                /* too big (or inf / nan): saturate */
+    else if (sh >= 0) r = m << sh;
+    else if (sh > -26) r = (m + (1u << (-sh - 1))) >> -sh;
+    else r = 0;
+    if (r > 0x7FFFFFFF) r = 0x7FFFFFFF;
+    return bits >> 31 ? -(fx)r : (fx)r;
+}
+
+char *fx_fmt(char *buf, fx v, int dec)
+{
+    static const uint32_t P10[5] = { 1, 10, 100, 1000, 10000 };
+    if (dec < 0) dec = 0;
+    if (dec > 4) dec = 4;
+    uint32_t a = v < 0 ? 0u - (uint32_t)v : (uint32_t)v;
+    uint64_t s = ((uint64_t)a * P10[dec] + 0x8000) >> 16;   /* the value in units of 10^-dec, rounded */
+    uint32_t ip = (uint32_t)(s / P10[dec]), fp = (uint32_t)(s % P10[dec]);
+    char tmp[16]; int n = 0;
+    for (int i = 0; i < dec; i++) { tmp[n++] = (char)('0' + fp % 10); fp /= 10; }
+    if (dec) tmp[n++] = '.';
+    do { tmp[n++] = (char)('0' + ip % 10); ip /= 10; } while (ip);
+    char *o = buf;
+    if (v < 0 && s) *o++ = '-';
+    while (n) *o++ = tmp[--n];
+    *o = 0;
+    return buf;
+}
+
+fx fx_parse(const char *s, const char **end)
+{
+    while (*s == ' ') s++;
+    bool neg = *s == '-'; if (*s == '-' || *s == '+') s++;
+    uint32_t ip = 0, fp = 0, scale = 1;
+    while (*s >= '0' && *s <= '9') { if (ip < 100000) ip = ip * 10 + (uint32_t)(*s - '0'); s++; }
+    if (*s == '.') { s++; while (*s >= '0' && *s <= '9') { if (scale < 100000) { fp = fp * 10 + (uint32_t)(*s - '0'); scale *= 10; } s++; } }
+    if (end) *end = s;
+    uint64_t v = ((uint64_t)ip << 16) + (((uint64_t)fp << 16) + scale / 2) / scale;
+    if (v > 0x7FFFFFFF) v = 0x7FFFFFFF;
+    return neg ? -(fx)v : (fx)v;
+}
+
 uint32_t fx_isqrt64(uint64_t n)
 {
     uint64_t res = 0, bit = (uint64_t)1 << 62;

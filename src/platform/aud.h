@@ -6,6 +6,7 @@
  * Gains are linear 0..1 (the core applies its bus levels). */
 #include <stdint.h>
 #include <stdbool.h>
+#include "../real.h"
 
 typedef struct AudSample AudSample;
 
@@ -21,13 +22,13 @@ void aud_keep(AudSample *s, bool loop);
 void aud_prefetch(AudSample *s);                 /* load it now, but a long one may be dropped again for others */
 
 /* voices: a handle >= 0 or -1 when nothing could play */
-int  aud_play(AudSample *s, float gain, bool loop);
-void aud_set_gain(int voice, float gain);
+int  aud_play(AudSample *s, real gain, bool loop);
+void aud_set_gain(int voice, real gain);
 void aud_stop(int voice);
 bool aud_playing(int voice);
 
 /* music: pack music resources (MUPS) by id; one track at a time */
 bool aud_music_play(uint32_t id, bool loop);
 void aud_music_stop(void);
-void aud_music_gain(float g);
+void aud_music_gain(real g);
 void aud_music_pause(bool pause);

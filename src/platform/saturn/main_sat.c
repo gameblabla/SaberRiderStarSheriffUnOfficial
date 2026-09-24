@@ -82,7 +82,7 @@ static void __attribute__((noreturn, noinline)) game_main(void)
         /* one displayed field is one fixed game step (59.94 Hz fields counted as 60 Hz steps, as on the Dreamcast) */
         uint32_t fields = vb - prev_vb; prev_vb = vb;
         if (fields == 0) fields = 1;
-        int steps = app_update(fields * (1.0 / 60.0));
+        int steps = app_update_fields((int)fields);
         uint32_t t_upd = sat_timer_us();
         rsat_frame_begin();
         if (!no_draw) app_draw();

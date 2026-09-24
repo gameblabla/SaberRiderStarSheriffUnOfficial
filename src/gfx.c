@@ -229,12 +229,12 @@ void cblock_tint(const CBlock *c, uint8_t r, uint8_t g, uint8_t b)
     if (t) rtex_set_color_mod(t, r, g, b);
 }
 
-void cblock_draw_tile(const CBlock *c, int t, float x, float y, bool flip)
+void cblock_draw_tile(const CBlock *c, int t, real x, real y, bool flip)
 {
     if (t < 0 || t >= c->ntiles) return;
     RTex *tex = cblock_tex(c);
-    RFRect src = { (float)((t % c->sheet_cols) * c->tw), (float)((t / c->sheet_cols) * c->th), (float)c->tw, (float)c->th };
-    RFRect dst = { x, y, (float)c->tw, (float)c->th };
+    RFRect src = { r_int((t % c->sheet_cols) * c->tw), r_int((t / c->sheet_cols) * c->th), r_int(c->tw), r_int(c->th) };
+    RFRect dst = { x, y, r_int(c->tw), r_int(c->th) };
     if (flip) r_tex_rot(R, tex, &src, &dst, 0, NULL, R_FLIP_H);
     else r_tex(R, tex, &src, &dst);
 }
@@ -255,19 +255,19 @@ void cblock_batch_begin(const CBlock *c)
     int cols = c->sheet_cols;   /* the sheet's width in tiles: a shift instead of a division when it is a power of two */
     g_batch.shift = cols > 0 && !(cols & (cols - 1)) ? __builtin_ctz((unsigned)cols) : -1;
 }
-void cblock_batch_tile(int t, float x, float y, bool flip)
+void cblock_batch_tile(int t, real x, real y, bool flip)
 {
     const CBlock *c = g_batch.c;
     if (!c || t < 0 || t >= c->ntiles) return;
     if (g_batch.n == BATCH_MAX) batch_flush();
     int col = g_batch.shift >= 0 ? t & (c->sheet_cols - 1) : t % c->sheet_cols, row = g_batch.shift >= 0 ? t >> g_batch.shift : t / c->sheet_cols;
-    g_batch.src[g_batch.n] = (RFRect){ (float)(col * c->tw), (float)(row * c->th), (float)c->tw, (float)c->th };
-    g_batch.dst[g_batch.n] = (RFRect){ x, y, flip ? -(float)c->tw : (float)c->tw, (float)c->th };
+    g_batch.src[g_batch.n] = (RFRect){ r_int(col * c->tw), r_int(row * c->th), r_int(c->tw), r_int(c->th) };
+    g_batch.dst[g_batch.n] = (RFRect){ x, y, flip ? -r_int(c->tw) : r_int(c->tw), r_int(c->th) };
     g_batch.n++;
 }
 void cblock_batch_end(void) { batch_flush(); g_batch.c = NULL; g_batch.tex = NULL; }
 
-void cblock_draw_frame(const CBlock *c, int frame, float x, float y, bool flip)
+void cblock_draw_frame(const CBlock *c, int frame, real x, real y, bool flip)
 {
     if (frame < 0 || frame >= c->frames) return;
     const uint16_t *cells = c->cells + frame * c->cols * c->rows;
@@ -277,7 +277,7 @@ void cblock_draw_frame(const CBlock *c, int frame, float x, float y, bool flip)
             uint16_t t = cells[r * c->cols + col];
             if (t == 0xFFFF) continue;
             int cx = flip ? (c->cols - 1 - col) : col;
-            cblock_batch_tile(t, x + cx * c->tw, y + r * c->th, flip);
+            cblock_batch_tile(t, x + r_int(cx * c->tw), y + r_int(r * c->th), flip);
         }
     cblock_batch_end();
 }
@@ -462,30 +462,30 @@ void gfx_scanlines(int sw, int sh)
 {
     static RFRect rows[512];
     int n = 0;
-    for (int y = 1; y < sh && n < 512; y += 2) rows[n++] = (RFRect){ 0, (float)y, (float)sw, 1 };
+    for (int y = 1; y < sh && n < 512; y += 2) rows[n++] = (RFRect){ 0, r_int(y), r_int(sw), R(1) };
     r_set_draw_blend(R, R_BLEND_BLEND); r_set_draw_color(R, 0, 0, 0, 70);
     r_fill_rects(R, rows, n);
 }
 
-void sprite_draw(const Sprite *s, int frame, float x, float y, bool flip)
+void sprite_draw(const Sprite *s, int frame, real x, real y, bool flip)
 {
     if (!s) return;
     if (frame < 0 || frame >= s->frames) frame = 0;
     RTex *t = sprite_tex(s);
-    RFRect src = { (float)(frame * s->w), 0, (float)s->w, (float)s->h };
-    RFRect dst = { x, y, (float)s->w, (float)s->h };
+    RFRect src = { r_int(frame * s->w), 0, r_int(s->w), r_int(s->h) };
+    RFRect dst = { x, y, r_int(s->w), r_int(s->h) };
     if (flip) r_tex_rot(R, t, &src, &dst, 0, NULL, R_FLIP_H);
     else r_tex(R, t, &src, &dst);
 }
-void sprite_draw_scaled(const Sprite *s, int frame, float x, float y, float w, float h)
+void sprite_draw_scaled(const Sprite *s, int frame, real x, real y, real w, real h)
 {
     if (!s) return;
-    RFRect src = { (float)(frame * s->w), 0, (float)s->w, (float)s->h };
+    RFRect src = { r_int(frame * s->w), 0, r_int(s->w), r_int(s->h) };
     RFRect dst = { x, y, w, h };
     r_tex(R, sprite_tex(s), &src, &dst);
 }
 
-void sprite_draw_scaled_mod(const Sprite *s, int frame, float x, float y, float w, float h, uint8_t r, uint8_t g, uint8_t b, uint8_t alpha)
+void sprite_draw_scaled_mod(const Sprite *s, int frame, real x, real y, real w, real h, uint8_t r, uint8_t g, uint8_t b, uint8_t alpha)
 {
     if (!s) return;
     RTex *t = sprite_tex(s);
@@ -494,17 +494,17 @@ void sprite_draw_scaled_mod(const Sprite *s, int frame, float x, float y, float 
     rtex_set_color_mod(t, 255, 255, 255); rtex_set_alpha_mod(t, 255);
 }
 
-void sprite_draw_rotated(const Sprite *s, int frame, float cx, float cy, float scale, float angle, uint8_t bright, uint8_t alpha)
+void sprite_draw_rotated(const Sprite *s, int frame, real cx, real cy, real scale, real angle, uint8_t bright, uint8_t alpha)
 {
     if (!s) return;
     RTex *t = sprite_tex(s);
-    RFRect src = { (float)(frame * s->w), 0, (float)s->w, (float)s->h };
-    RFRect dst = { cx - s->w * scale * 0.5f, cy - s->h * scale * 0.5f, s->w * scale, s->h * scale };
+    RFRect src = { r_int(frame * s->w), 0, r_int(s->w), r_int(s->h) };
+    RFRect dst = { cx - (s->w * scale) / 2, cy - (s->h * scale) / 2, s->w * scale, s->h * scale };   /* x / 2: x * 0.5f exactly */
     rtex_set_color_mod(t, bright, bright, bright); rtex_set_alpha_mod(t, alpha);
     r_tex_rot(R, t, &src, &dst, angle, NULL, R_FLIP_NONE);
     rtex_set_color_mod(t, 255, 255, 255); rtex_set_alpha_mod(t, 255);
 }
-void sprite_draw_mod(const Sprite *s, int frame, float x, float y, uint8_t r, uint8_t g, uint8_t b, uint8_t alpha)
+void sprite_draw_mod(const Sprite *s, int frame, real x, real y, uint8_t r, uint8_t g, uint8_t b, uint8_t alpha)
 {
     if (!s) return;
     RTex *t = sprite_tex(s);

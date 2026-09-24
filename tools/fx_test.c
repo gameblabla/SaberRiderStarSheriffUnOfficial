@@ -4,6 +4,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static uint64_t rs = 0x9E3779B97F4A7C15ull;
 static uint32_t rnd(void) { rs ^= rs << 13; rs ^= rs >> 7; rs ^= rs << 17; return (uint32_t)rs; }
@@ -61,6 +62,29 @@ int main(void)
     CHECK(worst_s < 1.6e-5, "sin error %g", worst_s);
     CHECK(worst_a < 2.0, "atan2 error %g binary-angle units", worst_a);   /* 2/65536 of a turn = 0.011 degrees */
     CHECK(fx_ang_from_rad(FX(3.14159265)) == 32768 && abs(fx_rad_from_ang(16384) - FX(1.5707963)) <= 1, "rad conversions");
+    /* float bits, text, the step */
+    for (int i = 0; i < 2000000; i++) {
+        uint32_t b = rnd(); float f; memcpy(&f, &b, 4);
+        if (isnan(f)) continue;
+        double w = (double)f * 65536.0; w = w >= 0 ? floor(w + 0.5) : -floor(-w + 0.5);
+        fx want = w >= 2147483647.0 ? FX_MAX : w <= -2147483647.0 ? -FX_MAX : (fx)w;
+        CHECK(fx_from_f32bits(b) == want, "f32bits %08X (%g): %d want %d", b, (double)f, fx_from_f32bits(b), want);
+        fx v = (fx)rnd();
+        for (int d = 0; d <= 4; d++) {
+            char ref[32], buf[16]; double x = v / 65536.0, sc = pow(10, d);
+            double r = floor(fabs(x) * sc + 0.5) / sc;   /* halves away from zero */
+            snprintf(ref, sizeof ref, "%.*f", d, x < 0 && r != 0 ? -r : r);
+            CHECK(!strcmp(fx_fmt(buf, v, d), ref) || fabs(fabs(x) * sc - floor(fabs(x) * sc) - 0.5) < 1e-6, "fmt %d %d: %s want %s", v, d, buf, ref);
+        }
+        char txt[32]; snprintf(txt, sizeof txt, "%.4f", v / 65536.0);
+        CHECK(abs(fx_parse(txt, NULL) - v) <= 4, "parse %s: %d want %d", txt, fx_parse(txt, NULL), v);
+    }
+    for (int i = 0; i < 1000000; i++) {
+        fx v = (fx)rnd() >> 2; double w = floor(v / 60.0 + 0.5);
+        CHECK(fabs(fx_mul_dt(v, FX_DT) - w) <= 1, "mul_dt %d", v);
+    }
+    CHECK(fx_mul_dt(FX(480), FX_DT) == FX(8) && fx_mul_dt(FX(100), FX_DT) == 109227, "mul_dt exact");
+    for (int n = 1; n < 1200; n++) CHECK(n * FX_DT >= FX(n / 60.0), "a timer of %d steps", n);   /* runs out on its step */
     printf("fx: sin error %.2g, atan2 error %.2f / 65536 turn; %s\n", worst_s, worst_a, fails ? "FAILED" : "ok");
     return fails != 0;
 }

@@ -9,9 +9,9 @@
 enum { BK_PLAYER = 0, BK_ENEMY = 1, BK_GRENADE = 2, BK_LASER = 3 };
 
 typedef struct {
-    float x, y;
+    real x, y;
     uint8_t dir;      /* 0..7 aim dir; 8..15 = ballistic variants */
-    float speed, t, angle;
+    real speed, t, angle;
     uint8_t kind;
     int layer;
     Sprite *spr;
@@ -20,6 +20,6 @@ typedef struct {
 
 typedef struct { Bullet b[MAX_BULLETS]; int n; } Bullets;
 
-void bullets_spawn(Bullets *bs, int kind, int layer, float x, float y, int dir, float speed);
-void bullets_update(Bullets *bs, const Level *L, Effects *fx, float dt, float cam_x, float cam_y, int sw, int sh);
-void bullets_draw(const Bullets *bs, int layer, float cam_x, float cam_y);
+void bullets_spawn(Bullets *bs, int kind, int layer, real x, real y, int dir, real speed);
+void bullets_update(Bullets *bs, const Level *L, Effects *fx, real dt, real cam_x, real cam_y, int sw, int sh);
+void bullets_draw(const Bullets *bs, int layer, real cam_x, real cam_y);

@@ -23,24 +23,24 @@ enum { PW_IDLE, PW_CUTIN, PW_FLASH };
 
 typedef struct {
     int hero; bool bomb;             /* bomb: the final phase's kind (drawn cut-in, screen bomb for every hero) */
-    int items; float cooldown, cooldown_max;
-    int phase; float t, dur;         /* the cut-in, then the flash over the running world */
+    int items; real cooldown, cooldown_max;
+    int phase; real t, dur;         /* the cut-in, then the flash over the running world */
     Video *video;
     bool strike;                     /* the cut-in has just ended: the caller lands the hit (power_take_strike) */
-    float boost_t, boost_max;        /* April's speed / Colt's rapid fire left */
-    Character trail[POWER_TRAIL]; float trail_life[POWER_TRAIL]; int trail_i; float trail_t;
+    real boost_t, boost_max;        /* April's speed / Colt's rapid fire left */
+    Character trail[POWER_TRAIL]; real trail_life[POWER_TRAIL]; int trail_i; real trail_t;
 } Power;
 
 void power_reset(Power *pw, int hero, bool bomb);      /* a new stage: two items, no cooldown */
 bool power_can_start(const Power *pw);
 void power_start(Power *pw, Ren *ren);         /* uses an item and opens the cut-in (the caller stops its world) */
 bool power_in_cutin(const Power *pw);
-void power_update(Power *pw, const Input *in, float dt);   /* every step: the cut-in (skippable), the flash, the timers */
+void power_update(Power *pw, const Input *in, real dt);   /* every step: the cut-in (skippable), the flash, the timers */
 bool power_take_strike(Power *pw);                      /* true once, on the step the cut-in ends */
 bool power_speed(const Power *pw);                      /* April's burst is running */
 bool power_rapid(const Power *pw);                      /* Colt's */
-void power_trail_update(Power *pw, const Character *c, float dt);
-void power_draw_trail(const Power *pw, float cam_x, float cam_y);   /* April's afterimages, before the hero */
+void power_trail_update(Power *pw, const Character *c, real dt);
+void power_draw_trail(const Power *pw, real cam_x, real cam_y);   /* April's afterimages, before the hero */
 void power_draw(const Power *pw, Ren *ren, int sw, int sh);   /* the cut-in or the flash, over everything */
-void power_draw_hud(const Power *pw, Ren *ren, float x, float y, float w);   /* recharge / effect bar */
+void power_draw_hud(const Power *pw, Ren *ren, real x, real y, real w);   /* recharge / effect bar */
 void power_close(Power *pw);                            /* frees a clip still open (the stage ends) */

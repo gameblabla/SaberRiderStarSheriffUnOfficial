@@ -3,10 +3,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <math.h>
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
-static float rdf(const uint8_t *p) { uint32_t v = rd32(p); float f; memcpy(&f, &v, 4); return f; }
+static real rdf(const uint8_t *p) { return r_bits(rd32(p)); }
 static int32_t rds32(const uint8_t *p) { return (int32_t)rd32(p); }
 
 bool level_load(Level *L, uint32_t id)
@@ -92,7 +91,7 @@ uint8_t level_cell(const Level *L, int cx, int cy)
 
 /* Port of saber_engine::TileMapRenderer::render. Non-wrapping layers scroll by cam*parallax;
  * the wrap layer (extra==1, SkyBG) repeats horizontally. */
-void level_draw_layer(const Level *L, int li, float cam_x, float cam_y, int sw, int sh)
+void level_draw_layer(const Level *L, int li, real cam_x, real cam_y, int sw, int sh)
 {
     if (r_layer(gfx_renderer(), L->id, li, cam_x, cam_y)) return;   /* held by the backend (the Saturn's VDP2 planes) */
     const Layer *ly = &L->layers[li];
@@ -102,22 +101,28 @@ void level_draw_layer(const Level *L, int li, float cam_x, float cam_y, int sw, 
     int tw = cb->tw, th = cb->th;
     bool wrap = ly->extra == 1;
     /* repeating layers auto-scroll by frame_count * parallax (TileMapRenderer::render, repeat mode); others by camera * parallax */
-    float ox = wrap ? (float)(plat_ticks_ms() * 60 / 1000) * ly->parallax : cam_x * ly->parallax, oy = wrap ? 0 : cam_y * ly->parallax;
     int ncells = cblock_ncells(cb);
     int mapw_px = m->used_w * tw;
+#ifdef REAL_FIXED   /* frames x parallax modulo the map's width in 64 bits: the frame count grows without bound */
+    int64_t wo = (int64_t)(plat_ticks_ms() * 60 / 1000) * ly->parallax;
+    if (mapw_px > 0) wo %= (int64_t)mapw_px << 16;
+    real ox = wrap ? (real)wo : r_mul(cam_x, ly->parallax), oy = wrap ? 0 : r_mul(cam_y, ly->parallax);
+#else
+    float ox = wrap ? (float)(plat_ticks_ms() * 60 / 1000) * ly->parallax : cam_x * ly->parallax, oy = wrap ? 0 : cam_y * ly->parallax;
     if (wrap && mapw_px > 0) ox = fmodf(ox, (float)mapw_px), oy = 0;
+#endif
     if (ox < 0 && !wrap) ox = 0;
     if (oy < 0) oy = 0;
-    int cx0 = (int)floorf(ox / tw), cy0 = (int)floorf(oy / th);
+    int cx0 = r_floor(ox / tw), cy0 = r_floor(oy / th);
     int ncx = sw / tw + 2, ncy = sh / th + 2;
     /* a cell's screen position is cx * tw - ox floored: cx * tw is whole, so the fraction is the layer's */
-    float fx = floorf(-ox), fy = floorf(-oy);
+    real fx = r_floorr(-ox), fy = r_floorr(-oy);
     int cxa = cx0 > 0 || wrap ? cx0 : 0, cxb = cx0 + ncx < m->w || wrap ? cx0 + ncx : m->w;   /* the columns in the map */
     int mx0 = wrap ? ((cxa % m->used_w) + m->used_w) % m->used_w : cxa;
     cblock_batch_begin(cb);
     for (int cy = cy0 < 0 ? 0 : cy0; cy < cy0 + ncy && cy < m->h; cy++) {
         const uint32_t *row = m->cells + (size_t)cy * m->w;
-        float y = (float)(cy * th) + fy;
+        real y = r_int(cy * th) + fy;
         for (int cx = cxa, mx = mx0; cx < cxb; cx++) {
             uint32_t v = row[mx];
             if (++mx == m->used_w && wrap) mx = 0;
@@ -127,7 +132,7 @@ void level_draw_layer(const Level *L, int li, float cam_x, float cam_y, int sw, 
             uint32_t ci = v - 1; if (ci >= (uint32_t)ncells) ci %= (uint32_t)ncells;
             uint16_t t = cb->cells[ci];
             if (t == 0xFFFF) continue;
-            cblock_batch_tile(t, (float)(cx * tw) + fx, y, flip);
+            cblock_batch_tile(t, r_int(cx * tw) + fx, y, flip);
         }
     }
     cblock_batch_end();

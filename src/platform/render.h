@@ -6,7 +6,8 @@
  *   platform/sdl3/render_sdl.c       SDL3 renderer (PC)
  *   platform/dreamcast/render_pvr.c  PowerVR through KOS direct rendering (Dreamcast)
  *   platform/null/render_null.c      no output (headless tests, bring-up of a new port)
- * Coordinates are logical screen pixels (plat_set_logical); a backend scales them to its display.
+ * Coordinates are logical screen pixels (plat_set_logical) as `real` (real.h: float on the PC and the Dreamcast, 16.16
+ * fixed point on the Saturn); a backend scales them to its display.
  * Textures carry their own colour/alpha modulation, blend and scale mode like SDL textures, so a draw
  * reads that state at the time of the call.
  *
@@ -19,14 +20,15 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include "../real.h"
 
 typedef struct Ren Ren;       /* the renderer (one per program; passed along like SDL_Renderer) */
 typedef struct RTex RTex;     /* a texture */
 
-typedef struct { float x, y, w, h; } RFRect;
+typedef struct { real x, y, w, h; } RFRect;
 typedef struct { int x, y, w, h; } RRect;
-typedef struct { float x, y; } RFPoint;
-typedef struct { float r, g, b, a; } RFColor;
+typedef struct { real x, y; } RFPoint;
+typedef struct { real r, g, b, a; } RFColor;
 typedef struct { RFPoint position; RFColor color; RFPoint tex_coord; } RVertex;
 
 typedef enum { R_BLEND_NONE, R_BLEND_BLEND, R_BLEND_ADD } RBlend;
@@ -69,11 +71,11 @@ void r_clear(Ren *r);                                /* whole screen, current dr
 void r_fill_rect(Ren *r, const RFRect *q);           /* NULL = whole viewport */
 void r_fill_rects(Ren *r, const RFRect *q, int n);
 void r_rect(Ren *r, const RFRect *q);                /* 1 px outline */
-void r_line(Ren *r, float x0, float y0, float x1, float y1);
-void r_point(Ren *r, float x, float y);
+void r_line(Ren *r, real x0, real y0, real x1, real y1);
+void r_point(Ren *r, real x, real y);
 void r_tex(Ren *r, RTex *t, const RFRect *src, const RFRect *dst);   /* NULL src = whole texture, NULL dst = whole viewport */
 /* rotated clockwise by angle degrees around center (relative to dst; NULL = its centre), then flipped */
-void r_tex_rot(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, double angle, const RFPoint *center, RFlip flip);
+void r_tex_rot(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, rdeg angle, const RFPoint *center, RFlip flip);
 /* n unrotated copies out of one texture in one call (a tile layer, a character's cells): src[i] -> dst[i], a negative
  * dst[i].w mirrors that one horizontally (its left edge stays dst[i].x). The same as n r_tex calls, without the
  * per-call overhead: a thousand 16 px tiles a frame is most of what the game draws. */
@@ -94,13 +96,13 @@ typedef struct {
     const uint32_t *const *mat;      /* mat[m * mips + L] */
 } RFloorDesc;
 typedef struct {
-    float cam_x, cam_y, fx, fy;      /* eye position on the ground plane, unit forward vector */
-    float cam_h, focal, horizon;     /* eye height (world units), focal length (px), horizon (screen row, may be fractional) */
+    real cam_x, cam_y, fx, fy;       /* eye position on the ground plane, unit forward vector */
+    real cam_h, focal, horizon;      /* eye height (world units), focal length (px), horizon (screen row, may be fractional) */
     int y0, y1;                      /* screen rows drawn: [y0, y1) */
-    float row_off;                   /* where a row is sampled: 0 its top edge, 0.5 its centre */
-    float fog0, fog1; int fog_max;   /* linear distance fog to `haze`, fog_max/256 at fog1 and beyond */
+    real row_off;                    /* where a row is sampled: 0 its top edge, 0.5 its centre */
+    real fog0, fog1; int fog_max;   /* linear distance fog to `haze`, fog_max/256 at fog1 and beyond */
     uint32_t haze;                   /* RGBA like texture pixels (0xAABBGGRR as an integer) */
-    float mip_step;                  /* world units per pixel at which mip 1 starts; mip L from mip_step * 2^(L-1) */
+    real mip_step;                  /* world units per pixel at which mip 1 starts; mip L from mip_step * 2^(L-1) */
     int sw;                          /* width drawn (from x 0) */
 } RFloorView;
 RFloor *r_floor_create(Ren *r, const RFloorDesc *d);
@@ -113,7 +115,7 @@ void    r_floor_destroy(RFloor *f);
  * for that level. level_draw_layer asks it first: true means the backend shows layer `layer` of level `level` (its
  * id) for this camera position this frame, and the core draws nothing for it; false (every other backend) means the
  * core draws the tiles. */
-bool r_layer(Ren *r, uint32_t level, int layer, float cam_x, float cam_y);
+bool r_layer(Ren *r, uint32_t level, int layer, real cam_x, real cam_y);
 /* The level layer the sprites that follow belong to (-1: none, in front of everything: HUD, menus). A backend whose
  * layers aren't drawn in the core's order (hardware planes composited by priority) places them by it; the others ignore
  * it (painter's order already holds). */

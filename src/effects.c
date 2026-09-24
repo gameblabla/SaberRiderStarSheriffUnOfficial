@@ -1,9 +1,8 @@
 #include "effects.h"
 #include "pack.h"
-#include <math.h>
 #include <string.h>
 
-Effect *effects_spawn(Effects *fx, uint32_t sprite_id, int layer, const AnimDef *a, float x, float y, float ox, float oy, float angle)
+Effect *effects_spawn(Effects *fx, uint32_t sprite_id, int layer, const AnimDef *a, real x, real y, real ox, real oy, real angle)
 {
     for (int i = 0; i < MAX_EFFECTS; i++) {
         Effect *e = &fx->e[i];
@@ -19,7 +18,7 @@ Effect *effects_spawn(Effects *fx, uint32_t sprite_id, int layer, const AnimDef 
     return NULL;
 }
 
-void effects_update(Effects *fx, float dt)
+void effects_update(Effects *fx, real dt)
 {
     for (int i = 0; i < MAX_EFFECTS; i++) {
         Effect *e = &fx->e[i];
@@ -34,19 +33,19 @@ void effects_update(Effects *fx, float dt)
     }
 }
 
-void effects_draw(const Effects *fx, int layer, float cam_x, float cam_y)
+void effects_draw(const Effects *fx, int layer, real cam_x, real cam_y)
 {
     for (int i = 0; i < MAX_EFFECTS; i++) {
         const Effect *e = &fx->e[i];
         if (!e->alive || e->layer != layer) continue;
-        float x = e->x + (e->follow_x ? *e->follow_x - e->fx0 : 0), y = e->y + (e->follow_y ? *e->follow_y - e->fy0 : 0);
-        x = floorf(x - e->ox - cam_x); y = floorf(y - e->oy - cam_y);
+        real x = e->x + (e->follow_x ? *e->follow_x - e->fx0 : 0), y = e->y + (e->follow_y ? *e->follow_y - e->fy0 : 0);
+        x = r_floorr(x - e->ox - cam_x); y = r_floorr(y - e->oy - cam_y);
         if (e->spr) {
             int f = e->frame < e->spr->frames ? e->frame : e->spr->frames - 1;
             if (e->angle != 0) {
-                RFRect src = { (float)(f * e->spr->w), 0, (float)e->spr->w, (float)e->spr->h };
-                RFRect dst = { x, y, (float)e->spr->w, (float)e->spr->h };
-                r_tex_rot(rtex_renderer(sprite_tex(e->spr)), sprite_tex(e->spr), &src, &dst, -e->angle * 180.0 / 3.14159265, NULL, R_FLIP_NONE);
+                RFRect src = { r_int(f * e->spr->w), 0, r_int(e->spr->w), r_int(e->spr->h) };
+                RFRect dst = { x, y, r_int(e->spr->w), r_int(e->spr->h) };
+                r_tex_rot(rtex_renderer(sprite_tex(e->spr)), sprite_tex(e->spr), &src, &dst, r_deg(-e->angle), NULL, R_FLIP_NONE);
             } else sprite_draw(e->spr, f, x, y, e->flip);
         } else if (e->cb) {
             int ci = e->frame; if (ci >= 0 && ci < cblock_ncells(e->cb) && e->cb->cells[ci] != 0xFFFF) cblock_draw_tile(e->cb, e->cb->cells[ci], x, y, e->flip);

@@ -29,8 +29,24 @@ typedef int32_t fx_ang;
 #define FX_DEG(d) ((fx_ang)((d) * (65536.0 / 360.0) + ((d) >= 0 ? 0.5 : -0.5)))
 
 static inline fx    fx_from_int(int i)     { return (fx)((uint32_t)i << FX_SHIFT); }
+#ifndef FX_NO_FLOAT   /* the Saturn build defines it: no float anywhere (host tools and the PC/DC backends may convert) */
 static inline fx    fx_from_float(float f) { return (fx)(f * 65536.0f + (f >= 0 ? 0.5f : -0.5f)); }
 static inline float fx_to_float(fx a)      { return (float)a * (1.0f / 65536.0f); }
+#endif
+/* an IEEE single given as its bits (the demo's data files hold floats) to fx, rounded to nearest (halves away from
+ * zero, like fx_from_float), saturating at FX_MAX / FX_MIN (the level data's +-100000 "off screen" waypoints) */
+fx fx_from_f32bits(uint32_t bits);
+
+/* The game steps at a fixed 60 Hz. As a duration (timers counting down, clocks counting up) one step is FX_DT: 1/60
+ * rounded up, as float's 1/60 (0.016666668) is, so a timer of n/60 s runs out on the nth step like the float code's.
+ * A rate times the step (a velocity into a displacement, an acceleration into a velocity) is v/60 exactly (to 1/65536):
+ * fx_mul_dt. Any other dt (a scaled or zero step) is an ordinary product. */
+#define FX_DT ((fx)1093)
+static inline fx fx_mul_dt(fx v, fx dt)
+{
+    if (dt == FX_DT) return (fx)(((int64_t)v * 71582788 + 0x80000000) >> 32);   /* 2^32 / 60 */
+    return (fx)(((int64_t)v * dt) >> 16);
+}
 
 /* to an integer: toward -infinity, toward +infinity, to nearest (halves up) */
 static inline int fx_floor(fx a) { return a >> FX_SHIFT; }
@@ -60,7 +76,20 @@ static inline fx fx_cos(fx_ang a) { return fx_sin(a + FX_ANG_TURN / 4); }
 /* the angle of (x, y), 0 along +x, a quarter turn along +y (atan2 in binary angles, -32768 .. 32767); error < 0.01 degree */
 fx_ang fx_atan2(fx y, fx x);
 
+/* text: v with `dec` decimals (0..4, rounded half away from zero) into buf (at least 16 bytes); returns buf. FXS(v, d)
+ * for a printf argument. */
+char *fx_fmt(char *buf, fx v, int dec);
+#define FXS(v, dec) fx_fmt((char[16]){ 0 }, (v), (dec))
+/* the reverse: a decimal number ("-12.5") to fx; *end past it (strtod without float) */
+fx fx_parse(const char *s, const char **end);
+
+/* degrees (fx) <-> binary angles */
+static inline fx_ang fx_ang_from_deg(fx d) { return (fx_ang)(((int64_t)d * 11930465 + ((int64_t)1 << 31)) >> 32); }   /* / 360 */
+static inline fx     fx_deg_from_ang(fx_ang a) { return (fx)((int16_t)a * 360); }   /* -180 .. 180 */
+
 /* radians <-> binary angles (for code whose angles are in radians) */
 static inline fx_ang fx_ang_from_rad(fx r) { return (fx_ang)(((int64_t)r * 683565276 + ((int64_t)1 << 31)) >> 32); }   /* / 2pi */
 static inline fx     fx_rad_from_ang(fx_ang a) { return (fx)(((int64_t)(int16_t)a * 411775 + 0x8000) >> 16); }   /* * 2pi, -pi .. pi */
+#ifndef FX_NO_FLOAT
 static inline fx_ang fx_ang_from_radf(float r) { return (fx_ang)(int32_t)(r * (65536.0f / 6.28318530718f) + (r >= 0 ? 0.5f : -0.5f)); }
+#endif

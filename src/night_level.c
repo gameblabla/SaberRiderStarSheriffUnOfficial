@@ -301,44 +301,44 @@ void stage3_world_free(Stage3World *w)
  * always 260+ px past their thin trigger so they are placed off screen and
  * scrolled into view, never popped in. Streams mix walkers, grunts and the
  * grunt variant, from ahead and from behind, with random intervals. */
-#define R 100000.0f
+#define RGT 100000.0f
 #define LFT -100000.0f
 typedef struct { int type; float x, zw; int nwp; float wp[3][2]; int interval_ms, loops, rand_n, delay_ms; } Stage3Trigger;
 static const Stage3Trigger TRIGGERS[] = {
     /* badlands: grunts run in, a kneeler waits behind the first wreck */
-    { 2,  160, 400, 1, { { R, 160 } },                              1500,  3, 40,    0 },
+    { 2,  160, 400, 1, { { RGT, 160 } },                              1500,  3, 40,    0 },
     { 8,  330,   8, 1, { { 664, 160 } },                               0,  1,  0,    0 },
     /* the pad stair: a sniper on the top pad, walkers from both sides, a kneeler on the last pad */
     { 7,  900,   8, 1, { { 1232, 51 } },                               0,  1,  0,    0 },
-    { 1,  880, 520, 2, { { LFT, 160 }, { R, 160 } },                1100, -1, 40,  400 },
+    { 1,  880, 520, 2, { { LFT, 160 }, { RGT, 160 } },                1100, -1, 40,  400 },
     { 9, 1080,   8, 1, { { 1408, 99 } },                               0,  1,  0,    0 },
     /* twin peaks: a sniper on the summit pad, grunts from behind, a kneeler on the far pad */
     { 6, 1580,   8, 1, { { 1888, 35 } },                               0,  1,  0,    0 },
     { 5, 1900,   8, 1, { { LFT, 160 } },                             700,  2, 20,    0 },
     { 8, 1940,   8, 1, { { 2208, 67 } },                               0,  1,  0,    0 },
-    { 2, 2100, 400, 3, { { R, 160 }, { R, 160 }, { LFT, 160 } },    1500, -1, 60,  600 },
+    { 2, 2100, 400, 3, { { RGT, 160 }, { RGT, 160 }, { LFT, 160 } },    1500, -1, 60,  600 },
     /* the wreck yard: gunmen on all three roofs, walkers both ways */
     { 9, 2480,   8, 1, { { 2780, 99 } },                               0,  1,  0,    0 },
-    { 1, 2650, 700, 2, { { R, 160 }, { LFT, 160 } },                1300, -1, 50,  800 },
+    { 1, 2650, 700, 2, { { RGT, 160 }, { LFT, 160 } },                1300, -1, 50,  800 },
     { 6, 2760,   8, 1, { { 3048, 123 } },                              0,  1,  0,    0 },
     { 8, 3040,   8, 1, { { 3336, 123 } },                              0,  1,  0,    0 },
     /* the mound */
     { 7, 3420,   8, 1, { { 3728, 51 } },                               0,  1,  0,    0 },
-    { 5, 3560, 500, 1, { { R, 160 } },                              1200,  4, 40,    0 },
+    { 5, 3560, 500, 1, { { RGT, 160 } },                              1200,  4, 40,    0 },
     { 8, 3860,   8, 1, { { 4160, 160 } },                              0,  1,  0,    0 },
     /* the wall climb */
-    { 2, 4350, 900, 3, { { R, 160 }, { LFT, 160 }, { R, 160 } },    1400, -1, 50,  500 },
+    { 2, 4350, 900, 3, { { RGT, 160 }, { LFT, 160 }, { RGT, 160 } },    1400, -1, 50,  500 },
     { 6, 4390,   8, 1, { { 4688, 35 } },                               0,  1,  0,    0 },
     { 9, 4900,   8, 1, { { 5192, 51 } },                               0,  1,  0,    0 },
     { 7, 5060,   8, 1, { { 5352, 123 } },                              0,  1,  0,    0 },
     { 5, 5100,   8, 1, { { LFT, 160 } },                             700,  2, 20,    0 },
     /* the crossroads before the arena */
-    { 1, 5450, 700, 2, { { LFT, 160 }, { R, 160 } },                1100, -1, 40,  300 },
+    { 1, 5450, 700, 2, { { LFT, 160 }, { RGT, 160 } },                1100, -1, 40,  300 },
     { 9, 5700,   8, 1, { { 6000, 83 } },                               0,  1,  0,    0 },
     { 6, 5980,   8, 1, { { 6280, 160 } },                              0,  1,  0,    0 },
-    { 2, 6050, 300, 1, { { R, 160 } },                              1200,  2, 40,    0 },
+    { 2, 6050, 300, 1, { { RGT, 160 } },                              1200,  2, 40,    0 },
 };
-#undef R
+#undef RGT
 #undef LFT
 
 int stage3_triggers(LevelObject *out, int max, int player_layer)

@@ -26,7 +26,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
 
 /* ---------------------------------------------------------------- VDP1 memory */
 #define VDP1_VRAM_BASE   0x25C00000u
@@ -469,7 +468,6 @@ typedef struct { uint8_t mr, mg, mb, alpha; RBlend blend; uint8_t prio; } TexSta
 static TexState cur;
 static uint8_t depth_reg;   /* the sprite priority register of the replayed draws' layer (8bpp parts; 0 the front) */
 
-static int32_t fx16(float f);   /* float -> 16.16 without soft-float (below) */
 static int16_t pix16(int32_t v) { int i = v >> 16; return (int16_t)(i < -2048 ? -2048 : i > 2047 ? 2047 : i); }   /* floor, clamped */
 
 static Cmd *cmd_new(void)
@@ -549,8 +547,6 @@ static void gouraud_upload(void)
     for (int i = 0; i < res.ngouraud; i++) { uint32_t v = (uint32_t)gour[i] << 16 | gour[i]; d[i * 2] = v; d[i * 2 + 1] = v; }
 }
 
-static int16_t clampc(float v) { return v < -2048 ? -2048 : v > 2047 ? 2047 : (int16_t)floorf(v); }
-
 /* ---------------------------------------------------------------- draw state */
 bool r_rect_intersect(const RRect *a, const RRect *b, RRect *out)
 {
@@ -600,7 +596,7 @@ static void exec_clear(void)
 static void exec_fill(const RFRect *q)
 {
     int32_t x, y, w, h;
-    if (q) { x = fx16(q->x); y = fx16(q->y); w = fx16(q->w); h = fx16(q->h); }
+    if (q) { x = q->x; y = q->y; w = q->w; h = q->h; }
     else { x = y = 0; w = (vp_on ? viewport.w : scr_w) << 16; h = (vp_on ? viewport.h : scr_h) << 16; }
     if (w <= 0 || h <= 0) return;
     int32_t x1 = x + w - (1 << 16), y1 = y + h - (1 << 16);
@@ -617,7 +613,7 @@ static void exec_fill(const RFRect *q)
     }
 }
 
-static void line_cmd(int type, const float *xy, int n)
+static void line_cmd(int type, const int32_t *xy, int n)
 {
     RRect c; if (!draw_clip(&c)) return;
     uint16_t pm = PM_ECD | PM_SPD;
@@ -628,7 +624,7 @@ static void line_cmd(int type, const float *xy, int n)
     Cmd *k = cmd_new(); if (!k) return;
     k->ctrl = (uint16_t)type; k->pmod = pm; k->colr = rgb555(draw_r, draw_g, draw_b);
     int16_t *v = &k->xa;
-    for (int i = 0; i < 4; i++) { int j = i < n ? i : n - 1; v[i * 2] = pix16(fx16(xy[j * 2]) + ox); v[i * 2 + 1] = pix16(fx16(xy[j * 2 + 1]) + oy); }
+    for (int i = 0; i < 4; i++) { int j = i < n ? i : n - 1; v[i * 2] = pix16(xy[j * 2] + ox); v[i * 2 + 1] = pix16(xy[j * 2 + 1] + oy); }
     ren.prims++;
 }
 /* ---------------------------------------------------------------- textured draws */
@@ -655,25 +651,6 @@ static const Unit *unit_exact(const RTex *t, int x, int y, int w, int h)
     return NULL;
 }
 
-/* float -> 16.16 without the soft-float library (the SH-2 has no FPU): |f| < 32768. The SH-2 has no barrel shifter
- * either (a variable shift is a libgcc loop): the shifts are multiplies by a power of two (mul.l / dmulu.l) */
-static const uint32_t POW2[32] = {
-    1u, 1u << 1, 1u << 2, 1u << 3, 1u << 4, 1u << 5, 1u << 6, 1u << 7, 1u << 8, 1u << 9, 1u << 10, 1u << 11, 1u << 12,
-    1u << 13, 1u << 14, 1u << 15, 1u << 16, 1u << 17, 1u << 18, 1u << 19, 1u << 20, 1u << 21, 1u << 22, 1u << 23,
-    1u << 24, 1u << 25, 1u << 26, 1u << 27, 1u << 28, 1u << 29, 1u << 30, 1u << 31 };
-
-static int32_t fx16(float f)
-{
-    union { float f; uint32_t u; } v = { f };
-    int e = (int)((v.u >> 23) & 255) - 127;
-    if (e < -17) return 0;
-    uint32_t m = (v.u & 0x7FFFFFu) | 0x800000u;
-    int sh = e - 7;   /* the mantissa is 1.23: 16.16 is a shift by e - 23 + 16 */
-    int32_t r;
-    if (sh >= 0) r = sh > 7 ? 0x7FFFFFFF : (int32_t)(m * POW2[sh]);
-    else r = (int32_t)(((uint64_t)m * POW2[32 + sh]) >> 32);   /* m >> -sh: the high word of m * 2^(32 - (-sh)) */
-    return (v.u >> 31) ? -r : r;
-}
 static int fl16(int32_t v) { return v >> 16; }                  /* floor */
 static int ce16(int32_t v) { return (v + 0xFFFF) >> 16; }       /* ceiling */
 
@@ -743,39 +720,39 @@ static void draw_part_axis(RTex *t, int pi, const AMap *m, const RRect *c)
 }
 
 /* Rotated draws: from texture space (the src rect) to the screen: dst, then rotation by angle (degrees, clockwise)
- * about (cx, cy) in screen space, flips. */
-typedef struct { float sx, sy, sw, sh, dx, dy, dw, dh; float cs, sn, cx, cy; RFlip flip; } Map;
+ * about (cx, cy) in screen space, flips. All 16.16: kx, ky the screen size of a texel, cs / sn the rotation. */
+typedef struct { int sx, sy, sw, sh; fx dx, dy, dw, dh, kx, ky, cs, sn, cx, cy; RFlip flip; } Map;
 
-static void map_pt(const Map *m, float u, float v, float *x, float *y)
+static void map_pt(const Map *m, int u, int v, fx *x, fx *y)
 {
-    float fx = (u - m->sx) / m->sw, fy = (v - m->sy) / m->sh;
-    if (m->flip & R_FLIP_H) fx = 1 - fx;
-    if (m->flip & R_FLIP_V) fy = 1 - fy;
-    float px = m->dx + fx * m->dw, py = m->dy + fy * m->dh;
-    float ex = px - m->cx, ey = py - m->cy;
-    *x = m->cx + ex * m->cs - ey * m->sn; *y = m->cy + ex * m->sn + ey * m->cs;
+    int fu = u - m->sx, fv = v - m->sy;
+    if (m->flip & R_FLIP_H) fu = m->sw - fu;
+    if (m->flip & R_FLIP_V) fv = m->sh - fv;
+    fx px = m->dx + fu * m->kx, py = m->dy + fv * m->ky;
+    fx ex = px - m->cx, ey = py - m->cy;
+    *x = m->cx + fx_mul(ex, m->cs) - fx_mul(ey, m->sn); *y = m->cy + fx_mul(ex, m->sn) + fx_mul(ey, m->cs);
 }
 
 static void draw_part_rot(RTex *t, int pi, const Map *m, const RRect *c, const RRect *dclip)
 {
     const Part *p = &t->parts[pi];
-    float ax, ay, bx, by, cxx, cyy, dxx, dyy;
+    fx ax, ay, bx, by, cxx, cyy, dxx, dyy;
     map_pt(m, p->x, p->y, &ax, &ay); map_pt(m, p->x + p->wpad, p->y, &bx, &by);
     map_pt(m, p->x + p->wpad, p->y + p->h, &cxx, &cyy); map_pt(m, p->x, p->y + p->h, &dxx, &dyy);
-    float minx = fminf(fminf(ax, bx), fminf(cxx, dxx)), maxx = fmaxf(fmaxf(ax, bx), fmaxf(cxx, dxx));
-    float miny = fminf(fminf(ay, by), fminf(cyy, dyy)), maxy = fmaxf(fmaxf(ay, by), fmaxf(cyy, dyy));
-    int16_t q[8] = { clampc(ax), clampc(ay), clampc(bx - 1), clampc(by), clampc(cxx - 1), clampc(cyy - 1), clampc(dxx), clampc(dyy - 1) };
-    part_emit(t, pi, (int)floorf(minx), (int)floorf(miny), (int)floorf(maxx) - 1, (int)floorf(maxy) - 1, m->flip, q, c, dclip);
+    fx minx = fx_min(fx_min(ax, bx), fx_min(cxx, dxx)), maxx = fx_max(fx_max(ax, bx), fx_max(cxx, dxx));
+    fx miny = fx_min(fx_min(ay, by), fx_min(cyy, dyy)), maxy = fx_max(fx_max(ay, by), fx_max(cyy, dyy));
+    int16_t q[8] = { pix16(ax), pix16(ay), pix16(bx - FX_ONE), pix16(by), pix16(cxx - FX_ONE), pix16(cyy - FX_ONE), pix16(dxx), pix16(dyy - FX_ONE) };
+    part_emit(t, pi, fl16(minx), fl16(miny), fl16(maxx) - 1, fl16(maxy) - 1, m->flip, q, c, dclip);
 }
 
-static void tex_draw(RTex *t, const RFRect *src, const RFRect *dst, double angle, const RFPoint *center, RFlip flip)
+static void tex_draw(RTex *t, const RFRect *src, const RFRect *dst, fx angle, const RFPoint *center, RFlip flip)
 {
     if (!t || !t->nparts) return;
     RRect c; if (!draw_clip(&c)) return;
     int sx = 0, sy = 0, sw = t->w, sh = t->h;
-    if (src) { sx = fl16(fx16(src->x)); sy = fl16(fx16(src->y)); sw = fl16(fx16(src->w)); sh = fl16(fx16(src->h)); }
+    if (src) { sx = fl16(src->x); sy = fl16(src->y); sw = fl16(src->w); sh = fl16(src->h); }
     int32_t dx = 0, dy = 0, dw, dh;
-    if (dst) { dx = fx16(dst->x); dy = fx16(dst->y); dw = fx16(dst->w); dh = fx16(dst->h); }
+    if (dst) { dx = dst->x; dy = dst->y; dw = dst->w; dh = dst->h; }
     else { dw = (vp_on ? viewport.w : scr_w) << 16; dh = (vp_on ? viewport.h : scr_h) << 16; }
     if (sw <= 0 || sh <= 0 || dw == 0 || dh == 0) return;
     if (vp_on) { dx += viewport.x << 16; dy += viewport.y << 16; }
@@ -785,10 +762,9 @@ static void tex_draw(RTex *t, const RFRect *src, const RFRect *dst, double angle
     if (tracing && depth_reg) printf("  tex %08X src %d,%d %dx%d dst %d,%d %dx%d a%u %s depth reg %d\n", (unsigned)t->tag, sx, sy, sw, sh,
                                      fl16(dx), fl16(dy), fl16(dw), fl16(dh), cur.alpha, u ? "unit" : "rect", depth_reg);
     RRect dclip = { fl16(dx), fl16(dy), ce16(dw), ce16(dh) };
-    uint64_t abits; memcpy(&abits, &angle, sizeof abits);   /* angle == 0 without a soft-double compare */
-    if (!(abits << 1)) {
-        AMap m = { sx, sy, sw, sh, dx, dy, dw == sw << 16 ? 1 << 16 : (int32_t)(((int64_t)dw) / sw),
-                   dh == sh << 16 ? 1 << 16 : (int32_t)(((int64_t)dh) / sh), flip, dclip, !whole };
+    fx kx = dw == sw << 16 ? 1 << 16 : dw / sw, ky = dh == sh << 16 ? 1 << 16 : dh / sh;
+    if (!angle) {
+        AMap m = { sx, sy, sw, sh, dx, dy, kx, ky, flip, dclip, !whole };
         if (whole) { for (int i = 0; i < u->n; i++) draw_part_axis(t, u->first + i, &m, &c); return; }
         for (int i = 0; i < t->nparts; i++) {   /* any other rectangle: every part that overlaps it, clipped to the destination */
             const Part *p = &t->parts[i];
@@ -797,10 +773,9 @@ static void tex_draw(RTex *t, const RFRect *src, const RFRect *dst, double angle
         }
         return;
     }
-    float a = (float)angle * 3.14159265f / 180.0f;
-    float fdx = dx / 65536.0f, fdy = dy / 65536.0f, fdw = dw / 65536.0f, fdh = dh / 65536.0f;
-    Map m = { (float)sx, (float)sy, (float)sw, (float)sh, fdx, fdy, fdw, fdh, cosf(a), sinf(a),
-              fdx + (center ? center->x : fdw * 0.5f), fdy + (center ? center->y : fdh * 0.5f), flip };
+    fx_ang a = fx_ang_from_deg(angle);
+    Map m = { sx, sy, sw, sh, dx, dy, dw, dh, kx, ky, fx_cos(a), fx_sin(a),
+              dx + (center ? center->x : dw / 2), dy + (center ? center->y : dh / 2), flip };
     if (whole) { for (int i = 0; i < u->n; i++) draw_part_rot(t, u->first + i, &m, &c, NULL); return; }
     for (int i = 0; i < t->nparts; i++) {
         const Part *p = &t->parts[i];
@@ -815,7 +790,7 @@ static void tex_draw(RTex *t, const RFRect *src, const RFRect *dst, double angle
  * mod / alpha / blend are recorded with the draw (the core sets them around it). SABER_NOSLAVE: replay on the master,
  * right at the frame end (no frame of delay: for comparisons). */
 enum { OP_TEX, OP_ROT, OP_FILL, OP_LINE, OP_QUAD, OP_CLIP, OP_VP, OP_CLEAR, OP_DEPTH };
-typedef struct { uint8_t op, flags, r, g, b, a, blend, prio; RTex *t; union { float f[8]; int32_t i[8]; uint32_t u[8]; } v; } Rec;
+typedef struct { uint8_t op, flags, r, g, b, a, blend, prio; RTex *t; union { int32_t i[8]; uint32_t u[8]; } v; } Rec;
 #define REC_MAX 512       /* a frame's draws (level 1: ~80-200; 22 KB a buffer, two of them, in low RAM) */
 static Rec *recbuf[2]; static int rec_n[2];
 static unsigned rec_overflow; static int rec_peak;
@@ -851,24 +826,25 @@ void r_fill_rect(Ren *r, const RFRect *q)
 {
     (void)r;
     Rec *e = rec_new(OP_FILL); if (!e) return;
-    if (q) { e->flags = 1; e->v.f[0] = q->x; e->v.f[1] = q->y; e->v.f[2] = q->w; e->v.f[3] = q->h; }
+    if (q) { e->flags = 1; e->v.i[0] = q->x; e->v.i[1] = q->y; e->v.i[2] = q->w; e->v.i[3] = q->h; }
 }
 void r_fill_rects(Ren *r, const RFRect *q, int n) { for (int i = 0; i < n; i++) r_fill_rect(r, &q[i]); }
-static void rec_line(int type, const float *xy, int n)
+static void rec_line(int type, const int32_t *xy, int n)
 {
     Rec *e = rec_new(OP_LINE); if (!e) return;
     e->flags = (uint8_t)n; e->prio = (uint8_t)type;
-    memcpy(e->v.f, xy, sizeof(float) * 2 * (size_t)n);
+    memcpy(e->v.i, xy, sizeof(int32_t) * 2 * (size_t)n);
 }
 void r_rect(Ren *r, const RFRect *q)
 {
     (void)r;
     if (!q) return;
-    float xy[8] = { q->x, q->y, q->x + q->w - 1, q->y, q->x + q->w - 1, q->y + q->h - 1, q->x, q->y + q->h - 1 };
+    fx x1 = q->x + q->w - FX_ONE, y1 = q->y + q->h - FX_ONE;
+    int32_t xy[8] = { q->x, q->y, x1, q->y, x1, y1, q->x, y1 };
     rec_line(C_POLYLINE, xy, 4);
 }
-void r_line(Ren *r, float x0, float y0, float x1, float y1) { (void)r; float xy[4] = { x0, y0, x1, y1 }; rec_line(C_LINE, xy, 2); }
-void r_point(Ren *r, float x, float y) { (void)r; float xy[4] = { x, y, x, y }; rec_line(C_LINE, xy, 2); }
+void r_line(Ren *r, fx x0, fx y0, fx x1, fx y1) { (void)r; int32_t xy[4] = { x0, y0, x1, y1 }; rec_line(C_LINE, xy, 2); }
+void r_point(Ren *r, fx x, fx y) { (void)r; int32_t xy[4] = { x, y, x, y }; rec_line(C_LINE, xy, 2); }
 void r_geometry(Ren *r, RTex *t, const RVertex *v, int nv, const int *idx, int ni)
 {
     (void)r; (void)t;   /* flat triangles in the vertices' average colour (the core uses it for untextured shapes) */
@@ -876,36 +852,33 @@ void r_geometry(Ren *r, RTex *t, const RVertex *v, int nv, const int *idx, int n
     for (int i = 0; i + 2 < n; i += 3) {
         const RVertex *a = &v[idx ? idx[i] : i], *b = &v[idx ? idx[i + 1] : i + 1], *c = &v[idx ? idx[i + 2] : i + 2];
         Rec *e = rec_new(OP_QUAD); if (!e) return;
-        e->r = (uint8_t)((a->color.r + b->color.r + c->color.r) * 85); e->g = (uint8_t)((a->color.g + b->color.g + c->color.g) * 85);
-        e->b = (uint8_t)((a->color.b + b->color.b + c->color.b) * 85); e->a = (uint8_t)((a->color.a + b->color.a + c->color.a) * 85);
-        int32_t xy[8] = { fx16(a->position.x), fx16(a->position.y), fx16(b->position.x), fx16(b->position.y),
-                          fx16(c->position.x), fx16(c->position.y), fx16(c->position.x), fx16(c->position.y) };
+        e->r = (uint8_t)(((a->color.r + b->color.r + c->color.r) * 85) >> 16); e->g = (uint8_t)(((a->color.g + b->color.g + c->color.g) * 85) >> 16);   /* 0..1 each */
+        e->b = (uint8_t)(((a->color.b + b->color.b + c->color.b) * 85) >> 16); e->a = (uint8_t)(((a->color.a + b->color.a + c->color.a) * 85) >> 16);
+        int32_t xy[8] = { a->position.x, a->position.y, b->position.x, b->position.y, c->position.x, c->position.y, c->position.x, c->position.y };
         memcpy(e->v.i, xy, sizeof xy);
     }
 }
-static void rec_tex(RTex *t, const RFRect *src, const RFRect *dst, const double *angle, const RFPoint *center, RFlip flip)
+static void rec_tex(RTex *t, const RFRect *src, const RFRect *dst, fx angle, const RFPoint *center, RFlip flip)
 {
     if (!t) return;
     Rec *e = rec_new(OP_TEX); if (!e) return;
     t->rec_seq = rec_seq;
     e->t = t; e->r = t->mr; e->g = t->mg; e->b = t->mb; e->a = t->alpha; e->blend = (uint8_t)t->blend; e->prio = t->prio;
     e->flags = (uint8_t)((src ? 1 : 0) | (dst ? 2 : 0) | (flip & 3) << 4);
-    if (src) memcpy(&e->v.f[0], src, sizeof *src);
-    if (dst) memcpy(&e->v.f[4], dst, sizeof *dst);
-    uint64_t abits = 0;
-    if (angle) memcpy(&abits, angle, sizeof abits);
-    if (abits << 1) {   /* rotated: the angle (its bits) and centre in an extension record */
+    if (src) memcpy(&e->v.i[0], src, sizeof *src);
+    if (dst) memcpy(&e->v.i[4], dst, sizeof *dst);
+    if (angle) {   /* rotated: the angle and centre in an extension record */
         Rec *x = rec_new(OP_ROT); if (!x) { rec_n[rec_w]--; return; }
         e->flags |= 8;
         x->flags = center != NULL;
-        if (center) { x->v.f[0] = center->x; x->v.f[1] = center->y; }
-        x->v.u[2] = (uint32_t)(abits >> 32); x->v.u[3] = (uint32_t)abits;
+        if (center) { x->v.i[0] = center->x; x->v.i[1] = center->y; }
+        x->v.i[2] = angle;
     }
 }
-void r_tex(Ren *r, RTex *t, const RFRect *src, const RFRect *dst) { (void)r; rec_tex(t, src, dst, NULL, NULL, R_FLIP_NONE); }
-void r_tex_rot(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, double angle, const RFPoint *center, RFlip flip)
-{ (void)r; rec_tex(t, src, dst, &angle, center, flip); }
-void r_tex_batch(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, int n) { (void)r; for (int i = 0; i < n; i++) rec_tex(t, &src[i], &dst[i], NULL, NULL, R_FLIP_NONE); }
+void r_tex(Ren *r, RTex *t, const RFRect *src, const RFRect *dst) { (void)r; rec_tex(t, src, dst, 0, NULL, R_FLIP_NONE); }
+void r_tex_rot(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, fx angle, const RFPoint *center, RFlip flip)
+{ (void)r; rec_tex(t, src, dst, angle, center, flip); }
+void r_tex_batch(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, int n) { (void)r; for (int i = 0; i < n; i++) rec_tex(t, &src[i], &dst[i], 0, NULL, R_FLIP_NONE); }
 
 static void replay_ops(const Rec *R, int n)
 {
@@ -913,24 +886,23 @@ static void replay_ops(const Rec *R, int n)
         const Rec *e = &R[i];
         switch (e->op) {
         case OP_TEX: {
-            double angle = 0; RFPoint ctr; const RFPoint *pc = NULL;
+            fx angle = 0; RFPoint ctr; const RFPoint *pc = NULL;
             if ((e->flags & 8) && i + 1 < n && R[i + 1].op == OP_ROT) {
                 const Rec *x = &R[++i];
-                uint64_t ab = (uint64_t)x->v.u[2] << 32 | x->v.u[3];
-                memcpy(&angle, &ab, sizeof angle);
-                if (x->flags & 1) { ctr.x = x->v.f[0]; ctr.y = x->v.f[1]; pc = &ctr; }
+                angle = x->v.i[2];
+                if (x->flags & 1) { ctr.x = x->v.i[0]; ctr.y = x->v.i[1]; pc = &ctr; }
             }
             if (e->t->dead) break;
             cur = (TexState){ e->r, e->g, e->b, e->a, (RBlend)e->blend, e->prio };
-            tex_draw(e->t, (e->flags & 1) ? (const RFRect *)&e->v.f[0] : NULL, (e->flags & 2) ? (const RFRect *)&e->v.f[4] : NULL,
+            tex_draw(e->t, (e->flags & 1) ? (const RFRect *)&e->v.i[0] : NULL, (e->flags & 2) ? (const RFRect *)&e->v.i[4] : NULL,
                      angle, pc, (RFlip)((e->flags >> 4) & 3));
             res.ntex++;
             break;
         }
         case OP_FILL: draw_r = e->r; draw_g = e->g; draw_b = e->b; draw_a = e->a; draw_blend = (RBlend)e->blend;
-                      exec_fill((e->flags & 1) ? (const RFRect *)e->v.f : NULL); break;
+                      exec_fill((e->flags & 1) ? (const RFRect *)e->v.i : NULL); break;
         case OP_LINE: draw_r = e->r; draw_g = e->g; draw_b = e->b; draw_a = e->a; draw_blend = (RBlend)e->blend;
-                      line_cmd(e->prio, e->v.f, e->flags); break;
+                      line_cmd(e->prio, e->v.i, e->flags); break;
         case OP_QUAD: polygon(e->v.i, e->r, e->g, e->b, e->a, (RBlend)e->blend); break;
         case OP_CLIP: clip_on = e->flags & 1; if (clip_on) clip = (RRect){ e->v.i[0], e->v.i[1], e->v.i[2], e->v.i[3] }; clip_dirty = true; break;
         case OP_VP:   vp_on = e->flags & 1; if (vp_on) viewport = (RRect){ e->v.i[0], e->v.i[1], e->v.i[2], e->v.i[3] }; clip_dirty = true; break;
@@ -1042,7 +1014,7 @@ static void draw_backdrops(void)
     vp_on = clip_on = false; clip_dirty = true;
     for (int i = 0; i < nbackdrops; i++) {
         cur = (TexState){ 255, 255, 255, 255, R_BLEND_BLEND, backdrop[i]->prio };
-        RFRect d = { (float)backdrop_x[i], (float)backdrop_y[i], (float)backdrop[i]->w, (float)backdrop[i]->h };
+        RFRect d = { fx_from_int(backdrop_x[i]), fx_from_int(backdrop_y[i]), fx_from_int(backdrop[i]->w), fx_from_int(backdrop[i]->h) };
         tex_draw(backdrop[i], NULL, &d, 0, NULL, R_FLIP_NONE);
     }
     vp_on = vp; clip_on = cl; clip_dirty = true;
@@ -1139,7 +1111,7 @@ void rsat_bench(void)
     for (int i = 0; i < 32 * 32; i++) px[i] = 0xFF00FF00u | (uint32_t)(i & 255);
     RTex *t = rtex_create(&ren, 32, 32, R_TEX_STATIC, px);
     if (!t) return;
-    RFRect src = { 0, 0, 32, 32 }, dst = { 10, 10, 32, 32 };
+    RFRect src = { 0, 0, FX(32), FX(32) }, dst = { FX(10), FX(10), FX(32), FX(32) };
     cur = (TexState){ 255, 255, 255, 255, R_BLEND_BLEND, 0 };
     uint32_t a = sat_timer_us();
     for (int i = 0; i < 1000; i++) { ncmd = 3; tex_draw(t, &src, &dst, 0, NULL, R_FLIP_NONE); }

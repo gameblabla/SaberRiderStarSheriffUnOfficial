@@ -55,17 +55,17 @@ int   cblock_ncells(const CBlock *c);
  * resets). The tint is texture state, so set it around a layer's draw. */
 void  cblock_tint(const CBlock *c, uint8_t r, uint8_t g, uint8_t b);
 /* draw tile t at x,y (screen space, integer) */
-void  cblock_draw_tile(const CBlock *c, int t, float x, float y, bool flip);
+void  cblock_draw_tile(const CBlock *c, int t, real x, real y, bool flip);
 /* many tiles of one bank in one draw call: begin, a tile at a time (screen space, integer), end. Nothing else may be
  * drawn in between. */
 void  cblock_batch_begin(const CBlock *c);
-void  cblock_batch_tile(int t, float x, float y, bool flip);
+void  cblock_batch_tile(int t, real x, real y, bool flip);
 void  cblock_batch_end(void);
 /* draw a full frame (cols×rows cells) with its top-left at x,y */
-void  cblock_draw_frame(const CBlock *c, int frame, float x, float y, bool flip);
-void  sprite_draw(const Sprite *s, int frame, float x, float y, bool flip);
-void  sprite_draw_scaled(const Sprite *s, int frame, float x, float y, float w, float h);
-void  sprite_draw_scaled_mod(const Sprite *s, int frame, float x, float y, float w, float h, uint8_t r, uint8_t g, uint8_t b, uint8_t alpha);
+void  cblock_draw_frame(const CBlock *c, int frame, real x, real y, bool flip);
+void  sprite_draw(const Sprite *s, int frame, real x, real y, bool flip);
+void  sprite_draw_scaled(const Sprite *s, int frame, real x, real y, real w, real h);
+void  sprite_draw_scaled_mod(const Sprite *s, int frame, real x, real y, real w, real h, uint8_t r, uint8_t g, uint8_t b, uint8_t alpha);
 /* draw centred at cx,cy, rotated by angle (degrees), with a brightness/alpha modulation (255 = unchanged) */
-void  sprite_draw_rotated(const Sprite *s, int frame, float cx, float cy, float scale, float angle, uint8_t bright, uint8_t alpha);
-void  sprite_draw_mod(const Sprite *s, int frame, float x, float y, uint8_t r, uint8_t g, uint8_t b, uint8_t alpha);
+void  sprite_draw_rotated(const Sprite *s, int frame, real cx, real cy, real scale, real angle, uint8_t bright, uint8_t alpha);
+void  sprite_draw_mod(const Sprite *s, int frame, real x, real y, uint8_t r, uint8_t g, uint8_t b, uint8_t alpha);

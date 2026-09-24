@@ -44,7 +44,7 @@ int font_text_width_n(const Font *f, const char *s, int n)
     return w;
 }
 
-void font_draw_n(const Font *f, const char *s, int n, float x, float y, uint8_t r, uint8_t g, uint8_t b)
+void font_draw_n(const Font *f, const char *s, int n, real x, real y, uint8_t r, uint8_t g, uint8_t b)
 {
     if (!f || !f->spr) return;
     rtex_set_color_mod(sprite_tex(f->spr), r, g, b);
@@ -52,13 +52,13 @@ void font_draw_n(const Font *f, const char *s, int n, float x, float y, uint8_t 
         unsigned char c = (unsigned char)s[i];
         int gi = c - 0x21;
         if (gi >= 0 && gi < f->spr->frames) sprite_draw(f->spr, gi, x, y, false);
-        x += glyph_w(f, c);
+        x += r_int(glyph_w(f, c));
     }
     rtex_set_color_mod(sprite_tex(f->spr), 255, 255, 255);
 }
-void font_draw(const Font *f, const char *s, float x, float y, uint8_t r, uint8_t g, uint8_t b) { font_draw_n(f, s, 1 << 30, x, y, r, g, b); }
+void font_draw(const Font *f, const char *s, real x, real y, uint8_t r, uint8_t g, uint8_t b) { font_draw_n(f, s, 1 << 30, x, y, r, g, b); }
 
-void font_draw_scaled(const Font *f, const char *s, float x, float y, float scale, uint8_t r, uint8_t g, uint8_t b)
+void font_draw_scaled(const Font *f, const char *s, real x, real y, real scale, uint8_t r, uint8_t g, uint8_t b)
 {
     if (!f || !f->spr) return;
     rtex_set_color_mod(sprite_tex(f->spr), r, g, b);
@@ -71,14 +71,14 @@ void font_draw_scaled(const Font *f, const char *s, float x, float y, float scal
     rtex_set_color_mod(sprite_tex(f->spr), 255, 255, 255);
 }
 
-int font_wrap(const Font *f, const char *text, float width, char out[][96], int max)
+int font_wrap(const Font *f, const char *text, real width, char out[][96], int max)
 {
     int n = 0; char line[96] = ""; const char *p = text;
     while (*p && n < max) {
         const char *e = p; while (*e && *e != ' ') e++;
         char word[64]; int wl = (int)(e - p); if (wl > 63) wl = 63; memcpy(word, p, (size_t)wl); word[wl] = 0;
         char trial[96]; bool fits = snprintf(trial, sizeof trial, "%s%s%s", line, line[0] ? " " : "", word) < (int)sizeof trial;
-        if (line[0] && (!fits || font_text_width(f, trial) > width)) { snprintf(out[n++], 96, "%s", line); snprintf(line, sizeof line, "%s", word); }
+        if (line[0] && (!fits || r_int(font_text_width(f, trial)) > width)) { snprintf(out[n++], 96, "%s", line); snprintf(line, sizeof line, "%s", word); }
         else memcpy(line, trial, sizeof line);
         p = *e ? e + 1 : e;
     }

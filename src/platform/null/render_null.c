@@ -8,14 +8,28 @@
 
 /* SABER_DRAWLOG=file (the headless build, main_null.c): every draw call of every frame, one line each, for comparing
  * two builds' rendering (texture tag, source and destination rectangles, angle, colour state) */
-static FILE *dlog; static int dlog_on = -1;
+static FILE *dlog; static int dlog_on = -1; static unsigned dlog_every = 1, dlog_frame;   /* SABER_DRAWLOG_EVERY=n: every nth frame only */
 static bool dl(void)
 {
-    if (dlog_on < 0) { const char *p = getenv("SABER_DRAWLOG"); dlog = p ? fopen(p, "w") : NULL; dlog_on = dlog != NULL; }
-    return dlog_on;
+    if (dlog_on < 0) {
+        const char *p = getenv("SABER_DRAWLOG"), *e = getenv("SABER_DRAWLOG_EVERY");
+        dlog = p ? fopen(p, "w") : NULL; dlog_on = dlog != NULL;
+        if (e && atoi(e) > 0) dlog_every = (unsigned)atoi(e);
+    }
+    return dlog_on && dlog_frame % dlog_every == 0;
 }
-void rnull_frame_end(unsigned frame) { if (dl()) fprintf(dlog, "F %u\n", frame); }
-#define R4(q) (q) ? (double)(q)->x : -1.0, (q) ? (double)(q)->y : -1.0, (q) ? (double)(q)->w : -1.0, (q) ? (double)(q)->h : -1.0
+void rnull_frame_end(unsigned frame) { if (dl()) fprintf(dlog, "F %u\n", frame); dlog_frame = frame + 1; }
+/* a coordinate in the log with 2 decimals (real.h: no float in the fixed-point builds, the Saturn's RENDER=null one too) */
+#define N2(v) RS(v, 2)
+#define R4(q) N2((q) ? (q)->x : R(-1)), N2((q) ? (q)->y : R(-1)), N2((q) ? (q)->w : R(-1)), N2((q) ? (q)->h : R(-1))
+static char *deg3(char *buf, rdeg a)
+{
+#ifdef REAL_FIXED
+    return fx_fmt(buf, a, 3);
+#else
+    snprintf(buf, 24, "%.3f", a); return buf;
+#endif
+}
 
 struct Ren { int prims; uint8_t r, g, b, a; int blend; };
 struct RTex { int w, h; Ren *r; uint32_t tag; uint8_t mr, mg, mb, ma; int blend; };
@@ -65,30 +79,30 @@ void r_clear(Ren *r) { r->prims++; if (dl()) fprintf(dlog, "clear %u %u %u\n", r
 void r_fill_rect(Ren *r, const RFRect *q)
 {
     r->prims++;
-    if (dl()) fprintf(dlog, "fill %.2f %.2f %.2f %.2f c %u %u %u %u b%d\n", R4(q), r->r, r->g, r->b, r->a, r->blend);
+    if (dl()) fprintf(dlog, "fill %s %s %s %s c %u %u %u %u b%d\n", R4(q), r->r, r->g, r->b, r->a, r->blend);
 }
 void r_fill_rects(Ren *r, const RFRect *q, int n) { for (int i = 0; i < n; i++) r_fill_rect(r, &q[i]); }
-void r_rect(Ren *r, const RFRect *q) { r->prims++; if (dl()) fprintf(dlog, "rect %.2f %.2f %.2f %.2f c %u %u %u %u\n", R4(q), r->r, r->g, r->b, r->a); }
-void r_line(Ren *r, float x0, float y0, float x1, float y1) { r->prims++; if (dl()) fprintf(dlog, "line %.2f %.2f %.2f %.2f\n", (double)x0, (double)y0, (double)x1, (double)y1); }
-void r_point(Ren *r, float x, float y) { r->prims++; if (dl()) fprintf(dlog, "point %.2f %.2f\n", (double)x, (double)y); }
-static void log_tex(const char *op, const RTex *t, const RFRect *s, const RFRect *d, double a, const RFPoint *c, RFlip f)
+void r_rect(Ren *r, const RFRect *q) { r->prims++; if (dl()) fprintf(dlog, "rect %s %s %s %s c %u %u %u %u\n", R4(q), r->r, r->g, r->b, r->a); }
+void r_line(Ren *r, real x0, real y0, real x1, real y1) { r->prims++; if (dl()) fprintf(dlog, "line %s %s %s %s\n", N2(x0), N2(y0), N2(x1), N2(y1)); }
+void r_point(Ren *r, real x, real y) { r->prims++; if (dl()) fprintf(dlog, "point %s %s\n", N2(x), N2(y)); }
+static void log_tex(const char *op, const RTex *t, const RFRect *s, const RFRect *d, rdeg a, const RFPoint *c, RFlip f)
 {
     if (!dl()) return;
-    fprintf(dlog, "%s %08X s %.2f %.2f %.2f %.2f d %.2f %.2f %.2f %.2f", op, t ? (unsigned)t->tag : 0u, R4(s), R4(d));
-    if (a != 0 || c || f) fprintf(dlog, " a %.3f c %.2f %.2f f%d", a, c ? (double)c->x : -1.0, c ? (double)c->y : -1.0, (int)f);
+    fprintf(dlog, "%s %08X s %s %s %s %s d %s %s %s %s", op, t ? (unsigned)t->tag : 0u, R4(s), R4(d));
+    if (a != 0 || c || f) fprintf(dlog, " a %s c %s %s f%d", deg3((char[24]){ 0 }, a), N2(c ? c->x : R(-1)), N2(c ? c->y : R(-1)), (int)f);
     if (t && (t->mr & t->mg & t->mb & t->ma) != 255) fprintf(dlog, " m %u %u %u %u", t->mr, t->mg, t->mb, t->ma);
     if (t && t->blend != R_BLEND_BLEND) fprintf(dlog, " b%d", t->blend);
     fputc('\n', dlog);
 }
 void r_tex(Ren *r, RTex *t, const RFRect *s, const RFRect *d) { r->prims++; log_tex("tex", t, s, d, 0, NULL, R_FLIP_NONE); }
-void r_tex_rot(Ren *r, RTex *t, const RFRect *s, const RFRect *d, double a, const RFPoint *c, RFlip f) { r->prims++; log_tex("rot", t, s, d, a, c, f); }
+void r_tex_rot(Ren *r, RTex *t, const RFRect *s, const RFRect *d, rdeg a, const RFPoint *c, RFlip f) { r->prims++; log_tex("rot", t, s, d, a, c, f); }
 void r_tex_batch(Ren *r, RTex *t, const RFRect *s, const RFRect *d, int n) { r->prims += n; for (int i = 0; i < n; i++) log_tex("tile", t, &s[i], &d[i], 0, NULL, R_FLIP_NONE); }
 void r_geometry(Ren *r, RTex *t, const RVertex *v, int nv, const int *idx, int ni)
 {
     r->prims += (idx ? ni : nv) / 3;
     if (!dl()) return;
     fprintf(dlog, "geom %08X %d", t ? (unsigned)t->tag : 0u, idx ? ni : nv);
-    for (int i = 0; i < (idx ? ni : nv); i++) { const RVertex *p = &v[idx ? idx[i] : i]; fprintf(dlog, " %.2f,%.2f", (double)p->position.x, (double)p->position.y); }
+    for (int i = 0; i < (idx ? ni : nv); i++) { const RVertex *p = &v[idx ? idx[i] : i]; fprintf(dlog, " %s,%s", N2(p->position.x), N2(p->position.y)); }
     fputc('\n', dlog);
 }
 
@@ -97,9 +111,9 @@ void    r_floor_cells_changed(RFloor *f) { (void)f; }
 void    r_floor_draw(Ren *r, RFloor *f, const RFloorView *v)
 {
     (void)f; r->prims++;
-    if (dl()) fprintf(dlog, "floor cam %.2f %.2f dir %.4f %.4f h %.2f focal %.2f horizon %.2f rows %d %d\n", (double)v->cam_x, (double)v->cam_y,
-                      (double)v->fx, (double)v->fy, (double)v->cam_h, (double)v->focal, (double)v->horizon, v->y0, v->y1);
+    if (dl()) fprintf(dlog, "floor cam %s %s dir %s %s h %s focal %s horizon %s rows %d %d\n", N2(v->cam_x), N2(v->cam_y),
+                      RS(v->fx, 4), RS(v->fy, 4), N2(v->cam_h), N2(v->focal), N2(v->horizon), v->y0, v->y1);
 }
 void    r_floor_destroy(RFloor *f) { free(f); }
-bool    r_layer(Ren *r, uint32_t level, int layer, float cam_x, float cam_y) { (void)r; (void)level; (void)layer; (void)cam_x; (void)cam_y; return false; }
+bool    r_layer(Ren *r, uint32_t level, int layer, real cam_x, real cam_y) { (void)r; (void)level; (void)layer; (void)cam_x; (void)cam_y; return false; }
 void    r_set_depth(Ren *r, int layer) { (void)r; (void)layer; }

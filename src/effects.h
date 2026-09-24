@@ -7,16 +7,16 @@
 typedef struct {
     bool alive;
     Sprite *spr; CBlock *cb;
-    AnimDef anim; int frame; float t;
-    float x, y, ox, oy, angle;
+    AnimDef anim; int frame; real t;
+    real x, y, ox, oy, angle;
     int layer;
-    const float *follow_x, *follow_y;   /* optional parent position */
-    float fx0, fy0;
+    const real *follow_x, *follow_y;   /* optional parent position */
+    real fx0, fy0;
     bool flip;                          /* mirrored (set after spawning) */
 } Effect;
 
 typedef struct { Effect e[MAX_EFFECTS]; } Effects;
 
-Effect *effects_spawn(Effects *fx, uint32_t sprite_id, int layer, const AnimDef *a, float x, float y, float ox, float oy, float angle);
-void effects_update(Effects *fx, float dt);
-void effects_draw(const Effects *fx, int layer, float cam_x, float cam_y);
+Effect *effects_spawn(Effects *fx, uint32_t sprite_id, int layer, const AnimDef *a, real x, real y, real ox, real oy, real angle);
+void effects_update(Effects *fx, real dt);
+void effects_draw(const Effects *fx, int layer, real cam_x, real cam_y);

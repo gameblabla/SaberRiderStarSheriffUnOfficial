@@ -5,7 +5,7 @@ static void rect(Ren *r, int x1, int y1, int x2, int y2, uint32_t argb)
 {
     r_set_draw_blend(r, R_BLEND_BLEND);
     r_set_draw_color(r, (argb >> 16) & 255, (argb >> 8) & 255, argb & 255, argb >> 24);
-    RFRect q = { (float)x1, (float)y1, (float)(x2 - x1), (float)(y2 - y1) };
+    RFRect q = { r_int(x1), r_int(y1), r_int(x2 - x1), r_int(y2 - y1) };
     r_fill_rect(r, &q);
 }
 
@@ -27,19 +27,19 @@ void hud_draw(Ren *r, int character, int difficulty, int lives, int hearts, int 
     if (!font) return;
     for (int x = 0; x < 0x50; x += 8)
         for (int gy = 0x26; gy < 0x3e; gy += 8)
-            sprite_draw(font, (gy >> 3) * 16 + (x >> 3), (float)(x + 3), (float)(gy - 0x23), false);
+            sprite_draw(font, (gy >> 3) * 16 + (x >> 3), r_int(x + 3), r_int(gy - 0x23), false);
     if (difficulty != 2) {
-        sprite_draw(font, hearts >= 1 ? 0x0e : 0x4e, 0xc, 0x18, false);
-        sprite_draw(font, hearts >= 2 ? 0x1e : 0x4e, 0xc, 0x20, false);
+        sprite_draw(font, hearts >= 1 ? 0x0e : 0x4e, R(0xc), R(0x18), false);
+        sprite_draw(font, hearts >= 2 ? 0x1e : 0x4e, R(0xc), R(0x20), false);
         if (difficulty == 0) {
-            sprite_draw(font, hearts >= 3 ? 0x2e : 0x4e, 0xc, 0x28, false);
-            sprite_draw(font, hearts >= 4 ? 0x3e : 0x4e, 0xc, 0x30, false);
+            sprite_draw(font, hearts >= 3 ? 0x2e : 0x4e, R(0xc), R(0x28), false);
+            sprite_draw(font, hearts >= 4 ? 0x3e : 0x4e, R(0xc), R(0x30), false);
         }
     }
     int a0 = 0xa0 + character * 3, a1 = a0 + 1, b0 = 0xb0 + character * 3, b1 = b0 + 1;
-    sprite_draw(font, a0, 8, 8, false); sprite_draw(font, a1, 0x10, 8, false);
-    sprite_draw(font, b0, 8, 0x10, false); sprite_draw(font, b1, 0x10, 0x10, false);
-    if (lives < 10) sprite_draw(font, lives + 0x80, 0x1d, 0xe, false);
-    else { sprite_draw(font, lives / 10 + 0x80, 0x1d, 0xe, false); sprite_draw(font, lives % 10 + 0x80, 0x22, 0xe, false); }
-    sprite_draw(font, ammo + 0x80, 0x3c, 0xe, false);
+    sprite_draw(font, a0, R(8), R(8), false); sprite_draw(font, a1, R(0x10), R(8), false);
+    sprite_draw(font, b0, R(8), R(0x10), false); sprite_draw(font, b1, R(0x10), R(0x10), false);
+    if (lives < 10) sprite_draw(font, lives + 0x80, R(0x1d), R(0xe), false);
+    else { sprite_draw(font, lives / 10 + 0x80, R(0x1d), R(0xe), false); sprite_draw(font, lives % 10 + 0x80, R(0x22), R(0xe), false); }
+    sprite_draw(font, ammo + 0x80, R(0x3c), R(0xe), false);
 }

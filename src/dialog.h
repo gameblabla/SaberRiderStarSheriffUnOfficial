@@ -18,7 +18,7 @@ typedef struct {
     DialogPage pages[DLG_MAX_PAGES]; int npages, page;
     int t;                /* page timer (DAT_00ac9bd8): >0 frames since the page opened, <0 closing countdown (-22..-1) */
     int box;              /* box frame (+0x50): 0 hidden, 1..11 growing, >=12 open with text; -12..-1 shrinking */
-    float chars;          /* typewriter progress in characters (50/12 per frame, x3 while a button is held) */
+    real chars;          /* typewriter progress in characters (50/12 per frame, x3 while a button is held) */
     bool done;            /* all text shown, waiting for the player */
     int frame;            /* |t|, kept for the briefing video unfold (FUN_0042ba20 uses the same counter) */
     bool closing;         /* t < 0 */
@@ -36,5 +36,5 @@ bool dialog_open_script(Dialog *d, const char *script);   /* the same script for
 bool dialog_open_text(Dialog *d, const char *text, int color);   /* plain text (no script header), e.g. the mission briefing */
 bool dialog_text_done(const Dialog *d);
 void dialog_close(Dialog *d);                                    /* start the close animation */                          /* typewriter finished on the last page */
-void dialog_update(Dialog *d, const Input *in, float dt);   /* advances pages, sets active=false when done */
+void dialog_update(Dialog *d, const Input *in, real dt);   /* advances pages, sets active=false when done */
 void dialog_draw(const Dialog *d, Ren *r, int sw, int sh);

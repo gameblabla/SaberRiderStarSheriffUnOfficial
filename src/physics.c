@@ -1,13 +1,17 @@
 #include "physics.h"
 #include "fx.h"
-#include <math.h>
 
-#define EPS 0.1f
+#define EPS R(0.1)
 #define EPS_FX FX(0.1)
 
 /* The collision decisions (which cells a box touches, whether it overlaps one) run in 16.16 fixed point (fx.h): exact
- * integer tests instead of a dozen float divisions and floors per step, the same on every platform. The positions
- * themselves keep their float formulas (a correction snaps to the same values as before). */
+ * integer tests instead of a dozen float divisions and floors per step, the same on every platform. The positions are
+ * `real` (real.h): the demo's floats on the PC, fx themselves on the Saturn. */
+#ifdef REAL_FIXED
+#define TO_FX(v) (v)
+#else
+#define TO_FX(v) fx_from_float(v)
+#endif
 static int cell_floor(fx v, int size, int shift)   /* floor(v / size) for a cell size in pixels */
 {
     int p = fx_floor(v);
@@ -22,58 +26,58 @@ static bool overlap(fx cx, fx cy, fx hx, fx hy, int col, int row, int cw, int ch
     return fx_abs(cx - tx) <= hx + cw * FX_HALF && fx_abs(cy - ty) <= hy + ch * FX_HALF;
 }
 
-void physics_step(const PhysicsWorld *w, const Level *L, Body *b, float dt)
+void physics_step(const PhysicsWorld *w, const Level *L, Body *b, real dt)
 {
     const int cw = L->cellw, ch = L->cellh, sw = pow2_shift(cw), sh = pow2_shift(ch);
-    float vx = b->vx, vy = b->vy;
-    if (!(b->flags & PHYS_NO_GRAVITY)) { vx += w->gx * dt; vy += w->gy * dt; }
-    float nx = b->x + b->ox + vx * dt;
-    float ny = b->y + b->oy + vy * dt;
-    const float hx = b->hx, hy = b->hy;
-    fx X = fx_from_float(nx), Y = fx_from_float(ny);
-    const fx HX = fx_from_float(hx), HY = fx_from_float(hy);
+    real vx = b->vx, vy = b->vy;
+    if (!(b->flags & PHYS_NO_GRAVITY)) { vx += r_mul_dt(w->gx, dt); vy += r_mul_dt(w->gy, dt); }
+    real nx = b->x + b->ox + r_mul_dt(vx, dt);
+    real ny = b->y + b->oy + r_mul_dt(vy, dt);
+    const real hx = b->hx, hy = b->hy;
+    fx X = TO_FX(nx), Y = TO_FX(ny);
+    const fx HX = TO_FX(hx), HY = TO_FX(hy);
     uint8_t coll = 0, gtile = 0;
 
     /* right */
-    if (vx > 0.0f && !(b->flags & PHYS_IGNORE_RIGHT)) {
-        if (w->world_max_x < nx + hx) { nx = w->world_max_x - hx; X = fx_from_float(nx); coll |= COLL_RIGHT; if (vx >= 0) vx = 0; }
+    if (vx > 0 && !(b->flags & PHYS_IGNORE_RIGHT)) {
+        if (w->world_max_x < nx + hx) { nx = w->world_max_x - hx; X = TO_FX(nx); coll |= COLL_RIGHT; if (vx >= 0) vx = 0; }
         int col = cell_floor(X + HX, cw, sw);
         int r0 = cell_floor(Y - HY, ch, sh), r1 = cell_floor(Y + HY, ch, sh);
         for (int r = r0; r < r1; r++) {
             if ((level_cell(L, col, r) & 1) && overlap(X, Y, HX, HY, col, r, cw, ch)) {
                 coll |= COLL_RIGHT; if (vx >= 0) vx = 0;
-                nx = col * cw - hx;   /* tile center - cw/2 - hx */
+                nx = r_int(col * cw) - hx;   /* tile center - cw/2 - hx */
                 X = fx_from_int(col * cw) - HX;
                 break;
             }
         }
     }
     /* left */
-    if (vx < 0.0f && !(b->flags & PHYS_IGNORE_LEFT)) {
-        if (nx - hx - EPS < w->world_min_x) { nx = w->world_min_x + hx; X = fx_from_float(nx); coll |= COLL_LEFT; if (vx <= 0) vx = 0; }
+    if (vx < 0 && !(b->flags & PHYS_IGNORE_LEFT)) {
+        if (nx - hx - EPS < w->world_min_x) { nx = w->world_min_x + hx; X = TO_FX(nx); coll |= COLL_LEFT; if (vx <= 0) vx = 0; }
         int col = cell_floor(X - HX, cw, sw);
         int r0 = cell_floor(Y - HY, ch, sh), r1 = cell_floor(Y + HY, ch, sh);
         for (int r = r0; r < r1; r++) {
             if ((level_cell(L, col, r) & 2) && overlap(X, Y, HX, HY, col, r, cw, ch)) {
-                nx = (col + 1) * cw + hx; X = fx_from_int((col + 1) * cw) + HX; if (vx <= 0) vx = 0; coll |= COLL_LEFT;
+                nx = r_int((col + 1) * cw) + hx; X = fx_from_int((col + 1) * cw) + HX; if (vx <= 0) vx = 0; coll |= COLL_LEFT;
                 break;
             }
         }
     }
     /* up */
-    if (vy < 0.0f && !(b->flags & PHYS_IGNORE_UP)) {
+    if (vy < 0 && !(b->flags & PHYS_IGNORE_UP)) {
         int c0 = cell_floor(X + (EPS_FX - HX), cw, sw), c1 = cell_floor(HX - EPS_FX + X, cw, sw);
         int row = cell_floor(Y - HY, ch, sh);
         int last = c1 - (c0 < c1 ? 1 : 0);
         for (int c = c0; c <= last; c++) {
             if ((level_cell(L, c, row) & 8) && overlap(X, Y, HX, HY, c, row, cw, ch)) {
-                ny = (row + 1) * ch + hy; Y = fx_from_int((row + 1) * ch) + HY; coll |= COLL_UP; if (vy <= 0) vy = 0;
+                ny = r_int((row + 1) * ch) + hy; Y = fx_from_int((row + 1) * ch) + HY; coll |= COLL_UP; if (vy <= 0) vy = 0;
                 break;
             }
         }
     }
     /* down */
-    if (vy > 0.0f && !(b->flags & PHYS_IGNORE_DOWN)) {
+    if (vy > 0 && !(b->flags & PHYS_IGNORE_DOWN)) {
         int c0 = cell_floor(X + (EPS_FX - HX), cw, sw), c1 = cell_floor(HX - EPS_FX + X, cw, sw);
         int row = cell_floor(Y + HY, ch, sh);
         int last = c1 - (c0 < c1 ? 1 : 0);
@@ -90,7 +94,7 @@ void physics_step(const PhysicsWorld *w, const Level *L, Body *b, float dt)
                     row = top;
                 }
                 coll |= COLL_DOWN; if (vy >= 0) vy = 0;
-                ny = row * ch + (1.0f - hy);     /* rests 1px into the floor, like the original */
+                ny = r_int(row * ch) + (R(1) - hy);     /* rests 1px into the floor, like the original */
                 gtile = v;
                 break;
             }
@@ -99,7 +103,7 @@ void physics_step(const PhysicsWorld *w, const Level *L, Body *b, float dt)
         if (!(coll & COLL_DOWN) && (b->coll & COLL_DOWN) && (b->ground_tile & COLL_RAMP))
             for (int c = c0; c <= last; c++)
                 if ((level_cell(L, c, row + 1) & (COLL_RAMP | 4)) == (COLL_RAMP | 4)) {
-                    coll |= COLL_DOWN; vy = 0; ny = (row + 1) * ch + (1.0f - hy); gtile = level_cell(L, c, row + 1);
+                    coll |= COLL_DOWN; vy = 0; ny = r_int((row + 1) * ch) + (R(1) - hy); gtile = level_cell(L, c, row + 1);
                     break;
                 }
     }

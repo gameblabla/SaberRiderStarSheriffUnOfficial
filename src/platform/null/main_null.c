@@ -57,7 +57,7 @@ int main(int argc, char **argv)
     unsigned frames = getenv("SABER_FRAMES") ? (unsigned)atoi(getenv("SABER_FRAMES")) : 3600u;
     if (!app_init(rnull_renderer(), data, level)) { fprintf(stderr, "app_init failed\n"); return 1; }
     for (frame = 0; frame < frames; frame++) {
-        app_update(1.0 / 60.0);
+        app_update_fields(1);
         app_draw();
         rnull_frame_end(frame);
     }

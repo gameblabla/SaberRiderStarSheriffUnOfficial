@@ -73,17 +73,17 @@ const char *hero_name(int character)
  * (10 fps; played once after 10 s of idling), 7 run frames (legs + torso overlay cells, both from the clip) and 8
  * death frames.  The "alert" pose (anims 4/7, held for
  * alert_time after shooting / landing) is the sway itself: her sheet has no clean alert art. */
-typedef struct { int anim, first, last, loop; float frame_time; } AnimPatch;
+typedef struct { int anim, first, last, loop; real frame_time; } AnimPatch;
 #define APRIL_BORED_L 53
 #define APRIL_BORED_R 54
 static const AnimPatch APRIL_ANIMS[] = {
-    { 1, 168, 173, 168, 0.10f }, { 2, 176, 181, 176, 0.10f },     /* idle L / R */
-    { 4, 168, 173, 168, 0.10f }, { 7, 176, 181, 176, 0.10f },     /* alert L / R = idle */
-    { APRIL_BORED_L, 184, 204, 204, 0.10f }, { APRIL_BORED_R, 208, 228, 228, 0.10f },   /* bored jump + wave L / R */
-    { 36, 80, 86, 80, 0.10f }, { 37, 104, 110, 104, 0.10f },      /* run legs L / R */
-    { 38, 64, 70, 64, 0.10f }, { 39, 88, 94, 88, 0.10f },         /* run torso overlays L / R (the clip frames' upper half + ponytail) */
-    { 50, 152, 159, 159, 0.10f }, { 51, 160, 167, 167, 0.10f },   /* death L / R */
-    { 52, 168, 168, 168, 4.0f },
+    { 1, 168, 173, 168, R(0.10f) }, { 2, 176, 181, 176, R(0.10f) },     /* idle L / R */
+    { 4, 168, 173, 168, R(0.10f) }, { 7, 176, 181, 176, R(0.10f) },     /* alert L / R = idle */
+    { APRIL_BORED_L, 184, 204, 204, R(0.10f) }, { APRIL_BORED_R, 208, 228, 228, R(0.10f) },   /* bored jump + wave L / R */
+    { 36, 80, 86, 80, R(0.10f) }, { 37, 104, 110, 104, R(0.10f) },      /* run legs L / R */
+    { 38, 64, 70, 64, R(0.10f) }, { 39, 88, 94, 88, R(0.10f) },         /* run torso overlays L / R (the clip frames' upper half + ponytail) */
+    { 50, 152, 159, 159, R(0.10f) }, { 51, 160, 167, 167, R(0.10f) },   /* death L / R */
+    { 52, 168, 168, 168, R(4.0f) },
 };
 
 /* April's grunts (../heroes/voice/generate.py) on the events Fireball's table 6 / 3-5 / 1-2 / 23 samples cover */
@@ -196,7 +196,7 @@ bool hero_apply(Character *c)
     memset(c->torso_bob, 0, sizeof c->torso_bob);   /* Fireball's run legs bob 1 px on cells 2 and 5; April's do not */
     c->ov_sync = true;         /* run torso frame k belongs on run legs frame k */
     c->walk_aim_ov = WALK_AIM_DIAG;   /* the run torso (clip pixels, gun held level) stays for level shots; up / down diagonals use the sheet's aim torsos over the clip legs */
-    c->bored_anim[0] = APRIL_BORED_L; c->bored_anim[1] = APRIL_BORED_R; c->bored_time = 10.0f;
-    if (plat_getenv("SABER_BORED")) c->bored_time = (float)atof(plat_getenv("SABER_BORED"));   /* debug */
+    c->bored_anim[0] = APRIL_BORED_L; c->bored_anim[1] = APRIL_BORED_R; c->bored_time = R(10.0f);
+    if (plat_getenv("SABER_BORED")) c->bored_time = r_parse(plat_getenv("SABER_BORED"), NULL);   /* debug */
     return true;
 }

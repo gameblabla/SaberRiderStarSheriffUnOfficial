@@ -2,7 +2,7 @@
 #include "player.h"
 #include "audio.h"
 
-void player_spawn(Player *p, uint32_t crhc_id, float x, float y)
+void player_spawn(Player *p, uint32_t crhc_id, real x, real y)
 {
     memset(p, 0, sizeof *p);
     character_init(&p->ch, crhc_id, false);
@@ -11,7 +11,7 @@ void player_spawn(Player *p, uint32_t crhc_id, float x, float y)
     p->safe_x = p->respawn_x = x; p->safe_y = p->respawn_y = y;
 }
 
-void player_control(Player *p, const Input *in, float dt)
+void player_control(Player *p, const Input *in, real dt)
 {
     Character *c = &p->ch;
     if (p->locked) {
@@ -50,31 +50,31 @@ void player_control(Player *p, const Input *in, float dt)
     if (btn_pressed(in, BTN_JUMP)) { uint8_t st = c->state; character_jump(c); if (c->state != st && !p->quiet) sfx_play(2, 0); }
 }
 
-static const float AIM_ANGLE[8] = { 3.1415927f, 2.3561945f, 1.5707964f, 0.7853982f, 0, 5.4977871f, 4.712389f, 3.9269908f };
+static const real AIM_ANGLE[8] = { R(3.1415927f), R(2.3561945f), R(1.5707964f), R(0.7853982f), 0, R(5.4977871f), R(4.712389f), R(3.9269908f) };
 
 bool player_try_fire(Player *p, Bullets *bs, Effects *fx, int layer)
 {
     Character *c = &p->ch;
-    if (!p->want_fire || p->fire_cooldown > 0.0f) return false;
-    float x = c->body.x + c->muzzle_x, y = c->body.y + c->muzzle_y;
+    if (!p->want_fire || p->fire_cooldown > 0) return false;
+    real x = c->body.x + c->muzzle_x, y = c->body.y + c->muzzle_y;
     /* muzzle flash: strip 8623249C, frames 0..4 for diagonals, 4..8 straight, 15 ms/frame */
-    AnimDef diag = { 0, 0, 4, 0, 0.015f, 0 }, straight = { 0, 4, 8, 4, 0.015f, 0 };
-    Effect *e = effects_spawn(fx, 0x8623249C, layer, ((c->aim & 0xf9) == 1) ? &diag : &straight, x, y, 8, 8, AIM_ANGLE[c->aim & 7]);
+    AnimDef diag = { 0, 0, 4, 0, R(0.015), 0 }, straight = { 0, 4, 8, 4, R(0.015), 0 };
+    Effect *e = effects_spawn(fx, 0x8623249C, layer, ((c->aim & 0xf9) == 1) ? &diag : &straight, x, y, R(8), R(8), AIM_ANGLE[c->aim & 7]);
     if (e) { e->follow_x = &c->body.x; e->follow_y = &c->body.y; e->fx0 = c->body.x; e->fy0 = c->body.y; }
-    bullets_spawn(bs, BK_PLAYER, layer, x, y, c->aim & 7, 500.0f);
-    p->fire_cooldown = 0.2f;
+    bullets_spawn(bs, BK_PLAYER, layer, x, y, c->aim & 7, R(500));
+    p->fire_cooldown = R(0.2);
     sfx_play(1, 0);
     return true;
 }
 
-void player_frame_end(Player *p, float dt)
+void player_frame_end(Player *p, real dt)
 {
     /* FUN_0041ef20 + FUN_0041d8f0: the shoot flag (and pose) clears when the emitter cooldown runs out */
     if (p->fire_cooldown > 0) { p->fire_cooldown -= dt; if (p->fire_cooldown <= 0) { p->fire_cooldown = 0; p->ch.flags &= ~CF_SHOOT; } }
     else p->ch.flags &= ~CF_SHOOT;
 }
 
-bool player_death_update(Player *p, float dt, float level_h, float *cam_x, int sw)
+bool player_death_update(Player *p, real dt, real level_h, real *cam_x, int sw)
 {
     Character *c = &p->ch; Body *b = &c->body;
     if (c->state != CS_DEAD) {
@@ -90,20 +90,20 @@ bool player_death_update(Player *p, float dt, float level_h, float *cam_x, int s
         p->dead_t -= dt;      /* the timer only runs once the body has settled or left the level */
     }
     p->dead_t += dt;
-    if (p->dead_t < 1.0f) return false;
+    if (p->dead_t < R(1)) return false;
     /* respawn */
     character_reset(c, false);
     c->anim = 0xff; c->frame = 0;
     p->fire_cooldown = 0; p->dead_t = 0;
     b->x = p->respawn_x; b->y = p->respawn_y; b->vx = b->vy = 0;
-    c->flags |= CF_HIT; c->hit_t = 170.0f;
+    c->flags |= CF_HIT; c->hit_t = R(170);
     if (p->lives < 1) { p->game_over = true; c->flags |= CF_DEAD; return true; }
     p->lives--;
     p->hp = p->max_hp;
-    float half = sw * 0.5f;
-    float camc = *cam_x + half;
-    if (p->respawn_x < 12.0f) p->respawn_x = b->x = 12.0f;
-    while (camc - half > p->respawn_x - 12.0f && camc - half > 0) camc -= 4.0f;
+    real half = r_int(sw) / 2;   /* sw * 0.5f */
+    real camc = *cam_x + half;
+    if (p->respawn_x < R(12)) p->respawn_x = b->x = R(12);
+    while (camc - half > p->respawn_x - R(12) && camc - half > 0) camc -= R(4);
     if (camc < half) camc = half;
     *cam_x = camc - half;
     return true;

@@ -1,7 +1,6 @@
 #include "enemies.h"
 #include "pack.h"
 #include "audio.h"
-#include <math.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,7 +13,23 @@ static const uint32_t TYPE_CRHC[28] = {
     0xF4A25ED9, 0xF3B05E28, 0x0DB9F0E0, 0xD39700C4 };
 
 static uint32_t crhc_for_type(int t) { return (t >= 2 && t <= 29) ? TYPE_CRHC[t - 2] : (t >= 30 && t <= 32) ? 0xD39700C4 : 0x02A38AFB; }   /* 30/31: the shield sniper stands on the sniper's body, 32 the stalker */
-static float sh_feet(const Enemy *e);
+static real sh_feet(const Enemy *e);
+/* the RE's counters in ch.speed: the grunt's shot timer counts 1e-5 a step (fires on step 16, walks on from step 24);
+ * the sniper's and kneeler's timers 0.01. In fixed point: one unit a step, and 0.01 rounded up (656), so every
+ * threshold falls on the float code's step (checked against it). */
+#ifdef REAL_FIXED
+#define GRUNT_TICK 1
+#define GRUNT_LO   15
+#define GRUNT_HI   17
+#define GRUNT_END  23
+#define C01        ((real)656)
+#else
+#define GRUNT_TICK 1e-5f
+#define GRUNT_LO   0.00016f
+#define GRUNT_HI   0.00017f
+#define GRUNT_END  0.00024f
+#define C01        0.01f
+#endif
 static int rnd(int n) { return n > 0 ? rand() % n : 0; }   /* FUN_0040cf30(0, n) -> [0,n) */
 
 /* Everything the level's triggers can spawn, loaded now: an enemy's CRHC and graphics fetched from the disc the
@@ -44,16 +59,16 @@ void enemies_add_trigger(Enemies *E, const LevelObject *o)   /* FUN_00421070 + F
     if (E->ntr >= MAX_TRIGGERS) return;
     Trigger *t = &E->tr[E->ntr++];
     memset(t, 0, sizeof *t);
-    t->hx = o->spawn_x * 0.5f; t->hy = o->spawn_y * 0.5f;
+    t->hx = o->spawn_x / 2; t->hy = o->spawn_y / 2;   /* * 0.5f */
     t->cx = o->x + t->hx; t->cy = o->y + t->hy;
-    t->x_lo = (int)floorf(t->cx - t->hx); t->x_hi = (int)ceilf(t->cx + t->hx);
+    t->x_lo = r_floor(t->cx - t->hx); t->x_hi = r_ceil(t->cx + t->hx);
     t->type = o->type; t->layer = o->layer;
     t->interval_ms = o->a; t->rand_n = o->c;
-    t->timer = o->b * 0.001f + (o->d ? rnd(o->d + 1) * 0.02f : 0);
+    t->timer = r_ms(o->b) + (o->d ? rnd(o->d + 1) * R(0.02f) : 0);
     t->remaining = o->loops; t->remaining_init = o->loops;
     for (int i = 0; i < o->n_wp && i < 8; i++) { t->wp[i][0] = o->wp[i][0]; t->wp[i][1] = o->wp[i][1]; t->nwp++; }
     if (t->nwp == 0) { t->wp[0][0] = o->x; t->wp[0][1] = o->y; t->nwp = 1; }
-    if (plat_getenv("SABER_TRACE")) { fprintf(stderr, "trigger type=%d zone=%.0f..%.0f x %.0f..%.0f every=%d loops=%d wp=", t->type, t->cx - t->hx, t->cx + t->hx, t->cy - t->hy, t->cy + t->hy, t->interval_ms, t->remaining); for (int i = 0; i < t->nwp; i++) fprintf(stderr, "(%.0f,%.0f)", t->wp[i][0], t->wp[i][1]); fprintf(stderr, "\n"); }
+    if (plat_getenv("SABER_TRACE")) { fprintf(stderr, "trigger type=%d zone=%s..%s x %s..%s every=%d loops=%d wp=", t->type, RS(t->cx - t->hx, 0), RS(t->cx + t->hx, 0), RS(t->cy - t->hy, 0), RS(t->cy + t->hy, 0), t->interval_ms, t->remaining); for (int i = 0; i < t->nwp; i++) fprintf(stderr, "(%s,%s)", RS(t->wp[i][0], 0), RS(t->wp[i][1], 0)); fprintf(stderr, "\n"); }
 }
 
 static Enemy *alloc_slot(Enemies *E, int cls)   /* FUN_0041f980 */
@@ -64,21 +79,21 @@ static Enemy *alloc_slot(Enemies *E, int cls)   /* FUN_0041f980 */
 
 static void enemy_kill(Enemies *E, Enemy *e, int ms)   /* FUN_0041faf0 */
 {
-    (void)E; e->dying = true; e->death_t = ms * 0.001f;
+    (void)E; e->dying = true; e->death_t = r_ms(ms);
 }
 
 /* --- physics probes (FUN_00420be0 / FUN_00420290 / FUN_00420730) --- */
 static void snap_to_ground(Enemy *e, const Level *L, const PhysicsWorld *W)
 {
     Character *c = &e->ch; Body *b = &c->body;
-    if (b->vy < -1.0f || b->vy > 1.0f) return;
+    if (b->vy < R(-1.0f) || b->vy > R(1.0f)) return;
     if (c->state != CS_AIR || (c->flags & CF_SPAWN_FALL)) return;
-    Body probe = *b; probe.y -= 4.0f; probe.vx = probe.vy = 0;
+    Body probe = *b; probe.y -= R(4.0f); probe.vx = probe.vy = 0;
     for (int i = 0; i < 12; i++) {
         probe.vx = probe.vy = 0;
-        physics_step(W, L, &probe, 0.001f);
+        physics_step(W, L, &probe, R(0.001f));
         if (probe.coll & COLL_DOWN) { b->y = probe.y; c->state = CS_IDLE; return; }
-        probe.y += 1.0f;
+        probe.y += R(1.0f);
     }
 }
 
@@ -86,27 +101,27 @@ static void snap_to_ground(Enemy *e, const Level *L, const PhysicsWorld *W)
  * ahead; if a wall is hit, try again with a jump; if that hits too, raise the spawn point by 8 px, add 8 steps and
  * retry until the body clears (or y reaches the top). The body is left at the raised position, so an enemy whose
  * spawn point falls inside a crashed car ends up above it and drops onto its roof instead of jittering inside. */
-static void face_and_probe(Enemy *e, bool right, const Level *L, const PhysicsWorld *W, float cam_x, int sw)
+static void face_and_probe(Enemy *e, bool right, const Level *L, const PhysicsWorld *W, real cam_x, int sw)
 {
     Character *c = &e->ch; Body *b = &c->body;
     if (right) character_move_right(c, 4); else character_move_left(c, 0);
-    if (right ? b->x > cam_x + 16.0f : b->x < cam_x + sw - 16.0f) return;   /* only the edge spawns are probed */
+    if (right ? b->x > cam_x + R(16.0f) : b->x < cam_x + r_int(sw) - R(16.0f)) return;   /* only the edge spawns are probed */
     Body save = *b;
-    float y = b->y;
+    real y = b->y;
     int n = 32; bool jump = false;
-    while (y > 8.0f) {
+    while (y > R(8.0f)) {
         bool hit = true;
         for (int pass = 0; pass < 2 && hit; pass++) {   /* walk first, then the jump */
-            Body p = save; p.y = y; p.vx = right ? 120.0f : -120.0f; p.vy = pass ? -250.0f : 0.0f; p.coll = 0;
-            for (int k = 0; k < n; k++) { physics_step(W, L, &p, 1.0f / 60.0f); if (p.coll & (COLL_LEFT | COLL_RIGHT)) break; }
+            Body p = save; p.y = y; p.vx = right ? R(120.0f) : R(-120.0f); p.vy = pass ? R(-250.0f) : R(0.0f); p.coll = 0;
+            for (int k = 0; k < n; k++) { physics_step(W, L, &p, R_DT); if (p.coll & (COLL_LEFT | COLL_RIGHT)) break; }
             hit = (p.coll & (COLL_LEFT | COLL_RIGHT)) != 0;
             if (!hit && pass) jump = true;
         }
         if (!hit) break;
-        n += 8; y -= 8.0f;
+        n += 8; y -= R(8.0f);
     }
     *b = save; b->y = y;
-    if (jump) b->vy -= 250.0f;
+    if (jump) b->vy -= R(250.0f);
 }
 
 static int count_class(const Enemies *E, int cls) { int n = 0; for (int i = 0; i < MAX_ENEMIES; i++) if (E->e[i].cls == cls) n++; return n; }
@@ -119,15 +134,15 @@ static void convoy_check(Enemies *E)
 }
 
 /* FUN_00415550: the robot-horse convoy (type 11) */
-static Enemy *spawn_convoy(Enemies *E, const Trigger *t, float x, float y, const Level *L, const PhysicsWorld *W)
+static Enemy *spawn_convoy(Enemies *E, const Trigger *t, real x, real y, const Level *L, const PhysicsWorld *W)
 {
     (void)L; (void)W;
     Character tmp; character_init(&tmp, 0xFBFAF817, false);
-    float hx = tmp.box_hx, hy = tmp.box_hy;
+    real hx = tmp.box_hx, hy = tmp.box_hy;
     bool right = E->px <= x;         /* horses run toward the player */
-    float px0 = right ? x + hx + t->interval_ms * 0.15f : x - hx - t->interval_ms * 0.15f;
-    float py0 = right ? y + hy : y - hy;
-    float step = t->rand_n * 3.2f + 16.0f;
+    real px0 = right ? x + hx + t->interval_ms * R(0.15f) : x - hx - t->interval_ms * R(0.15f);
+    real py0 = right ? y + hy : y - hy;
+    real step = t->rand_n * R(3.2f) + R(16.0f);
     int extra = t->remaining_init < 0x39 ? t->remaining_init : 0x38;
     Enemy *head = NULL;
     for (int i = 0; i <= extra; i++) {
@@ -141,11 +156,11 @@ static Enemy *spawn_convoy(Enemies *E, const Trigger *t, float x, float y, const
         px0 += right ? step : -step;   /* the column extends away from the player (FUN_00415550) */
     }
     convoy_check(E);
-    if (plat_getenv("SABER_TRACE")) fprintf(stderr, "convoy spawn: trigger x=%.0f player %.0f first horse %.0f step %.0f speed %.0f\n", x, E->px, head ? head->ch.body.x : -1, step, tmp.speed);
+    if (plat_getenv("SABER_TRACE")) fprintf(stderr, "convoy spawn: trigger x=%s player %s first horse %s step %s speed %s\n", RS(x, 0), RS(E->px, 0), RS(head ? head->ch.body.x : R(-1), 0), RS(step, 0), RS(tmp.speed, 0));
     return head;
 }
 
-Enemy *enemy_spawn(Enemies *E, const Trigger *t, float x, float y, const Level *L, const PhysicsWorld *W, float cam_x, int sw, int sh)
+Enemy *enemy_spawn(Enemies *E, const Trigger *t, real x, real y, const Level *L, const PhysicsWorld *W, real cam_x, int sw, int sh)
 {
     int type = t->type, layer = t->layer;
     if (type == 11) return spawn_convoy(E, t, x, y, L, W);
@@ -168,22 +183,22 @@ Enemy *enemy_spawn(Enemies *E, const Trigger *t, float x, float y, const Level *
     Enemy *e = alloc_slot(E, cls);
     if (!e) return NULL;
     e->type = type; e->layer = layer;
-    bool fall_in = y < -999.0f;
-    if (fall_in) y = -1000.0f - y;
+    bool fall_in = y < R(-999.0f);
+    if (fall_in) y = R(-1000.0f) - y;
     character_init(&e->ch, crhc_for_type(type), fall_in);
     Body *b = &e->ch.body;
-    b->x = x + b->hx; b->y = y + b->hy - 4.0f;     /* FUN_00414210: offset by the half extents, 4 px up */
-    if (fall_in) b->vy -= 166.6667f;
+    b->x = x + b->hx; b->y = y + b->hy - R(4.0f);     /* FUN_00414210: offset by the half extents, 4 px up */
+    if (fall_in) b->vy -= R(166.6667f);
     e->ch.state = CS_AIR;
     (void)sh;
     e->variant = (type == 5 || type == 7 || type == 9 || type == 29 || type == 32);
     if (cls == EC_GRUNT || cls == EC_GRUNT_B || cls == EC_SNIPER || cls == EC_SNIPER_B || cls == EC_KNEELER || cls == EC_KNEELER_B || cls == EC_END || cls == EC_STALKER) e->gun_alive = true;
-    if (cls == EC_STALKER) e->ft = (float)rnd(81);   /* its own spacing: a spot shifted up to +-8 px, a level stand-off 80..160 px */
+    if (cls == EC_STALKER) e->ft = r_int(rnd(81));   /* its own spacing: a spot shifted up to +-8 px, a level stand-off 80..160 px */
     if (cls == EC_WALKER || cls == EC_GRUNT || cls == EC_GRUNT_B || cls == EC_STALKER) {
         e->ch.facing = E->px <= b->x ? 0 : 1;
         face_and_probe(e, e->ch.facing == 1, L, W, cam_x, sw);
         snap_to_ground(e, L, W);
-        if (e->ch.flags & CF_SPAWN_FALL) e->spawn_t = 0.6666667f;
+        if (e->ch.flags & CF_SPAWN_FALL) e->spawn_t = R(0.6666667f);
     } else if (cls >= EC_PROP && cls <= EC_STAMPEDE + 3) {
         b->x = x; b->y = y; b->vx = b->vy = 0; b->flags = 0x1f;
         e->ch.state = CS_IDLE;
@@ -196,9 +211,9 @@ Enemy *enemy_spawn(Enemies *E, const Trigger *t, float x, float y, const Level *
         e->ch.facing = E->px <= b->x ? 0 : 1;
         snap_to_ground(e, L, W);
         e->hp = E->difficulty == 0 ? 4 : E->difficulty == 1 ? 6 : 8;   /* shots the shield takes */
-        e->t0 = 0.9f + rnd(30) * 0.02f;                                 /* first shot once on screen */
+        e->t0 = R(0.9f) + rnd(30) * R(0.02f);                                 /* first shot once on screen */
         e->dormant = type == 31;
-        int cx = (int)floorf(b->x / L->cellw), cy = (int)floorf((sh_feet(e) + 1.0f) / L->cellh);
+        int cx = r_floor(b->x / L->cellw), cy = r_floor((sh_feet(e) + R(1.0f)) / L->cellh);
         e->on_deck = L->collision && cx >= 0 && cx < L->cols && cy >= 0 && cy < L->rows && L->collision[cy * L->cols + cx] == 4;   /* one-way floor, no ramp */
     } else if (cls == EC_CUTSCENE) {
         snap_to_ground(e, L, W);
@@ -210,52 +225,52 @@ Enemy *enemy_spawn(Enemies *E, const Trigger *t, float x, float y, const Level *
     return e;
 }
 
-static void spawner_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *W, float cam_x, int sw, int sh, float dt)   /* FUN_00421370 */
+static void spawner_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *W, real cam_x, int sw, int sh, real dt)   /* FUN_00421370 */
 {
     Body *pb = &pl->ch.body;
-    float pcx = pb->x + pb->ox, pcy = pb->y + pb->oy;
+    real pcx = pb->x + pb->ox, pcy = pb->y + pb->oy;
     if (!E->spawner_enabled) return;
     /* integers first (soft-float on the Saturn): a trigger clearly left or right of the player needs no float test; the
      * 2-unit margins keep every decision the float test would make */
-    int px = (int)floorf(pcx), phx = (int)ceilf(pb->hx);
+    int px = r_floor(pcx), phx = r_ceil(pb->hx);
     for (int i = 0; i < E->ntr; i++) {
         Trigger *t = &E->tr[i];
         if (px + 2 < t->x_lo - phx || px - 2 > t->x_hi + phx) continue;
-        if (fabsf(pcx - t->cx) > t->hx + pb->hx || fabsf(pcy - t->cy) > t->hy + pb->hy) continue;
+        if (r_abs(pcx - t->cx) > t->hx + pb->hx || r_abs(pcy - t->cy) > t->hy + pb->hy) continue;
         t->timer -= dt;
-        while (t->timer <= 0.0f && t->remaining != 0) {
-            t->timer = t->interval_ms * 0.001f + (t->rand_n ? rnd(t->rand_n + 1) * 0.02f : 0);
+        while (t->timer <= R(0.0f) && t->remaining != 0) {
+            t->timer = r_ms(t->interval_ms) + (t->rand_n ? rnd(t->rand_n + 1) * R(0.02f) : 0);
             t->remaining--;
-            float wx = t->wp[t->spawned % t->nwp][0], wy = t->wp[t->spawned % t->nwp][1];
+            real wx = t->wp[t->spawned % t->nwp][0], wy = t->wp[t->spawned % t->nwp][1];
             t->spawned++;
             const Character tmp = {0}; (void)tmp;
             /* +-100000 = just outside the screen, offset by the sprite origin */
-            float ox = 32, oy = 32;
-            if (wx > 99999.0f) wx = (cam_x + sw) + ox; else if (wx < -99999.0f) wx = cam_x - ox;
-            if (wy > 99999.0f) wy = oy + sh; else if (wy < -99999.0f) wy = -oy;
+            real ox = R(32), oy = R(32);
+            if (wx > WP_OFF_TEST) wx = (cam_x + r_int(sw)) + ox; else if (wx < -WP_OFF_TEST) wx = cam_x - ox;
+            if (wy > WP_OFF_TEST) wy = oy + r_int(sh); else if (wy < -WP_OFF_TEST) wy = -oy;
             Enemy *e = enemy_spawn(E, t, wx, wy, L, W, cam_x, sw, sh);
-            if (t->type == 11) t->cy = -10000.0f;    /* buggy triggers fire once */
+            if (t->type == 11) t->cy = R(-10000.0f);    /* buggy triggers fire once */
             if (!e) break;
         }
     }
 }
 
 /* ---- class updates ---- */
-static bool hurt_overlap(const Character *a, float ax, float ay, const Enemies *E)
+static bool hurt_overlap(const Character *a, real ax, real ay, const Enemies *E)
 {
     const HurtBox *h = character_hurt(a);
-    float cx = ax + h->ox, cy = ay + h->oy;
-    return fabsf(E->phcx - cx) <= E->phx + h->hw && fabsf(E->phcy - cy) <= E->phy + h->hh;
+    real cx = ax + h->ox, cy = ay + h->oy;
+    return r_abs(E->phcx - cx) <= E->phx + h->hw && r_abs(E->phcy - cy) <= E->phy + h->hh;
 }
 
 bool player_damage(Player *pl, int hit_dir, int dmg)   /* FUN_00422a10 */
 {
     Character *c = &pl->ch;
     if (dmg < 1) return false;
-    if (dmg <= pl->hp) { pl->hp -= dmg; c->flags |= CF_HIT; c->hit_t = 170.0f; sfx_play(3, 0); return true; }
+    if (dmg <= pl->hp) { pl->hp -= dmg; c->flags |= CF_HIT; c->hit_t = R(170.0f); sfx_play(3, 0); return true; }
     if ((hit_dir & 0xfb) != 2) {
-        if (hit_dir < 8 && ((1u << hit_dir) & 0x83u)) { c->facing = 1; c->body.vx -= 300.0f; }
-        else { c->facing = 0; c->body.vx += 300.0f; }
+        if (hit_dir < 8 && ((1u << hit_dir) & 0x83u)) { c->facing = 1; c->body.vx -= R(300.0f); }
+        else { c->facing = 0; c->body.vx += R(300.0f); }
     }
     c->state = CS_DEAD;
     sfx_play(4, 0);
@@ -263,7 +278,7 @@ bool player_damage(Player *pl, int hit_dir, int dmg)   /* FUN_00422a10 */
 }
 
 /* common tail of the humanoid enemy updates: player contact, player bullets, death floor, resolve, knockback */
-static void humanoid_tail(Enemies *E, Enemy *e, Player *pl, Bullets *pb, float cam_x, int sw, float dt, bool offscreen)
+static void humanoid_tail(Enemies *E, Enemy *e, Player *pl, Bullets *pb, real cam_x, int sw, real dt, bool offscreen)
 {
     Character *c = &e->ch; Body *b = &c->body;
     int knock = 0; bool die = offscreen;
@@ -282,12 +297,12 @@ static void humanoid_tail(Enemies *E, Enemy *e, Player *pl, Bullets *pb, float c
     }
     {
         const HurtBox *h = character_hurt(c);
-        float cx = b->x + h->ox, cy = b->y + h->oy;
+        real cx = b->x + h->ox, cy = b->y + h->oy;
         for (int i = 0; i < pb->n; i++) {
             Bullet *bl = &pb->b[i];
-            float r = bl->kind == BK_GRENADE ? 8.0f : 5.0f;
-            if (fabsf(cx - bl->x) > r + h->hw || fabsf(cy - bl->y) > r + h->hh) continue;
-            float sx = bl->x - cam_x; if (sx <= 8.0f || sx >= sw) continue;
+            real r = bl->kind == BK_GRENADE ? R(8.0f) : R(5.0f);
+            if (r_abs(cx - bl->x) > r + h->hw || r_abs(cy - bl->y) > r + h->hh) continue;
+            real sx = bl->x - cam_x; if (sx <= R(8.0f) || sx >= r_int(sw)) continue;
             int d = bl->dir;
             pb->b[i] = pb->b[--pb->n];
             if (c->state != CS_DEAD && (d & 0xfb) != 2) {
@@ -304,26 +319,26 @@ resolve:
          * runs out (an armed request keeps CF_SHOOT while cd == 0, e.g. the kneeler's 0.235 s wind-up). Gating this
          * on gun_alive left a grunt that had finished its burst (gun_alive = false) in the shooting pose for good:
          * it walked off with the standing-shoot cell, legs frozen. */
-        float was = e->gun_cd; e->gun_cd -= dt; if (e->gun_cd < 0) e->gun_cd = 0;
+        real was = e->gun_cd; e->gun_cd -= dt; if (e->gun_cd < 0) e->gun_cd = 0;
         if (was > 0 && e->gun_cd <= 0) c->flags &= ~CF_SHOOT;
     }
-    if (knock) b->vx += knock * 102.0f;
+    if (knock) b->vx += knock * R(102.0f);
     if (die && c->state == CS_DEAD && !e->dying) { sfx_play(5, 0); sfx_play(6, 3); }
     if (die) enemy_kill(E, e, 0x19f);
 }
 
-static void update_walker(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, float cam_x, int sw, float dt)   /* FUN_004144d0 */
+static void update_walker(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, real cam_x, int sw, real dt)   /* FUN_004144d0 */
 {
     Character *c = &e->ch; Body *b = &c->body;
     (void)L;
     character_sync_ground(c);
     bool offscreen = false;
     if (e->ch.facing == 1) {
-        if (!(c->coll & COLL_RIGHT)) { character_move_right(c, 4); offscreen = b->x - b->hx > cam_x + sw; }
+        if (!(c->coll & COLL_RIGHT)) { character_move_right(c, 4); offscreen = b->x - b->hx > cam_x + r_int(sw); }
         else character_move_left(c, 0);
     } else if (e->ch.facing == 0) {
         if (c->coll & COLL_LEFT) {
-            if (W->world_min_x <= b->x - b->hx - 1.0f) character_move_right(c, 4);
+            if (W->world_min_x <= b->x - b->hx - R(1.0f)) character_move_right(c, 4);
             else { b->flags = PHYS_IGNORE_LEFT; character_move_left(c, 0); }
         } else { character_move_left(c, 0); offscreen = b->x + b->hx < W->world_min_x; }
     } else character_move_left(c, 0);
@@ -331,48 +346,48 @@ static void update_walker(Enemies *E, Enemy *e, Player *pl, const Level *L, cons
 }
 
 /* FUN_00416d20: grunt (types 2/5). The shooting phase lives in ch.speed (tiny while shooting -> stands still). */
-static void update_grunt(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, Bullets *eb, Effects *fx, float cam_x, int sw, float dt)
+static void update_grunt(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, Bullets *eb, Effects *fx, real cam_x, int sw, real dt)
 {
     Character *c = &e->ch; Body *b = &c->body;
     (void)L;
     character_sync_ground(c);
     bool offscreen = false;
-    float quarter = 0.125f * sw * 2;   /* 0x7c43f8 * screen_w, screen_w is the logical width */
-    quarter = 0.125f * sw;
-    if (c->speed < 1.0f) {
-        c->speed += 1e-5f;
-        if (c->speed > 0.00016f) {
-            if (c->speed < 0.00017f) {
-                float mx = e->ch.facing == 0 ? (e->variant ? -29.0f : -26.0f) : (e->variant ? 29.0f : 26.0f);
-                if (e->gun_alive && e->gun_cd <= 0.0f) {
-                    float x = b->x + mx, y = b->y + c->muzzle_y;
-                    AnimDef fl = { 0, 0, 3, 0, 0.05f, 0 };
-                    Effect *ef = effects_spawn(fx, 0xD85FB68A, e->layer, &fl, x, y, 8, 8, c->aim == AIM_L ? 3.1415927f : 0);
+    real quarter = R(0.125f) * sw * 2;   /* 0x7c43f8 * screen_w, screen_w is the logical width */
+    quarter = R(0.125f) * sw;
+    if (c->speed < R(1.0f)) {
+        c->speed += GRUNT_TICK;
+        if (c->speed > GRUNT_LO) {
+            if (c->speed < GRUNT_HI) {
+                real mx = e->ch.facing == 0 ? (e->variant ? R(-29.0f) : R(-26.0f)) : (e->variant ? R(29.0f) : R(26.0f));
+                if (e->gun_alive && e->gun_cd <= R(0.0f)) {
+                    real x = b->x + mx, y = b->y + c->muzzle_y;
+                    AnimDef fl = { 0, 0, 3, 0, R(0.05f), 0 };
+                    Effect *ef = effects_spawn(fx, 0xD85FB68A, e->layer, &fl, x, y, R(8), R(8), c->aim == AIM_L ? R(3.1415927f) : 0);
                     if (ef) { ef->follow_x = &b->x; ef->follow_y = &b->y; ef->fx0 = b->x; ef->fy0 = b->y; }
-                    bullets_spawn(eb, BK_ENEMY, e->layer, x, y, c->aim & 7, 166.0f);
-                    e->gun_cd = 0.2f;
+                    bullets_spawn(eb, BK_ENEMY, e->layer, x, y, c->aim & 7, R(166.0f));
+                    e->gun_cd = R(0.2f);
                     sfx_play(7, 0);
                 }
-            } else if (c->speed > 0.00024f) {
-                c->speed = 120.0f; e->gun_alive = false;
+            } else if (c->speed > GRUNT_END) {
+                c->speed = R(120.0f); e->gun_alive = false;
                 if (e->ch.facing == 0) character_move_right(c, 4); else character_move_left(c, 0);
             }
         }
     } else if (e->ch.facing == 0) {
         if (c->coll & COLL_LEFT) {
-            if (W->world_min_x <= b->x - b->hx - 1.0f) { e->gun_alive = false; character_move_right(c, 4); }
+            if (W->world_min_x <= b->x - b->hx - R(1.0f)) { e->gun_alive = false; character_move_right(c, 4); }
             else { b->flags = PHYS_IGNORE_LEFT; character_move_left(c, 0); }
         } else {
             character_move_left(c, 0);
             if (b->x + b->hx < W->world_min_x) offscreen = true;
-            else if (c->state != CS_AIR && E->px + quarter < b->x && b->x < cam_x + sw - quarter && rnd(100) >= 0x60 && e->gun_alive
+            else if (c->state != CS_AIR && E->px + quarter < b->x && b->x < cam_x + r_int(sw) - quarter && rnd(100) >= 0x60 && e->gun_alive
                      && character_request_shoot(c)) c->speed = 0;
         }
     } else if (e->ch.facing == 1) {
         if (c->coll & COLL_RIGHT) { e->gun_alive = false; character_move_left(c, 0); }
         else {
             character_move_right(c, 4);
-            if (b->x - b->hx > cam_x + sw) offscreen = true;
+            if (b->x - b->hx > cam_x + r_int(sw)) offscreen = true;
             else if (c->state != CS_AIR && E->px - quarter > b->x && b->x > cam_x + quarter && rnd(100) >= 0x60 && e->gun_alive
                      && character_request_shoot(c)) c->speed = 0;
         }
@@ -381,57 +396,57 @@ static void update_grunt(Enemies *E, Enemy *e, Player *pl, const Level *L, const
 }
 
 /* shared enemy shot (FUN_0041ebd0 with kind 1): flash D85FB68A frames 0..3 @50ms, bullet 166 px/s, 0.2 s cooldown */
-static bool enemy_fire(Enemy *e, Bullets *eb, Effects *fx, float mx, float my)
+static bool enemy_fire(Enemy *e, Bullets *eb, Effects *fx, real mx, real my)
 {
     Character *c = &e->ch; Body *b = &c->body;
-    if (!e->gun_alive || e->gun_cd > 0.0f) return false;
-    float x = b->x + mx, y = b->y + my;
-    AnimDef fl = { 0, 0, 3, 0, 0.05f, 0 };
-    static const float ANG[8] = { 3.1415927f, 2.3561945f, 1.5707964f, 0.7853982f, 0, 5.4977871f, 4.712389f, 3.9269908f };
-    Effect *ef = effects_spawn(fx, 0xD85FB68A, e->layer, &fl, x, y, 8, 8, ANG[c->aim & 7]);
+    if (!e->gun_alive || e->gun_cd > R(0.0f)) return false;
+    real x = b->x + mx, y = b->y + my;
+    AnimDef fl = { 0, 0, 3, 0, R(0.05f), 0 };
+    static const real ANG[8] = { R(3.1415927f), R(2.3561945f), R(1.5707964f), R(0.7853982f), 0, R(5.4977871f), R(4.712389f), R(3.9269908f) };
+    Effect *ef = effects_spawn(fx, 0xD85FB68A, e->layer, &fl, x, y, R(8), R(8), ANG[c->aim & 7]);
     if (ef) { ef->follow_x = &b->x; ef->follow_y = &b->y; ef->fx0 = b->x; ef->fy0 = b->y; }
-    bullets_spawn(eb, BK_ENEMY, e->layer, x, y, c->aim & 7, 166.0f);
-    e->gun_cd = 0.2f;
+    bullets_spawn(eb, BK_ENEMY, e->layer, x, y, c->aim & 7, R(166.0f));
+    e->gun_cd = R(0.2f);
     sfx_play(7, 0);
     return true;
 }
 
 /* FUN_00419910: sniper (types 6/7). Stands aiming at the player; ch.speed is the aim-settle timer. */
-static void update_sniper(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, Bullets *eb, Effects *fx, float cam_x, int sw, float dt)
+static void update_sniper(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, Bullets *eb, Effects *fx, real cam_x, int sw, real dt)
 {
     Character *c = &e->ch; Body *b = &c->body;
     (void)L; (void)W;
-    float px = E->phcx, py = E->phcy, pvy = pl->ch.body.vy;
+    real px = E->phcx, py = E->phcy, pvy = pl->ch.body.vy;
     character_sync_ground(c);
     if (c->state == CS_IDLE) character_aim_stand(c);
     if (c->state == CS_AIM) {
-        float t = c->speed;
+        real t = c->speed;
         bool try_shoot = false;
-        if (t <= 0.125f) {
-            t += 0.01f;
+        if (t <= R(0.125f)) {
+            t += C01;
         } else {
-            float dx = fabsf(px - b->x);
-            float lead = (pvy > -150.0f && pvy < 70.0f && (pl->ch.flags & CF_IN_JUMP)) ? 20.0f : 0.0f;
-            float dyq = floorf(fabsf(lead + (py - b->y)) * 0.0625f) * 16.0f;
+            real dx = r_abs(px - b->x);
+            real lead = (pvy > R(-150.0f) && pvy < R(70.0f) && (pl->ch.flags & CF_IN_JUMP)) ? R(20.0f) : R(0.0f);
+            real dyq = r_floorr(r_abs(lead + (py - b->y)) / 16) * 16;   /* * 0.0625f, * 16.0f */
             bool below = b->y < py;      /* player below the enemy */
             int want;
-            float newt;
-            if (dyq < dx || dx > 16.0f) {
-                float th = below ? 24.0f : E->aim_decks ? 40.0f : 48.0f;
-                if (th < dyq || (dx > 0.1f && dyq / dx > 2.0f)) want = below ? (b->x <= px ? AIM_DR : AIM_DL) : (b->x <= px ? AIM_UR : AIM_UL);
+            real newt;
+            if (dyq < dx || dx > R(16.0f)) {
+                real th = below ? R(24.0f) : E->aim_decks ? R(40.0f) : R(48.0f);
+                if (th < dyq || (dx > R(0.1f) && r_div(dyq, dx) > R(2.0f))) want = below ? (b->x <= px ? AIM_DR : AIM_DL) : (b->x <= px ? AIM_UR : AIM_UL);
                 else want = b->x <= px ? AIM_R : AIM_L;
-                newt = 0.01f;
-            } else if (dyq <= 0.1f || dx / dyq <= 0.1f) {
-                want = below ? AIM_D : AIM_U; newt = 0.0725f;
+                newt = C01;
+            } else if (dyq <= R(0.1f) || r_div(dx, dyq) <= R(0.1f)) {
+                want = below ? AIM_D : AIM_U; newt = R(0.0725f);
             } else {
-                want = below ? (b->x <= px ? AIM_DR : AIM_DL) : (b->x <= px ? AIM_UR : AIM_UL); newt = 0.0725f;
+                want = below ? (b->x <= px ? AIM_DR : AIM_DL) : (b->x <= px ? AIM_UR : AIM_UL); newt = R(0.0725f);
             }
             if (c->aim != want) { character_aim(c, want); character_aim_stand(c); t = newt; }
-            else if (t > 0.2f && c->state != CS_AIR) try_shoot = true;
-            else t += 0.01f;
+            else if (t > R(0.2f) && c->state != CS_AIR) try_shoot = true;
+            else t += C01;
         }
         if (try_shoot) {
-            if (cam_x < b->x && b->x < cam_x + sw && rnd(200) > 0xc5 && character_request_shoot(c)) {
+            if (cam_x < b->x && b->x < cam_x + r_int(sw) && rnd(200) > 0xc5 && character_request_shoot(c)) {
                 enemy_fire(e, eb, fx, c->muzzle_x, c->muzzle_y);
                 t = 0;
             }
@@ -447,97 +462,97 @@ static void update_sniper(Enemies *E, Enemy *e, Player *pl, const Level *L, cons
  * the ground it stops 80..160 px short of him and fires level. It re-picks the spot only while he stands (not in a
  * jump) and walks over when he leaves the line. st 0 = walking to t0, 1 = aiming; t1 = time to the next shot;
  * dir = the aim for t0. */
-#define STALK_MZ_X 17.8f   /* the sniper body's 45-degree-up muzzle from the body centre (UR; UL mirrored) */
-#define STALK_MZ_Y 20.0f
-static float stalk_spot(const Enemies *E, const Enemy *e, float cam_x, int sw, int *aim)
+#define STALK_MZ_X R(17.8f)   /* the sniper body's 45-degree-up muzzle from the body centre (UR; UL mirrored) */
+#define STALK_MZ_Y R(20.0f)
+static real stalk_spot(const Enemies *E, const Enemy *e, real cam_x, int sw, int *aim)
 {
     const Body *b = &e->ch.body;
-    float lo = cam_x + 24.0f, hi = cam_x + sw - 24.0f;
-    float rise = (b->y - STALK_MZ_Y) - E->phcy;
-    if (rise > 24.0f) {                                      /* he is up high: the diagonal spot nearer to us */
-        float d = rise + STALK_MZ_X + (e->ft / 80.0f * 16.0f - 8.0f);
-        float l = E->phcx - d, r = E->phcx + d;              /* from the left it fires up-right */
+    real lo = cam_x + R(24.0f), hi = cam_x + r_int(sw) - R(24.0f);
+    real rise = (b->y - STALK_MZ_Y) - E->phcy;
+    if (rise > R(24.0f)) {                                      /* he is up high: the diagonal spot nearer to us */
+        real d = rise + STALK_MZ_X + (e->ft / 80 * 16 - R(8.0f));
+        real l = E->phcx - d, r = E->phcx + d;              /* from the left it fires up-right */
         bool okl = l >= lo, okr = r <= hi;
         if (okl || okr) {
-            bool left = okl && (!okr || fabsf(b->x - l) <= fabsf(b->x - r));
+            bool left = okl && (!okr || r_abs(b->x - l) <= r_abs(b->x - r));
             *aim = left ? AIM_UR : AIM_UL; return left ? l : r;
         }
     }
-    float gap = 80.0f + e->ft;                               /* level with him */
+    real gap = R(80.0f) + e->ft;                               /* level with him */
     bool left = b->x < E->phcx;
-    float x = E->phcx + (left ? -gap : gap);
+    real x = E->phcx + (left ? -gap : gap);
     if (x < lo || x > hi) { left = !left; x = E->phcx + (left ? -gap : gap); }
     if (x < lo) x = lo;
     if (x > hi) x = hi;
-    float cur = b->x - E->phcx;                              /* already in the band on that side: stay */
-    if ((left ? -cur : cur) >= 70.0f && (left ? -cur : cur) <= 170.0f && b->x >= lo && b->x <= hi) x = b->x;
+    real cur = b->x - E->phcx;                              /* already in the band on that side: stay */
+    if ((left ? -cur : cur) >= R(70.0f) && (left ? -cur : cur) <= R(170.0f) && b->x >= lo && b->x <= hi) x = b->x;
     *aim = x < E->phcx ? AIM_R : AIM_L;
     return x;
 }
 
-static void update_stalker(Enemies *E, Enemy *e, Player *pl, Bullets *pb, Bullets *eb, Effects *fx, float cam_x, int sw, float dt)
+static void update_stalker(Enemies *E, Enemy *e, Player *pl, Bullets *pb, Bullets *eb, Effects *fx, real cam_x, int sw, real dt)
 {
     Character *c = &e->ch; Body *b = &c->body;
     character_sync_ground(c);
     bool grounded = (c->coll & COLL_DOWN) != 0;
     if (grounded && (pl->ch.coll & COLL_DOWN) && pl->ch.state != CS_DEAD && !(c->flags & CF_SHOOT)) {
-        int aim; float x = stalk_spot(E, e, cam_x, sw, &aim);
-        if (e->st == 0 || fabsf(x - b->x) > 10.0f || aim != e->dir) { e->t0 = x; e->dir = (uint8_t)aim; if (fabsf(x - b->x) > 3.0f) e->st = 0; }
+        int aim; real x = stalk_spot(E, e, cam_x, sw, &aim);
+        if (e->st == 0 || r_abs(x - b->x) > R(10.0f) || aim != e->dir) { e->t0 = x; e->dir = (uint8_t)aim; if (r_abs(x - b->x) > R(3.0f)) e->st = 0; }
     }
     if (e->st == 0 && grounded) {
-        if (fabsf(b->x - e->t0) <= 3.0f && b->x > cam_x + 8.0f && b->x < cam_x + sw - 8.0f) {
-            e->st = 1; e->t1 = 0.35f + rnd(10) * 0.02f;      /* at the spot: raise the rifle, settle, then fire */
+        if (r_abs(b->x - e->t0) <= R(3.0f) && b->x > cam_x + R(8.0f) && b->x < cam_x + r_int(sw) - R(8.0f)) {
+            e->st = 1; e->t1 = R(0.35f) + rnd(10) * R(0.02f);      /* at the spot: raise the rifle, settle, then fire */
         } else {
-            c->speed = 110.0f;
+            c->speed = R(110.0f);
             if (e->t0 < b->x) character_move_left(c, 0); else character_move_right(c, 4);
         }
     }
     if (e->st == 1) {
         character_aim(c, e->dir); character_aim_stand(c);
-        if ((e->t1 -= dt) <= 0 && b->x > cam_x && b->x < cam_x + sw && pl->ch.state != CS_DEAD && character_request_shoot(c)) {
+        if ((e->t1 -= dt) <= 0 && b->x > cam_x && b->x < cam_x + r_int(sw) && pl->ch.state != CS_DEAD && character_request_shoot(c)) {
             enemy_fire(e, eb, fx, c->muzzle_x, c->muzzle_y);
-            e->t1 = 0.8f + rnd(25) * 0.03f;
+            e->t1 = R(0.8f) + rnd(25) * R(0.03f);
         }
     }
     humanoid_tail(E, e, pl, pb, cam_x, sw, dt, false);
 }
 
 /* FUN_00418670: kneeler (types 8/9/29). Crouches and throws grenades; ch.speed is the throw timer. */
-static void update_kneeler(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, Bullets *eb, Effects *fx, float cam_x, int sw, float dt)
+static void update_kneeler(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, Bullets *eb, Effects *fx, real cam_x, int sw, real dt)
 {
     Character *c = &e->ch; Body *b = &c->body;
     (void)L; (void)W;
-    float px = E->phcx, py = E->phcy;
+    real px = E->phcx, py = E->phcy;
     character_sync_ground(c);
     if (c->state == CS_IDLE) character_down(c);
     if (c->state == CS_CROUCH) {
         character_aim(c, b->x <= px ? AIM_R : AIM_L);
         e->ch.facing = (c->aim < 8 && ((1u << c->aim) & 0x83u)) ? 0 : 1;
-        if (c->speed > 1.0f) {
-            if (c->state != CS_AIR && cam_x < b->x && b->x < cam_x + sw && rnd(100) >= 0x5d && character_request_shoot(c))
+        if (c->speed > R(1.0f)) {
+            if (c->state != CS_AIR && cam_x < b->x && b->x < cam_x + r_int(sw) && rnd(100) >= 0x5d && character_request_shoot(c))
                 c->speed = 0;
         } else {
-            c->speed += 0.01f;
-            if ((c->flags & CF_SHOOT) && c->speed > 0.235f) {
-                float lead = b->x < px ? 60.0f : 0.0f;
-                float pxm = pl->ch.facing == 0 ? px - 60.0f : px + 6.0f;   /* 0x7c3b5c=60, 0x7c440c=6 */
-                float dx = fabsf(lead - b->x + pxm);
-                if (dx < 80.0f) dx = 80.0f;
-                if (dx > 200.0f) dx = 200.0f;
-                float dy = fabsf(py - b->y) * 0.25f;
-                if (py < b->y) dy *= -10.0f;
-                float th = pl->ch.facing == 0 ? 320.0f : 230.0f;
-                float div = th < dx ? 1.2333333f : 1.125f;
-                float spd = rnd(6) + (dx - dy) / div - 3.0f;
-                if (spd < 60.0f) spd = 60.0f;
-                if (spd > 160.0f) spd = 160.0f;
-                if (e->gun_alive && e->gun_cd <= 0.0f) {
-                    float x = b->x + c->muzzle_x, y = b->y + c->muzzle_y;
+            c->speed += C01;
+            if ((c->flags & CF_SHOOT) && c->speed > R(0.235f)) {
+                real lead = b->x < px ? R(60.0f) : R(0.0f);
+                real pxm = pl->ch.facing == 0 ? px - R(60.0f) : px + R(6.0f);   /* 0x7c3b5c=60, 0x7c440c=6 */
+                real dx = r_abs(lead - b->x + pxm);
+                if (dx < R(80.0f)) dx = R(80.0f);
+                if (dx > R(200.0f)) dx = R(200.0f);
+                real dy = r_abs(py - b->y) / 4;   /* * 0.25f */
+                if (py < b->y) dy *= -10;
+                real th = pl->ch.facing == 0 ? R(320.0f) : R(230.0f);
+                real div = th < dx ? R(1.2333333f) : R(1.125f);
+                real spd = r_int(rnd(6)) + r_div(dx - dy, div) - R(3.0f);
+                if (spd < R(60.0f)) spd = R(60.0f);
+                if (spd > R(160.0f)) spd = R(160.0f);
+                if (e->gun_alive && e->gun_cd <= R(0.0f)) {
+                    real x = b->x + c->muzzle_x, y = b->y + c->muzzle_y;
                     bullets_spawn(eb, BK_GRENADE, e->layer, x, y, c->aim & 7, spd);
-                    e->gun_cd = 0.2f;
+                    e->gun_cd = R(0.2f);
                     sfx_play(13, 0);
                 }
-                c->speed += 0.235f;
+                c->speed += R(0.235f);
             }
         }
     }
@@ -545,29 +560,29 @@ static void update_kneeler(Enemies *E, Enemy *e, Player *pl, const Level *L, con
 }
 
 /* FUN_00411aa0: decorative props (types 12..23): static, loop anim entry 1, despawn a screen behind the camera */
-static void update_prop(Enemies *E, Enemy *e, float cam_x, int sw)
+static void update_prop(Enemies *E, Enemy *e, real cam_x, int sw)
 {
     Character *c = &e->ch;
     c->body.flags = 0x1f;
     character_set_anim(c, 1);
-    if (c->body.x < cam_x - sw) enemy_kill(E, e, 0x19f);
+    if (c->body.x < cam_x - r_int(sw)) enemy_kill(E, e, 0x19f);
 }
 
 /* FUN_004121a0: stampede horses (types 24..27): run across the screen at a fixed pixel speed per frame */
-static void update_stampede(Enemies *E, Enemy *e, float cam_x, int sw)
+static void update_stampede(Enemies *E, Enemy *e, real cam_x, int sw)
 {
-    static const float SPEED[4] = { 7.875f, 4.4625f, 9.1875f, 5.25f };   /* 0x7c4194 (22), 0x7c4198 (23), 0x7c419c (24), 0x7c4190 (25) px/frame */
+    static const real SPEED[4] = { R(7.875f), R(4.4625f), R(9.1875f), R(5.25f) };   /* 0x7c4194 (22), 0x7c4198 (23), 0x7c419c (24), 0x7c4190 (25) px/frame */
     Character *c = &e->ch;
     c->body.flags = 0x1f;
-    float sp = SPEED[e->cls - EC_STAMPEDE];
+    real sp = SPEED[e->cls - EC_STAMPEDE];
     bool right = c->aim == AIM_R;
     character_set_anim(c, right ? 2 : 1);
-    if (right) { c->body.x += sp; if (c->body.x - 2 * c->origin_x > cam_x + sw) enemy_kill(E, e, 0x19f); }
+    if (right) { c->body.x += sp; if (c->body.x - 2 * c->origin_x > cam_x + r_int(sw)) enemy_kill(E, e, 0x19f); }
     else { c->body.x -= sp; if (c->body.x + 2 * c->origin_x < cam_x) enemy_kill(E, e, 0x19f); }
 }
 
 /* FUN_00415c10: convoy horse. Forced walk state, no gravity/collision, tramples the player and humanoid enemies. */
-static void update_horse(Enemies *E, Enemy *e, Player *pl, float cam_x, int sw, float dt)
+static void update_horse(Enemies *E, Enemy *e, Player *pl, real cam_x, int sw, real dt)
 {
     Character *c = &e->ch; Body *b = &c->body;
     b->flags = 0x1f; b->coll = COLL_DOWN;
@@ -575,7 +590,7 @@ static void update_horse(Enemies *E, Enemy *e, Player *pl, float cam_x, int sw, 
     character_sync_ground(c);
     c->state = CS_WALK;
     bool offscreen = false;
-    if (e->ch.facing == 1) { character_move_right(c, 4); offscreen = b->x - b->hx > cam_x + sw; }
+    if (e->ch.facing == 1) { character_move_right(c, 4); offscreen = b->x - b->hx > cam_x + r_int(sw); }
     else { character_move_left(c, 0); offscreen = b->x + b->hx < cam_x; }
     c->state = CS_WALK;
     /* player */
@@ -585,17 +600,17 @@ static void update_horse(Enemies *E, Enemy *e, Player *pl, float cam_x, int sw, 
     }
     /* humanoid enemies */
     const HurtBox *h = character_hurt(c);
-    float cx = b->x + h->ox, cy = b->y + h->oy;
+    real cx = b->x + h->ox, cy = b->y + h->oy;
     for (int i = 0; i < MAX_ENEMIES; i++) {
         Enemy *o = &E->e[i];
         if (!o->cls || o->dying || o->cls >= 8 || o == e) { if (!(o->cls == EC_END && !o->dying)) continue; }
         const HurtBox *oh = character_hurt(&o->ch);
-        float ox = o->ch.body.x + oh->ox, oy = o->ch.body.y + oh->oy;
-        if (fabsf(ox - cx) > oh->hw + h->hw || fabsf(oy - cy) > oh->hh + h->hh) continue;
+        real ox = o->ch.body.x + oh->ox, oy = o->ch.body.y + oh->oy;
+        if (r_abs(ox - cx) > oh->hw + h->hw || r_abs(oy - cy) > oh->hh + h->hh) continue;
         o->ch.facing = e->ch.facing == 0 ? 1 : 0;
         o->ch.state = CS_DEAD; sfx_play(5, 0); sfx_play(6, 3);
         character_resolve(&o->ch, dt);
-        o->ch.body.vx += e->ch.facing == 0 ? -102.0f : 102.0f;
+        o->ch.body.vx += e->ch.facing == 0 ? R(-102.0f) : R(102.0f);
         enemy_kill(E, o, 0x19f);
     }
     character_resolve(c, dt);
@@ -604,19 +619,19 @@ static void update_horse(Enemies *E, Enemy *e, Player *pl, float cam_x, int sw, 
 
 /* FUN_00417b60: the cutscene Outrider on the Ramrod's roof (type 28). Alarm pose when seen, then runs off; despawns
  * once it has left the screen. ft = run flag (50 while running, +0x12848). */
-static void update_cutscene_outrider(Enemies *E, Enemy *e, float cam_x, int sw, float dt)
+static void update_cutscene_outrider(Enemies *E, Enemy *e, real cam_x, int sw, real dt)
 {
     Character *c = &e->ch; Body *b = &c->body;
-    float camc = cam_x + sw * 0.5f;
-    if ((int)fabsf(camc - b->x) < sw / 2) {
-        if (c->state == CS_IDLE) { c->state = CS_SLIDE; c->slide_t = 2.0f; sfx_play(22, 0); }
-        else if (c->state == CS_SLIDE && c->slide_t < 1.0f) { c->state = CS_WALK; e->ch.facing = 1; c->aim = AIM_R; c->slide_t = 0; c->alert_time = 50.0f; e->ft = 50.0f; }
+    real camc = cam_x + r_int(sw) / 2;   /* sw * 0.5f */
+    if (r_trunc(r_abs(camc - b->x)) < sw / 2) {
+        if (c->state == CS_IDLE) { c->state = CS_SLIDE; c->slide_t = R(2.0f); sfx_play(22, 0); }
+        else if (c->state == CS_SLIDE && c->slide_t < R(1.0f)) { c->state = CS_WALK; e->ch.facing = 1; c->aim = AIM_R; c->slide_t = 0; c->alert_time = R(50.0f); e->ft = R(50.0f); }
     } else {
-        if (e->ft >= 40.0f) enemy_kill(E, e, 0x19f);      /* ran off the screen */
+        if (e->ft >= R(40.0f)) enemy_kill(E, e, 0x19f);      /* ran off the screen */
         else { e->ft = 0; b->vx = b->vy = 0; }
     }
     character_sync_ground(c);
-    if (e->ft > 40.0f) { character_move_right(c, 4); e->ft = 50.0f; }
+    if (e->ft > R(40.0f)) { character_move_right(c, 4); e->ft = R(50.0f); }
     character_resolve(c, dt);
 }
 
@@ -630,14 +645,14 @@ static int next_sprite_layer(const Level *L, int layer)
 static void boss_fire(Enemies *E, Enemy *e, Bullets *eb, int sound)
 {
     Character *c = &e->ch;
-    if (e->gun_cd > 0.0f) return;
-    bullets_spawn(eb, BK_LASER, e->layer, c->body.x + c->muzzle_x, c->body.y + c->muzzle_y, c->aim & 7, 333.3333f);
-    e->gun_cd = 0.2f; c->flags |= CF_SHOOT;
+    if (e->gun_cd > R(0.0f)) return;
+    bullets_spawn(eb, BK_LASER, e->layer, c->body.x + c->muzzle_x, c->body.y + c->muzzle_y, c->aim & 7, R(333.3333f));
+    e->gun_cd = R(0.2f); c->flags |= CF_SHOOT;
     sfx_play(sound, 0);
     (void)E;
 }
 
-static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, Bullets *eb, Effects *fx, float cam_x, int sw, float dt)
+static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, Bullets *eb, Effects *fx, real cam_x, int sw, real dt)
 {
     Character *c = &e->ch; Body *b = &c->body;
     (void)W;
@@ -648,11 +663,11 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
          * sideways (the port used to keep hovering in place here) */
         c->state = CS_DEAD;
         b->flags = 0x0f; b->vx = 0;
-        if (plat_getenv("SABER_TRACE") && (E->boss_phase % 10) == 0) fprintf(stderr, "boss dying phase=%d x=%.0f y=%.0f vy=%.0f\n", E->boss_phase, b->x, b->y, b->vy);
-        b->x += (float)(rnd(180)) / 60.0f - 153.0f / 60.0f;
+        if (plat_getenv("SABER_TRACE") && (E->boss_phase % 10) == 0) fprintf(stderr, "boss dying phase=%d x=%s y=%s vy=%s\n", E->boss_phase, RS(b->x, 0), RS(b->y, 0), RS(b->vy, 0));
+        b->x += r_int(rnd(180)) / 60 - R(153.0f / 60.0f);
         if (rnd(10) >= 9) {
-            AnimDef a = { 0, 0, 11, 11, 0.025f, 0 };
-            effects_spawn(fx, 0x9C861FF3, e->layer, &a, b->x + rnd(18), b->y + rnd(80), 32, 32, 0);
+            AnimDef a = { 0, 0, 11, 11, R(0.025f), 0 };
+            effects_spawn(fx, 0x9C861FF3, e->layer, &a, b->x + r_int(rnd(18)), b->y + r_int(rnd(80)), R(32), R(32), 0);
             if (E->boss_phase < 0x40 && (E->boss_phase & 1)) sfx_play(0x11, 0);
         }
         if (E->boss_phase == 8) sfx_play(0x15, 0);
@@ -661,9 +676,9 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
         return;
     }
     /* hover: vertical sine, gravity cancelled */
-    float amp = c->state == CS_FALL ? 10.0f : c->state == CS_SLIDE ? 13.0f : 16.0f;
+    real amp = c->state == CS_FALL ? R(10.0f) : c->state == CS_SLIDE ? R(13.0f) : R(16.0f);
     b->flags = 0x0f | PHYS_NO_GRAVITY;
-    b->vy = sinf((float)(E->frame % 66) * 0.0952f) * amp;
+    b->vy = r_mul(r_sin(r_mul(r_int(E->frame % 66), R(0.0952f))), amp);
     if (E->boss_phase == 0) {
         E->boss_phase = 1; E->cam_locked = true;
         /* The far-to-mid pass resets boss_phase to zero. Restarting ADX here
@@ -672,30 +687,30 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
         sfx_play(0x13, 0);
     }
     if (plat_getenv("SABER_TRACE") && (E->frame % 10) == 0)
-        fprintf(stderr, "boss st=%d layer=%d x=%.0f y=%.0f vx=%.0f cam=%.0f phase=%d dir=%d aim=%d hp=%d anim=%d\n", c->state, e->layer, b->x, b->y, b->vx, cam_x, E->boss_phase, e->dir, c->aim, e->hp, c->anim);
+        fprintf(stderr, "boss st=%d layer=%d x=%s y=%s vx=%s cam=%s phase=%d dir=%d aim=%d hp=%d anim=%d\n", c->state, e->layer, RS(b->x, 0), RS(b->y, 0), RS(b->vx, 0), RS(cam_x, 0), E->boss_phase, e->dir, c->aim, e->hp, c->anim);
 
     switch (c->state) {
     case CS_FALL:      /* fly-in from the right in the far layer, accelerating left (0x7c4200) */
-        b->vx += dt * -18666.0f;
+        b->vx += r_mul_dt(R(-18666.0f), dt);
         c->facing = 0; c->aim = AIM_L;
-        if (b->x + 350.0f < cam_x) {
+        if (b->x + R(350.0f) < cam_x) {
             int nl = next_sprite_layer(L, e->layer);
             if (nl >= 0) e->layer = nl;
-            c->state = CS_SLIDE; e->dir = 1; e->ft = 400.0f; c->speed = 140.0f; E->boss_phase = 0; sfx_play(0x13, 0);
-            b->x = cam_x - 820.0f; b->vx = 0;   /* re-enters at the left edge ~1.9 s later (measured on the original) */
+            c->state = CS_SLIDE; e->dir = 1; e->ft = R(400.0f); c->speed = R(140.0f); E->boss_phase = 0; sfx_play(0x13, 0);
+            b->x = cam_x - R(820.0f); b->vx = 0;   /* re-enters at the left edge ~1.9 s later (measured on the original) */
         }
         break;
     case CS_SLIDE:     /* mid layer, accelerating right (0x7c4208) */
-        b->vx += dt * 23332.75f;
+        b->vx += r_mul_dt(R(23332.75f), dt);
         c->facing = 1; c->aim = AIM_R;
-        if (b->x - 230.0f > cam_x + sw) {
+        if (b->x - R(230.0f) > cam_x + r_int(sw)) {
             int nl = next_sprite_layer(L, e->layer);
-            if (nl >= 0) { e->layer = nl; b->x = cam_x - 230.0f; b->vx = 0; }
+            if (nl >= 0) { e->layer = nl; b->x = cam_x - R(230.0f); b->vx = 0; }
             if (nl < 0 || next_sprite_layer(L, nl) < 0) {
                 /* reached the play layer: the boss sweeps (state 1, facing left, aiming down-left) and a clone of
                  * it (FUN_0041fbf0) rides along in state 8 as a second gun; both share the phase counter */
                 e->layer = nl >= 0 ? nl : e->layer;
-                c->state = CS_WALK; c->aim = AIM_DL; e->dir = 0; c->facing = 0; b->x = cam_x + sw + 280.0f; b->vx = 0;   /* ~1.5 s until it shows */
+                c->state = CS_WALK; c->aim = AIM_DL; e->dir = 0; c->facing = 0; b->x = cam_x + r_int(sw) + R(280.0f); b->vx = 0;   /* ~1.5 s until it shows */
                 Enemy *r = alloc_slot(E, EC_HORSEBOSS);
                 if (r) { character_init(&r->ch, 0x2A02BD4F, false); r->type = 10; r->layer = e->layer; r->link = (int)(e - E->e); r->hp = 1; r->variant = 99; r->ch.state = CS_AIM; r->ch.aim = AIM_DR; r->ch.body = *b; e->link = (int)(r - E->e); }
                 E->boss_phase = 1;
@@ -704,25 +719,25 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
         break;
     case CS_WALK: {    /* FUN_00412750 state 1: fly in to the centre (+128 / -160), hold and shoot for 0x50 frames,
                         * then leave on the far side and come back from there. The resolver turns c->speed into vx. */
-        float camc = cam_x + sw * 0.5f;
+        real camc = cam_x + r_int(sw) / 2;   /* sw * 0.5f */
         bool can_shoot = false;
         if (e->dir == 0) {
             if (E->boss_phase > 0x50) {
-                c->speed = 140.0f; E->boss_phase++;
-                if (b->x + 180.0f < cam_x) { e->dir = 1; c->aim = AIM_DR; E->boss_phase = 1; }
+                c->speed = R(140.0f); E->boss_phase++;
+                if (b->x + R(180.0f) < cam_x) { e->dir = 1; c->aim = AIM_DR; E->boss_phase = 1; }
             } else if (E->boss_phase < 2 && b->x >= camc) {
-                if (b->x > camc + 128.0f) { c->speed = 140.0f; can_shoot = true; } else { E->boss_phase++; c->speed = 0; }
+                if (b->x > camc + R(128.0f)) { c->speed = R(140.0f); can_shoot = true; } else { E->boss_phase++; c->speed = 0; }
             } else { E->boss_phase++; c->speed = 0; can_shoot = true; }
         } else {
             if (E->boss_phase > 0x50) {
-                c->speed = 140.0f; E->boss_phase++;
-                if (b->x - 280.0f > cam_x + sw) { e->dir = 0; c->aim = AIM_DL; E->boss_phase = 1; }
+                c->speed = R(140.0f); E->boss_phase++;
+                if (b->x - R(280.0f) > cam_x + r_int(sw)) { e->dir = 0; c->aim = AIM_DL; E->boss_phase = 1; }
             } else if (E->boss_phase < 2 && b->x <= camc) {
-                if (b->x < camc - 160.0f) { c->speed = 140.0f; can_shoot = true; } else { E->boss_phase++; c->speed = 0; }
+                if (b->x < camc - R(160.0f)) { c->speed = R(140.0f); can_shoot = true; } else { E->boss_phase++; c->speed = 0; }
             } else { E->boss_phase++; c->speed = 0; can_shoot = true; }
         }
         c->facing = e->dir; c->aim = e->dir ? AIM_DR : AIM_DL;
-        if (can_shoot && b->x > cam_x - 64.0f && b->x < cam_x + sw) boss_fire(E, e, eb, 0x10);
+        if (can_shoot && b->x > cam_x - R(64.0f) && b->x < cam_x + r_int(sw)) boss_fire(E, e, eb, 0x10);
         break; }
     default:
         c->state = CS_FALL;
@@ -731,33 +746,33 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
     /* player bullets: only the sweeping boss takes hits (state 1); the passes and the rider are invulnerable */
     if (c->state == CS_WALK) {
         const HurtBox *h = character_hurt(c);
-        float cx = b->x + h->ox, cy = b->y + h->oy;
-        float hw = h->hw > 0 ? h->hw : 48, hh = h->hh > 0 ? h->hh : 32;
+        real cx = b->x + h->ox, cy = b->y + h->oy;
+        real hw = h->hw > 0 ? h->hw : R(48), hh = h->hh > 0 ? h->hh : R(32);
         for (int i = 0; i < pb->n; i++) {
             Bullet *bl = &pb->b[i];
-            float r = bl->kind == BK_GRENADE ? 8.0f : 5.0f;
-            if (fabsf(cx - bl->x) > r + hw || fabsf(cy - bl->y) > r + hh) continue;
-            float sx = bl->x - cam_x; if (sx <= 8.0f || sx >= sw) continue;
+            real r = bl->kind == BK_GRENADE ? R(8.0f) : R(5.0f);
+            if (r_abs(cx - bl->x) > r + hw || r_abs(cy - bl->y) > r + hh) continue;
+            real sx = bl->x - cam_x; if (sx <= R(8.0f) || sx >= r_int(sw)) continue;
             pb->b[i] = pb->b[--pb->n];
             if (c->flags & (CF_HIT | CF_HIT_ALT)) break;
             if (--e->hp <= 0) {
                 enemy_kill(E, e, 0xed8); c->state = CS_DEAD; E->boss_phase = 1; c->flags &= ~CF_SHOOT;
                 if (e->link >= 0 && E->e[e->link].cls) { E->e[e->link].cls = 0; E->count--; e->link = -1; }
             } else {
-                c->flags |= CF_HIT; c->hit_t = 4.0f;
-                if (e->link >= 0 && E->e[e->link].cls) { E->e[e->link].ch.flags |= CF_HIT; E->e[e->link].ch.hit_t = 4.0f; }
+                c->flags |= CF_HIT; c->hit_t = R(4.0f);
+                if (e->link >= 0 && E->e[e->link].cls) { E->e[e->link].ch.flags |= CF_HIT; E->e[e->link].ch.hit_t = R(4.0f); }
             }
             break;
         }
     }
     e->gun_cd -= dt; if (e->gun_cd < 0) e->gun_cd = 0;
-    if (e->gun_cd < 0.1f) c->flags &= ~CF_SHOOT;
+    if (e->gun_cd < R(0.1f)) c->flags &= ~CF_SHOOT;
     /* animation from the enemy resolver (CRHC anims 28-35 = laser charge, etc.) */
     uint8_t st = c->state;
     if (st == CS_FALL || st == CS_SLIDE) {
         /* the passes keep their accelerated velocity (the walk resolver would pin it to +-speed); the original
          * crosses the screen at ~390 px/s */
-        float vx = b->vx; if (vx > 390.0f) vx = 390.0f; if (vx < -390.0f) vx = -390.0f;
+        real vx = b->vx; if (vx > R(390.0f)) vx = R(390.0f); if (vx < R(-390.0f)) vx = R(-390.0f);
         c->state = CS_WALK; character_resolve(c, dt); c->state = st; b->vx = vx;
     } else character_resolve(c, dt);
     (void)pl;
@@ -766,7 +781,7 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
 /* FUN_00412750 state 8: the rider clone sits on the boss (position copied from the link), takes the boss's facing
  * and covers the other side: boss facing right -> aims left (down-left when the player is 60+ px below), facing
  * left -> aims right / down-right. It holds fire while the shared phase counter is in 0xa0..0xb8. */
-static void update_boss_rider(Enemies *E, Enemy *e, Bullets *eb, float cam_x, int sw, float dt)
+static void update_boss_rider(Enemies *E, Enemy *e, Bullets *eb, real cam_x, int sw, real dt)
 {
     Character *c = &e->ch;
     if (e->link < 0 || !E->e[e->link].cls) { e->cls = 0; E->count--; return; }
@@ -775,12 +790,12 @@ static void update_boss_rider(Enemies *E, Enemy *e, Bullets *eb, float cam_x, in
     e->layer = h->layer;
     c->state = CS_AIM;
     e->dir = h->dir; c->facing = h->ch.facing;
-    bool below = E->phcy - c->body.y >= 60.0f;
+    bool below = E->phcy - c->body.y >= R(60.0f);
     c->aim = e->dir == 1 ? (below ? AIM_DL : AIM_L) : (below ? AIM_DR : AIM_R);
-    if (h->ch.state == CS_WALK && !h->dying && !((unsigned)(E->boss_phase - 0xa0) < 0x19) && c->body.x > cam_x - 64.0f && c->body.x < cam_x + sw)
+    if (h->ch.state == CS_WALK && !h->dying && !((unsigned)(E->boss_phase - 0xa0) < 0x19) && c->body.x > cam_x - R(64.0f) && c->body.x < cam_x + r_int(sw))
         boss_fire(E, e, eb, 0x12);
     e->gun_cd -= dt; if (e->gun_cd < 0) e->gun_cd = 0;
-    if (e->gun_cd < 0.1f) c->flags &= ~CF_SHOOT;
+    if (e->gun_cd < R(0.1f)) c->flags &= ~CF_SHOOT;
     c->flags = (c->flags & ~(CF_HIT | CF_HIT_ALT)) | (h->ch.flags & (CF_HIT | CF_HIT_ALT)); c->hit_t = h->ch.hit_t;
     character_resolve(c, dt);
 }
@@ -793,28 +808,28 @@ static void update_boss_rider(Enemies *E, Enemy *e, Bullets *eb, float cam_x, in
  * Up in a tower with the hero on the ground ahead he aims 45 degrees down (sheet 20 with the shield, 21 without, 23..34
  * the deaths from it) and the rifle, its shots and the flash are drawn over the cabin's front wall (sheet 22).
  * st 0 shield up, 1 burning away (t1 = time), 2 no shield; t0 = time to the next shot; ft = time the hero is behind. */
-#define SH_AX 24.0f        /* body.x in the art (the torso's middle), art facing right */
-#define SH_FEET 52.0f      /* the feet rest on this art row */
-static const float SH_BODY[4] = { 14, 9, 35, 53 };      /* art boxes x0, y0, x1, y1 */
-static const float SH_SHIELD[4] = { 35, 15, 53, 57 };
-#define SH_MUZZLE_DX 28.0f      /* level shot: from the muzzle, art (52, 20) */
-#define SH_MUZZLE_DY 32.0f
-#define SH_DOWN_DX 18.0f        /* aimed down: the muzzle at art (41, 43) */
-#define SH_DOWN_DY 9.0f
-#define SH_BREAK_FRAME 0.1f      /* the clip's rate */
-#define SH_DEATH_FRAME 0.0667f   /* the Outriders' death anim (0x32/0x33) rate */
+#define SH_AX R(24.0f)        /* body.x in the art (the torso's middle), art facing right */
+#define SH_FEET R(52.0f)      /* the feet rest on this art row */
+static const real SH_BODY[4] = { R(14), R(9), R(35), R(53) };      /* art boxes x0, y0, x1, y1 */
+static const real SH_SHIELD[4] = { R(35), R(15), R(53), R(57) };
+#define SH_MUZZLE_DX R(28.0f)      /* level shot: from the muzzle, art (52, 20) */
+#define SH_MUZZLE_DY R(32.0f)
+#define SH_DOWN_DX R(18.0f)        /* aimed down: the muzzle at art (41, 43) */
+#define SH_DOWN_DY R(9.0f)
+#define SH_BREAK_FRAME R(0.1f)      /* the clip's rate */
+#define SH_DEATH_FRAME R(0.0667f)   /* the Outriders' death anim (0x32/0x33) rate */
 
-static float sh_feet(const Enemy *e) { const Body *b = &e->ch.body; return b->y + b->oy + b->hy; }
-static void sh_box(const Enemy *e, const float a[4], float o[4])
+static real sh_feet(const Enemy *e) { const Body *b = &e->ch.body; return b->y + b->oy + b->hy; }
+static void sh_box(const Enemy *e, const real a[4], real o[4])
 {
-    float x = e->ch.body.x, f = sh_feet(e);
+    real x = e->ch.body.x, f = sh_feet(e);
     if (e->ch.facing == 1) { o[0] = x + a[0] - SH_AX; o[2] = x + a[2] - SH_AX; }
     else { o[0] = x - (a[2] - SH_AX); o[2] = x - (a[0] - SH_AX); }
     o[1] = f + a[1] - SH_FEET; o[3] = f + a[3] - SH_FEET;
 }
 static bool sh_shield_up(const Enemy *e) { return e->st == 0 || (e->st == 1 && e->t1 < 3 * SH_BREAK_FRAME); }   /* the panel is gone from frame 4 */
 
-static void update_shield(Enemies *E, Enemy *e, Player *pl, Bullets *pb, Bullets *eb, Effects *fx, float cam_x, int sw, float dt)
+static void update_shield(Enemies *E, Enemy *e, Player *pl, Bullets *pb, Bullets *eb, Effects *fx, real cam_x, int sw, real dt)
 {
     Character *c = &e->ch; Body *b = &c->body;
     Character *p = &pl->ch;
@@ -823,49 +838,49 @@ static void update_shield(Enemies *E, Enemy *e, Player *pl, Bullets *pb, Bullets
     /* type 31 (the finale's tower): stands there, no shots, and the hero's shots fly through him until woken */
     if (e->dormant) {
         if (!E->shield_wake) return;
-        e->dormant = false; e->t0 = 0.6f + rnd(20) * 0.02f;
+        e->dormant = false; e->t0 = R(0.6f) + rnd(20) * R(0.02f);
     }
     if (e->st == 1 && (e->t1 += dt) >= 6 * SH_BREAK_FRAME) e->st = 2;
     /* turns to a hero who got behind him */
-    bool behind = c->facing == 1 ? E->phcx < b->x - 6.0f : E->phcx > b->x + 6.0f;
-    if (behind && p->state != CS_DEAD) { if ((e->ft += dt) > 0.9f) { c->facing ^= 1; e->ft = 0; } } else e->ft = 0;
+    bool behind = c->facing == 1 ? E->phcx < b->x - R(6.0f) : E->phcx > b->x + R(6.0f);
+    if (behind && p->state != CS_DEAD) { if ((e->ft += dt) > R(0.9f)) { c->facing ^= 1; e->ft = 0; } } else e->ft = 0;
     /* up on a tower deck with the hero down on the ground ahead: the rifle points down at 45 degrees (not while the
        shield burns: those frames are the level pose) */
     {
-        float y = sh_feet(e) - SH_MUZZLE_DY, dy = E->phcy - y, dx = c->facing ? E->phcx - (b->x + SH_MUZZLE_DX) : b->x - SH_MUZZLE_DX - E->phcx;
-        e->aim_down = e->st != 1 && !behind && p->state != CS_DEAD && dy > 32.0f && dx > dy * 0.5f && dx < dy * 2.5f;
+        real y = sh_feet(e) - SH_MUZZLE_DY, dy = E->phcy - y, dx = c->facing ? E->phcx - (b->x + SH_MUZZLE_DX) : b->x - SH_MUZZLE_DX - E->phcx;
+        e->aim_down = e->st != 1 && !behind && p->state != CS_DEAD && dy > R(32.0f) && dx > dy / 2 && dx < r_mul(dy, R(2.5f));   /* dy * 0.5f */
     }
     /* the rifle: level shots at 0.2 s cooldown pace, a long pause between them; not while the shield burns */
-    bool on_screen = b->x > cam_x + 16.0f && b->x < cam_x + sw - 16.0f;
+    bool on_screen = b->x > cam_x + R(16.0f) && b->x < cam_x + r_int(sw) - R(16.0f);
     if (on_screen && !behind && e->st != 1 && p->state != CS_DEAD && (e->t0 -= dt) <= 0) {
         bool down = e->aim_down;
-        float x = b->x + (c->facing ? 1 : -1) * (down ? SH_DOWN_DX : SH_MUZZLE_DX), y = sh_feet(e) - (down ? SH_DOWN_DY : SH_MUZZLE_DY);
+        real x = b->x + (c->facing ? 1 : -1) * (down ? SH_DOWN_DX : SH_MUZZLE_DX), y = sh_feet(e) - (down ? SH_DOWN_DY : SH_MUZZLE_DY);
         int layer = e->on_deck && E->front_layer >= 0 ? E->front_layer : e->layer;   /* over the cabin wall */
-        AnimDef fl = { 0, 0, 3, 0, 0.05f, 0 };
-        Effect *ef = effects_spawn(fx, 0xD85FB68A, layer, &fl, x, y, 8, 8, (c->facing ? 0 : 3.1415927f) + (down ? (c->facing ? -0.7853982f : 0.7853982f) : 0));
+        AnimDef fl = { 0, 0, 3, 0, R(0.05f), 0 };
+        Effect *ef = effects_spawn(fx, 0xD85FB68A, layer, &fl, x, y, R(8), R(8), (c->facing ? 0 : R(3.1415927f)) + (down ? (c->facing ? R(-0.7853982f) : R(0.7853982f)) : 0));
         if (ef) { ef->follow_x = &b->x; ef->follow_y = &b->y; ef->fx0 = b->x; ef->fy0 = b->y; }
-        bullets_spawn(eb, BK_ENEMY, layer, x, y, down ? (c->facing ? AIM_DR : AIM_DL) : c->facing ? AIM_R : AIM_L, 200.0f);
+        bullets_spawn(eb, BK_ENEMY, layer, x, y, down ? (c->facing ? AIM_DR : AIM_DL) : c->facing ? AIM_R : AIM_L, R(200.0f));
         sfx_play(7, 0);
-        e->t0 = 1.4f + rnd(40) * 0.02f - E->difficulty * 0.2f;
+        e->t0 = R(1.4f) + rnd(40) * R(0.02f) - E->difficulty * R(0.2f);
     }
-    float bx[4], sx[4]; sh_box(e, SH_BODY, bx); sh_box(e, SH_SHIELD, sx);
+    real bx[4], sx[4]; sh_box(e, SH_BODY, bx); sh_box(e, SH_SHIELD, sx);
     int knock = 0; bool die = false;
     /* the hero's shots: from the front (or straight down) the shield takes them first */
     for (int i = 0; i < pb->n; i++) {
         Bullet *bl = &pb->b[i];
-        float r = bl->kind == BK_GRENADE ? 8.0f : 5.0f;
-        float scr = bl->x - cam_x; if (scr <= 8.0f || scr >= sw) continue;
+        real r = bl->kind == BK_GRENADE ? R(8.0f) : R(5.0f);
+        real scr = bl->x - cam_x; if (scr <= R(8.0f) || scr >= r_int(sw)) continue;
         int d = bl->dir & 7;
         bool leftward = (1u << d) & 0x83u, front = d == AIM_U || d == AIM_D || (c->facing == 1 ? leftward : !leftward && d != AIM_U);
         bool on_shield = sh_shield_up(e) && front && bl->x + r > sx[0] && bl->x - r < sx[2] && bl->y + r > sx[1] && bl->y - r < sx[3];
         bool on_body = bl->x + r > bx[0] && bl->x - r < bx[2] && bl->y + r > bx[1] && bl->y - r < bx[3];
         if (!on_shield && !on_body) continue;
-        float hx = bl->x, hy = bl->y;
+        real hx = bl->x, hy = bl->y;
         pb->b[i] = pb->b[--pb->n];
         if (on_shield) {
-            AnimDef a = { 0, 4, 8, 4, 0.03f, 0 };
-            effects_spawn(fx, 0x8623249C, e->layer, &a, hx, hy, 8, 8, 0);
-            e->flash = 0.08f;
+            AnimDef a = { 0, 4, 8, 4, R(0.03f), 0 };
+            effects_spawn(fx, 0x8623249C, e->layer, &a, hx, hy, R(8), R(8), 0);
+            e->flash = R(0.08f);
             if (e->st == 0 && --e->hp <= 0) { e->st = 1; e->t1 = 0; sfx_play(0x11, 0); }
             else sfx_play(14, 0);
         } else {
@@ -876,39 +891,39 @@ static void update_shield(Enemies *E, Enemy *e, Player *pl, Bullets *pb, Bullets
     }
     /* contact: the hero's slide bowls him over from behind or once the shield is gone; otherwise it hurts */
     if (!die) {
-        float x0 = fminf(bx[0], sh_shield_up(e) ? sx[0] : bx[0]), x1 = fmaxf(bx[2], sh_shield_up(e) ? sx[2] : bx[2]);
-        if (fabsf(E->phcx - (x0 + x1) * 0.5f) <= E->phx + (x1 - x0) * 0.5f && fabsf(E->phcy - (bx[1] + bx[3]) * 0.5f) <= E->phy + (bx[3] - bx[1]) * 0.5f) {
+        real x0 = r_min(bx[0], sh_shield_up(e) ? sx[0] : bx[0]), x1 = r_max(bx[2], sh_shield_up(e) ? sx[2] : bx[2]);
+        if (r_abs(E->phcx - (x0 + x1) / 2) <= E->phx + (x1 - x0) / 2 && r_abs(E->phcy - (bx[1] + bx[3]) / 2) <= E->phy + (bx[3] - bx[1]) / 2) {   /* / 2: * 0.5f */
             if (p->state == CS_SLIDE && (behind || !sh_shield_up(e))) { die = true; knock = p->facing == 0 ? -1 : 1; }
             else if (!(p->flags & CF_HIT) && p->state != CS_DEAD) player_damage(pl, c->facing == 0 ? 0 : 4, 1);
         }
     }
     if (b->y - b->hy > E->death_floor) die = true;
     if (die) {
-        c->state = CS_DEAD; b->vx = knock * 102.0f;
+        c->state = CS_DEAD; b->vx = knock * R(102.0f);
         if (e->st == 1) e->st = sh_shield_up(e) ? 0 : 2;   /* the death set with or without the panel */
         sfx_play(5, 0); sfx_play(6, 3);
         enemy_kill(E, e, 0x19f);
     }
 }
 
-static void draw_shield(const Enemy *e, float cam_x, float cam_y)
+static void draw_shield(const Enemy *e, real cam_x, real cam_y)
 {
     static Sprite *spr;
     if (!spr) spr = sprite_get(SHIELD_SNIPER_SPRITE);
     if (!spr) return;
     const Character *c = &e->ch;
     int frame;
-    if (e->dying) { int k = (int)((0.415f - e->death_t) / SH_DEATH_FRAME); frame = (e->aim_down ? (e->st == 0 ? 29 : 23) : (e->st == 0 ? 14 : 8)) + (k < 0 ? 0 : k > 5 ? 5 : k); }
-    else if (e->st == 1) { int k = 1 + (int)(e->t1 / SH_BREAK_FRAME); frame = k > 7 ? 7 : k; }
+    if (e->dying) { int k = r_trunc(r_div(R(0.415f) - e->death_t, SH_DEATH_FRAME)); frame = (e->aim_down ? (e->st == 0 ? 29 : 23) : (e->st == 0 ? 14 : 8)) + (k < 0 ? 0 : k > 5 ? 5 : k); }
+    else if (e->st == 1) { int k = 1 + r_trunc(r_div(e->t1, SH_BREAK_FRAME)); frame = k > 7 ? 7 : k; }
     else if (e->aim_down) frame = e->st == 2 ? 21 : 20;
     else frame = e->st == 2 ? 7 : 0;
-    float x = floorf(c->body.x - cam_x) - (c->facing ? SH_AX : 63.0f - SH_AX), y = floorf(sh_feet(e) - cam_y) - SH_FEET;
+    real x = r_floorr(c->body.x - cam_x) - (c->facing ? SH_AX : R(63.0f) - SH_AX), y = r_floorr(sh_feet(e) - cam_y) - SH_FEET;
     bool flash = e->flash > 0 && !e->dying;
     if (flash) rtex_set_color_mod(sprite_tex(spr), 255, 170, 170);
     /* in a tower cabin the shield's foot (it reaches 5 px below his feet) would show through the gaps under the
        front wall's bottom beam: nothing below the feet */
     Ren *ren = e->on_deck ? rtex_renderer(sprite_tex(spr)) : NULL;
-    RRect clip = { -64, -64, 4096, (int)(y + SH_FEET) + 64 + 1 };
+    RRect clip = { -64, -64, 4096, r_trunc(y + SH_FEET) + 64 + 1 };
     if (ren) r_set_clip(ren, &clip);
     sprite_draw(spr, frame, x, y, c->facing == 0);
     if (ren) r_set_clip(ren, NULL);
@@ -916,7 +931,7 @@ static void draw_shield(const Enemy *e, float cam_x, float cam_y)
 }
 
 /* stage 4, after the cabin walls: a tower sniper's rifle aimed down reaches over his cabin's front wall */
-void enemies_draw_front(const Enemies *E, float cam_x, float cam_y)
+void enemies_draw_front(const Enemies *E, real cam_x, real cam_y)
 {
     static Sprite *spr;
     if (!spr) spr = sprite_get(SHIELD_SNIPER_SPRITE);
@@ -925,7 +940,7 @@ void enemies_draw_front(const Enemies *E, float cam_x, float cam_y)
         const Enemy *e = &E->e[i];
         if (e->cls != EC_SHIELD || !e->on_deck || !e->aim_down || e->dying) continue;
         const Character *c = &e->ch;
-        float x = floorf(c->body.x - cam_x) - (c->facing ? SH_AX : 63.0f - SH_AX), y = floorf(sh_feet(e) - cam_y) - SH_FEET;
+        real x = r_floorr(c->body.x - cam_x) - (c->facing ? SH_AX : R(63.0f) - SH_AX), y = r_floorr(sh_feet(e) - cam_y) - SH_FEET;
         bool flash = e->flash > 0;
         if (flash) rtex_set_color_mod(sprite_tex(spr), 255, 170, 170);
         sprite_draw(spr, 22, x, y, c->facing == 0);
@@ -933,7 +948,7 @@ void enemies_draw_front(const Enemies *E, float cam_x, float cam_y)
     }
 }
 
-static void update_generic(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, float cam_x, int sw, float dt)
+static void update_generic(Enemies *E, Enemy *e, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, real cam_x, int sw, real dt)
 {
     /* placeholder for classes not yet ported: stand, take hits like a walker */
     Character *c = &e->ch;
@@ -946,30 +961,30 @@ static void update_generic(Enemies *E, Enemy *e, Player *pl, const Level *L, con
 /* ours: a hero's power attack lands (power.c). Every Outrider on screen goes down at once, each in a blast; level 1's
  * boss loses boss_frac of its hit points, but only in its sweep across the play plane (the passes are out of reach,
  * as they are for the hero's shots). Returns how many went down. */
-int enemies_power_strike(Enemies *E, Effects *fx, float cam_x, int sw, int sh, float boss_frac)
+int enemies_power_strike(Enemies *E, Effects *fx, real cam_x, int sw, int sh, real boss_frac)
 {
     int n = 0;
-    AnimDef blast = { 0, 0, 11, 11, 0.025f, 0 };
+    AnimDef blast = { 0, 0, 11, 11, R(0.025f), 0 };
     for (int i = 0; i < MAX_ENEMIES; i++) {
         Enemy *e = &E->e[i]; Character *c = &e->ch; Body *b = &c->body;
         if (!e->cls || e->dying) continue;
-        if (b->x < cam_x - 16.0f || b->x > cam_x + sw + 16.0f || b->y < -48.0f || b->y > sh + 48.0f) continue;
+        if (b->x < cam_x - R(16.0f) || b->x > cam_x + r_int(sw) + R(16.0f) || b->y < R(-48.0f) || b->y > r_int(sh) + R(48.0f)) continue;
         switch (e->cls) {
         case EC_WALKER: case EC_GRUNT: case EC_GRUNT_B: case EC_SNIPER: case EC_SNIPER_B: case EC_KNEELER: case EC_KNEELER_B:
         case EC_STALKER: case EC_SHIELD:
             if (e->cls == EC_SHIELD) { if (e->dormant) continue; if (e->st == 1) e->st = 2; }   /* the death set without the panel */
-            c->state = CS_DEAD; b->vx = (b->x < E->px ? -1.0f : 1.0f) * 102.0f;
+            c->state = CS_DEAD; b->vx = (b->x < E->px ? -1 : 1) * R(102.0f);
             enemy_kill(E, e, 0x19f); n++;
-            effects_spawn(fx, 0x9C861FF3, e->layer, &blast, b->x, b->y - 20.0f, 32, 32, 0);
+            effects_spawn(fx, 0x9C861FF3, e->layer, &blast, b->x, b->y - R(20.0f), R(32), R(32), 0);
             break;
         case EC_HORSEBOSS: {
             if (e->variant == 99 || c->state != CS_WALK) break;
-            int dmg = (int)ceilf((plat_getenv("SABER_BOSSHP") ? atoi(plat_getenv("SABER_BOSSHP")) : 0x42) * boss_frac);
-            for (int k = 0; k < 6; k++) effects_spawn(fx, 0x9C861FF3, e->layer, &blast, b->x - 50.0f + rand() % 100, b->y - 40.0f + rand() % 50, 32, 32, 0);
+            int dmg = r_ceil((plat_getenv("SABER_BOSSHP") ? atoi(plat_getenv("SABER_BOSSHP")) : 0x42) * boss_frac);
+            for (int k = 0; k < 6; k++) effects_spawn(fx, 0x9C861FF3, e->layer, &blast, b->x - R(50.0f) + r_int(rand() % 100), b->y - R(40.0f) + r_int(rand() % 50), R(32), R(32), 0);
             if ((e->hp -= dmg) <= 0) {
                 e->hp = 0; enemy_kill(E, e, 0xed8); c->state = CS_DEAD; E->boss_phase = 1; c->flags &= ~CF_SHOOT;
                 if (e->link >= 0 && E->e[e->link].cls) { E->e[e->link].cls = 0; E->count--; e->link = -1; }
-            } else { c->flags |= CF_HIT; c->hit_t = 4.0f; }
+            } else { c->flags |= CF_HIT; c->hit_t = R(4.0f); }
             n++;
             break; }
         default: break;
@@ -980,7 +995,7 @@ int enemies_power_strike(Enemies *E, Effects *fx, float cam_x, int sw, int sh, f
 }
 
 void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, Bullets *eb, Effects *fx,
-                    float cam_x, int sw, int sh, float dt)
+                    real cam_x, int sw, int sh, real dt)
 {
     Character *p = &pl->ch;
     E->px = p->body.x; E->py = p->body.y;
@@ -998,7 +1013,7 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
          * (it never scrolls back, FUN_0040c460, and a scene's pan returns to it). Walkers and grunts leave by
          * walking off, the props go a screen behind (FUN_00411aa0), but snipers and kneelers had no way out: every
          * one left standing was simulated and drawn to the end of the level, and the slots ran out. */
-        if (e->ch.body.x < E->cam_max - sw - 64.0f) {
+        if (e->ch.body.x < E->cam_max - r_int(sw) - R(64.0f)) {
             bool stays = e->cls == EC_SNIPER || e->cls == EC_SNIPER_B || e->cls == EC_KNEELER || e->cls == EC_KNEELER_B || e->cls == EC_END
                       || e->cls == EC_SHIELD || e->cls == EC_CUTSCENE || (e->cls >= EC_PROP && e->cls < EC_STAMPEDE);
             if (stays || (e->dying && e->cls != EC_HORSEBOSS && e->cls != EC_BUGGY)) { e->cls = 0; E->count--; continue; }
@@ -1029,43 +1044,43 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
         }
         physics_step(W, L, &e->ch.body, dt);
         character_animate(&e->ch, dt);
-        if (trace && e->cls < 8 && !e->dying && ((E->tick % 60) == 0 || (trace == 2 && (e->ch.body.x < cam_x + 40.0f || e->ch.body.x > cam_x + 380.0f))))
-            fprintf(stderr, "enemy[%d] cls=%d type=%d st=%d face=%d pos=%.1f,%.0f hx=%.0f ox=%.0f fl=%x v=%.0f,%.0f coll=%x speed=%g gun=%d cd=%.2f cam=%.0f\n", (int)(e - E->e), e->cls, e->type, e->ch.state, e->ch.facing, e->ch.body.x, e->ch.body.y, e->ch.body.hx, e->ch.body.ox, e->ch.body.flags, e->ch.body.vx, e->ch.body.vy, e->ch.coll, e->ch.speed, e->gun_alive, e->gun_cd, cam_x);
+        if (trace && e->cls < 8 && !e->dying && ((E->tick % 60) == 0 || (trace == 2 && (e->ch.body.x < cam_x + R(40.0f) || e->ch.body.x > cam_x + R(380.0f)))))
+            fprintf(stderr, "enemy[%d] cls=%d type=%d st=%d face=%d pos=%s,%s hx=%s ox=%s fl=%x v=%s,%s coll=%x speed=%s gun=%d cd=%s cam=%s\n", (int)(e - E->e), e->cls, e->type, e->ch.state, e->ch.facing, RS(e->ch.body.x, 1), RS(e->ch.body.y, 0), RS(e->ch.body.hx, 0), RS(e->ch.body.ox, 0), e->ch.body.flags, RS(e->ch.body.vx, 0), RS(e->ch.body.vy, 0), e->ch.coll, RSG(e->ch.speed), e->gun_alive, RS(e->gun_cd, 2), RS(cam_x, 0));
         if (trace && e->cls < 8 && !e->dying) {   /* debug: humanoid that wants to move but does not */
-            if (fabsf(e->ch.body.x - e->dbg_x) < 0.5f && e->ch.body.vx != 0) { if (++e->dbg_still == 120) fprintf(stderr, "stuck? cls=%d state=%d pos=%.0f,%.0f vx=%.0f coll=%x cam=%.0f\n", e->cls, e->ch.state, e->ch.body.x, e->ch.body.y, e->ch.body.vx, e->ch.coll, cam_x); }
+            if (r_abs(e->ch.body.x - e->dbg_x) < R(0.5f) && e->ch.body.vx != 0) { if (++e->dbg_still == 120) fprintf(stderr, "stuck? cls=%d state=%d pos=%s,%s vx=%s coll=%x cam=%s\n", e->cls, e->ch.state, RS(e->ch.body.x, 0), RS(e->ch.body.y, 0), RS(e->ch.body.vx, 0), e->ch.coll, RS(cam_x, 0)); }
             else e->dbg_still = 0;
             e->dbg_x = e->ch.body.x;
         }
     }
 }
 
-void enemies_draw(const Enemies *E, int layer, float cam_x, float cam_y)
+void enemies_draw(const Enemies *E, int layer, real cam_x, real cam_y)
 {
     for (int i = 0; i < MAX_ENEMIES; i++) {
         const Enemy *e = &E->e[i];
         if (!e->cls || e->layer != layer) continue;
         /* well off screen (640: wider than any logical screen; the boss's sprites are big and its passes fly in from
            far out, so it is always drawn) */
-        if (e->cls != EC_HORSEBOSS && (e->ch.body.x < cam_x - 160.0f || e->ch.body.x > cam_x + 640.0f + 160.0f)) continue;
+        if (e->cls != EC_HORSEBOSS && (e->ch.body.x < cam_x - R(160.0f) || e->ch.body.x > cam_x + R(640.0f) + R(160.0f))) continue;
         if (e->cls == EC_SHIELD) draw_shield(e, cam_x, cam_y);
         else character_draw(&e->ch, cam_x, cam_y);
     }
 }
 
 /* FUN_0041a960 against the player's hurtbox (called from PlayerControls) */
-void player_check_enemy_bullets(Player *pl, Bullets *eb, Effects *fx, float cam_x, int sw, int sh)
+void player_check_enemy_bullets(Player *pl, Bullets *eb, Effects *fx, real cam_x, int sw, int sh)
 {
     Character *c = &pl->ch;
     if ((c->flags & CF_HIT) || c->state == CS_DEAD) return;
     const HurtBox *h = character_hurt(c);
-    float cx = c->body.x + h->ox, cy = c->body.y + h->oy;
+    real cx = c->body.x + h->ox, cy = c->body.y + h->oy;
     for (int i = 0; i < eb->n; i++) {
         Bullet *bl = &eb->b[i];
-        float r = bl->kind == BK_GRENADE ? 8.0f : bl->dark ? 3.0f : 5.0f;   /* Dark April's shots: thin, a crouch ducks them (darkapril.c SHOT_R) */
-        if (fabsf(cx - bl->x) > r + h->hw || fabsf(cy - bl->y) > r + h->hh) continue;
-        float sx = bl->x - cam_x, sy = bl->y; if (sx <= 8.0f || sx >= sw || sy <= 4.0f || sy >= sh - 4.0f) continue;
+        real r = bl->kind == BK_GRENADE ? R(8.0f) : bl->dark ? R(3.0f) : R(5.0f);   /* Dark April's shots: thin, a crouch ducks them (darkapril.c SHOT_R) */
+        if (r_abs(cx - bl->x) > r + h->hw || r_abs(cy - bl->y) > r + h->hh) continue;
+        real sx = bl->x - cam_x, sy = bl->y; if (sx <= R(8.0f) || sx >= r_int(sw) || sy <= R(4.0f) || sy >= r_int(sh) - R(4.0f)) continue;
         int d = bl->dir;
-        if (bl->kind == BK_GRENADE) { AnimDef a = { 0, 0, 12, 12, 0.0666667f, 0 }; effects_spawn(fx, 0x5B5EBBA3, 11, &a, bl->x, bl->y, 20, 28, 0); }
+        if (bl->kind == BK_GRENADE) { AnimDef a = { 0, 0, 12, 12, R(0.0666667f), 0 }; effects_spawn(fx, 0x5B5EBBA3, 11, &a, bl->x, bl->y, R(20), R(28), 0); }
         eb->b[i] = eb->b[--eb->n];
         player_damage(pl, d, 1);
         return;
