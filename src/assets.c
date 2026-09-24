@@ -87,12 +87,17 @@ uint32_t *png_load_rgba(const char *path, int *w, int *h)
 {
     if (!path) return NULL;
 #ifdef PLAT_BAKED_ASSETS
-    const PackEntry *e = baked(path, RES_IMAGE);   /* "RGBA", u16 w, h, 24 bytes 0, the pixels */
+    /* "RGBA", u16 w, h, the stored rectangle's u16 x, y, w, h (w 0: all of it), 16 bytes 0, its pixels. Only the part
+     * the game reads is stored (mode7.png: the floor strip); the rest comes back transparent black. */
+    const PackEntry *e = baked(path, RES_IMAGE);
     if (e) {
-        *w = e->data[4] | e->data[5] << 8; *h = e->data[6] | e->data[7] << 8;
-        size_t n = (size_t)*w * *h * 4;
-        uint32_t *px = n + 32 <= e->size ? malloc(n) : NULL;
-        if (px) memcpy(px, e->data + 32, n);
+        const uint8_t *d = e->data;
+        *w = d[4] | d[5] << 8; *h = d[6] | d[7] << 8;
+        int rx = d[8] | d[9] << 8, ry = d[10] | d[11] << 8, rw = d[12] | d[13] << 8, rh = d[14] | d[15] << 8;
+        if (!rw) { rx = ry = 0; rw = *w; rh = *h; }
+        bool fits = rx + rw <= *w && ry + rh <= *h && (size_t)rw * rh * 4 + 32 <= e->size;
+        uint32_t *px = fits ? (rw == *w && rh == *h ? malloc((size_t)*w * *h * 4) : calloc((size_t)*w * *h, 4)) : NULL;
+        if (px) for (int y = 0; y < rh; y++) memcpy(px + (size_t)(ry + y) * *w + rx, d + 32 + (size_t)y * rw * 4, (size_t)rw * 4);
         packs_release_type(asset_key(path), RES_IMAGE);
         return px;
     }

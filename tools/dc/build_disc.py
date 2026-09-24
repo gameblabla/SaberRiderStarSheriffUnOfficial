@@ -4,12 +4,13 @@
 The original E2DM packs are user supplied. All generated media stays under
 --out; the source packs and assets are never modified.
 
-Nothing on the disc is decoded at run time: every texture (the packs' sprites,
+Nothing on the disc is decoded at run time (beyond an LZ4 unpack): every texture (the packs' sprites,
 tile banks and fonts, our PNGs) is baked into data/tex.pck in the PVR's own
 formats (tools/dc/texbake.py), every sample (the packs' sfx, our WAVs) into
 data/snd.pck as AICA ADPCM, and our other files (text, level blobs, the RGBA of
 the few images the game reads pixels from) into data/files.pck. Each block is
-32-byte aligned and padded, read in one go and DMA'd on. Music (ADX) and video
+32-byte aligned and padded, read in one go and DMA'd on; a few big ones are
+stored LZ4-compressed instead (the disc reads slowly, the decode is quick). Music (ADX) and video
 (DCMV) stay files: they stream.
 
 A CD-R on the Dreamcast is read at constant linear velocity from the inside
@@ -42,8 +43,23 @@ UNUSED = ('old_april.png', 'stage2_victory.png', 'stage2_victory_og.png', 'mode7
           'colt_victory_stage1.png', 'fireball_victory_stage1.png', 'saber_victory_stage1.png',
           'stage3_night_sky.png', 'stage3_red_moon.png', 'stage3_static_*.png', 'stage3/native/stage3_static_*.png',
           'stage3/native/manifest.json', 'lab/source/*.png')
-# images whose pixels the game reads (floor materials, hit masks): their RGBA goes to files.pck besides the texture
-IMAGES = ('mode7.png', 'ramrod/floor.png', 'space/boss.png')
+
+
+def mode7_floor(path: Path) -> tuple[int, int, int, int]:
+    """src/mode7.c only reads the floor materials' strip of its atlas (the rest is drawn from the texture)"""
+    for line in path.with_suffix('.txt').read_text().splitlines():
+        f = line.split()
+        if f and f[0] == 'floor':
+            x, y, w, h, n = map(int, f[1:6])
+            return x, y, w * n, h
+    raise ValueError(f'{path.with_suffix(".txt")}: no floor line')
+
+
+# images whose pixels the game reads (floor materials, hit masks): their RGBA goes to files.pck besides the texture,
+# LZ4-compressed, cut down to the part the game reads where a function says which
+IMAGES = {'mode7.png': mode7_floor, 'ramrod/floor.png': None, 'space/boss.png': None}
+# our PNGs whose texture blocks are LZ4-compressed: stage 2's load read 330 KB of them off the disc (~3 s in Flycast)
+LZ4_TEX = ('mode7.png', 'sky_mode7.png')
 PAD_TO_MIB = 650   # the padded image size: an 80-minute CD-R holds ~700 MiB, less the second session's lead-in/out
 
 
@@ -116,9 +132,12 @@ def file_block(data: bytes) -> bytes:
     return b'FILE' + struct.pack('<I24x', len(data)) + data
 
 
-def image_block(path: Path) -> bytes:
+def image_block(path: Path, crop) -> bytes:
+    """src/assets.c png_load_rgba: "RGBA", u16 w, h, the stored rectangle's u16 x, y, w, h (w 0: all), 16 bytes 0"""
     px = np.array(Image.open(path).convert('RGBA'))
-    return b'RGBA' + struct.pack('<HH24x', px.shape[1], px.shape[0]) + px.tobytes()
+    x, y, w, h = crop(path) if crop else (0, 0, 0, 0)
+    part = px[y:y + h, x:x + w] if crop else px
+    return b'RGBA' + struct.pack('<6H16x', px.shape[1], px.shape[0], x, y, w, h) + part.tobytes()
 
 
 def unused(rel: Path) -> bool:
@@ -148,9 +167,9 @@ def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log) -> None:
             continue
         block, desc, vram = texbake.bake(np.array(Image.open(source).convert('RGBA')),
                                          log=lambda m, r=rel: log(f'    {r}: {m}'))
-        tex.add(namehash(rel.as_posix()), 'tex', block)
+        stored = tex.add(namehash(rel.as_posix()), 'tex', block, lz4=rel.as_posix() in LZ4_TEX)
         total += vram
-        log(f'tex {rel} {desc} {vram // 1024} KB')
+        log(f'tex {rel} {desc} {vram // 1024} KB' + (f', {stored // 1024} KB stored' if stored < len(block) else ''))
     log(f'textures: {total // 1024} KB of VRAM if all were loaded at once')
 
 
@@ -311,7 +330,7 @@ def build(args: argparse.Namespace) -> None:
             snd.add(key, 'sample', sample_block(source, work))
         elif ext == '.png':
             if rel.as_posix() in IMAGES:
-                files.add(key, 'image', image_block(source))
+                files.add(key, 'image', image_block(source, IMAGES[rel.as_posix()]), lz4=True)
         elif ext == '.m4v':
             files.add(key, 'file', file_block(b''))
         else:

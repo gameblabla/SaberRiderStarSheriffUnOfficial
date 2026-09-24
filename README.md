@@ -60,7 +60,7 @@ FFmpeg, Python 3 with NumPy and Pillow, the KOS `wav2adpcm`, `pvrtex`,
 `third_party/dreamcast-fmv` (its packers are compiled on first use: gcc,
 liblz4, libzstd), `mkisofs`, and `cdi4dc`.
 
-Nothing is decoded on the console. The builder bakes everything into three
+Nothing is decoded on the console (apart from an LZ4 unpack of a few blocks). The builder bakes everything into three
 extra packs in `/cd/data`, in the same HEADLIST format. Every block is 32-byte
 aligned and padded, so it takes one read and goes on by DMA:
 
@@ -75,11 +75,14 @@ aligned and padded, so it takes one read and goes on by DMA:
   texture is expanded to 16 bits instead if it would cost at most 8 KB that way,
   if palette RAM has no room, or if it saves less than 768 bytes of VRAM per
   new entry. The 1024 entries go to the backgrounds and sprite sheets that save
-  the most.
+  the most. Stage 2's atlas and sky (`LZ4_TEX` in `build_disc.py`) are stored
+  LZ4-compressed (224 + 108 KB down to 51 + 12 KB) and decoded on load.
 - `snd.pck`: the packs' sfx and our WAVs as AICA ADPCM (`wav2adpcm`), padded
   to 32 bytes.
 - `files.pck`: our text and level files, plus the RGBA of the three images whose
-  pixels the game reads.
+  pixels the game reads, LZ4-compressed. Of `mode7.png` only the floor strip is
+  kept (5 KB instead of 860 KB). Reading the whole image took 7 s of stage 2's
+  load in Flycast.
 
 Music goes to ADX files, and the pack videos and power-attack clips to DCMV
 files. Those stream. Do not copy `video.pck` to the disc: the runtime opens the

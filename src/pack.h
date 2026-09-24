@@ -19,6 +19,7 @@ typedef struct {
     uint32_t size;
     uint32_t off, stored, declen;   /* where the block is in the file, its stored (maybe compressed) and full size */
     bool     owned;        /* data was malloc'd by us */
+    bool     lz4;          /* a console pack's block stored LZ4-compressed (directory type "<type>+lz4"), not LZO */
 } PackEntry;
 
 typedef struct {

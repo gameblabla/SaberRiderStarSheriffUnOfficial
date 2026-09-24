@@ -7,6 +7,9 @@
 #ifdef PLAT_DREAMCAST
 #include <malloc.h>
 #endif
+#ifdef PLAT_BAKED_ASSETS
+#include "platform/dreamcast/dcfmv/lz4_mini.h"
+#endif
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 
@@ -97,7 +100,8 @@ bool pack_load(Pack *p, const char *path)
         const char *nl = memchr(eq, '\n', end - eq); if (!nl) nl = end;
         if (nl - eq - 1 >= 8) {
             uint32_t id = hex_id(eq + 1);
-            for (int i = 0; i < n; i++) if (p->entries[i].id == id) { p->entries[i].type = type_of(s, eq - s); break; }
+            size_t tn = eq - s; bool lz4 = tn > 4 && !memcmp(eq - 4, "+lz4", 4);
+            for (int i = 0; i < n; i++) if (p->entries[i].id == id) { p->entries[i].type = type_of(s, lz4 ? tn - 4 : tn); p->entries[i].lz4 = lz4; break; }
         }
         s = nl + 1;
     }
@@ -119,7 +123,11 @@ static bool entry_load(const Pack *p, PackEntry *pe)
     if (!raw || !read_at(p->f, pe->off, raw, pe->stored)) { fprintf(stderr, "pack: block %08X read failed\n", pe->id); free(raw); return false; }
     if (pe->stored == pe->declen) { pe->data = raw; pe->size = pe->declen; pe->owned = true; return true; }
     uint8_t *buf = block_alloc(pe->declen + 16);
-    int r = buf ? lzo1z_decompress(raw, pe->stored, buf, pe->declen + 16) : -1;
+    int r = !buf ? -1
+#ifdef PLAT_BAKED_ASSETS
+          : pe->lz4 ? (lz4_mini_decode(raw, (int)pe->stored, buf, (int)pe->declen, (int)pe->declen) == (int)pe->declen ? (int)pe->declen : -1)   /* stops at declen: padding follows */
+#endif
+          : lzo1z_decompress(raw, pe->stored, buf, pe->declen + 16);
     free(raw);
     if (r < 0) { fprintf(stderr, "pack: block %08X decompress failed\n", pe->id); free(buf); return false; }
     pe->data = buf; pe->size = (uint32_t)r; pe->owned = true;
