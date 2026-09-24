@@ -152,6 +152,17 @@ void hero_select_sfx(int character)
 static bool g_quiet;
 void hero_quiet(bool quiet) { g_quiet = quiet; }
 
+void hero_patch_def(CharDef *d)
+{
+    if (d->crhc_id != CRHC_APRIL) return;
+    for (size_t i = 0; i < sizeof APRIL_ANIMS / sizeof *APRIL_ANIMS; i++) {
+        const AnimPatch *p = &APRIL_ANIMS[i];
+        AnimDef *a = &d->anims[p->anim];
+        a->first = p->first; a->last = p->last; a->loop = p->loop; a->frame_time = p->frame_time;
+    }
+    d->hurt[APRIL_BORED_L] = d->hurt[1]; d->hurt[APRIL_BORED_R] = d->hurt[2];
+}
+
 bool hero_apply(Character *c)
 {
     if (c->crhc_id != CRHC_APRIL && c->crhc_id != CRHC_FIREBALL && c->crhc_id != CRHC_COLT && c->crhc_id != CRHC_DEFAULT) return false;   /* enemies */
@@ -185,12 +196,6 @@ bool hero_apply(Character *c)
     memset(c->torso_bob, 0, sizeof c->torso_bob);   /* Fireball's run legs bob 1 px on cells 2 and 5; April's do not */
     c->ov_sync = true;         /* run torso frame k belongs on run legs frame k */
     c->walk_aim_ov = WALK_AIM_DIAG;   /* the run torso (clip pixels, gun held level) stays for level shots; up / down diagonals use the sheet's aim torsos over the clip legs */
-    for (size_t i = 0; i < sizeof APRIL_ANIMS / sizeof *APRIL_ANIMS; i++) {
-        const AnimPatch *p = &APRIL_ANIMS[i];
-        AnimDef *a = &c->anims[p->anim];
-        a->first = p->first; a->last = p->last; a->loop = p->loop; a->frame_time = p->frame_time;
-    }
-    c->hurt[APRIL_BORED_L] = c->hurt[1]; c->hurt[APRIL_BORED_R] = c->hurt[2];
     c->bored_anim[0] = APRIL_BORED_L; c->bored_anim[1] = APRIL_BORED_R; c->bored_time = 10.0f;
     if (plat_getenv("SABER_BORED")) c->bored_time = (float)atof(plat_getenv("SABER_BORED"));   /* debug */
     return true;

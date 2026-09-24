@@ -157,7 +157,7 @@ static bool on_ground(const Character *c) { return (c->coll & COLL_DOWN) != 0; }
 static int threat(const DarkApril *d, const Bullets *pb)
 {
     const Character *c = &d->p.ch; const Body *b = &c->body;
-    const HurtBox *h = &c->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0];
+    const HurtBox *h = character_hurt(c);
     float top = b->y + h->oy - h->hh, bot = b->y + h->oy + h->hh;
     for (int i = 0; i < pb->n; i++) {
         const Bullet *bl = &pb->b[i];
@@ -169,7 +169,7 @@ static int threat(const DarkApril *d, const Bullets *pb)
         float t = ahead / (bl->speed > 1 ? bl->speed : 1);
         float y = bl->y + ((dir == 1 || dir == 3) ? -1.0f : (dir == 5 || dir == 7) ? 1.0f : 0.0f) * bl->speed * 0.7f * t;
         if (y < top - SHOT_R || y > bot + SHOT_R) continue;
-        const HurtBox *hc = &c->hurt[c->facing ? 0x29 : 0x28];   /* her crouch */
+        const HurtBox *hc = &c->def->hurt[c->facing ? 0x29 : 0x28];   /* her crouch */
         return y < b->y + hc->oy - hc->hh - SHOT_R ? DG_CROUCH : DG_JUMP;
     }
     return DG_NONE;
@@ -294,7 +294,7 @@ static void fire(DarkApril *d, Bullets *eb, Effects *fx, int layer)
     sfx_play(1, 0);
 }
 
-static const HurtBox *hurt(const Character *c) { return &c->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0]; }
+static const HurtBox *hurt(const Character *c) { return character_hurt(c); }
 
 static bool overlap(const Character *a, const Character *b)
 {

@@ -22,16 +22,24 @@ typedef struct { float ox, oy, hw, hh; } HurtBox;
 #define CHAR_MAX_ANIMS 56           /* + slots for recreated heroes' extra animations (heroes.c) */
 enum { WALK_AIM_ALL, WALK_AIM_DIAG, WALK_AIM_NONE };   /* torso overlays while walking: every aim (Fireball), only the up / down diagonals (April: her run torso already holds the gun level), never */
 
-typedef struct {
-    /* definition (from CRHC) */
-    uint32_t crhc_id, sprite_id;
-    float box_ox, box_oy, box_hx, box_hy;   /* +0x24.. : physics box */
-    float origin_x, origin_y;               /* +0x08 : sprite origin */
-    float speed, slide_speed, slide_time, jump_vel, alert_time;   /* +0x10..0x20 */
+/* The animation / hurtbox / muzzle tables of a character type (a CRHC, with a recreated hero's patches), shared by
+ * every character of that type: character_init looks it up (they used to be copied into each of the 64 enemy slots,
+ * ~185 KB, which the Saturn's 1 MB of fast RAM can't spare). */
+typedef struct CharDef {
+    uint32_t crhc_id;
     AnimDef anims[CHAR_MAX_ANIMS];
     HurtBox hurt[CHAR_MAX_ANIMS];
     float muzzle[CHAR_MAX_ANIMS][2];
     uint32_t anim_flags[CHAR_MAX_ANIMS];
+} CharDef;
+
+typedef struct {
+    /* definition (from CRHC) */
+    const CharDef *def;
+    uint32_t crhc_id, sprite_id;
+    float box_ox, box_oy, box_hx, box_hy;   /* +0x24.. : physics box */
+    float origin_x, origin_y;               /* +0x08 : sprite origin */
+    float speed, slide_speed, slide_time, jump_vel, alert_time;   /* +0x10..0x20 */
     int hp_max;
     /* runtime */
     uint8_t state;
@@ -62,6 +70,8 @@ typedef struct {
 } Character;
 
 bool character_init(Character *c, uint32_t crhc_id, bool enemy);
+/* a character's hurtbox for its current animation */
+static inline const HurtBox *character_hurt(const Character *c) { return &c->def->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0]; }
 void character_reset(Character *c, bool enemy);
 void character_sync_ground(Character *c);                 /* FUN_0041ba90 */
 void character_resolve(Character *c, float dt);           /* FUN_0041bc40: state -> anim + vx */

@@ -576,3 +576,40 @@ Each milestone ends with a mednafen run the harness can repeat, and a commit.
 - Videos: intro 768x384 60.3 s (Vorbis stereo), briefing 768x312 6.1 s, heroes 768x384 7.7 s (unused), power clips
   320x240 24 fps.
 - Core: `sizeof(Game)` 383 KB, `sizeof(Enemies)` 215 KB (32-bit build); stage 2 material map 1 MB.
+
+---
+
+## 15. Progress
+
+### M0 — skeleton (done)
+
+`Makefile.saturn` (libyaul rules, ISO + CUE from `build/saturn/stage`), `src/platform/saturn` (CD-backed `fopen`,
+RAM log ring, pad, FRT timing, a libc shim for what libyaul lacks), `src/platform/null` (render / audio / video that
+do nothing), `tools/saturn/build_disc.py` + `mednafen_run.py`. The mednafen kit got a `pad` command, disc insertion on
+load and a fixed `regs` command. A pad script reaches level 1.
+
+### M1 — CPU and memory reality check (measured in mednafen, level 1, `tools/saturn/bench_level1.env`)
+
+| | before | after |
+|---|---|---|
+| soft-float | libgcc `fp-bit.c`: 65 % of all instructions in the first in-level profile | `platform/saturn/softfloat_sat.c` (bit-exact vs. the FPU, DIVU for division): draw-side core time 54 → 30 ms/frame, update ~7 → ~5 ms/step |
+| level 1 load | ~50 s (libyaul re-seeks on every read: 420 reads, 17 KB/s) | ~8 s (the drive keeps streaming: 43 seeks) |
+| update, level 1 (5-8 enemies) | | 3-4.6 ms/frame average (< 30 % of a frame), rare spikes to ~15 ms (to look at) |
+| `sizeof(Game)` | 383 KB (`Character` held its type's 2.9 KB of tables in each of 64 enemy slots) | 162 KB (shared `CharDef`) |
+
+RAM map, level 1, null renderer: high work RAM = BIOS/boot stack 16 KB, code 333 KB, rodata/data 58 KB, BSS 329 KB
+(Game 162 KB, stack 48 KB, sfx overrides 24 KB, batch 16 KB, libyaul pool 40 KB), heap 193 KB free. Low work RAM:
+696 KB used (the LEVL block alone is 623 KB), 327 KB free. The remaining draw cost is the per-tile layer loop, which
+the VDP2 planes replace (M5).
+
+### M2 — fixed point (shared)
+
+`src/fx.h` / `src/fx.c`: 16.16 `fx`, binary angles, `fx_mul/div/muldiv` (the SH-2's divider on the Saturn),
+table sine/cosine, `fx_atan2`, `fx_sqrt`/`fx_hypot`; `make test` checks it (and the soft-float) on the host. Used
+by every platform. First user: `physics.c` makes its collision decisions in fx. `SABER_TRACE=3` traces every step
+precisely; the four heroes' level-1 traces (3286 steps, `bench_level1.env`) are identical to the float build.
+Further modules move to fx where a stage's profile shows float cost (Mode 7, cockpit, space: M9/M10).
+
+Decisions taken for the open questions of section 14 (defaults of this plan, revisit on request): power clips stop
+CD-DA and resume; briefing Plan A with Plan B as fallback; 30 fps accepted as the floor for Mode 7 / space; RATIO
+switch by re-init from OPTIONS.

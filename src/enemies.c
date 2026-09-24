@@ -238,7 +238,7 @@ static void spawner_update(Enemies *E, Player *pl, const Level *L, const Physics
 /* ---- class updates ---- */
 static bool hurt_overlap(const Character *a, float ax, float ay, const Enemies *E)
 {
-    const HurtBox *h = &a->hurt[a->anim < CHAR_MAX_ANIMS ? a->anim : 0];
+    const HurtBox *h = character_hurt(a);
     float cx = ax + h->ox, cy = ay + h->oy;
     return fabsf(E->phcx - cx) <= E->phx + h->hw && fabsf(E->phcy - cy) <= E->phy + h->hh;
 }
@@ -276,7 +276,7 @@ static void humanoid_tail(Enemies *E, Enemy *e, Player *pl, Bullets *pb, float c
         }
     }
     {
-        const HurtBox *h = &c->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0];
+        const HurtBox *h = character_hurt(c);
         float cx = b->x + h->ox, cy = b->y + h->oy;
         for (int i = 0; i < pb->n; i++) {
             Bullet *bl = &pb->b[i];
@@ -579,12 +579,12 @@ static void update_horse(Enemies *E, Enemy *e, Player *pl, float cam_x, int sw, 
         if (!(p->flags & CF_HIT) && p->state != CS_DEAD) player_damage(pl, e->ch.facing == 0 ? 0 : 4, 1);
     }
     /* humanoid enemies */
-    const HurtBox *h = &c->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0];
+    const HurtBox *h = character_hurt(c);
     float cx = b->x + h->ox, cy = b->y + h->oy;
     for (int i = 0; i < MAX_ENEMIES; i++) {
         Enemy *o = &E->e[i];
         if (!o->cls || o->dying || o->cls >= 8 || o == e) { if (!(o->cls == EC_END && !o->dying)) continue; }
-        const HurtBox *oh = &o->ch.hurt[o->ch.anim < CHAR_MAX_ANIMS ? o->ch.anim : 0];
+        const HurtBox *oh = character_hurt(&o->ch);
         float ox = o->ch.body.x + oh->ox, oy = o->ch.body.y + oh->oy;
         if (fabsf(ox - cx) > oh->hw + h->hw || fabsf(oy - cy) > oh->hh + h->hh) continue;
         o->ch.facing = e->ch.facing == 0 ? 1 : 0;
@@ -725,7 +725,7 @@ static void update_boss(Enemies *E, Enemy *e, Player *pl, const Level *L, const 
     }
     /* player bullets: only the sweeping boss takes hits (state 1); the passes and the rider are invulnerable */
     if (c->state == CS_WALK) {
-        const HurtBox *h = &c->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0];
+        const HurtBox *h = character_hurt(c);
         float cx = b->x + h->ox, cy = b->y + h->oy;
         float hw = h->hw > 0 ? h->hw : 48, hh = h->hh > 0 ? h->hh : 32;
         for (int i = 0; i < pb->n; i++) {
@@ -979,7 +979,7 @@ void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *
 {
     Character *p = &pl->ch;
     E->px = p->body.x; E->py = p->body.y;
-    const HurtBox *ph = &p->hurt[p->anim < CHAR_MAX_ANIMS ? p->anim : 0];
+    const HurtBox *ph = character_hurt(p);
     E->phcx = p->body.x + ph->ox; E->phcy = p->body.y + ph->oy; E->phx = ph->hw; E->phy = ph->hh;
     E->death_floor = L->height; E->dt = dt;
     E->tick++;
@@ -1052,7 +1052,7 @@ void player_check_enemy_bullets(Player *pl, Bullets *eb, Effects *fx, float cam_
 {
     Character *c = &pl->ch;
     if ((c->flags & CF_HIT) || c->state == CS_DEAD) return;
-    const HurtBox *h = &c->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0];
+    const HurtBox *h = character_hurt(c);
     float cx = c->body.x + h->ox, cy = c->body.y + h->oy;
     for (int i = 0; i < eb->n; i++) {
         Bullet *bl = &eb->b[i];

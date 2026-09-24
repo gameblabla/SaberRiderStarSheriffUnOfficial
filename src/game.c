@@ -468,7 +468,7 @@ void game_update(Game *g, float dt)
     /* level-flow zones (FUN_00422d10 tail): exit, dialogs, camera stops, death zones */
     if (c->state != CS_DEAD && !p->locked) {
         float bx = c->body.x, by = c->body.y;
-        const HurtBox *h = &c->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0];
+        const HurtBox *h = character_hurt(c);
         float hw = h->hw, hh = h->hh;
         #define IN_ZONE(z) (fabsf(bx - (z).cx) <= hw + fabsf((z).hx) && fabsf(by - (z).cy) <= hh + fabsf((z).hy))
         if (g->exit_zone.set && IN_ZONE(g->exit_zone)) { p->locked = true; c->flags |= CF_HIT | CF_DEAD; g->state = 0xe; g->state_t = 0; }
@@ -517,7 +517,13 @@ void game_update(Game *g, float dt)
     power_trail_update(&g->power, c, dt);
     effects_update(&g->effects, dt);
     player_frame_end(p, dt);
-    if (plat_getenv("SABER_TRACE")) fprintf(stderr, "cam=%.0f lock=%d st=%d aim=%d face=%d anim=%d frame=%d ov=%d ovf=%d flags=%x coll=%x pos=%.1f,%.1f v=%.1f,%.1f in=%d%d%d%d%d%d%d\n",
+    static int trace = -1; if (trace < 0) trace = plat_getenv("SABER_TRACE") ? (plat_getenv("SABER_TRACE")[0] == '3' ? 3 : 1) : 0;
+    if (trace == 3) {   /* debug: SABER_TRACE=3, every step precisely (comparing arithmetic changes, e.g. fx.h, between builds) */
+        fprintf(stderr, "T st=%d pos=%.4f,%.4f v=%.4f,%.4f cam=%.4f,%.4f hp=%d e=%d", c->state, c->body.x, c->body.y, c->body.vx, c->body.vy,
+                g->cam_x, g->cam_y, p->hp, g->enemies.count);
+        for (int i = 0; i < MAX_ENEMIES; i++) if (g->enemies.e[i].cls) fprintf(stderr, " %d:%.3f,%.3f", g->enemies.e[i].cls, g->enemies.e[i].ch.body.x, g->enemies.e[i].ch.body.y);
+        fprintf(stderr, " b=%d/%d\n", g->player_bullets.n, g->enemy_bullets.n);
+    } else if (trace) fprintf(stderr, "cam=%.0f lock=%d st=%d aim=%d face=%d anim=%d frame=%d ov=%d ovf=%d flags=%x coll=%x pos=%.1f,%.1f v=%.1f,%.1f in=%d%d%d%d%d%d%d\n",
         g->cam_x, g->cam_locked, c->state, c->aim, c->facing, c->anim, c->frame, c->overlay, c->ov_frame, c->flags, c->coll, c->body.x, c->body.y, c->body.vx, c->body.vy,
         g->in.state[0], g->in.state[1], g->in.state[2], g->in.state[3], g->in.state[4], g->in.state[5], g->in.state[6]);
 

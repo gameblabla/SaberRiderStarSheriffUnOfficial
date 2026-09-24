@@ -198,6 +198,7 @@ def main() -> int:
             emu.call('coverage_save', raw.resolve())
             per: dict[str, int] = {}
             total = 0
+            hits: list[tuple[int, int]] = []
             for line in raw.read_text().splitlines():
                 f = line.split('\t')
                 if len(f) < 2 or not f[0].strip().lower().startswith(('0x', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9')):
@@ -206,10 +207,20 @@ def main() -> int:
                     pc, n = int(f[0], 16), int(f[1])
                 except ValueError:
                     continue
-                i = bisect.bisect_right(addrs, pc) - 1
-                name = names[i] if i >= 0 else '?'
-                per[name] = per.get(name, 0) + n
+                hits.append((pc, n))
                 total += n
+            # attribute to the innermost source function (LTO inlines most of the core into a few big symbols)
+            a2l = Path(str(NM).replace('-nm', '-addr2line'))
+            res = subprocess.run([a2l, '-f', '-e', args.elf], input='\n'.join(hex(pc) for pc, _ in hits),
+                                 check=True, capture_output=True, text=True).stdout.splitlines()
+            for k, (pc, n) in enumerate(hits):
+                name = res[2 * k] if 2 * k < len(res) else '?'
+                if name == '??':
+                    i = bisect.bisect_right(addrs, pc) - 1
+                    name = names[i] if i >= 0 else '?'
+                src = res[2 * k + 1].split(':')[0].rsplit('/', 1)[-1] if 2 * k + 1 < len(res) else ''
+                key = f'{name} ({src})' if src and src != '??' else name
+                per[key] = per.get(key, 0) + n
             frames = max(1, args.frames - args.profile_from)
             with open(args.profile, 'w') as out:
                 out.write('function\tinstructions\tper_frame\tshare\n')

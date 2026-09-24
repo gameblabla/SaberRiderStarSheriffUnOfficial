@@ -19,6 +19,10 @@ SH_BUILD_DIR  := obj-saturn
 SH_OUTPUT_DIR := $(OUT)
 SH_SRCS := $(wildcard src/*.c) $(wildcard src/platform/saturn/*.c) \
 	src/platform/null/aud_null.c src/platform/null/video_null.c
+# SOFTFLOAT=0: libgcc's fp-bit soft-float instead of ours (platform/saturn/softfloat_sat.c), for comparisons
+ifeq ($(SOFTFLOAT),0)
+SH_SRCS := $(filter-out %/softfloat_sat.c,$(SH_SRCS))
+endif
 ifeq ($(RENDER),null)
 SH_SRCS   += src/platform/null/render_null.c
 SH_CFLAGS += -DSAT_RENDER_NULL

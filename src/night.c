@@ -141,7 +141,7 @@ static bool phase2(const Night *n) { return n->hp * 2 <= n->hp_max; }
 static void player_box(const Player *pl, Box *out)
 {
     const Character *c = &pl->ch;
-    const HurtBox *h = &c->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0];
+    const HurtBox *h = character_hurt(c);
     float cx = c->body.x + h->ox, cy = c->body.y + h->oy;
     *out = (Box){ cx - h->hw, cy - h->hh, cx + h->hw, cy + h->hh };
 }

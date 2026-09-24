@@ -10,7 +10,8 @@
 
 /* cd_sat.c: the ISO's file list (fopen reads the CD through it) */
 void cd_sat_init(void);
-void cd_sat_stats(unsigned long *reads, unsigned long *bytes);
+void cd_sat_stats(unsigned long *reads, unsigned long *bytes, unsigned long *seeks);
+void cd_sat_stream_stop(void);   /* the data stream gives the drive up (CD-DA takes it) */
 
 /* log_sat.c: stdout / stderr -> the RAM log ring the harness reads */
 void log_sat_write(const char *s, size_t n);

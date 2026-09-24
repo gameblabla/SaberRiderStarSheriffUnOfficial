@@ -12,7 +12,7 @@ OBJDIR := obj
 OBJ := $(SRC:src/%.c=$(OBJDIR)/%.o)
 BIN := saber_rider
 
-.PHONY: all clean run
+.PHONY: all clean run test
 all: $(BIN)
 
 $(BIN): $(OBJ)
@@ -26,6 +26,12 @@ $(OBJDIR)/%.o: src/%.c
 
 run: $(BIN)
 	SABER_ASSETS="$(CURDIR)/assets" ./$(BIN) SaberRider/data
+
+# host checks of the shared fixed-point module (src/fx.c) and the Saturn's soft-float (bit-exact against the FPU)
+test:
+	@mkdir -p $(OBJDIR)
+	$(CC) -O2 -Wall -Wextra -Isrc tools/fx_test.c src/fx.c -lm -o $(OBJDIR)/fx_test && $(OBJDIR)/fx_test
+	$(CC) -O2 -DSF_HOST_TEST tools/saturn/softfloat_test.c -lm -o $(OBJDIR)/softfloat_test && $(OBJDIR)/softfloat_test
 
 clean:
 	rm -rf $(OBJDIR) $(BIN)

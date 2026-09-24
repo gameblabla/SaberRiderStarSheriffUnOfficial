@@ -85,7 +85,7 @@ bool player_death_update(Player *p, float dt, float level_h, float *cam_x, int s
     p->want_fire = false;
     if (c->coll & COLL_DOWN) {
         p->safe_x = b->x; p->safe_y = b->y;
-        if (b->y - c->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0].oy < level_h) { p->respawn_x = b->x; p->respawn_y = b->y; }
+        if (b->y - character_hurt(c)->oy < level_h) { p->respawn_x = b->x; p->respawn_y = b->y; }
     } else if (b->y < level_h) {
         p->dead_t -= dt;      /* the timer only runs once the body has settled or left the level */
     }

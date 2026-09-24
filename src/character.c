@@ -5,10 +5,40 @@
 #include "platform/plat.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <math.h>
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 static float rdf(const uint8_t *p) { uint32_t v = rd32(p); float f; memcpy(&f, &v, 4); return f; }
+
+/* the shared tables of a character type, parsed on first use (a handful of types a game) */
+#define MAX_DEFS 48
+static CharDef *g_defs[MAX_DEFS]; static int g_ndefs;
+
+static const CharDef *chardef_get(uint32_t crhc_id, const uint8_t *d)
+{
+    for (int i = 0; i < g_ndefs; i++) if (g_defs[i]->crhc_id == crhc_id) return g_defs[i];
+    CharDef *def = g_ndefs < MAX_DEFS ? calloc(1, sizeof *def) : NULL;
+    if (!def) { fprintf(stderr, "CRHC %08X: no room for its tables\n", crhc_id); return NULL; }
+    def->crhc_id = crhc_id;
+    for (int i = 0; i < CHAR_CRHC_ANIMS; i++) {
+        const uint8_t *a = d + 0x34 + i * 0x18;
+        def->anims[i].id = rd32(a); def->anims[i].first = rd32(a + 4); def->anims[i].last = rd32(a + 8);
+        def->anims[i].loop = rd32(a + 12); def->anims[i].frame_time = rdf(a + 16); def->anims[i].flags = rd32(a + 20);
+        const uint8_t *h = d + 0x52c + i * 16;
+        def->hurt[i].ox = rdf(h); def->hurt[i].oy = rdf(h + 4); def->hurt[i].hw = rdf(h + 8); def->hurt[i].hh = rdf(h + 12);
+        def->muzzle[i][0] = rdf(d + 0x87c + i * 8); def->muzzle[i][1] = rdf(d + 0x880 + i * 8);
+        def->anim_flags[i] = rd32(d + 0xa24 + i * 4);
+    }
+    hero_patch_def(def);   /* a recreated hero's table changes (April) */
+    if (plat_getenv("SABER_ANIMS"))   /* debug: dump the table */
+        for (int i = 0; i < CHAR_CRHC_ANIMS; i++)
+            fprintf(stderr, "crhc %08X anim %2d: cells %d-%d loop %d dt %.3f flags %x muzzle %.0f,%.0f hurt %.0f,%.0f %.0fx%.0f\n", crhc_id, i, def->anims[i].first,
+                    def->anims[i].last, def->anims[i].loop, def->anims[i].frame_time, def->anims[i].flags, def->muzzle[i][0], def->muzzle[i][1],
+                    def->hurt[i].ox, def->hurt[i].oy, def->hurt[i].hw, def->hurt[i].hh);
+    g_defs[g_ndefs++] = def;
+    return def;
+}
 
 bool character_init(Character *c, uint32_t crhc_id, bool enemy)
 {
@@ -16,26 +46,13 @@ bool character_init(Character *c, uint32_t crhc_id, bool enemy)
     const PackEntry *e = packs_find(crhc_id);
     if (!e || memcmp(e->data, "CRHC", 4)) { fprintf(stderr, "CRHC %08X not found\n", crhc_id); return false; }
     const uint8_t *d = e->data;
+    if (!(c->def = chardef_get(crhc_id, d))) return false;
     c->crhc_id = crhc_id; c->sprite_id = rd32(d + 4);
     c->origin_x = rdf(d + 0x08); c->origin_y = rdf(d + 0x0c);
     c->speed = rdf(d + 0x10); c->slide_speed = rdf(d + 0x14); c->slide_time = rdf(d + 0x18);
     c->jump_vel = rdf(d + 0x1c); c->alert_time = rdf(d + 0x20);
     c->box_ox = rdf(d + 0x24); c->box_oy = rdf(d + 0x28); c->box_hx = rdf(d + 0x2c); c->box_hy = rdf(d + 0x30);
-    for (int i = 0; i < CHAR_CRHC_ANIMS; i++) {
-        const uint8_t *a = d + 0x34 + i * 0x18;
-        c->anims[i].id = rd32(a); c->anims[i].first = rd32(a + 4); c->anims[i].last = rd32(a + 8);
-        c->anims[i].loop = rd32(a + 12); c->anims[i].frame_time = rdf(a + 16); c->anims[i].flags = rd32(a + 20);
-        const uint8_t *h = d + 0x52c + i * 16;
-        c->hurt[i].ox = rdf(h); c->hurt[i].oy = rdf(h + 4); c->hurt[i].hw = rdf(h + 8); c->hurt[i].hh = rdf(h + 12);
-        c->muzzle[i][0] = rdf(d + 0x87c + i * 8); c->muzzle[i][1] = rdf(d + 0x880 + i * 8);
-        c->anim_flags[i] = rd32(d + 0xa24 + i * 4);
-    }
     c->hp_max = rd32(d + 0xadc);
-    if (plat_getenv("SABER_ANIMS"))   /* debug: dump the table */
-        for (int i = 0; i < CHAR_CRHC_ANIMS; i++)
-            fprintf(stderr, "crhc %08X anim %2d: cells %d-%d loop %d dt %.3f flags %x muzzle %.0f,%.0f hurt %.0f,%.0f %.0fx%.0f\n", crhc_id, i, c->anims[i].first,
-                    c->anims[i].last, c->anims[i].loop, c->anims[i].frame_time, c->anims[i].flags, c->muzzle[i][0], c->muzzle[i][1],
-                    c->hurt[i].ox, c->hurt[i].oy, c->hurt[i].hw, c->hurt[i].hh);
     { const PackEntry *se = packs_peek(c->sprite_id); if (se && se->type == RES_SPRITE) c->spr = sprite_get(c->sprite_id); else c->cb = cblock_get(c->sprite_id); }
     static const int8_t fireball_bob[8] = { 0, 0, 1, 0, 0, 1 };
     memcpy(c->torso_bob, fireball_bob, sizeof c->torso_bob);
@@ -88,11 +105,11 @@ void character_set_anim(Character *c, int anim)
     }
     if (c->anim != anim) {
         c->anim = (uint8_t)anim;
-        c->frame = c->anims[anim].first; c->anim_t = 0;
+        c->frame = c->def->anims[anim].first; c->anim_t = 0;
     }
-    uint32_t af = c->anim_flags[anim];
+    uint32_t af = c->def->anim_flags[anim];
     if (af & 1) {
-        float mx = c->muzzle[anim][0], my = c->muzzle[anim][1], x, y;
+        float mx = c->def->muzzle[anim][0], my = c->def->muzzle[anim][1], x, y;
         if (af & 2) {
             switch (c->aim) {
             case AIM_L:  x = -mx;       y = 0;          break;
@@ -114,15 +131,15 @@ void character_set_overlay(Character *c, int anim)
 {
     if (anim < 0 || anim >= CHAR_MAX_ANIMS) return;
     if (c->overlay != anim) {
-        const AnimDef *o = &c->anims[anim], *a = &c->anims[c->anim];
+        const AnimDef *o = &c->def->anims[anim], *a = &c->def->anims[c->anim];
         c->overlay = (uint8_t)anim; c->ov_frame = o->first; c->ov_t = 0;
         if (c->ov_sync && o->last - o->first == a->last - a->first && o->frame_time == a->frame_time) {
             c->ov_frame = o->first + (c->frame - a->first); c->ov_t = c->anim_t;
         }
     }
-    uint32_t af = c->anim_flags[anim];
+    uint32_t af = c->def->anim_flags[anim];
     if (af & 1) {
-        float mx = c->muzzle[anim][0], my = c->muzzle[anim][1], x, y;
+        float mx = c->def->muzzle[anim][0], my = c->def->muzzle[anim][1], x, y;
         if (af & 2) {
             switch (c->aim) {
             case AIM_L:  x = -mx;       y = 0;          break;
@@ -143,14 +160,14 @@ void character_set_overlay(Character *c, int anim)
 void character_animate(Character *c, float dt)
 {
     if (c->anim >= CHAR_MAX_ANIMS) return;
-    const AnimDef *a = &c->anims[c->anim];
+    const AnimDef *a = &c->def->anims[c->anim];
     if (a->frame_time <= 0) return;
     c->anim_t += dt;
     while (c->anim_t >= a->frame_time) {
         c->anim_t -= a->frame_time;
         c->frame = (c->frame < a->last) ? c->frame + 1 : a->loop;
     }
-    const AnimDef *o = &c->anims[c->overlay];
+    const AnimDef *o = &c->def->anims[c->overlay];
     if (o->frame_time > 0) {
         c->ov_t += dt;
         while (c->ov_t >= o->frame_time) { c->ov_t -= o->frame_time; c->ov_frame = (c->ov_frame < o->last) ? c->ov_frame + 1 : o->loop; }
@@ -245,11 +262,11 @@ void character_draw(const Character *c, float cam_x, float cam_y)
     if (c->anim >= CHAR_MAX_ANIMS) return;
     float x = floorf(c->body.x - c->origin_x - cam_x), y = floorf(c->body.y - c->origin_y - cam_y);
     if ((c->flags & CF_HIT) && c->hit_t > 0.01f && (plat_ticks_ms() / 16 & 2)) return;   /* invulnerability blink (effect flag 0x10 every other 2 frames) */
-    draw_cell(c, c->frame, (int)(c->anims[c->anim].flags & 0xff), x, y);
+    draw_cell(c, c->frame, (int)(c->def->anims[c->anim].flags & 0xff), x, y);
     /* the torso is its own sprite object placed at the base offset (up/down aims, 1 px walk bob) */
     float oy = c->base_oy;
-    if (c->walk_bob) { int k = c->frame - (int)c->anims[c->anim].first; if (k >= 0 && k < 8) oy += (float)c->torso_bob[k]; }   /* the hip drops with the legs frame */
-    if (c->overlay) draw_cell(c, c->ov_frame, (int)(c->anims[c->overlay].flags & 0xff), x + c->base_ox, y + oy);
+    if (c->walk_bob) { int k = c->frame - (int)c->def->anims[c->anim].first; if (k >= 0 && k < 8) oy += (float)c->torso_bob[k]; }   /* the hip drops with the legs frame */
+    if (c->overlay) draw_cell(c, c->ov_frame, (int)(c->def->anims[c->overlay].flags & 0xff), x + c->base_ox, y + oy);
 }
 
 /* FUN_0041c530: player state -> legs anim, torso overlay anim, muzzle base offset, horizontal velocity */
@@ -274,7 +291,7 @@ void player_resolve(Character *c, float dt)
             c->idle_t += dt;
             if (c->bored_anim[0] >= 0 && c->idle_t >= c->bored_time) {   /* play the bored animation once, then sway again */
                 int bored = c->bored_anim[L ? 0 : 1];
-                if (c->anim == bored && c->frame >= c->anims[bored].last) c->idle_t = 0;
+                if (c->anim == bored && c->frame >= c->def->anims[bored].last) c->idle_t = 0;
                 else body = bored;
             }
         }

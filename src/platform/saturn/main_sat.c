@@ -73,6 +73,7 @@ static void __attribute__((noreturn, noinline)) game_main(void)
     report_memory("init");
 
     uint32_t prev_vb = sat_vblanks(), last_report = 0, frames = 0;
+    bool no_draw = plat_getenv("SABER_NODRAW") != NULL;   /* debug: profile the update alone */
     for (;;) {
         smpc_peripheral_process();
         if (sat_reset_combo()) bios_cd_player_execute();
@@ -83,7 +84,7 @@ static void __attribute__((noreturn, noinline)) game_main(void)
         int steps = app_update(fields * (1.0 / 60.0));
         uint32_t t_upd = sat_timer_us();
         rsat_frame_begin();
-        app_draw();
+        if (!no_draw) app_draw();
         rsat_frame_end();
         uint32_t t_draw = sat_timer_us();
         if (app_perf_on()) app_perf(t_upd - t0, t_draw - t_upd, fields * 16683u, steps, rsat_prims());
@@ -91,10 +92,10 @@ static void __attribute__((noreturn, noinline)) game_main(void)
         vdp2_sync_wait();
         frames++;
         if (t0 - last_report > 10000000u) {
-            Game *g = app_game(); unsigned long reads, bytes; cd_sat_stats(&reads, &bytes);
-            printf("[state] t=%us frame=%u level=%d stage=%d state=%d menu=%d title=%d cd reads=%lu (%lu KB)\n",
+            Game *g = app_game(); unsigned long reads, bytes, seeks; cd_sat_stats(&reads, &bytes, &seeks);
+            printf("[state] t=%us frame=%u level=%d stage=%d state=%d menu=%d title=%d cd reads=%lu (%lu KB, %lu seeks)\n",
                    (unsigned)(t0 / 1000000u), (unsigned)frames, g->in_level, g->stage, g->state, g->menu.state, g->title_on,
-                   reads, bytes / 1024);
+                   reads, bytes / 1024, seeks);
             report_memory("run");
             last_report = t0;
         }
