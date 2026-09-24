@@ -1,4 +1,6 @@
 #include "assets.h"
+#include "namehash.h"
+#include "pack.h"
 #include "platform/plat.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,10 +10,31 @@
 
 static bool exists(const char *p) { FILE *f = fopen(p, "rb"); if (!f) return false; fclose(f); return true; }
 
+/* the name under assets/ of an asset path */
+static const char *asset_name(const char *path)
+{
+    const char *best = NULL;
+    for (const char *p = path; (p = strstr(p, "assets/")); p++) best = p + 7;
+    return best ? best : path;
+}
+uint32_t asset_key(const char *path) { return path ? namehash(asset_name(path)) : 0; }
+
+#ifdef PLAT_BAKED_ASSETS
+static const PackEntry *baked(const char *path, ResType t) { return path ? packs_find_type(asset_key(path), t) : NULL; }
+static bool baked_has(const char *name)
+{
+    uint32_t k = namehash(name);
+    return packs_peek_type(k, RES_FILE) || packs_peek_type(k, RES_TEX) || packs_peek_type(k, RES_SAMPLE) || packs_peek_type(k, RES_IMAGE);
+}
+#endif
+
 const char *asset_path(const char *name)
 {
     static char buf[1024];
     if (!name) return NULL;
+#ifdef PLAT_BAKED_ASSETS
+    if (baked_has(name)) { snprintf(buf, sizeof buf, "%sassets/%s", plat_base_path() ? plat_base_path() : "", name); return buf; }
+#endif
     const char *env = plat_getenv("SABER_ASSETS");
     if (env) { snprintf(buf, sizeof buf, "%s/%s", env, name); if (exists(buf)) return buf; }
     snprintf(buf, sizeof buf, "assets/%s", name); if (exists(buf)) return buf;
@@ -25,6 +48,16 @@ const char *asset_path(const char *name)
 
 uint8_t *file_read(const char *path, size_t *size)
 {
+#ifdef PLAT_BAKED_ASSETS
+    const PackEntry *e = baked(path, RES_FILE);   /* "FILE", u32 size, 24 bytes 0, the bytes */
+    if (e) {
+        uint32_t n = e->data[4] | e->data[5] << 8 | e->data[6] << 16 | (uint32_t)e->data[7] << 24;
+        uint8_t *d = n + 32 <= e->size ? malloc((size_t)n + PAD) : NULL;
+        if (d) { memcpy(d, e->data + 32, n); memset(d + n, 0, PAD); *size = n; }
+        packs_release_type(asset_key(path), RES_FILE);
+        return d;
+    }
+#endif
     FILE *f = path ? fopen(path, "rb") : NULL; if (!f) return NULL;
     fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
     uint8_t *d = malloc(n > 0 ? (size_t)n + PAD : PAD);
@@ -36,9 +69,36 @@ uint8_t *file_read(const char *path, size_t *size)
     return d;
 }
 
+FILE *asset_fopen(const char *path)
+{
+#ifdef PLAT_BAKED_ASSETS
+    size_t n; uint8_t *d = file_read(path, &n);
+    if (!d) return NULL;
+    FILE *f = fmemopen(NULL, n + 1, "w+");   /* the stream owns its buffer */
+    if (f) { fwrite(d, 1, n, f); rewind(f); }
+    free(d);
+    return f;
+#else
+    return path ? fopen(path, "r") : NULL;
+#endif
+}
+
 uint32_t *png_load_rgba(const char *path, int *w, int *h)
 {
     if (!path) return NULL;
+#ifdef PLAT_BAKED_ASSETS
+    const PackEntry *e = baked(path, RES_IMAGE);   /* "RGBA", u16 w, h, 24 bytes 0, the pixels */
+    if (e) {
+        *w = e->data[4] | e->data[5] << 8; *h = e->data[6] | e->data[7] << 8;
+        size_t n = (size_t)*w * *h * 4;
+        uint32_t *px = n + 32 <= e->size ? malloc(n) : NULL;
+        if (px) memcpy(px, e->data + 32, n);
+        packs_release_type(asset_key(path), RES_IMAGE);
+        return px;
+    }
+    fprintf(stderr, "%s: no baked pixels (tools/dc/build_disc.py IMAGES)\n", path);
+    return NULL;
+#endif
     uint32_t *px = plat_image_load_rgba(path, w, h);
     if (!px) fprintf(stderr, "%s: image decode failed\n", path);
     return px;

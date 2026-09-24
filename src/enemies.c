@@ -17,6 +17,26 @@ static uint32_t crhc_for_type(int t) { return (t >= 2 && t <= 29) ? TYPE_CRHC[t 
 static float sh_feet(const Enemy *e);
 static int rnd(int n) { return n > 0 ? rand() % n : 0; }   /* FUN_0040cf30(0, n) -> [0,n) */
 
+/* Everything the level's triggers can spawn, loaded now: an enemy's CRHC and graphics fetched from the disc the
+ * moment it first appears (the boss ship flying into the background) stalled the game and the sound with it. */
+void enemies_preload(const Enemies *E)
+{
+    bool seen[40] = { false };
+    for (int i = 0; i < E->ntr; i++) {
+        int t = E->tr[i].type; if (t < 0 || t >= 40 || seen[t]) continue;
+        seen[t] = true;
+        Character tmp;
+        if (character_init(&tmp, crhc_for_type(t), true)) { sprite_tex(tmp.spr); cblock_tex(tmp.cb); }
+    }
+    if (seen[10]) { Character tmp; character_init(&tmp, 0x2A02BD4F, true); }   /* the rider a horse carries */
+    /* the shots, muzzle flashes and blasts enemies and the player spawn */
+    static const uint32_t FX[] = { 0xD85FB68A, 0x9C861FF3, 0x8623249C, 0x5B5EBBA3, 0xB2143E42, 0xF0FB3C78, 0x7027A26E, 0x33269F6B, 0xA2E02F5A };
+    for (size_t i = 0; i < sizeof FX / sizeof *FX; i++) {
+        const PackEntry *e = packs_peek(FX[i]);
+        if (e && e->type == RES_CBLOCK) cblock_tex(cblock_get(FX[i])); else if (e) sprite_tex(sprite_get(FX[i]));
+    }
+}
+
 void enemies_reset(Enemies *E) { memset(E, 0, sizeof *E); E->spawner_enabled = true; E->front_layer = -1; }
 
 void enemies_add_trigger(Enemies *E, const LevelObject *o)   /* FUN_00421070 + FUN_004211b0 */

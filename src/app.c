@@ -19,6 +19,11 @@ bool app_init(Ren *ren, const char *data_dir, int start_level)
     gfx_init(ren);
     static const char *const base[] = { "pack.pck", "common.pck", "levels.pck", "menu.pck", "level1.pck", "video.pck" };
     if (!packs_open(data_dir, base, 6)) return false;
+#ifdef PLAT_BAKED_ASSETS
+    /* our assets and the packs' graphics and sounds, baked for the console by tools/dc/build_disc.py */
+    static const char *const baked[] = { "tex.pck", "snd.pck", "files.pck" };
+    if (!packs_open(data_dir, baked, 3)) return false;
+#endif
     audio_init();
     if (!game_init(&g, ren, APP_SCREEN_W, APP_SCREEN_H, start_level)) return false;
     /* debug: SABER_SCRIPT="60:R,20:RJ,40:" drives the input for N fixed steps each (L R U D J S A P, X = power) */

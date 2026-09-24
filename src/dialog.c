@@ -17,7 +17,30 @@ static const uint8_t TEXTRGB[4][3] = { {255,255,255}, {255,232,208}, {224,232,25
 
 static int g_hero = HERO_FIREBALL;
 static void paginate(Dialog *d);
-void dialog_set_hero(int character) { g_hero = character; }
+void dialog_set_hero(int character) { g_hero = character; dialog_preload(0); }
+
+static void preload_sprite(uint32_t id) { if (packs_peek_type(id, RES_SPRITE) || packs_peek_type(id, RES_TEX)) sprite_tex(sprite_get(id)); }
+
+/* The box tilesets and the avatars the scripts use (once), and with a pack dialog's id its own avatars and voice
+ * line: fetched from the disc when the box opens, they stalled the camera's pan to it */
+void dialog_preload(uint32_t text_id)
+{
+    static bool common;
+    if (!common) {
+        common = true;
+        for (int i = 0; i < 4; i++) preload_sprite(TILESET[i]);
+        static const char *const AVATARS[] = { "dialog_avatar_fireball1", "dialog_avatar_saber2", "dialog_avatar_april2", "dialog_avatar_colt2", "dialog_avatar_outrider" };
+        for (size_t i = 0; i < sizeof AVATARS / sizeof *AVATARS; i++) preload_sprite(namehash(AVATARS[i]));
+        font_get(0x4058897F); font_get(0x12072E60);   /* the big and small fonts, and the HUD's */
+        preload_sprite(0x87A5333C);
+    }
+    if (!text_id) return;
+    static Dialog d;   /* big: not on the stack */
+    if (!dialog_open(&d, text_id)) return;
+    for (int i = 0; i < d.npages; i++) { if (d.pages[i].avatar_id) preload_sprite(d.pages[i].avatar_id); preload_sprite(TILESET[d.pages[i].color & 3]); }
+    if (d.pending_sfx) sfx_prefetch_id(d.pending_sfx);
+    memset(&d, 0, sizeof d);
+}
 
 #define AVATAR_FIREBALL 0x742F352A   /* dialog_avatar_fireball1 */
 /* the level-1 script addresses Fireball by name and the other three heroes talk to him: playing as one of them

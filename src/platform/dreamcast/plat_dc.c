@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stb_image/stb_image.h>
 
 /* SABER_* debug switches: NAME=value lines in /cd/saber.env (or /pc/saber.env under dcload), '#' comments */
 #define MAX_ENV 48
@@ -157,11 +156,7 @@ void plat_apply_screen(Ren *r, int sw, int sh, int ratio, int screen)
     else apply_view();
 }
 
-uint32_t *plat_image_load_rgba(const char *path, int *w, int *h)
-{
-    int n;
-    unsigned char *px = stbi_load(path, w, h, &n, 4);
-    return (uint32_t *)px;   /* stb allocates with malloc: the caller's free() is right */
-}
+/* no image decoding on the console: the disc's images are baked (PLAT_BAKED_ASSETS, assets.c) */
+uint32_t *plat_image_load_rgba(const char *path, int *w, int *h) { (void)path; (void)w; (void)h; return NULL; }
 
 bool plat_screenshot(Ren *r, const char *path) { (void)r; return vid_screen_shot(path) == 0; }

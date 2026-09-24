@@ -2,12 +2,15 @@
 #   source /opt/toolchains/dc/kos/environ.sh
 #   make -f Makefile.dc            -> saber_rider.elf
 #   make -f Makefile.dc disc       -> build/dc/saber_rider.cdi (runs tools/dc/build_disc.py; needs the demo's data)
+#   make -f Makefile.dc rebake     -> the same, reusing the converted music and videos (textures, sounds, files baked again)
+#   make -f Makefile.dc repack     -> only the new ELF
 # The core game (src/*.c) + the Dreamcast platform (src/platform/dreamcast) + the vendored FMV player.
 TARGET  := saber_rider.elf
 OBJDIR  := obj-dc
 SRC     := $(wildcard src/*.c) $(wildcard src/platform/dreamcast/*.c) src/platform/dreamcast/dcfmv/dcfmv.c
 OBJ     := $(SRC:src/%.c=$(OBJDIR)/%.o)
-DEFS    := -DPLAT_DREAMCAST -DPLAT_LOW_MEMORY -DDCFMV_NO_ZSTD -DDCFMV_NUM_BUFFERS=8
+# PLAT_BAKED_ASSETS: textures, samples and our other files come baked into tex.pck / snd.pck / files.pck (build_disc.py)
+DEFS    := -DPLAT_DREAMCAST -DPLAT_LOW_MEMORY -DPLAT_BAKED_ASSETS -DDCFMV_NO_ZSTD -DDCFMV_NUM_BUFFERS=8
 # KOS, kos-ports and the game must all use one SH4 float ABI: environ.sh sets
 # KOS_SH4_PRECISION=-m4-single-only (32-bit double). Mixing it with -m4-single links the wrong
 # newlib multilib and libm/printf return garbage (floorf(96) == 0).
@@ -16,10 +19,10 @@ $(error KOS_SH4_PRECISION is '$(KOS_SH4_PRECISION)'; set it to -m4-single-only i
 endif
 # KOS_CFLAGS brings -O3 -ffast-math; the game keeps IEEE infinities out of fast-math's way
 CFLAGS  := -std=gnu11 -Isrc $(DEFS) -MMD -MP -fno-finite-math-only -Wno-unused-parameter -Wno-misleading-indentation -Wno-format
-LIBS    := -lADX -lsh4zam -lstb_image -lm -Wl,--wrap=snd_stream_shutdown   # see aud_dc.c
+LIBS    := -lADX -lsh4zam -lm -Wl,--wrap=snd_stream_shutdown   # see aud_dc.c
 DATA    ?= SaberRider/data
 
-.PHONY: all clean disc repack
+.PHONY: all clean disc rebake repack
 all: $(TARGET)
 
 $(TARGET): $(OBJ)
@@ -33,6 +36,9 @@ $(OBJDIR)/%.o: src/%.c
 
 disc: $(TARGET)
 	python3 tools/dc/build_disc.py --elf $(TARGET) --data $(DATA) --out build/dc
+
+rebake: $(TARGET)
+	python3 tools/dc/build_disc.py --elf $(TARGET) --data $(DATA) --out build/dc --rebake
 
 repack: $(TARGET)
 	python3 tools/dc/build_disc.py --elf $(TARGET) --out build/dc --repack

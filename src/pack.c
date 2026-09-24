@@ -1,8 +1,12 @@
 #include "pack.h"
 #include "lzo1z.h"
+#include "platform/plat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef PLAT_DREAMCAST
+#include <malloc.h>
+#endif
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 
@@ -24,10 +28,21 @@ static ResType type_of(const char *s, size_t n)
 {
     static const struct { const char *k; ResType t; } tab[] = {
         {"font", RES_FONT}, {"sprite", RES_SPRITE}, {"cblock", RES_CBLOCK}, {"data", RES_DATA},
-        {"sfx", RES_SFX}, {"music", RES_MUSIC}, {"video", RES_VIDEO} };
+        {"sfx", RES_SFX}, {"music", RES_MUSIC}, {"video", RES_VIDEO},
+        {"tex", RES_TEX}, {"sample", RES_SAMPLE}, {"image", RES_IMAGE}, {"file", RES_FILE} };
     for (size_t i = 0; i < sizeof tab / sizeof tab[0]; i++)
         if (strlen(tab[i].k) == n && !memcmp(tab[i].k, s, n)) return tab[i].t;
     return RES_UNKNOWN;
+}
+
+/* block buffers are 32-byte aligned (DMA to video / sound memory) */
+static void *block_alloc(size_t n)
+{
+#ifdef PLAT_DREAMCAST
+    return memalign(32, (n + 31) & ~(size_t)31);
+#else
+    return aligned_alloc(32, (n + 31) & ~(size_t)31);
+#endif
 }
 
 static bool read_at(FILE *f, uint32_t off, void *dst, size_t n)
@@ -92,10 +107,12 @@ bool pack_load(Pack *p, const char *path)
 static bool entry_load(const Pack *p, PackEntry *pe)
 {
     if (pe->data) return true;
-    uint8_t *raw = malloc(pe->stored + 16);
+    static int log = -1; if (log < 0) log = plat_getenv("SABER_READLOG") != NULL;   /* debug: every read from a pack */
+    if (log) fprintf(stderr, "pack: read %s %08X (%u KB) at %u ms\n", p->name, pe->id, (unsigned)(pe->stored / 1024), (unsigned)plat_ticks_ms());
+    uint8_t *raw = block_alloc(pe->stored + 16);
     if (!raw || !read_at(p->f, pe->off, raw, pe->stored)) { fprintf(stderr, "pack: block %08X read failed\n", pe->id); free(raw); return false; }
     if (pe->stored == pe->declen) { pe->data = raw; pe->size = pe->declen; pe->owned = true; return true; }
-    uint8_t *buf = malloc(pe->declen + 16);
+    uint8_t *buf = block_alloc(pe->declen + 16);
     int r = buf ? lzo1z_decompress(raw, pe->stored, buf, pe->declen + 16) : -1;
     free(raw);
     if (r < 0) { fprintf(stderr, "pack: block %08X decompress failed\n", pe->id); free(buf); return false; }
@@ -116,6 +133,11 @@ static PackEntry *pack_lookup(const Pack *p, uint32_t id)
     for (int i = 0; i < p->count; i++) if (p->entries[i].id == id) return &p->entries[i];
     return NULL;
 }
+static PackEntry *pack_lookup_type(const Pack *p, uint32_t id, ResType t)
+{
+    for (int i = 0; i < p->count; i++) if (p->entries[i].id == id && p->entries[i].type == t) return &p->entries[i];
+    return NULL;
+}
 
 const PackEntry *pack_find(const Pack *p, uint32_t id)
 {
@@ -124,7 +146,7 @@ const PackEntry *pack_find(const Pack *p, uint32_t id)
 }
 
 /* ---- registry ---- */
-#define MAX_PACKS 8
+#define MAX_PACKS 12
 static Pack g_packs[MAX_PACKS];
 static int g_npacks;
 
@@ -156,16 +178,31 @@ const PackEntry *packs_find(uint32_t id)
     for (int i = 0; i < g_npacks; i++) { PackEntry *e = pack_lookup(&g_packs[i], id); if (e) return entry_load(&g_packs[i], e) ? e : NULL; }
     return NULL;
 }
+const PackEntry *packs_peek_type(uint32_t id, ResType t)
+{
+    for (int i = 0; i < g_npacks; i++) { const PackEntry *e = pack_lookup_type(&g_packs[i], id, t); if (e) return e; }
+    return NULL;
+}
 const PackEntry *packs_find_type(uint32_t id, ResType t)
 {
-    const PackEntry *e = packs_peek(id);
-    return (e && e->type == t) ? packs_find(id) : NULL;
+    for (int i = 0; i < g_npacks; i++) { PackEntry *e = pack_lookup_type(&g_packs[i], id, t); if (e) return entry_load(&g_packs[i], e) ? e : NULL; }
+    return NULL;
 }
 
 void packs_release(uint32_t id)
 {
     for (int i = 0; i < g_npacks; i++) {
         PackEntry *e = pack_lookup(&g_packs[i], id);
+        if (e) {
+            if (e->owned) { free((void *)e->data); e->data = NULL; e->owned = false; }
+            return;
+        }
+    }
+}
+void packs_release_type(uint32_t id, ResType t)
+{
+    for (int i = 0; i < g_npacks; i++) {
+        PackEntry *e = pack_lookup_type(&g_packs[i], id, t);
         if (e) {
             if (e->owned) { free((void *)e->data); e->data = NULL; e->owned = false; }
             return;

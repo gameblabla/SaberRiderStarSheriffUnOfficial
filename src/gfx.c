@@ -37,6 +37,45 @@ static RTex *finish_tex(RTex *t, uint32_t id, int w, int h)
 }
 static RTex *make_tex(uint32_t id, int w, int h, const uint32_t *px) { return finish_tex(rtex_create(R, w, h, R_TEX_STATIC, px), id, w, h); }
 
+#ifdef PLAT_BAKED_ASSETS
+/* A texture baked for the console ahead of time (a RES_TEX block of tex.pck, tools/dc/texbake.py): pack sprites, cblocks
+ * and fonts under their own id, our images under asset_key(path). One read of a block that goes to video memory as it
+ * is. meta (if asked) gets a copy of the layout data baked with it (sprite frames, a cblock's cell grid). */
+static RTex *baked_tex(uint32_t key, int *w, int *h, uint8_t **meta)
+{
+    const PackEntry *e = packs_find_type(key, RES_TEX);
+    if (!e || e->size < 32 || memcmp(e->data, "PVT1", 4)) return NULL;
+    const uint8_t *d = e->data;
+    *w = rd16(d + 4); *h = rd16(d + 6);
+    if (meta) {
+        uint32_t off = rd32(d + 16), n = rd32(d + 20);
+        *meta = malloc(n + 2);
+        if (*meta) memcpy(*meta, d + off, n);
+    }
+    RTex *t = rtex_create_baked(R, (uint8_t *)d, e->size);   /* may remap the block's palette indices in place */
+    packs_release_type(key, RES_TEX);
+    return finish_tex(t, key, *w, *h);
+}
+#endif
+
+RTex *gfx_image_tex(const char *path, int *w, int *h)
+{
+    int ww = 0, hh = 0; RTex *t = NULL;
+    if (!path) return NULL;
+#ifdef PLAT_BAKED_ASSETS
+    t = baked_tex(asset_key(path), &ww, &hh, NULL);
+#endif
+    if (!t) {
+        uint32_t *px = png_load_rgba(path, &ww, &hh);
+        if (!px) return NULL;
+        t = make_tex(asset_key(path), ww, hh, px);
+        free(px);
+    }
+    if (w) *w = ww;
+    if (h) *h = hh;
+    return t;
+}
+
 /* ---- cblock cache ---- */
 #define MAX_CB 64
 static CBlock g_cb[MAX_CB]; static int g_ncb;
@@ -62,6 +101,24 @@ static void sheet_rows(void *ud, int y0, int n, uint32_t *out)
 /* (re)build a pack cblock's texture from its blob; parse = also read the cell grid (first time) */
 static bool cblock_build(CBlock *c, bool parse)
 {
+#ifdef PLAT_BAKED_ASSETS
+    int bw, bh; uint8_t *meta = NULL;
+    if ((c->tex = baked_tex(c->id, &bw, &bh, parse ? &meta : NULL))) {
+        if (parse) {   /* u16 frames, cols, rows, tw, th, ntiles, sheet_cols, 0, then the cells */
+            if (!meta) return false;
+            c->frames = rd16(meta); c->cols = rd16(meta + 2); c->rows = rd16(meta + 4);
+            c->tw = rd16(meta + 6); c->th = rd16(meta + 8); c->ntiles = rd16(meta + 10); c->sheet_cols = rd16(meta + 12);
+            int n = c->frames * c->cols * c->rows;
+            uint16_t *cells = malloc((size_t)n * 2 + 2);
+            if (cells) for (int i = 0; i < n; i++) cells[i] = rd16(meta + 16 + i * 2);
+            c->cells = cells;
+            free(meta);
+            if (!cells) return false;
+        }
+        c->last_used = g_frame;
+        return true;
+    }
+#endif
     const PackEntry *e = packs_find_type(c->id, RES_CBLOCK);
     if (!e) { fprintf(stderr, "cblock %08X not found\n", c->id); return false; }
     const uint8_t *d = e->data;
@@ -109,32 +166,39 @@ CBlock *cblock_get(uint32_t id)
     return c;
 }
 
-CBlock *cblock_from_rgba(uint32_t id, const uint32_t *px, int w, int h, int tw, int th)
+/* a one-frame cblock over a w x h sheet of tw x th cells, cell i = tile i */
+static CBlock *cblock_sheet(uint32_t id, RTex *tex, int w, int h, int tw, int th)
 {
-    for (int i = 0; i < g_ncb; i++) if (g_cb[i].id == id) return &g_cb[i];
-    if (g_ncb == MAX_CB) return NULL;
+    if (!tex) return NULL;
+    if (g_ncb == MAX_CB) { rtex_destroy(tex); return NULL; }
     CBlock *c = &g_cb[g_ncb];
     memset(c, 0, sizeof *c);
     c->id = id; c->frames = 1; c->cols = w / tw; c->rows = h / th; c->tw = tw; c->th = th;
     c->ntiles = c->cols * c->rows;
-    uint16_t *cells = malloc((size_t)c->ntiles * 2);
+    uint16_t *cells = malloc((size_t)c->ntiles * 2 + 2);
+    if (!cells) { rtex_destroy(tex); return NULL; }
     for (int i = 0; i < c->ntiles; i++) cells[i] = (uint16_t)i;
     c->cells = cells; c->mask = NULL;
     c->sheet_cols = c->cols;          /* the sheet is the image itself */
-    c->tex = make_tex(id, w, h, px);
-    if (!c->tex) { free(cells); return NULL; }
+    c->tex = tex;
     c->last_used = g_frame;
     g_ncb++;
     return c;
 }
 
+CBlock *cblock_from_rgba(uint32_t id, const uint32_t *px, int w, int h, int tw, int th)
+{
+    for (int i = 0; i < g_ncb; i++) if (g_cb[i].id == id) return &g_cb[i];
+    if (g_ncb == MAX_CB) return NULL;
+    return cblock_sheet(id, make_tex(id, w, h, px), w, h, tw, th);
+}
+
 CBlock *cblock_from_png(uint32_t id, const char *path, int tw, int th)
 {
     for (int i = 0; i < g_ncb; i++) if (g_cb[i].id == id) return &g_cb[i];
-    int w, h; uint32_t *px = path ? png_load_rgba(path, &w, &h) : NULL;
-    if (!px) return NULL;
-    CBlock *c = cblock_from_rgba(id, px, w, h, tw, th);
-    free(px);
+    int w, h; RTex *t = gfx_image_tex(path, &w, &h);
+    if (t) rtex_set_tag(t, id);
+    CBlock *c = cblock_sheet(id, t, w, h, tw, th);
     if (c) c->file = strdup(path);
     return c;
 }
@@ -144,12 +208,15 @@ RTex *cblock_tex(const CBlock *cc)
     if (!cc) return NULL;
     CBlock *c = (CBlock *)cc;
     if (!c->tex && c->from_pack) cblock_build(c, false);
-    else if (!c->tex && c->file) {
-        int w, h; uint32_t *px = png_load_rgba(c->file, &w, &h);
-        if (px) { c->tex = make_tex(c->id, w, h, px); free(px); }
-    }
+    else if (!c->tex && c->file) { int w, h; if ((c->tex = gfx_image_tex(c->file, &w, &h))) rtex_set_tag(c->tex, c->id); }
     c->last_used = g_frame;
     return c->tex;
+}
+
+void cblock_unload(const CBlock *cc)
+{
+    CBlock *c = (CBlock *)cc;
+    if (c && c->tex && (c->from_pack || c->file)) { rtex_destroy(c->tex); c->tex = NULL; }
 }
 
 int cblock_ncells(const CBlock *c) { return c->frames * c->cols * c->rows; }
@@ -203,6 +270,23 @@ static void strip_rows(void *ud, int y0, int n, uint32_t *out)
         }
 }
 
+#ifdef PLAT_BAKED_ASSETS
+/* a pack sprite (or font glyph sprite) baked for the console; first = also take its size and frame count */
+static bool sprite_baked(Sprite *s, bool first)
+{
+    int bw, bh; uint8_t *meta = NULL;
+    s->tex = baked_tex(s->id, &bw, &bh, first ? &meta : NULL);
+    if (!s->tex) return false;
+    if (first) {   /* u16 frame w, h, frames */
+        if (!meta) { rtex_destroy(s->tex); s->tex = NULL; return false; }
+        s->w = rd16(meta); s->h = rd16(meta + 2); s->frames = rd16(meta + 4);
+        free(meta);
+    }
+    s->last_used = g_frame;
+    return true;
+}
+#endif
+
 /* the texture of a sprite blob; first = also read its size and frame count */
 static bool sprite_build(Sprite *s, const uint8_t *d, uint32_t size, bool first)
 {
@@ -231,7 +315,23 @@ Sprite *sprite_from_blob(uint32_t id, const uint8_t *d, uint32_t size)
     if (g_nspr == MAX_SPR) return NULL;
     Sprite *s = &g_spr[g_nspr]; memset(s, 0, sizeof *s);
     s->id = id;
+#ifdef PLAT_BAKED_ASSETS
+    if (sprite_baked(s, true)) { g_nspr++; return s; }
+#endif
     if (!sprite_build(s, d, size, true)) return NULL;
+    g_nspr++;
+    return s;
+}
+
+/* a sprite of `frames` frames side by side over a w x h texture */
+static Sprite *sprite_strip(uint32_t id, RTex *tex, int w, int h, int frames)
+{
+    if (!tex) return NULL;
+    if (g_nspr == MAX_SPR || frames < 1) { rtex_destroy(tex); return NULL; }
+    Sprite *s = &g_spr[g_nspr]; memset(s, 0, sizeof *s);
+    s->id = id; s->w = w / frames; s->h = h; s->frames = frames;
+    s->tex = tex;
+    s->last_used = g_frame;
     g_nspr++;
     return s;
 }
@@ -240,22 +340,15 @@ Sprite *sprite_from_rgba(uint32_t id, const uint32_t *px, int w, int h, int fram
 {
     for (int i = 0; i < g_nspr; i++) if (g_spr[i].id == id) return &g_spr[i];
     if (g_nspr == MAX_SPR || frames < 1) return NULL;
-    Sprite *s = &g_spr[g_nspr]; memset(s, 0, sizeof *s);
-    s->id = id; s->w = w / frames; s->h = h; s->frames = frames;
-    s->tex = make_tex(id, w, h, px);
-    if (!s->tex) return NULL;
-    s->last_used = g_frame;
-    g_nspr++;
-    return s;
+    return sprite_strip(id, make_tex(id, w, h, px), w, h, frames);
 }
 
 Sprite *sprite_from_png(uint32_t id, const char *path, int frame_w)
 {
     for (int i = 0; i < g_nspr; i++) if (g_spr[i].id == id) return &g_spr[i];
-    int w, h; uint32_t *px = path ? png_load_rgba(path, &w, &h) : NULL;
-    if (!px) return NULL;
-    Sprite *s = sprite_from_rgba(id, px, w, h, frame_w > 0 && w >= frame_w ? w / frame_w : 1);
-    free(px);
+    int w, h; RTex *t = gfx_image_tex(path, &w, &h);
+    if (t) rtex_set_tag(t, id);
+    Sprite *s = t ? sprite_strip(id, t, w, h, frame_w > 0 && w >= frame_w ? w / frame_w : 1) : NULL;
     if (s) s->file = strdup(path);
     return s;
 }
@@ -263,6 +356,13 @@ Sprite *sprite_from_png(uint32_t id, const char *path, int frame_w)
 Sprite *sprite_get(uint32_t id)
 {
     for (int i = 0; i < g_nspr; i++) if (g_spr[i].id == id) return &g_spr[i];
+#ifdef PLAT_BAKED_ASSETS
+    if (g_nspr < MAX_SPR && packs_peek_type(id, RES_TEX)) {
+        Sprite *s = &g_spr[g_nspr]; memset(s, 0, sizeof *s);
+        s->id = id;
+        if (sprite_baked(s, true)) { s->from_pack = true; g_nspr++; return s; }
+    }
+#endif
     const PackEntry *e = packs_find_type(id, RES_SPRITE);
     if (!e) { fprintf(stderr, "sprite %08X not found\n", id); return NULL; }
     Sprite *s = sprite_from_blob(id, e->data, e->size);
@@ -278,15 +378,15 @@ RTex *sprite_tex(const Sprite *cs)
     if (!cs) return NULL;
     Sprite *s = (Sprite *)cs;
     if (!s->tex && s->from_pack) {
+#ifdef PLAT_BAKED_ASSETS
+        if (sprite_baked(s, false)) { s->last_used = g_frame; return s->tex; }
+#endif
         const PackEntry *e = packs_find_type(s->id, RES_SPRITE);
         if (e) sprite_build(s, e->data, e->size, false);
 #ifdef PLAT_LOW_MEMORY
         packs_release(s->id);
 #endif
-    } else if (!s->tex && s->file) {
-        int w, h; uint32_t *px = png_load_rgba(s->file, &w, &h);
-        if (px) { s->tex = make_tex(s->id, w, h, px); free(px); }
-    }
+    } else if (!s->tex && s->file) { int w, h; if ((s->tex = gfx_image_tex(s->file, &w, &h))) rtex_set_tag(s->tex, s->id); }
     s->last_used = g_frame;
     return s->tex;
 }
@@ -303,6 +403,13 @@ static bool evict_one(void)
 }
 
 bool gfx_init(Ren *r) { R = r; r_set_evict_hook(evict_one); return true; }
+
+void gfx_flush(void)
+{
+    for (int i = 0; i < g_nspr; i++) { rtex_destroy(g_spr[i].tex); free((void *)g_spr[i].file); }
+    for (int i = 0; i < g_ncb; i++) { rtex_destroy(g_cb[i].tex); free((void *)g_cb[i].cells); free((void *)g_cb[i].mask); free((void *)g_cb[i].file); }
+    g_nspr = g_ncb = 0;
+}
 void gfx_frame(void) { g_frame++; }
 
 void sprite_draw(const Sprite *s, int frame, float x, float y, bool flip)

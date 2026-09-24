@@ -16,6 +16,9 @@ void aud_update(void);                           /* once per frame */
 /* samples are cached by the backend; NULL if missing */
 AudSample *aud_sample_pack(uint32_t id);         /* a pack sfx by resource id (RIFF, 4-bit ADPCM or PCM16) */
 AudSample *aud_sample_file(const char *path);    /* one of our wav files (PCM16 in assets/; converted on consoles) */
+/* have it ready from now on (no load when it first plays), however long; loop: also for playing it as a loop */
+void aud_keep(AudSample *s, bool loop);
+void aud_prefetch(AudSample *s);                 /* load it now, but a long one may be dropped again for others */
 
 /* voices: a handle >= 0 or -1 when nothing could play */
 int  aud_play(AudSample *s, float gain, bool loop);

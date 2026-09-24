@@ -13,6 +13,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* the platform bits pack.c reaches (its SABER_READLOG trace) */
+const char *plat_getenv(const char *name) { return getenv(name); }
+uint64_t plat_ticks_ms(void) { return 0; }
+
 static const char *const PACKS[] = { "pack.pck", "common.pck", "levels.pck", "menu.pck", "level1.pck", "video.pck" };
 static const char *TYPES[] = { "unknown", "font", "sprite", "cblock", "data", "sfx", "music", "video" };
 

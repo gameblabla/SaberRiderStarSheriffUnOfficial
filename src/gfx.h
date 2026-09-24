@@ -28,12 +28,17 @@ typedef struct Sprite {
 } Sprite;
 
 bool  gfx_init(Ren *r);
+/* forget every cached sprite and cblock (tools/dc/texprep walks all of the packs' graphics through the cache) */
+void  gfx_flush(void);
+/* the texture of one of our images (assets/): the console's baked one, else the PNG decoded; w, h may be NULL */
+RTex *gfx_image_tex(const char *path, int *w, int *h);
 /* once per drawn frame: the clock that decides which textures are idle enough to evict under memory pressure */
 void  gfx_frame(void);
 /* the texture to draw with (reloaded from the pack if it had been evicted) */
 RTex *sprite_tex(const Sprite *s);
 RTex *cblock_tex(const CBlock *c);
 CBlock *cblock_get(uint32_t id);          /* cached */
+void  cblock_unload(const CBlock *c);     /* drop its texture now (it is loaded again if the cblock is drawn) */
 /* a cblock made of our own RGBA sheet: one frame of (w/tw) x (h/th) cells, cell i = tile i (recreated heroes) */
 CBlock *cblock_from_rgba(uint32_t id, const uint32_t *px, int w, int h, int tw, int th);
 /* the same from a PNG file, kept by path so its texture can be dropped under memory pressure and decoded again */

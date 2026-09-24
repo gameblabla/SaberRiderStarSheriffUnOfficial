@@ -3,12 +3,17 @@
  * sh4zam "Bruce's Balls" example), all of it in the translucent list with autosort off, so the PVR draws in
  * submission order exactly like a 2D painter. A header goes out only when the texture / blend / filter changes.
  *
- * Textures are converted from RGBA8888 to the smallest 16-bit format that keeps them intact (RGB565 when opaque,
- * ARGB1555 for cut-outs, ARGB4444 when they carry real translucency) and stored non-twiddled with a power-of-two
- * row length, only as many rows as the image has. Anything wider or taller than 1024 is split into pages.
+ * Textures come baked from the disc (rtex_create_baked: tex.pck blocks made by tools/dc/texbake.py): twiddled
+ * power-of-two pages in 4/8-bit palette, VQ or 16-bit formats, DMA'd to VRAM as they are read. Their colours go to
+ * palette RAM (ARGB8888, 4 banks of 256) where a texture shares the entries of any colour it has in common with the
+ * others; a texture palette RAM can't take (or should not: pal_alloc) is expanded to 16 bits instead.
+ * Textures made at run time from RGBA (rtex_create) are converted to the smallest 16-bit format that keeps them intact
+ * (RGB565 when opaque, ARGB1555 for cut-outs, ARGB4444 when they carry real translucency) and stored non-twiddled with
+ * a power-of-two row length, only as many rows as the image has. Anything wider or taller than 1024 is split into pages.
  * The logical screen (426x240 wide / 320x240 4:3, 416x240 in the 832x480 mode) is scaled to the display (plat_apply_screen).
  * A display mode switch re-initialises the PVR, which wipes VRAM: the textures are parked in RAM around it (rdc_vram_park). */
 #include "pvr_internal.h"
+#include "../plat.h"
 #include <sh4zam/shz_sh4zam.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,12 +35,14 @@ typedef struct {
     int x0, y0, w, h;              /* the part of the image this page holds */
     int tw, th;                    /* power-of-two size given to the PVR */
     uint8_t have;                  /* bit b*2+l: hdr[b][l] valid */
+    uint32_t txr;                  /* PVR texture format word (pixel format, twiddling, VQ, palette) */
     void *parked;                  /* the page's VRAM, copied out while the PVR is re-initialised */
 } Page;
 
 struct RTex {
-    int w, h; uint32_t fmt; bool streaming;
+    int w, h; uint32_t fmt; bool streaming, baked;
     int npx, npy; Page *pages;
+    uint16_t *pal; int npal;       /* the palette RAM entries it holds (baked paletted textures) */
     uint8_t r, g, b, a; RBlend blend; RScale scale; uint32_t tag;
     struct RTex *prev, *next;      /* every live texture (live_tex) */
 };
@@ -158,8 +165,192 @@ static RTex *create(int w, int h, bool streaming, Src *src)
         pg->bytes = ((size_t)pg->tw * rows * 2 + 31) & ~(size_t)31;
         pg->mem = rdc_vram_alloc(pg->bytes);
         if (!pg->mem) { free_pages(t); free(t); return NULL; }
+        pg->txr = t->fmt | PVR_TXRFMT_NONTWIDDLED;
     }
     if (src) for (int i = 0; i < t->npx * t->npy; i++) upload_page(t, &t->pages[i], src);
+    t->next = live_tex; if (live_tex) live_tex->prev = t; live_tex = t;
+    return t;
+}
+
+/* ------------------------------------------------------------------ palette RAM */
+/* 1024 ARGB8888 entries: PAL8 textures index a bank of 256, PAL4 ones a block of 16. An entry is shared by every
+ * texture using its colour (ref counts); a bank handed out whole (the Mode-7 floor) is marked PAL_OWNED. */
+#define PAL_OWNED 0xffff
+static uint32_t pal_col[1024];
+static uint16_t pal_ref[1024];
+
+static void pal_write(int i, uint32_t c) { pal_col[i] = c; pvr_set_pal_entry(i, c); }
+void rdc_pal_restore(void)
+{
+    pvr_set_pal_format(PVR_PAL_ARGB8888);
+    for (int i = 0; i < 1024; i++) pvr_set_pal_entry(i, pal_col[i]);
+}
+static bool bank_owned(int b) { return pal_ref[b * 256] == PAL_OWNED; }
+
+/* colours not yet in entries [i0, i0+n) and the free entries there */
+static void pal_fit(const uint32_t *col, int ncol, int i0, int n, int *missing, int *nfree)
+{
+    int m = 0, f = 0;
+    for (int i = i0; i < i0 + n; i++) f += pal_ref[i] == 0;
+    for (int k = 0; k < ncol; k++) {
+        int i = i0; while (i < i0 + n && !(pal_ref[i] && pal_col[i] == col[k])) i++;
+        m += i == i0 + n;
+    }
+    *missing = m; *nfree = f;
+}
+
+/* place ncol colours in entries [i0, i0+n): lut[k] = the entry of col[k]. New ones fill free entries from the top
+ * (PAL8) or the bottom (PAL4 blocks), so the two kinds meet in the middle of a bank. */
+static void pal_take(const uint32_t *col, int ncol, int i0, int n, bool top, uint16_t *lut)
+{
+    for (int k = 0; k < ncol; k++) {
+        int i = i0; while (i < i0 + n && !(pal_ref[i] && pal_col[i] == col[k])) i++;
+        if (i == i0 + n) {
+            if (top) { i = i0 + n - 1; while (pal_ref[i]) i--; }
+            else { i = i0; while (pal_ref[i]) i++; }
+            pal_write(i, col[k]);
+        }
+        pal_ref[i]++; lut[k] = (uint16_t)i;
+    }
+}
+
+/* entries for a texture's colours, in one bank (PAL8) or one 16-entry block (PAL4); false when nowhere has room, or
+ * when the new entries it needs are not worth it: 1024 entries are few, a texture must save PAL_WORTH bytes of VRAM
+ * (against 16 bits) per entry it adds. Level backgrounds and sprite sheets save kilobytes an entry, a small sprite
+ * with 200 colours a hundred bytes: first come first served, it would take the entries a hero sheet needs later. */
+#define PAL_WORTH 768
+static bool pal_alloc(const uint32_t *col, int ncol, bool pal4, size_t saved, uint16_t *lut)
+{
+    int best = -1, best_m = 1 << 30, span = pal4 ? 16 : 256;
+    for (int i0 = 0; i0 < 1024; i0 += span) {
+        if (bank_owned(i0 / 256)) continue;
+        int m, f; pal_fit(col, ncol, i0, span, &m, &f);
+        if (m <= f && m < best_m) { best = i0; best_m = m; if (!m) break; }
+    }
+    if (best < 0 || saved < (size_t)best_m * PAL_WORTH) return false;
+    pal_take(col, ncol, best, span, !pal4, lut);
+    return true;
+}
+static void pal_release(const uint16_t *e, int n) { for (int k = 0; k < n; k++) if (pal_ref[e[k]] && pal_ref[e[k]] != PAL_OWNED) pal_ref[e[k]]--; }
+
+/* a whole bank for the caller's own 256 entries (rdc_pal_set), or -1 */
+int rdc_pal_bank_alloc(void)
+{
+    for (int tries = 0; tries < 4096; tries++) {
+        for (int b = 3; b >= 0; b--) {
+            bool free_bank = true;
+            for (int i = b * 256; i < b * 256 + 256 && free_bank; i++) free_bank = pal_ref[i] == 0;
+            if (free_bank) { for (int i = b * 256; i < b * 256 + 256; i++) pal_ref[i] = PAL_OWNED; return b; }
+        }
+        if (!evict_hook || !evict_hook()) break;
+    }
+    printf("pal: no free palette bank\n");
+    return -1;
+}
+void rdc_pal_bank_free(int b) { if (b >= 0) for (int i = b * 256; i < b * 256 + 256; i++) pal_ref[i] = 0; }
+void rdc_pal_set(int i, uint32_t argb) { pal_write(i, argb); }
+
+/* ------------------------------------------------------------------ baked textures */
+static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
+static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
+
+/* main RAM -> VRAM: DMA between frames (the block is 32-byte aligned, lengths are whole 32-byte units). Inside a frame
+ * (a texture drawn before anything loaded it) the store queues copy it, as the loader always did, rather than put a
+ * DMA through the TA's texture path while the frame's direct-render store queues feed it */
+static void vram_load(const void *src, pvr_ptr_t dst, size_t n)
+{
+    if (rdc_in_frame() || ((uintptr_t)src & 31) || (n & 31) || pvr_txr_load_dma(src, dst, n, true, NULL, NULL) < 0) pvr_txr_load(src, dst, n);
+}
+
+static inline uint16_t argb_to16(uint32_t c, uint32_t fmt)
+{
+    uint32_t a = c >> 24, r = (c >> 16) & 0xff, g = (c >> 8) & 0xff, b = c & 0xff;
+    return conv(a << 24 | b << 16 | g << 8 | r, fmt);
+}
+
+/* a paletted page expanded to 16 bits (palette RAM was full): same twiddled order, one texel after the other */
+static void expand_page(const uint8_t *d, bool pal4, int texels, const uint32_t *col, uint32_t fmt, pvr_ptr_t dst)
+{
+    enum { CHUNK = 8192 };
+    static uint16_t buf[CHUNK] __attribute__((aligned(32)));
+    for (int t0 = 0; t0 < texels; t0 += CHUNK) {
+        int n = texels - t0 < CHUNK ? texels - t0 : CHUNK;
+        for (int k = 0; k < n; k++) {
+            int t = t0 + k, ix = pal4 ? (d[t >> 1] >> ((t & 1) * 4)) & 15 : d[t];
+            buf[k] = argb_to16(col[ix], fmt);
+        }
+        vram_load(buf, (uint8_t *)dst + (size_t)t0 * 2, (size_t)n * 2);
+    }
+}
+
+RTex *rtex_create_baked(Ren *r, uint8_t *blk, size_t size)
+{
+    (void)r;
+    if (size < 32 || memcmp(blk, "PVT1", 4)) return NULL;
+    int w = rd16(blk + 4), h = rd16(blk + 6), np = rd16(blk + 8), ncol = rd16(blk + 10);
+    static const uint32_t FMT16[3] = { PVR_TXRFMT_ARGB1555, PVR_TXRFMT_RGB565, PVR_TXRFMT_ARGB4444 };
+    uint32_t fmt16 = FMT16[rd16(blk + 12) < 3 ? rd16(blk + 12) : 0];
+    const uint32_t *col = (const uint32_t *)(blk + rd32(blk + 24));
+    if (np < 1 || 32 + np * 32 > (int)size) return NULL;
+    RTex *t = calloc(1, sizeof *t);
+    if (!t) return NULL;
+    t->w = w; t->h = h; t->baked = true; t->fmt = fmt16;
+    t->r = t->g = t->b = t->a = 255; t->blend = R_BLEND_BLEND; t->scale = R_SCALE_NEAREST;
+    t->npx = np; t->npy = 1;
+    t->pages = memalign(32, sizeof(Page) * np);
+    if (!t->pages) { free(t); return NULL; }
+    memset(t->pages, 0, sizeof(Page) * np);
+    bool pal4 = true;
+    for (int i = 0; i < np; i++) pal4 &= (rd32(blk + 32 + i * 32 + 12) & 7) == 5;
+    /* The colours into palette RAM, else 16 bits. Palette RAM runs out long before VRAM does, so a small texture (16-bit
+     * it costs at most SMALL16 bytes) goes 16-bit anyway and leaves the entries to the big ones; and a full palette
+     * never evicts anything (that would put the disc reads back) */
+    enum { SMALL16 = 8192 };
+    size_t size16 = 0, sizep = 0;
+    for (int i = 0; i < np; i++) { size16 += (size_t)rd16(blk + 32 + i * 32 + 8) * rd16(blk + 32 + i * 32 + 10) * 2; sizep += rd32(blk + 32 + i * 32 + 20); }
+    uint16_t *lut = NULL; bool expand = false;
+    if (ncol) {
+        lut = size16 > SMALL16 ? malloc(sizeof *lut * ncol) : NULL;
+        if (lut && pal_alloc(col, ncol, pal4, size16 > sizep ? size16 - sizep : 0, lut)) { t->pal = lut; t->npal = ncol; }
+        else {
+            if (lut) printf("pal: tex %dx%d (%d colours) goes 16-bit\n", w, h, ncol);
+            free(lut); lut = NULL; expand = true;
+        }
+    }
+    for (int i = 0; i < np; i++) {
+        const uint8_t *e = blk + 32 + i * 32;
+        Page *pg = &t->pages[i];
+        pg->x0 = rd16(e); pg->y0 = rd16(e + 2); pg->w = rd16(e + 4); pg->h = rd16(e + 6); pg->tw = rd16(e + 8); pg->th = rd16(e + 10);
+        uint32_t pf = rd32(e + 12), off = rd32(e + 16), len = rd32(e + 20);
+        bool paletted = (pf & 7) >= 5;
+        uint8_t *d = blk + off;
+        pg->bytes = expand && paletted ? (size_t)pg->tw * pg->th * 2 : len;
+        if (off + len > size || !(pg->mem = rdc_vram_alloc(pg->bytes))) {
+            free_pages(t); pal_release(t->pal, t->npal); free(t->pal); free(t);
+            return NULL;
+        }
+        if (expand && paletted) {
+            expand_page(d, (pf & 7) == 5, pg->tw * pg->th, col, fmt16, pg->mem);
+            pg->txr = fmt16 | PVR_TXRFMT_TWIDDLED;
+            continue;
+        }
+        if (paletted) {   /* local indices -> the entries the colours got */
+            int sel = lut[0] >> ((pf & 7) == 5 ? 4 : 8);
+            if ((pf & 7) == 5) {
+                uint8_t map[256];
+                for (int b = 0; b < 256; b++) {
+                    int lo = (b & 15) < ncol ? lut[b & 15] & 15 : 0, hi = (b >> 4) < ncol ? lut[b >> 4] & 15 : 0;
+                    map[b] = (uint8_t)(lo | hi << 4);
+                }
+                for (uint32_t k = 0; k < len; k++) d[k] = map[d[k]];
+                pg->txr = PVR_TXRFMT_PAL4BPP | PVR_TXRFMT_4BPP_PAL(sel) | PVR_TXRFMT_TWIDDLED;
+            } else {
+                for (uint32_t k = 0; k < len; k++) d[k] = d[k] < ncol ? (uint8_t)lut[d[k]] : 0;
+                pg->txr = PVR_TXRFMT_PAL8BPP | PVR_TXRFMT_8BPP_PAL(sel) | PVR_TXRFMT_TWIDDLED;
+            }
+        } else pg->txr = ((pf & 7) << 27) | (pf & 0x100 ? PVR_TXRFMT_VQ_ENABLE : 0) | PVR_TXRFMT_TWIDDLED;
+        vram_load(d, pg->mem, len);
+    }
     t->next = live_tex; if (live_tex) live_tex->prev = t; live_tex = t;
     return t;
 }
@@ -184,7 +375,7 @@ RTex *rtex_create_rows(Ren *r, int w, int h, RTexRows rows, void *ud)
 
 void rtex_update(RTex *t, const uint32_t *px, int pitch)
 {
-    if (!t || !px) return;
+    if (!t || !px || t->baked) return;
     Src src = { .px = px, .pitch = pitch, .w = t->w, .h = t->h };
     for (int i = 0; i < t->npx * t->npy; i++) upload_page(t, &t->pages[i], &src);
 }
@@ -193,7 +384,7 @@ void rtex_destroy(RTex *t)
     if (!t) return;
     if (t->prev) t->prev->next = t->next; else live_tex = t->next;
     if (t->next) t->next->prev = t->prev;
-    free_pages(t); free(t);
+    free_pages(t); pal_release(t->pal, t->npal); free(t->pal); free(t);
 }
 
 /* ------------------------------------------------------------------ display mode switches */
@@ -229,6 +420,7 @@ void rdc_vram_unpark(void)
         if ((pg->mem = rdc_vram_alloc(pg->bytes))) pvr_txr_load(pg->parked, pg->mem, pg->bytes);
         free(pg->parked); pg->parked = NULL;
     }
+    rdc_pal_restore();
 }
 
 void rtex_size(const RTex *t, int *w, int *h) { *w = t ? t->w : 0; *h = t ? t->h : 0; }
@@ -236,7 +428,18 @@ void rtex_set_color_mod(RTex *t, uint8_t r, uint8_t g, uint8_t b) { if (t) { t->
 void rtex_set_alpha_mod(RTex *t, uint8_t a) { if (t) t->a = a; }
 void rtex_set_blend(RTex *t, RBlend b) { if (t) t->blend = b; }
 void rtex_set_scale(RTex *t, RScale s) { if (t) t->scale = s; }
-void rtex_set_tag(RTex *t, uint32_t tag) { if (t) t->tag = tag; }
+void rtex_set_tag(RTex *t, uint32_t tag)
+{
+    if (!t) return;
+    static int log = -1; if (log < 0) log = plat_getenv("SABER_VRAMLOG") != NULL;   /* debug: every texture made */
+    if (log && !t->tag) {
+        size_t b = 0; for (int i = 0; i < t->npx * t->npy; i++) b += t->pages[i].bytes;
+        int pal = 0; for (int i = 0; i < 1024; i++) pal += pal_ref[i] != 0;
+        printf("vram: tex %08lX %dx%d %s%u KB, %u KB used, %u KB free, %d palette entries\n", (unsigned long)tag, t->w, t->h,
+               t->baked ? (t->npal ? "pal " : "baked ") : "rgba ", (unsigned)(b / 1024), (unsigned)(vram_used / 1024), (unsigned)(pvr_mem_available() / 1024), pal);
+    }
+    t->tag = tag;
+}
 Ren *rtex_renderer(const RTex *t) { (void)t; return &the_ren; }
 size_t rdc_vram_used(void) { return vram_used; }
 
@@ -265,7 +468,7 @@ static const pvr_poly_hdr_t *page_hdr(RTex *t, Page *pg)
 {
     int b = t->blend, l = t->scale == R_SCALE_LINEAR;
     if (!(pg->have & (1 << (b * 2 + l)))) {
-        rdc_compile(&pg->hdr[b][l], pg->mem, t->fmt | PVR_TXRFMT_NONTWIDDLED, pg->tw, pg->th, (RBlend)b, l, false, false);
+        rdc_compile(&pg->hdr[b][l], pg->mem, pg->txr, pg->tw, pg->th, (RBlend)b, l, false, false);
         pg->have |= (uint8_t)(1 << (b * 2 + l));
     }
     return &pg->hdr[b][l];
@@ -300,6 +503,7 @@ void rdc_clip_screen(float *x0, float *y0, float *x1, float *y1) { *x0 = clx0; *
 
 void rdc_init(void)
 {
+    rdc_pal_restore();
     for (int b = 0; b < 3; b++) rdc_compile(&col_hdr[b], NULL, 0, 0, 0, (RBlend)b, false, false, false);
     update_clip();
 }

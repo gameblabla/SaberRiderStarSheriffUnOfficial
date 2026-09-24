@@ -96,7 +96,7 @@ void sfx_set_override(int game_id, const char *const *paths, int n)
 {
     if (game_id < 0 || game_id >= 24) return;
     sfx_over[game_id].n = 0;
-    for (int i = 0; i < n && i < 4; i++) if (paths[i]) snprintf(sfx_over[game_id].file[sfx_over[game_id].n++], 256, "%s", paths[i]);
+    for (int i = 0; i < n && i < 4; i++) if (paths[i]) { snprintf(sfx_over[game_id].file[sfx_over[game_id].n++], 256, "%s", paths[i]); aud_keep(aud_sample_file(paths[i]), false); }   /* loaded now */
 }
 void sfx_clear_overrides(void) { memset(sfx_over, 0, sizeof sfx_over); }
 
@@ -176,5 +176,14 @@ void audio_update(void)
     aud_update();
 }
 
-bool audio_init(void) { return aud_init(); }
+/* the sfx table's samples are loaded up front: fetching one from a disc the moment it first plays stalls the game */
+bool audio_init(void)
+{
+    if (!aud_init()) return false;
+    for (int i = 0; i < 32; i++) aud_keep(aud_sample_pack(SFX_TABLE[i]), false);
+    return true;
+}
+void sfx_preload_file(const char *path) { if (path) aud_keep(aud_sample_file(path), false); }
+void sfx_prefetch_id(uint32_t id) { aud_prefetch(aud_sample_pack(id)); }
+void sfx_preload_loop(const char *path) { if (path) aud_keep(aud_sample_file(path), true); }
 void audio_shutdown(void) { aud_music_stop(); aud_shutdown(); }

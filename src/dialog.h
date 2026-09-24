@@ -26,6 +26,8 @@ typedef struct {
 } Dialog;
 
 enum { DLG_GREEN, DLG_PURPLE, DLG_RED, DLG_BLUE };
+/* load what dialogs show before one opens: the box tilesets and avatars (text_id 0), a pack dialog's avatars and voice */
+void dialog_preload(uint32_t text_id);
 /* the hero the player picked: the level-1 scripts were written for Fireball, so with April the lines that name
  * him are rewritten for her and the two avatars swap roles (April speaks to Fireball instead of the other way round) */
 void dialog_set_hero(int character);

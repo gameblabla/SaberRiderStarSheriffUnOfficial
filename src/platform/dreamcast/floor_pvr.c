@@ -36,6 +36,7 @@ struct RFloor {
     uint8_t *idx[MAX_LEV * 16];        /* [m * MAX_LEV + L]: material m at mip L as palette indices (clipmap path) */
     int msz[MAX_LEV];                  /* size of mip L (>= 1) */
     uint16_t pal[256];
+    int bank;                          /* the palette bank lent by the renderer (clipmap path), -1 none */
     uint8_t tw_lx[64], tw_ly[64];      /* twiddled byte k of a block -> texel (lx, ly) */
 };
 
@@ -153,8 +154,11 @@ static bool create_clipmap(RFloor *f)
         f->idx[m * MAX_LEV + L] = ix;
     }
     for (int i = 0; i < 16 * MAX_LEV; i++) free(rgba[i]);
-    pvr_set_pal_format(PVR_PAL_RGB565);
-    for (int i = 0; i < np; i++) pvr_set_pal_entry(i, f->pal[i]);
+    if ((f->bank = rdc_pal_bank_alloc()) < 0) return false;   /* palette RAM is ARGB8888, shared with the textures */
+    for (int i = 0; i < np; i++) {
+        uint32_t c = f->pal[i], r = ((c >> 11) * 255 + 15) / 31, g = (((c >> 5) & 63) * 255 + 31) / 63, b = ((c & 31) * 255 + 15) / 31;
+        rdc_pal_set(f->bank * 256 + i, 0xff000000u | r << 16 | g << 8 | b);
+    }
     for (int k = 0; k < 64; k++) {   /* twiddled order inside an 8x8 block: bit 0 = y0, bit 1 = x0, ... */
         int lx = 0, ly = 0;
         for (int b = 0; b < 3; b++) { ly |= ((k >> (2 * b)) & 1) << b; lx |= ((k >> (2 * b + 1)) & 1) << b; }
@@ -170,7 +174,7 @@ RFloor *r_floor_create(Ren *r, const RFloorDesc *d)
     RFloor *f = memalign(32, sizeof(RFloor));
     if (!f) return NULL;
     memset(f, 0, sizeof *f);
-    f->d = *d;
+    f->d = *d; f->bank = -1;
     while ((1 << f->tex_shift) < d->tex) f->tex_shift++;
     f->single = d->mapn == 1 && d->nmat == 1;
     if (!(f->single ? create_single(f) : create_clipmap(f))) { r_floor_destroy(f); return NULL; }
@@ -185,6 +189,7 @@ void r_floor_destroy(RFloor *f)
     rdc_forget_header();
     for (int L = 0; L < MAX_LEV; L++) if (f->lev[L].mem) rdc_vram_free(f->lev[L].mem, f->lev[L].bytes);
     for (int i = 0; i < MAX_LEV * 16; i++) free(f->idx[i]);
+    rdc_pal_bank_free(f->bank);
     free(f);
 }
 
@@ -214,7 +219,7 @@ static void keep_window(RFloor *f, int L, float cam_x, float cam_y)
         lv->bytes = WIN * WIN; lv->tw = WIN;
         lv->mem = rdc_vram_alloc(lv->bytes);
         if (!lv->mem) return;
-        rdc_compile(&lv->hdr, lv->mem, PVR_TXRFMT_PAL8BPP | PVR_TXRFMT_8BPP_PAL(0) | PVR_TXRFMT_TWIDDLED, WIN, WIN, R_BLEND_NONE, false, true, true);
+        rdc_compile(&lv->hdr, lv->mem, PVR_TXRFMT_PAL8BPP | PVR_TXRFMT_8BPP_PAL(f->bank) | PVR_TXRFMT_TWIDDLED, WIN, WIN, R_BLEND_NONE, false, true, true);
         lv->valid = false;
     }
     float scale = 1.0f / (float)(1 << L);

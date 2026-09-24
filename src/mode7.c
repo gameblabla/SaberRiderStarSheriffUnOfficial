@@ -147,14 +147,18 @@ static bool load_atlas(Mode7 *m)
     if (!png) { fprintf(stderr, "assets/mode7.png missing (run tools/build_mode7_assets.py)\n"); return false; }
     int w, h; uint32_t *px = png_load_rgba(png, &w, &h);
     if (!px) return false;
-    FILE *f = fopen(txt, "r");
+    FILE *f = asset_fopen(txt);
     char name[64]; int x, y, sw, sh, n; int found = 0;
     while (f && fscanf(f, "%63s %d %d %d %d %d", name, &x, &y, &sw, &sh, &n) == 6) {
         for (int i = 0; i < S_COUNT; i++) if (!strcmp(name, SPR_NAMES[i])) { m->spr[i] = (Spr){ x, y, sw, sh, n }; found++; }
     }
     if (f) fclose(f);
     if (found < S_COUNT) fprintf(stderr, "mode7.txt: %d/%d sprites\n", found, S_COUNT);
-    m->atlas = rtex_create(m->ren, w, h, R_TEX_STATIC, px);
+    m->atlas = NULL;
+#ifdef PLAT_BAKED_ASSETS
+    m->atlas = gfx_image_tex(png, NULL, NULL);   /* the console's baked texture */
+#endif
+    if (!m->atlas) m->atlas = rtex_create(m->ren, w, h, R_TEX_STATIC, px);
     rtex_set_blend(m->atlas, R_BLEND_BLEND); rtex_set_scale(m->atlas, R_SCALE_NEAREST);
     /* floor materials into memory, with box-filtered mips */
     Spr *fl = &m->spr[S_FLOOR];
@@ -182,12 +186,10 @@ static bool load_sky(Mode7 *m)
 {
     const char *png = asset_path("sky_mode7.png");
     if (!png) { fprintf(stderr, "assets/sky_mode7.png missing\n"); return false; }
-    int w, h; uint32_t *px = png_load_rgba(png, &w, &h);
-    if (!px) return false;
-    m->sky_tex = rtex_create(m->ren, w, h, R_TEX_STATIC, px);
+    int w, h; m->sky_tex = gfx_image_tex(png, &w, &h);
+    if (!m->sky_tex) return false;
     rtex_set_scale(m->sky_tex, R_SCALE_NEAREST);
     m->sky_w = w; m->sky_h = h;
-    free(px);
     return true;
 }
 
@@ -391,6 +393,7 @@ Mode7 *mode7_create(Ren *ren, int sw, int sh, int difficulty, int lives, bool re
     m->ren = ren; m->sw = sw; m->sh = sh; m->rng = 0xC0FFEE;
     m->floor_h = sh - HORIZON - 1;
     m->ok = load_atlas(m);
+    sfx_preload_file(asset_path("sfx/turbo_start.wav")); sfx_preload_loop(asset_path("sfx/turbo_loop.wav"));
     if (m->ok && m->spr[S_BUGGY].frames < 5) { fprintf(stderr, "mode7.png is stale (buggy needs 5 steering frames): rerun tools/build_mode7_assets.py\n"); m->ok = false; }
     m->sky_ok = load_sky(m);
     m->difficulty = difficulty; m->lives = lives;

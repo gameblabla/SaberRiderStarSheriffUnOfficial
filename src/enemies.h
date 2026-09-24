@@ -68,6 +68,7 @@ typedef struct {
 } Enemies;
 
 void enemies_reset(Enemies *E);
+void enemies_preload(const Enemies *E);   /* load what the triggers added so far can spawn (no disc reads mid-level) */
 void enemies_add_trigger(Enemies *E, const LevelObject *o);
 void enemies_update(Enemies *E, Player *pl, const Level *L, const PhysicsWorld *W, Bullets *pb, Bullets *eb, Effects *fx,
                     float cam_x, int sw, int sh, float dt);

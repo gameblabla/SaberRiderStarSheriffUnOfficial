@@ -145,6 +145,8 @@ static bool level_start(Game *g)
             g->dialogs[k].t_in = o->wp[2][0] * 0.001f; g->dialogs[k].t_out = o->wp[2][1] * 0.001f;
         }
     }
+    enemies_preload(&g->enemies);
+    for (int k = 0; k < 4; k++) if (g->dialogs[k].text) dialog_preload(g->dialogs[k].text);
     g->state = 10;
     if (plat_getenv("SABER_DEBUG")) g->debug_collision = true;   /* debug: collision overlay from the start */
     music_play(g->night_on ? 13 : g->forest_on ? 15 : g->lab_on ? 14 : 5, true);

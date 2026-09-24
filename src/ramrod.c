@@ -1,5 +1,6 @@
 #include "ramrod.h"
 #include "assets.h"
+#include "gfx.h"
 #include "font.h"
 #include "audio.h"
 #include "dialog.h"
@@ -185,24 +186,25 @@ static RTex *load_tex(Ramrod *r, const char *name, int *w, int *h, uint32_t **ke
     char buf[64]; snprintf(buf, sizeof buf, "ramrod/%s", name);
     const char *p = asset_path(buf);
     if (!p) { fprintf(stderr, "assets/%s missing (run ../ramrod/build.py)\n", buf); return NULL; }
-    int ww, hh; uint32_t *px = png_load_rgba(p, &ww, &hh);
-    if (!px) return NULL;
-    RTex *t = rtex_create(r->ren, ww, hh, R_TEX_STATIC, px);
+    int ww, hh; RTex *t = gfx_image_tex(p, &ww, &hh);   /* the console's baked texture, else the PNG */
+    if (!t) return NULL;
     rtex_set_blend(t, R_BLEND_BLEND); rtex_set_scale(t, R_SCALE_NEAREST);
     if (w) *w = ww;
     if (h) *h = hh;
-    if (keep) *keep = px; else free(px);
+    if (keep && !(*keep = png_load_rgba(p, &ww, &hh))) { rtex_destroy(t); return NULL; }   /* the pixels the code reads */
     return t;
 }
 
 static bool load_assets(Ramrod *r)
 {
+    static const char *const SFX[] = { "alarm.wav", "charge.wav", "clang.wav", "laser.wav", "stomp.wav", "whoosh.wav" };   /* its sounds, loaded before they play */
+    for (size_t i = 0; i < sizeof SFX / sizeof *SFX; i++) { char b[64]; snprintf(b, sizeof b, "ramrod/%s", SFX[i]); sfx_preload_file(asset_path(b)); }
     int w, h;
     r->atlas = load_tex(r, "atlas.png", NULL, NULL, NULL);
     r->sky = load_tex(r, "sky.png", &w, &h, NULL);
     r->cockpit = load_tex(r, "cockpit.png", NULL, NULL, NULL);
-    uint32_t *fl = NULL; RTex *ft = load_tex(r, "floor.png", &w, &h, &fl);
-    if (ft) rtex_destroy(ft);
+    const char *fp = asset_path("ramrod/floor.png");
+    uint32_t *fl = fp ? png_load_rgba(fp, &w, &h) : NULL;   /* the floor is only read as pixels (r_floor_create) */
     if (!r->atlas || !r->sky || !r->cockpit || !fl || w != TEX || h != TEX) { free(fl); return false; }
     memcpy(r->tex[0], fl, sizeof r->tex[0]); free(fl);
     for (int L = 1; L < MIPS; L++) {   /* box-filtered mips against far-row shimmer */
@@ -215,7 +217,7 @@ static bool load_assets(Ramrod *r)
         }
     }
     const char *p = asset_path("ramrod/atlas.txt");
-    FILE *f = p ? fopen(p, "r") : NULL;
+    FILE *f = asset_fopen(p);
     if (!f) return false;
     char name[64]; int fr, x, y, fw, fh, ax, ay;
     while (fscanf(f, "%63s %d %d %d %d %d %d %d", name, &fr, &x, &y, &fw, &fh, &ax, &ay) == 8)

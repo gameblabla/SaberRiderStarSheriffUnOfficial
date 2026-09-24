@@ -18,6 +18,7 @@
  * hardware rotation plane (VDP2 RBG0, SNES mode 7), which is why the floor is not expressed as polygons. */
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 typedef struct Ren Ren;       /* the renderer (one per program; passed along like SDL_Renderer) */
 typedef struct RTex RTex;     /* a texture */
@@ -40,6 +41,10 @@ void  rtex_update(RTex *t, const uint32_t *px, int pitch_bytes);                
  * backend convert a big image piece by piece instead of holding it whole (the callback may run twice per row). */
 typedef void (*RTexRows)(void *ud, int y0, int n, uint32_t *out);
 RTex *rtex_create_rows(Ren *r, int w, int h, RTexRows rows, void *ud);
+/* a texture baked ahead of time in the backend's own format (a "PVT1" block of the console's tex.pck, see
+ * tools/dc/texbake.py); NULL where the backend has none. The block must be 32-byte aligned and may be altered (the
+ * palette indices are remapped to where its colours land); it can be freed afterwards. */
+RTex *rtex_create_baked(Ren *r, uint8_t *block, size_t size);
 void  rtex_destroy(RTex *t);
 void  rtex_size(const RTex *t, int *w, int *h);
 void  rtex_set_color_mod(RTex *t, uint8_t r, uint8_t g, uint8_t b);

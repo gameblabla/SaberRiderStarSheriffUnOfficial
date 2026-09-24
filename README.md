@@ -24,23 +24,56 @@ It reads the demo's packs from `SaberRider/data` (override with `DATA=`).
 
 KOS, its kos-ports and the game must share one SH4 float ABI. The build expects
 `export KOS_SH4_PRECISION="-m4-single-only"` (32-bit `double`) in `environ.sh`,
-with KOS and the ports (libADX, sh4zam, stb_image) rebuilt after changing it.
+with KOS and the ports (libADX, sh4zam) rebuilt after changing it.
 Mixing `-m4-single` code with the `-m4-single-only` newlib breaks libm and printf
 (`floorf(96)` returned 0).
 
 ```sh
 source /opt/toolchains/dc/kos/environ.sh
 make -f Makefile.dc -j8
-make -f Makefile.dc disc
+make -f Makefile.dc disc      # everything
+make -f Makefile.dc rebake    # textures, samples and files baked again; converted music and videos kept
+make -f Makefile.dc repack    # only the new ELF
 ```
 
 The playable image is `build/dc/saber_rider.cdi`. The disc builder requires
-FFmpeg, the KOS `wav2adpcm`, `pvrtex`, `scramble`, and `makeip` utilities, the
-DCMV converter vendored in `third_party/dreamcast-fmv` (its packers are compiled
-on first use: gcc, liblz4, libzstd), `mkisofs`, and `cdi4dc`.
-It converts the pack sound effects to AICA ADPCM, music to ADX, and the pack
-videos and power-attack clips to DCMV. Do not copy `video.pck` to the disc:
-the runtime opens the converted files in `/cd/video` instead.
+FFmpeg, Python 3 with NumPy and Pillow, the KOS `wav2adpcm`, `pvrtex`,
+`scramble`, and `makeip` utilities, the DCMV converter vendored in
+`third_party/dreamcast-fmv` (its packers are compiled on first use: gcc,
+liblz4, libzstd), `mkisofs`, and `cdi4dc`.
+
+Nothing is decoded on the console. The builder bakes everything into three
+extra packs in `/cd/data`, in the same HEADLIST format. Every block is 32-byte
+aligned and padded, so it takes one read and goes on by DMA:
+
+- `tex.pck`: every texture. `tools/dc/texprep.c` runs the game's own `gfx.c`
+  over the packs' sprites, tile banks and fonts. `tools/dc/texbake.py` then
+  bakes those and our PNGs into twiddled power-of-two pages. Up to 16 colours
+  use a 4-bit palette and up to 256 an 8-bit one, both exact. An image with
+  more colours keeps its 16-bit format (RGB565, ARGB1555, ARGB4444) unless
+  pvrtex's VQ or 256-colour quantisation measures no worse against the source.
+  Tile banks are re-laid in the sheet width that needs the least memory. At run
+  time the colours go into palette RAM (ARGB8888), shared between textures. A
+  texture is expanded to 16 bits instead if it would cost at most 8 KB that way,
+  if palette RAM has no room, or if it saves less than 768 bytes of VRAM per
+  new entry. The 1024 entries go to the backgrounds and sprite sheets that save
+  the most.
+- `snd.pck`: the packs' sfx and our WAVs as AICA ADPCM (`wav2adpcm`), padded
+  to 32 bytes.
+- `files.pck`: our text and level files, plus the RGBA of the three images whose
+  pixels the game reads.
+
+Music goes to ADX files, and the pack videos and power-attack clips to DCMV
+files. Those stream. Do not copy `video.pck` to the disc: the runtime opens the
+converted files in `/cd/video` instead. Stages load what they use when they
+start: the level's graphics, and every enemy, shot and effect its triggers can
+spawn. The sfx table and the stage's own sounds load too, so nothing is read
+from the disc mid-level. `SABER_READLOG=1` logs every pack read, and
+`SABER_VRAMLOG=1` logs every texture with the VRAM and palette use.
+
+A CD-R is read at constant linear velocity. The image is padded to 650 MiB
+(`--pad-to`, 0 turns it off) with a dummy file sorted first, so the game's
+files sit on the outer part of the disc.
 
 Controls: D-pad or stick moves, A jumps, B/X shoots, Y uses the power attack,
 triggers aim, and Start pauses. A+B+X+Y+Start resets to the console menu.

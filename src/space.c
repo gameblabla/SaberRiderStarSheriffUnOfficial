@@ -227,18 +227,19 @@ static RTex *load_tex(Space *s, const char *name, int *w, int *h, uint32_t **kee
     char buf[64]; snprintf(buf, sizeof buf, "space/%s", name);
     const char *p = asset_path(buf);
     if (!p) { fprintf(stderr, "assets/%s missing (run ../space/build.py)\n", buf); return NULL; }
-    int ww, hh; uint32_t *px = png_load_rgba(p, &ww, &hh);
-    if (!px) return NULL;
-    RTex *t = rtex_create(s->ren, ww, hh, R_TEX_STATIC, px);
+    int ww, hh; RTex *t = gfx_image_tex(p, &ww, &hh);   /* the console's baked texture, else the PNG */
+    if (!t) return NULL;
     rtex_set_blend(t, R_BLEND_BLEND); rtex_set_scale(t, R_SCALE_NEAREST);
     if (w) *w = ww;
     if (h) *h = hh;
-    if (keep) *keep = px; else free(px);
+    if (keep && !(*keep = png_load_rgba(p, &ww, &hh))) { rtex_destroy(t); return NULL; }   /* the pixels the code reads */
     return t;
 }
 
 static bool load_assets(Space *s)
 {
+    static const char *const SFX[] = { "beam.wav", "charge.wav", "launch.wav", "pickup.wav", "shot.wav", "torpedo.wav", "warning.wav", "zap.wav" };   /* its sounds, loaded before they play */
+    for (size_t i = 0; i < sizeof SFX / sizeof *SFX; i++) { char b[64]; snprintf(b, sizeof b, "space/%s", SFX[i]); sfx_preload_file(asset_path(b)); }
     s->atlas = load_tex(s, "atlas.png", NULL, NULL, NULL);
     s->boss_tex = load_tex(s, "boss.png", &s->boss_w, &s->boss_h, &s->boss_px);
     s->neb = load_tex(s, "nebula.png", NULL, NULL, NULL);
@@ -246,7 +247,7 @@ static bool load_assets(Space *s)
     s->far = load_tex(s, "far_ship.png", &s->far_w, &s->far_h, NULL);
     if (!s->atlas || !s->boss_tex || !s->neb || !s->planet || !s->far) return false;
     const char *p = asset_path("space/atlas.txt");
-    FILE *f = p ? fopen(p, "r") : NULL;
+    FILE *f = asset_fopen(p);
     if (!f) return false;
     char name[64]; int fr, x, y, fw, fh, ax, ay;
     while (fscanf(f, "%63s %d %d %d %d %d %d %d", name, &fr, &x, &y, &fw, &fh, &ax, &ay) == 8)
@@ -256,7 +257,7 @@ static bool load_assets(Space *s)
     fclose(f);
     for (int i = 0; i < A_COUNT; i++) if (!s->anim[i].n) { fprintf(stderr, "space atlas: %s missing\n", ANAMES[i]); return false; }
     p = asset_path("space/boss.txt");
-    f = p ? fopen(p, "r") : NULL;
+    f = asset_fopen(p);
     if (!f) return false;
     char line[128]; Boss *b = &s->boss;
     while (fgets(line, sizeof line, f)) {

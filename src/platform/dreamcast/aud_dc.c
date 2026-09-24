@@ -1,13 +1,17 @@
 /* platform/aud.h on the AICA.
  *
- * Every sample on the disc is 4-bit Yamaha ADPCM made by KOS's wav2adpcm (tools/dc/build_disc.py converts the packs'
+ * Every sample is baked into snd.pck by tools/dc/build_disc.py: 4-bit Yamaha ADPCM made by KOS's wav2adpcm (the packs'
  * sfx - their own ADPCM flavour restarts its predictor every 0x7ff8 bytes, which the AICA can't - and our wav files,
- * mono, at their own rate). A sample that fits the AICA's 16-bit channel length (65534 samples) is loaded into sound
- * RAM once and fired with snd_sfx; a longer one (dialog lines, the power-attack speeches) or a loop stays in main
- * RAM and plays through one of two ADPCM streams, which also carry a volume we can change while it plays.
+ * mono, at their own rate), padded to whole 32-byte units, one block each ("SMPL", u32 rate, samples, bytes, 16 bytes
+ * 0, the data): one read from the disc, no header parsing. Pack sfx are under their id, our files under asset_key.
+ * A sample that fits the AICA's 16-bit channel length (65534 samples) goes to sound RAM once and is fired with
+ * snd_sfx; a longer one (dialog lines, the power-attack speeches) or a loop stays in main RAM (its block) and plays
+ * through one of two ADPCM streams, which also carry a volume we can change while it plays.
  * Music is the packs' tracks as ADX files, streamed from the disc by libADX in its own thread. */
 #include "../aud.h"
 #include "../plat.h"
+#include "../../pack.h"
+#include "../../assets.h"
 #include <kos.h>
 #include <dc/sound/sound.h>
 #include <dc/sound/sfxmgr.h>
@@ -25,93 +29,82 @@
 #define STREAM_BUF 16384          /* ADPCM bytes per stream buffer (0.74 s at 44.1 kHz) */
 
 struct AudSample {
-    uint32_t id; char path[128];
-    bool loaded, missing;
+    uint32_t key;                 /* its snd.pck block: a pack sfx id or asset_key */
+    bool missing;
     int rate, samples;
     sfxhnd_t sfx;                 /* short: in sound RAM */
-    uint8_t *adpcm; size_t bytes; /* long: in main RAM (NULL until needed) */
+    const uint8_t *adpcm; size_t bytes; /* long: its block in main RAM (NULL until needed); bytes: whole 32-byte units */
     uint32_t last_use;
+    bool kept;                    /* long, loaded for good (aud_keep) */
 };
 #define MAX_SAMPLES 200
 static AudSample samples[MAX_SAMPLES]; static int nsamples;
 static uint32_t use_clock;
 static size_t long_bytes;
 
-/* ---- wav files ---- */
-typedef struct { int rate, ch, bits; uint32_t data_off, data_len; } WavInfo;
-static bool wav_info(const char *path, WavInfo *wi)
-{
-    FILE *f = fopen(path, "rb"); if (!f) return false;
-    uint8_t h[12]; bool ok = false;
-    if (fread(h, 1, 12, f) == 12 && !memcmp(h, "RIFF", 4) && !memcmp(h + 8, "WAVE", 4)) {
-        uint32_t pos = 12; uint8_t c[8];
-        while (fseek(f, pos, SEEK_SET) == 0 && fread(c, 1, 8, f) == 8) {
-            uint32_t len = c[4] | c[5] << 8 | c[6] << 16 | (uint32_t)c[7] << 24;
-            if (!memcmp(c, "fmt ", 4)) {
-                uint8_t fm[16]; if (fread(fm, 1, 16, f) != 16) break;
-                wi->ch = fm[2] | fm[3] << 8; wi->rate = fm[4] | fm[5] << 8 | fm[6] << 16 | fm[7] << 24; wi->bits = fm[14] | fm[15] << 8;
-            } else if (!memcmp(c, "data", 4)) { wi->data_off = pos + 8; wi->data_len = len; ok = true; break; }
-            pos += 8 + len + (len & 1);
-        }
-    }
-    fclose(f);
-    return ok;
-}
+static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 
+/* a long sample's block stays in main RAM (s->adpcm points into it); the least recently used ones not playing go when
+ * the cache would pass LONG_CACHE */
+static void make_room(const AudSample *s)
+{
+    while (long_bytes + s->bytes > LONG_CACHE) {
+        AudSample *old = NULL;
+        for (int i = 0; i < nsamples; i++) if (samples[i].adpcm && !samples[i].kept && &samples[i] != s && (!old || samples[i].last_use < old->last_use)) old = &samples[i];
+        extern bool snd_dc_sample_busy(const AudSample *s);
+        if (!old || snd_dc_sample_busy(old)) break;
+        packs_release_type(old->key, RES_SAMPLE); old->adpcm = NULL; long_bytes -= old->bytes;
+    }
+}
 static bool load_long(AudSample *s)
 {
-    WavInfo wi;
-    if (!wav_info(s->path, &wi)) return false;
-    while (long_bytes + wi.data_len > LONG_CACHE) {   /* make room: drop the least recently used long sample not playing */
-        AudSample *old = NULL;
-        for (int i = 0; i < nsamples; i++) if (samples[i].adpcm && (!old || samples[i].last_use < old->last_use)) old = &samples[i];
-        extern bool snd_dc_sample_busy(const AudSample *s);
-        if (!old || old == s || snd_dc_sample_busy(old)) break;
-        free(old->adpcm); old->adpcm = NULL; long_bytes -= old->bytes;
-    }
-    uint8_t *d = memalign(32, (wi.data_len + 31) & ~31u);
-    FILE *f = d ? fopen(s->path, "rb") : NULL;
-    bool ok = f && fseek(f, wi.data_off, SEEK_SET) == 0 && fread(d, 1, wi.data_len, f) == wi.data_len;
-    if (f) fclose(f);
-    if (!ok) { free(d); return false; }
-    s->adpcm = d; s->bytes = wi.data_len; long_bytes += wi.data_len;
+    if (s->adpcm) return true;
+    make_room(s);
+    const PackEntry *e = packs_find_type(s->key, RES_SAMPLE);
+    if (!e || e->size < 32 + s->bytes) return false;
+    s->adpcm = e->data + 32; long_bytes += s->bytes;
     return true;
 }
 
 static AudSample *load(AudSample *s)
 {
-    WavInfo wi;
-    s->loaded = true;
-    if (!wav_info(s->path, &wi) || wi.bits != 4 || wi.ch != 1) {
-        printf("snd: %s missing or not mono ADPCM\n", s->path); s->missing = true; return NULL;
-    }
-    s->rate = wi.rate; s->samples = (int)(wi.data_len * 2);
-    if (s->samples <= AICA_MAX_LEN) {
-        s->sfx = snd_sfx_load(s->path);
-        if (s->sfx == SFXHND_INVALID) { printf("snd: %s: no sound RAM\n", s->path); s->missing = true; return NULL; }
+    const PackEntry *e = packs_find_type(s->key, RES_SAMPLE);
+    if (!e || e->size < 32 || memcmp(e->data, "SMPL", 4)) { printf("snd: sample %08lX missing\n", (unsigned long)s->key); s->missing = true; return NULL; }
+    s->rate = (int)rd32(e->data + 4); s->samples = (int)rd32(e->data + 8); s->bytes = rd32(e->data + 12);
+    if (s->samples <= AICA_MAX_LEN) {   /* to sound RAM; the block goes */
+        s->sfx = snd_sfx_load_raw_buf((char *)e->data + 32, s->bytes, (uint32_t)s->rate, 4, 1);
+        packs_release_type(s->key, RES_SAMPLE);
+        if (s->sfx == SFXHND_INVALID) { printf("snd: %08lX: no sound RAM\n", (unsigned long)s->key); s->missing = true; return NULL; }
+    } else if (e->size >= 32 + s->bytes) {   /* long: the block just read is what the stream plays */
+        make_room(s);
+        s->adpcm = e->data + 32; long_bytes += s->bytes;
     }
     return s;
 }
 
-static AudSample *find(uint32_t id, const char *path)
+static AudSample *find(uint32_t key)
 {
-    for (int i = 0; i < nsamples; i++)
-        if (path ? !strcmp(samples[i].path, path) : (samples[i].id == id && samples[i].path[0] == '/' && !strncmp(samples[i].path, "/cd/sfx/", 8)))
-            return samples[i].missing ? NULL : &samples[i];
+    for (int i = 0; i < nsamples; i++) if (samples[i].key == key) return samples[i].missing ? NULL : &samples[i];
     if (nsamples == MAX_SAMPLES) return NULL;
     AudSample *s = &samples[nsamples++]; memset(s, 0, sizeof *s);
-    s->id = id;
-    if (path) snprintf(s->path, sizeof s->path, "%s", path);
-    else snprintf(s->path, sizeof s->path, "/cd/sfx/%08lX.wav", (unsigned long)id);
+    s->key = key;
     return load(s);
 }
 
-AudSample *aud_sample_pack(uint32_t id) { return find(id, NULL); }
-AudSample *aud_sample_file(const char *path) { return path ? find(0, path) : NULL; }
+AudSample *aud_sample_pack(uint32_t id) { return find(id); }
+void aud_prefetch(AudSample *s) { if (s && !s->sfx && !s->adpcm) { s->last_use = ++use_clock; load_long(s); } }
+void aud_keep(AudSample *s, bool loop)
+{
+    if (!s || (s->sfx && !loop) || s->kept) return;   /* short one-shots are in sound RAM already; loops stream from main RAM */
+    if (s->adpcm || load_long(s)) { s->kept = true; long_bytes -= s->bytes; }   /* outside the LRU budget */
+}
+AudSample *aud_sample_file(const char *path) { return path ? find(asset_key(path)) : NULL; }
 
 /* ---- streams for long samples and loops ---- */
 static uint8_t silence[STREAM_BUF] __attribute__((aligned(32)));
+#ifdef AUD_UNPADDED_SAMPLES
 static uint8_t pad[NSTREAM][STREAM_BUF] __attribute__((aligned(32)));   /* a sample's padded last chunk */
+#endif
 static struct {
     snd_stream_hnd_t h; AudSample *smp; size_t pos; bool loop, active, draining; uint64_t end_ms; unsigned gen; int vol;
 } strm[NSTREAM];
@@ -131,10 +124,14 @@ static void *stream_cb(snd_stream_hnd_t hnd, int req, int *got)
             }
         }
         size_t n = s->bytes - strm[i].pos;
-        if (n >= (size_t)req) { void *p = s->adpcm + strm[i].pos; strm[i].pos += (size_t)req; *got = req; return p; }
-        /* the tail: KOS writes each chunk at the running offset in sound RAM, so a short chunk (not whole 32-byte
-         * blocks) misaligned every later DMA of that stream - g2_dma refused them and it went silent for good. So the
-         * request is always filled: a loop carries on from its start, a one-shot with silence */
+        if (n >= (size_t)req) { const void *p = s->adpcm + strm[i].pos; strm[i].pos += (size_t)req; *got = req; return (void *)p; }
+#ifndef AUD_UNPADDED_SAMPLES
+        /* the tail: KOS writes each chunk at the running offset in sound RAM, so a chunk that is not whole 32-byte units
+         * would misalign every later DMA of the stream (g2_dma refuses them and it goes silent for good). The samples are
+         * baked as whole 32-byte units, so the tail goes as it is; the next request loops or drains */
+        { const void *p = s->adpcm + strm[i].pos; strm[i].pos = s->bytes; *got = (int)n; return (void *)p; }
+#else
+        /* unpadded samples: always fill the request, a loop carrying on from its start, a one-shot with silence */
         size_t want = (size_t)req < STREAM_BUF ? (size_t)req : STREAM_BUF, done = 0;
         while (done < want) {
             size_t k = s->bytes - strm[i].pos; if (k > want - done) k = want - done;
@@ -145,6 +142,7 @@ static void *stream_cb(snd_stream_hnd_t hnd, int req, int *got)
         }
         *got = (int)want;
         return pad[i];
+#endif
     }
     *got = 0; return NULL;
 }

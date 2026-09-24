@@ -32,6 +32,7 @@ RTex *rtex_create_rows(Ren *r, int w, int h, RTexRows rows, void *ud)
     SDL_free(px);
     return t;
 }
+RTex *rtex_create_baked(Ren *r, uint8_t *block, size_t size) { (void)r; (void)block; (void)size; return NULL; }   /* PC: no baked textures */
 void rtex_destroy(RTex *t) { if (t) SDL_DestroyTexture(ST(t)); }
 void rtex_size(const RTex *t, int *w, int *h) { float fw = 0, fh = 0; SDL_GetTextureSize((SDL_Texture *)t, &fw, &fh); *w = (int)fw; *h = (int)fh; }
 void rtex_set_color_mod(RTex *t, uint8_t r, uint8_t g, uint8_t b) { if (t) SDL_SetTextureColorMod(ST(t), r, g, b); }

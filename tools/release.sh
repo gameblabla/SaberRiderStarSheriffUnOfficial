@@ -5,7 +5,7 @@
 #
 #   tools/release.sh [--linux] [--dc] [--full-disc] [DATA_DIR]
 #     --linux / --dc   only that package (default: both)
-#     --full-disc      rebuild the whole Dreamcast disc (sound, music, FMV conversion) instead of reusing build/dc/stage
+#     --full-disc      rebuild the whole Dreamcast disc (music and FMV conversion too) instead of re-baking build/dc/stage
 #     DATA_DIR         the demo's data/ folder with the .pck packs (default SaberRider/data, the copy in this repo)
 # The Dreamcast part sources $KOS_ENV (default /opt/toolchains/dc/kos/environ.sh).
 set -euo pipefail
@@ -97,8 +97,8 @@ package_dc() {
     if [ -f build/dc/stage/saber.env ]; then
         echo "build/dc/stage/saber.env holds debug switches; remove it before a release" >&2; exit 1
     fi
-    local target=repack
-    [ $full_disc = 1 ] || [ ! -f build/dc/stage/data/pack.pck ] && target=disc
+    local target=rebake                   # textures, samples and files baked again; the converted music and videos kept
+    [ $full_disc = 1 ] || [ ! -d build/dc/stage/music ] && target=disc
     (   set +u                             # KOS's environ scripts read variables that may be unset
         # shellcheck disable=SC1090
         source "$env_sh"

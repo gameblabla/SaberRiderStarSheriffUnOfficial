@@ -40,6 +40,8 @@ void power_reset(Power *pw, int hero, bool bomb)
     memset(pw, 0, sizeof *pw);
     pw->hero = hero & 3; pw->bomb = bomb; pw->items = POWER_ITEMS;
     if (plat_getenv("SABER_POWER")) pw->items = atoi(plat_getenv("SABER_POWER"));   /* debug: items at the start */
+    static const char *const SFX[] = { "power/saber_intermission.wav", "space/charge.wav", "sfx/turbo_start.wav", "voice/april_ok.wav" };
+    for (size_t i = 0; i < sizeof SFX / sizeof *SFX; i++) sfx_preload_file(asset_path(SFX[i]));   /* loaded before they play */
 }
 
 bool power_can_start(const Power *pw) { return pw->items > 0 && pw->cooldown <= 0 && pw->phase == PW_IDLE && pw->boost_t <= 0; }

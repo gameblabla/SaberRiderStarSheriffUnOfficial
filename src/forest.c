@@ -40,6 +40,8 @@ bool forest_init(Forest *f, Level *L) { return forest_load(f, L, "forest", "fore
 bool forest_load(Forest *f, Level *L, const char *dir, const char *file, uint32_t sheet_ids)
 {
     memset(f, 0, sizeof *f);
+    /* level 1's tile layers give way to ours: their textures go first, so ours get the memory and palette entries */
+    for (int i = 0; i < L->nlayers; i++) if (L->layers[i].is_tilemap && L->layers[i].map) cblock_unload(L->layers[i].map->cb);
     char lname[64]; snprintf(lname, sizeof lname, "%s/%s", dir, file);
     const char *path = asset_path(lname);
     size_t size = 0;

@@ -34,6 +34,12 @@ void rdc_compile(pvr_poly_hdr_t *h, pvr_ptr_t base, uint32_t fmt, int tw, int th
 /* VRAM: pvr_mem_malloc that retries after asking the game to release textures */
 pvr_ptr_t rdc_vram_alloc(size_t bytes);
 void rdc_vram_free(pvr_ptr_t p, size_t bytes);
+/* palette RAM (ARGB8888, shared with the baked textures): a whole bank of 256 entries lent out, its entries, and
+ * everything written back after a PVR re-initialisation */
+int  rdc_pal_bank_alloc(void);
+void rdc_pal_bank_free(int bank);
+void rdc_pal_set(int index, uint32_t argb);
+void rdc_pal_restore(void);
 /* forget the header sent last (its memory is going away) */
 void rdc_forget_header(void);
 /* around a PVR re-initialisation (display mode switch): copy the textures out of VRAM / back into the new pool */
