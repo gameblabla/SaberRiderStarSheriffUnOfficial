@@ -56,6 +56,9 @@ struct RTex {
     const Unit *units; int nunits;
     const Part *parts; int nparts;
     uint16_t *loc;              /* per part: its VDP1 address / 8, 0 while not in video memory */
+    uint32_t *used;             /* per part: the last frame it was drawn in (the cache's LRU; no search on a hit) */
+    uint16_t *grid; int gw, gh, gcols;   /* units all gw x gh on a grid: unit index + 1 per grid cell (a direct lookup) */
+    uint32_t gw_inv, gh_inv;             /* 2^20 / gw, rounded up: x / gw as a multiply (no libgcc division) */
     const uint8_t *pal; int npal; /* the 8bpp parts' palette (big-endian RGB555 of indices 1..npal) */
     uint8_t mr, mg, mb, alpha; RBlend blend; uint32_t tag;
     uint8_t prio;               /* 8bpp parts: sprite priority register (their colour code's bits 14-12) */
@@ -73,13 +76,17 @@ static uint16_t le16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
 static uint32_t le32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
 
 /* ---------------------------------------------------------------- the video memory cache */
-typedef struct { uint32_t off, size; RTex *t; uint16_t part; uint32_t used; } Slot;   /* sorted by off */
+typedef struct { uint32_t off, size; RTex *t; uint16_t part; uint32_t used; } Slot;   /* sorted by off; used: once orphaned */
 #define MAX_SLOTS 1536
 static Slot slots[MAX_SLOTS]; static int nslots;
 static uint32_t frame_no = 2;
 static uint8_t *staging;
 static unsigned uploads_frame, upload_bytes_frame, evictions, cram_uploads;
+static uint32_t tm_planes, tm_wait, tm_put, tm_frames, tm_tex, tm_ntex, tm_upl;   /* SABER_PERF timing (rsat_timing) */
 static int trace_from, traced; static bool tracing;   /* SABER_RTRACE=n: every draw of frames n, n+10, ... n+50 */
+
+/* when a slot's part was last drawn: its texture keeps it (an orphaned slot, its own copy) */
+static uint32_t slot_used(int i) { return slots[i].t ? slots[i].t->used[slots[i].part] : slots[i].used; }
 
 static int slot_find(uint32_t off)
 {
@@ -119,7 +126,7 @@ static bool vram_alloc(uint32_t size, RTex *t, int part, uint32_t *off)
         /* evict the least recently used part that neither this frame nor the one being drawn needs */
         int victim = -1;
         for (int i = 0; i < nslots; i++)
-            if (slots[i].used + 1 < frame_no && (victim < 0 || slots[i].used < slots[victim].used)) victim = i;
+            if (slot_used(i) + 1 < frame_no && (victim < 0 || slot_used(i) < slot_used(victim))) victim = i;
         if (victim < 0) return false;
         slot_remove(victim);
         evictions++;
@@ -141,7 +148,7 @@ static void vram_dump(void)
         if (seen) continue;
         uint32_t bytes = 0, newest = 0; int n = 0;
         for (int k = i; k < nslots; k++)
-            if (slots[k].t == t) { bytes += slots[k].size; n++; if (slots[k].used > newest) newest = slots[k].used; }
+            if (slots[k].t == t) { bytes += slots[k].size; n++; if (slot_used(k) > newest) newest = slot_used(k); }
         printf("    %08X %dx%d: %d parts %u KB, last used frame %u\n", t ? (unsigned)t->tag : 0u, t ? t->w : 0, t ? t->h : 0,
                n, (unsigned)(bytes / 1024), (unsigned)newest);
     }
@@ -231,11 +238,9 @@ static int cram_bank(RTex *t, uint8_t r, uint8_t g, uint8_t b)
 static uint16_t part_resident(RTex *t, int i)
 {
     const Part *p = &t->parts[i];
-    if (t->loc[i]) {
-        int s = slot_find((uint32_t)t->loc[i] * 8);
-        if (s >= 0) slots[s].used = frame_no;
-        return t->loc[i];
-    }
+    t->used[i] = frame_no;
+    if (t->loc[i]) return t->loc[i];
+    uint32_t tu = sat_timer_us();
     uint32_t raw = part_raw_size(p), off;
     if (raw > STAGING_SIZE || !vram_alloc(raw, t, i, &off)) {
         static int warned;
@@ -254,7 +259,7 @@ static uint16_t part_resident(RTex *t, int i)
         src = staging;
     } else if ((uintptr_t)src & 3) { memcpy(staging, src, raw); src = staging; }
     vram_copy(off, src, raw);
-    uploads_frame++; upload_bytes_frame += raw;
+    uploads_frame++; upload_bytes_frame += raw; tm_upl += sat_timer_us() - tu;
     t->loc[i] = (uint16_t)(off / 8);
     return t->loc[i];
 }
@@ -265,7 +270,7 @@ static void tex_free_vram(RTex *t)
 {
     for (int i = 0; i < CRAM_GRAN; i++) if (cslots[i].n && cslots[i].t == t) cslots[i].t = NULL;
     for (int i = 0; i < t->nparts; i++)
-        if (t->loc[i]) { int s = slot_find((uint32_t)t->loc[i] * 8); if (s >= 0) slots[s].t = NULL; t->loc[i] = 0; }
+        if (t->loc[i]) { int s = slot_find((uint32_t)t->loc[i] * 8); if (s >= 0) { slots[s].used = t->used[i]; slots[s].t = NULL; } t->loc[i] = 0; }
 }
 
 /* ---------------------------------------------------------------- texture objects */
@@ -278,6 +283,23 @@ static void *alloc_retry(size_t n)
     while (!(p = malloc(n)))
         if (!evict_hook || !evict_hook()) return NULL;
     return p;
+}
+
+/* units that are all one size on a grid (sprite frames, tiles): a direct lookup table instead of a search */
+static void build_grid(RTex *t)
+{
+    t->grid = NULL;
+    if (t->nunits < 8) return;
+    int gw = t->units[0].w, gh = t->units[0].h;
+    if (!gw || !gh) return;
+    for (int i = 0; i < t->nunits; i++)
+        if (t->units[i].w != gw || t->units[i].h != gh || t->units[i].x % gw || t->units[i].y % gh) return;
+    int cols = (t->w + gw - 1) / gw, rows = (t->h + gh - 1) / gh;
+    uint16_t *g = calloc((size_t)cols * rows, sizeof *g);
+    if (!g) return;
+    for (int i = 0; i < t->nunits; i++) g[(t->units[i].y / gh) * cols + t->units[i].x / gw] = (uint16_t)(i + 1);
+    t->grid = g; t->gw = gw; t->gh = gh; t->gcols = cols;
+    t->gw_inv = ((1u << 20) + (uint32_t)gw - 1) / (uint32_t)gw; t->gh_inv = ((1u << 20) + (uint32_t)gh - 1) / (uint32_t)gh;
 }
 
 static RTex *tex_from_block(Ren *r, uint8_t *block, size_t size, bool owned)
@@ -293,8 +315,9 @@ static RTex *tex_from_block(Ren *r, uint8_t *block, size_t size, bool owned)
     Unit *u = malloc(sizeof(Unit) * (size_t)(t->nunits ? t->nunits : 1));
     Part *p = malloc(sizeof(Part) * (size_t)(t->nparts ? t->nparts : 1));
     t->loc = calloc((size_t)(t->nparts ? t->nparts : 1), sizeof *t->loc);
-    if (!u || !p || !t->loc || uoff + 12u * t->nunits > size || poff + 20u * t->nparts + 2u * t->npal > size || t->npal > 255) {
-        free(u); free(p); free(t->loc); free(t); return NULL;
+    t->used = calloc((size_t)(t->nparts ? t->nparts : 1), sizeof *t->used);
+    if (!u || !p || !t->loc || !t->used || uoff + 12u * t->nunits > size || poff + 20u * t->nparts + 2u * t->npal > size || t->npal > 255) {
+        free(u); free(p); free(t->loc); free(t->used); free(t); return NULL;
     }
     for (int i = 0; i < t->nunits; i++) {
         const uint8_t *d = block + uoff + 12 * i;
@@ -305,6 +328,7 @@ static RTex *tex_from_block(Ren *r, uint8_t *block, size_t size, bool owned)
         p[i] = (Part){ be16(d), be16(d + 2), be16(d + 4), be16(d + 6), be16(d + 8), d[10], 0, be32(d + 12), be32(d + 16) };
     }
     t->units = u; t->parts = p; t->pal = block + poff + 20 * t->nparts;
+    build_grid(t);
     t->mr = t->mg = t->mb = t->alpha = 255; t->blend = R_BLEND_BLEND;
     return t;
 }
@@ -381,8 +405,9 @@ void rtex_update(RTex *t, const uint32_t *px, int pitch_bytes)
     RTex *n = tex_from_block(t->r, b, size, true);
     if (!n) { free(b); return; }
     tex_free_vram(t);
-    free(t->block); free((void *)t->units); free((void *)t->parts); free(t->loc);
+    free(t->block); free((void *)t->units); free((void *)t->parts); free(t->loc); free(t->used); free(t->grid);
     t->block = n->block; t->size = n->size; t->units = n->units; t->parts = n->parts; t->loc = n->loc; t->pal = n->pal; t->npal = n->npal;
+    t->used = n->used; t->grid = n->grid; t->gw = n->gw; t->gh = n->gh; t->gcols = n->gcols;
     t->nunits = n->nunits; t->nparts = n->nparts;
     free(n);
 }
@@ -391,7 +416,7 @@ void rtex_destroy(RTex *t)
 {
     if (!t) return;
     tex_free_vram(t);
-    free(t->block); free((void *)t->units); free((void *)t->parts); free(t->loc); free(t);
+    free(t->block); free((void *)t->units); free((void *)t->parts); free(t->loc); free(t->used); free(t->grid); free(t);
 }
 void rtex_size(const RTex *t, int *w, int *h) { if (w) *w = t ? t->w : 0; if (h) *h = t ? t->h : 0; }
 void rtex_set_color_mod(RTex *t, uint8_t r, uint8_t g, uint8_t b) { if (t) { t->mr = r; t->mg = g; t->mb = b; } }
@@ -415,27 +440,36 @@ static int fade_cmd = -1; static uint8_t fade_r, fade_g, fade_b, fade_a;   /* a 
 static RTex *backdrop[4]; static int backdrop_x[4], backdrop_y[4], nbackdrops; static bool clear_fb;
 static void draw_backdrops(void);
 
+static int32_t fx16(float f);   /* float -> 16.16 without soft-float (below) */
+static int16_t pix16(int32_t v) { int i = v >> 16; return (int16_t)(i < -2048 ? -2048 : i > 2047 ? 2047 : i); }   /* floor, clamped */
+
 static Cmd *cmd_new(void)
 {
     if (ncmd >= CMD_MAX - 1) return NULL;
     Cmd *c = &cmds[ncmd++];
-    memset(c, 0, sizeof *c);
+    uint32_t *w = (uint32_t *)c;   /* 32-byte aligned: eight stores (memset is a call and a loop) */
+    w[0] = w[1] = w[2] = w[3] = w[4] = w[5] = w[6] = w[7] = 0;
     return c;
 }
 
 static uint16_t rgb555(uint8_t r, uint8_t g, uint8_t b) { return (uint16_t)(0x8000 | (b >> 3) << 10 | (g >> 3) << 5 | (r >> 3)); }
 
 /* the draw's effective clip rectangle in screen pixels (viewport and clip); false when nothing is visible */
+static RRect clip_eff; static bool clip_eff_ok, clip_dirty = true;   /* draw_clip's result until the clip changes */
+
 static bool draw_clip(RRect *out)
 {
+    if (!clip_dirty) { *out = clip_eff; return clip_eff_ok; }
+    clip_dirty = false;
+    clip_eff_ok = false;
     RRect c = { 0, 0, scr_w, scr_h };
     if (vp_on && !r_rect_intersect(&c, &viewport, &c)) return false;
     if (clip_on) {
         RRect k = clip; if (vp_on) { k.x += viewport.x; k.y += viewport.y; }
         if (!r_rect_intersect(&c, &k, &c)) return false;
     }
-    *out = c;
-    return true;
+    *out = clip_eff = c;
+    return clip_eff_ok = true;
 }
 
 /* returns the PMOD bits for user clipping (setting the rectangle in the list when it changes) */
@@ -462,15 +496,28 @@ static bool blend_bits(uint8_t a, RBlend b, uint16_t *pm)
 }
 
 /* a gouraud table that approximates a colour multiply (r, g, b) / 255; 0 when none is needed */
+static uint16_t gour[GOURAUD_MAX];   /* the frame's tables (one colour each, as 4 corners at copy time) */
+
 static uint16_t gouraud_for(uint8_t r, uint8_t g, uint8_t b)
 {
-    if ((r & g & b) == 255 || ngouraud >= GOURAUD_MAX) return 0;
+    if ((r & g & b) == 255) return 0;
+    static uint32_t last_rgb; static int last_i = -1;   /* runs of one colour (a line of text) */
+    uint32_t rgb = (uint32_t)r << 16 | (uint32_t)g << 8 | b;
+    if (last_i >= 0 && last_i < ngouraud && rgb == last_rgb) return (uint16_t)((GOURAUD_OFF + (uint32_t)last_i * 8) / 8);
+    if (ngouraud >= GOURAUD_MAX) return 0;
     int gr = 16 - (255 - r) * 16 / 255, gg = 16 - (255 - g) * 16 / 255, gb = 16 - (255 - b) * 16 / 255;
     uint16_t v = (uint16_t)(0x8000 | gb << 10 | gg << 5 | gr);
-    uint32_t off = GOURAUD_OFF + (uint32_t)ngouraud++ * 8;
-    volatile uint16_t *d = (volatile uint16_t *)(VDP1_VRAM_BASE + off);
-    d[0] = d[1] = d[2] = d[3] = v;
-    return (uint16_t)(off / 8);
+    last_rgb = rgb; last_i = ngouraud;
+    gour[ngouraud] = v;
+    return (uint16_t)((GOURAUD_OFF + (uint32_t)ngouraud++ * 8) / 8);
+}
+
+/* the frame's gouraud tables into VDP1 memory, once VDP1 is done with the last frame's (writing them while it draws
+ * waits for its bus at every access) */
+static void gouraud_upload(void)
+{
+    volatile uint32_t *d = (volatile uint32_t *)(VDP1_VRAM_BASE + GOURAUD_OFF);
+    for (int i = 0; i < ngouraud; i++) { uint32_t v = (uint32_t)gour[i] << 16 | gour[i]; d[i * 2] = v; d[i * 2 + 1] = v; }
 }
 
 static int16_t clampc(float v) { return v < -2048 ? -2048 : v > 2047 ? 2047 : (int16_t)floorf(v); }
@@ -478,8 +525,8 @@ static int16_t clampc(float v) { return v < -2048 ? -2048 : v > 2047 ? 2047 : (i
 /* ---------------------------------------------------------------- draw state */
 void r_set_draw_color(Ren *r, uint8_t R, uint8_t G, uint8_t B, uint8_t A) { (void)r; draw_r = R; draw_g = G; draw_b = B; draw_a = A; }
 void r_set_draw_blend(Ren *r, RBlend b) { (void)r; draw_blend = b; }
-void r_set_clip(Ren *r, const RRect *c) { (void)r; clip_on = c != NULL; if (c) clip = *c; }
-void r_set_viewport(Ren *r, const RRect *v) { (void)r; vp_on = v != NULL; if (v) viewport = *v; }
+void r_set_clip(Ren *r, const RRect *c) { (void)r; clip_on = c != NULL; if (c) clip = *c; clip_dirty = true; }
+void r_set_viewport(Ren *r, const RRect *v) { (void)r; vp_on = v != NULL; if (v) viewport = *v; clip_dirty = true; }
 bool r_rect_intersect(const RRect *a, const RRect *b, RRect *out)
 {
     int x0 = a->x > b->x ? a->x : b->x, y0 = a->y > b->y ? a->y : b->y;
@@ -489,24 +536,31 @@ bool r_rect_intersect(const RRect *a, const RRect *b, RRect *out)
     return true;
 }
 
-void rsat_set_screen(int w, int h) { scr_w = w; scr_h = h; }
+void rsat_set_screen(int w, int h) { scr_w = w; scr_h = h; clip_dirty = true; }
 
 /* ---------------------------------------------------------------- primitives */
-static void polygon(float x0, float y0, float x1, float y1, float x2, float y2, float x3, float y3, uint8_t R, uint8_t G, uint8_t B, uint8_t A, RBlend bl)
+/* a polygon from four corners in 16.16 viewport coordinates */
+static void polygon(const int32_t *xy, uint8_t R, uint8_t G, uint8_t B, uint8_t A, RBlend bl)
 {
     RRect c; if (!draw_clip(&c)) return;
     uint16_t pm = PM_ECD | PM_SPD;
     if (!blend_bits(A, bl, &pm)) return;
     if (pal_drawn && (pm & PM_HALF)) pm = (uint16_t)((pm & ~PM_HALF) | PM_MESH);
-    float ox = vp_on ? viewport.x : 0, oy = vp_on ? viewport.y : 0;
-    float minx = fminf(fminf(x0, x1), fminf(x2, x3)) + ox, maxx = fmaxf(fmaxf(x0, x1), fmaxf(x2, x3)) + ox;
-    float miny = fminf(fminf(y0, y1), fminf(y2, y3)) + oy, maxy = fmaxf(fmaxf(y0, y1), fmaxf(y2, y3)) + oy;
+    int32_t ox = vp_on ? viewport.x << 16 : 0, oy = vp_on ? viewport.y << 16 : 0;
+    int16_t v[8];
+    int minx = 4096, maxx = -4096, miny = 4096, maxy = -4096;
+    for (int i = 0; i < 4; i++) {
+        v[i * 2] = pix16(xy[i * 2] + ox); v[i * 2 + 1] = pix16(xy[i * 2 + 1] + oy);
+        if (v[i * 2] < minx) minx = v[i * 2];
+        if (v[i * 2] > maxx) maxx = v[i * 2];
+        if (v[i * 2 + 1] < miny) miny = v[i * 2 + 1];
+        if (v[i * 2 + 1] > maxy) maxy = v[i * 2 + 1];
+    }
     if (maxx < c.x || maxy < c.y || minx >= c.x + c.w || miny >= c.y + c.h) return;
-    pm |= clip_bits(&c, (int)minx, (int)miny, (int)maxx, (int)maxy);
+    pm |= clip_bits(&c, minx, miny, maxx, maxy);
     Cmd *k = cmd_new(); if (!k) return;
     k->ctrl = C_POLYGON; k->pmod = pm; k->colr = rgb555(R, G, B);
-    k->xa = clampc(x0 + ox); k->ya = clampc(y0 + oy); k->xb = clampc(x1 + ox); k->yb = clampc(y1 + oy);
-    k->xc = clampc(x2 + ox); k->yc = clampc(y2 + oy); k->xd = clampc(x3 + ox); k->yd = clampc(y3 + oy);
+    memcpy(&k->xa, v, sizeof v);
     ren.prims++;
 }
 
@@ -522,16 +576,20 @@ void r_clear(Ren *r)
 void r_fill_rect(Ren *r, const RFRect *q)
 {
     (void)r;
-    RFRect f = q ? *q : (RFRect){ 0, 0, vp_on ? (float)viewport.w : (float)scr_w, vp_on ? (float)viewport.h : (float)scr_h };
-    if (f.w <= 0 || f.h <= 0) return;
-    float x1 = f.x + f.w - 1, y1 = f.y + f.h - 1;
+    int32_t x, y, w, h;
+    if (q) { x = fx16(q->x); y = fx16(q->y); w = fx16(q->w); h = fx16(q->h); }
+    else { x = y = 0; w = (vp_on ? viewport.w : scr_w) << 16; h = (vp_on ? viewport.h : scr_h) << 16; }
+    if (w <= 0 || h <= 0) return;
+    int32_t x1 = x + w - (1 << 16), y1 = y + h - (1 << 16);
+    int32_t xy[8] = { x, y, x1, y, x1, y1, x, y1 };
     int before = ncmd;
-    polygon(f.x, f.y, x1, f.y, x1, y1, f.x, y1, draw_r, draw_g, draw_b, draw_a, draw_blend);
+    polygon(xy, draw_r, draw_g, draw_b, draw_a, draw_blend);
     /* a translucent fill of the whole screen: if nothing is drawn after it, rsat_frame_end makes it a colour offset */
     RRect c;
+    int vx = vp_on ? viewport.x : 0, vy = vp_on ? viewport.y : 0;
     if (ncmd == before + 1 && draw_blend == R_BLEND_BLEND && draw_a < 255 && draw_clip(&c) && c.x == 0 && c.y == 0 &&
-        c.w == scr_w && c.h == scr_h && f.x + (vp_on ? viewport.x : 0) <= 0 && f.y + (vp_on ? viewport.y : 0) <= 0 &&
-        f.x + (vp_on ? viewport.x : 0) + f.w >= scr_w && f.y + (vp_on ? viewport.y : 0) + f.h >= scr_h) {
+        c.w == scr_w && c.h == scr_h && (x >> 16) + vx <= 0 && (y >> 16) + vy <= 0 &&
+        ((x + w) >> 16) + vx >= scr_w && ((y + h) >> 16) + vy >= scr_h) {
         fade_cmd = before; fade_r = draw_r; fade_g = draw_g; fade_b = draw_b; fade_a = draw_a;
     }
 }
@@ -543,12 +601,12 @@ static void line_cmd(int type, const float *xy, int n)
     uint16_t pm = PM_ECD | PM_SPD;
     if (!blend_bits(draw_a, draw_blend, &pm)) return;
     if (pal_drawn && (pm & PM_HALF)) pm = (uint16_t)((pm & ~PM_HALF) | PM_MESH);
-    float ox = vp_on ? viewport.x : 0, oy = vp_on ? viewport.y : 0;
+    int32_t ox = vp_on ? viewport.x << 16 : 0, oy = vp_on ? viewport.y << 16 : 0;
     pm |= clip_bits(&c, -4096, -4096, 4096, 4096);
     Cmd *k = cmd_new(); if (!k) return;
     k->ctrl = (uint16_t)type; k->pmod = pm; k->colr = rgb555(draw_r, draw_g, draw_b);
     int16_t *v = &k->xa;
-    for (int i = 0; i < 4; i++) { int j = i < n ? i : n - 1; v[i * 2] = clampc(xy[j * 2] + ox); v[i * 2 + 1] = clampc(xy[j * 2 + 1] + oy); }
+    for (int i = 0; i < 4; i++) { int j = i < n ? i : n - 1; v[i * 2] = pix16(fx16(xy[j * 2]) + ox); v[i * 2 + 1] = pix16(fx16(xy[j * 2 + 1]) + oy); }
     ren.prims++;
 }
 void r_rect(Ren *r, const RFRect *q)
@@ -569,7 +627,9 @@ void r_geometry(Ren *r, RTex *t, const RVertex *v, int nv, const int *idx, int n
         const RVertex *a = &v[idx ? idx[i] : i], *b = &v[idx ? idx[i + 1] : i + 1], *c = &v[idx ? idx[i + 2] : i + 2];
         float cr = (a->color.r + b->color.r + c->color.r) / 3, cg = (a->color.g + b->color.g + c->color.g) / 3;
         float cb = (a->color.b + b->color.b + c->color.b) / 3, ca = (a->color.a + b->color.a + c->color.a) / 3;
-        polygon(a->position.x, a->position.y, b->position.x, b->position.y, c->position.x, c->position.y, c->position.x, c->position.y,
+        int32_t xy[8] = { fx16(a->position.x), fx16(a->position.y), fx16(b->position.x), fx16(b->position.y),
+                          fx16(c->position.x), fx16(c->position.y), fx16(c->position.x), fx16(c->position.y) };
+        polygon(xy,
                 (uint8_t)(cr * 255), (uint8_t)(cg * 255), (uint8_t)(cb * 255), (uint8_t)(ca * 255), draw_blend);
     }
 }
@@ -578,6 +638,13 @@ void r_geometry(Ren *r, RTex *t, const RVertex *v, int nv, const int *idx, int n
 /* the unit whose rectangle is exactly src (binary search: units are sorted by y, then x) */
 static const Unit *unit_exact(const RTex *t, int x, int y, int w, int h)
 {
+    if (t->grid) {
+        if (w != t->gw || h != t->gh || x < 0 || y < 0 || x >= t->w || y >= t->h) return NULL;
+        int cx = (int)(((uint32_t)x * t->gw_inv) >> 20), cy = (int)(((uint32_t)y * t->gh_inv) >> 20);   /* exact for x, y < 4096 */
+        if (cx * t->gw != x || cy * t->gh != y) return NULL;
+        int k = t->grid[cy * t->gcols + cx];
+        return k ? &t->units[k - 1] : NULL;
+    }
     int lo = 0, hi = t->nunits - 1;
     while (lo <= hi) {
         int m = (lo + hi) / 2; const Unit *u = &t->units[m];
@@ -591,21 +658,30 @@ static const Unit *unit_exact(const RTex *t, int x, int y, int w, int h)
     return NULL;
 }
 
-/* One part, mapped from texture space (the src rect) to the screen: dst, then rotation by angle (degrees, clockwise)
- * about (cx, cy) in screen space, flips. */
-typedef struct { float sx, sy, sw, sh, dx, dy, dw, dh; float cs, sn, cx, cy; bool rot; RFlip flip; } Map;
+/* float -> 16.16 without the soft-float library (the SH-2 has no FPU): |f| < 32768. The SH-2 has no barrel shifter
+ * either (a variable shift is a libgcc loop): the shifts are multiplies by a power of two (mul.l / dmulu.l) */
+static const uint32_t POW2[32] = {
+    1u, 1u << 1, 1u << 2, 1u << 3, 1u << 4, 1u << 5, 1u << 6, 1u << 7, 1u << 8, 1u << 9, 1u << 10, 1u << 11, 1u << 12,
+    1u << 13, 1u << 14, 1u << 15, 1u << 16, 1u << 17, 1u << 18, 1u << 19, 1u << 20, 1u << 21, 1u << 22, 1u << 23,
+    1u << 24, 1u << 25, 1u << 26, 1u << 27, 1u << 28, 1u << 29, 1u << 30, 1u << 31 };
 
-static void map_pt(const Map *m, float u, float v, float *x, float *y)
+static int32_t fx16(float f)
 {
-    float fx = (u - m->sx) / m->sw, fy = (v - m->sy) / m->sh;
-    if (m->flip & R_FLIP_H) fx = 1 - fx;
-    if (m->flip & R_FLIP_V) fy = 1 - fy;
-    float px = m->dx + fx * m->dw, py = m->dy + fy * m->dh;
-    if (m->rot) { float ex = px - m->cx, ey = py - m->cy; px = m->cx + ex * m->cs - ey * m->sn; py = m->cy + ex * m->sn + ey * m->cs; }
-    *x = px; *y = py;
+    union { float f; uint32_t u; } v = { f };
+    int e = (int)((v.u >> 23) & 255) - 127;
+    if (e < -17) return 0;
+    uint32_t m = (v.u & 0x7FFFFFu) | 0x800000u;
+    int sh = e - 7;   /* the mantissa is 1.23: 16.16 is a shift by e - 23 + 16 */
+    int32_t r;
+    if (sh >= 0) r = sh > 7 ? 0x7FFFFFFF : (int32_t)(m * POW2[sh]);
+    else r = (int32_t)(((uint64_t)m * POW2[32 + sh]) >> 32);   /* m >> -sh: the high word of m * 2^(32 - (-sh)) */
+    return (v.u >> 31) ? -r : r;
 }
+static int fl16(int32_t v) { return v >> 16; }                  /* floor */
+static int ce16(int32_t v) { return (v + 0xFFFF) >> 16; }       /* ceiling */
 
-static void draw_part(RTex *t, int pi, const Map *m, const RRect *c, bool partial)
+/* A part's command, its screen rectangle known: [ix0, ix1] x [iy0, iy1] inclusive, or quad (4 corners, rotated) */
+static void part_emit(RTex *t, int pi, int ix0, int iy0, int ix1, int iy1, RFlip flip, const int16_t *quad, const RRect *c, const RRect *dclip)
 {
     const Part *p = &t->parts[pi];
     int fmt = p->fmt & 0x7F;
@@ -613,30 +689,21 @@ static void draw_part(RTex *t, int pi, const Map *m, const RRect *c, bool partia
     if (!blend_bits(t->alpha, t->blend, &pm)) return;
     if (fmt == FMT_8BPP && (pm & PM_HALF)) pm = (uint16_t)((pm & ~PM_HALF) | PM_MESH);   /* no VDP1 blending of palette pixels */
     else if (pal_drawn && (pm & PM_HALF)) pm = (uint16_t)((pm & ~PM_HALF) | PM_MESH);
-    /* the part's corners on the screen (its padded width: the padding is transparent) */
-    float ax, ay, bx, by, cxx, cyy, dxx, dyy;
-    map_pt(m, p->x, p->y, &ax, &ay); map_pt(m, p->x + p->wpad, p->y, &bx, &by);
-    map_pt(m, p->x + p->wpad, p->y + p->h, &cxx, &cyy); map_pt(m, p->x, p->y + p->h, &dxx, &dyy);
-    float minx = fminf(fminf(ax, bx), fminf(cxx, dxx)), maxx = fmaxf(fmaxf(ax, bx), fmaxf(cxx, dxx));
-    float miny = fminf(fminf(ay, by), fminf(cyy, dyy)), maxy = fmaxf(fmaxf(ay, by), fmaxf(cyy, dyy));
-    if (maxx <= c->x || maxy <= c->y || minx >= c->x + c->w || miny >= c->y + c->h) {
-        if (tracing) printf("    part %d culled (%d,%d)-(%d,%d)\n", pi, (int)minx, (int)miny, (int)maxx, (int)maxy);
+    if (ix1 < c->x || iy1 < c->y || ix0 >= c->x + c->w || iy0 >= c->y + c->h) {
+        if (tracing) printf("    part %d culled (%d,%d)-(%d,%d)\n", pi, ix0, iy0, ix1, iy1);
         return;
     }
     uint16_t loc = part_resident(t, pi);
-    if (tracing) printf("    part %d fmt %d %dx%d at %d,%d loc %u tint %02X%02X%02X\n", pi, p->fmt, p->wpad, p->h, (int)minx, (int)miny, loc, t->mr, t->mg, t->mb);
+    if (tracing) printf("    part %d fmt %d %dx%d at %d,%d loc %u tint %02X%02X%02X\n", pi, p->fmt, p->wpad, p->h, ix0, iy0, loc, t->mr, t->mg, t->mb);
     if (!loc) return;
     RRect cc = *c;
-    if (partial) {   /* a draw of part of a unit: clip to the destination rectangle too */
-        RRect d = { (int)floorf(m->dx), (int)floorf(m->dy), (int)ceilf(m->dw), (int)ceilf(m->dh) };
-        if (!r_rect_intersect(&cc, &d, &cc)) return;
-    }
+    if (dclip && !r_rect_intersect(&cc, dclip, &cc)) return;   /* a draw of part of a unit: clip to the destination too */
     int bank = 0;
     if (fmt == FMT_8BPP && (bank = cram_bank(t, t->mr, t->mg, t->mb)) < 0) {
         static int warned; if (!warned++) printf("render: colour RAM full (texture %08X)\n", (unsigned)t->tag);
         return;
     }
-    pm |= clip_bits(&cc, (int)minx, (int)miny, (int)maxx - 1, (int)maxy - 1);
+    pm |= clip_bits(&cc, ix0, iy0, ix1, iy1);
     uint16_t gr = fmt == FMT_8BPP ? 0 : gouraud_for(t->mr, t->mg, t->mb);
     if (gr) pm |= PM_GOURAUD;
     Cmd *k = cmd_new(); if (!k) return;
@@ -649,52 +716,109 @@ static void draw_part(RTex *t, int pi, const Map *m, const RRect *c, bool partia
     else { pm |= PM_RGB; k->srca = loc; }
     k->pmod = pm; k->grda = gr;
     k->size = (uint16_t)((p->wpad / 8) << 8 | p->h);
-    bool axis = !m->rot;
-    int ix0 = (int)floorf(minx), iy0 = (int)floorf(miny), ix1 = (int)floorf(maxx) - 1, iy1 = (int)floorf(maxy) - 1;
-    if (axis && ix1 - ix0 + 1 == p->wpad && iy1 - iy0 + 1 == p->h) {
-        k->ctrl = C_NORMAL | ((m->flip & R_FLIP_H) ? 0x10 : 0) | ((m->flip & R_FLIP_V) ? 0x20 : 0);
-        k->xa = (int16_t)ix0; k->ya = (int16_t)iy0;
-    } else if (axis) {
-        k->ctrl = C_SCALED | ((m->flip & R_FLIP_H) ? 0x10 : 0) | ((m->flip & R_FLIP_V) ? 0x20 : 0);
-        k->xa = (int16_t)ix0; k->ya = (int16_t)iy0; k->xc = (int16_t)ix1; k->yc = (int16_t)iy1;
-    } else {   /* rotated: the corners in the part's own order (the map already flipped them) */
+    uint16_t fl = (uint16_t)(((flip & R_FLIP_H) ? 0x10 : 0) | ((flip & R_FLIP_V) ? 0x20 : 0));
+    if (quad) {   /* rotated: the corners in the part's own order (the map already flipped them) */
         k->ctrl = C_DISTORTED;
-        k->xa = clampc(ax); k->ya = clampc(ay); k->xb = clampc(bx - 1); k->yb = clampc(by);
-        k->xc = clampc(cxx - 1); k->yc = clampc(cyy - 1); k->xd = clampc(dxx); k->yd = clampc(dyy - 1);
+        memcpy(&k->xa, quad, 8 * sizeof *quad);
+    } else if (ix1 - ix0 + 1 == p->wpad && iy1 - iy0 + 1 == p->h) {
+        k->ctrl = C_NORMAL | fl;
+        k->xa = (int16_t)ix0; k->ya = (int16_t)iy0;
+    } else {
+        k->ctrl = C_SCALED | fl;
+        k->xa = (int16_t)ix0; k->ya = (int16_t)iy0; k->xc = (int16_t)ix1; k->yc = (int16_t)iy1;
     }
     ren.prims++;
+}
+
+/* Unrotated draws (sprites, glyphs, tiles: nearly all of them), in integers: the source rectangle in texels, the
+ * destination's corner and scale in 16.16 */
+typedef struct { int sx, sy, sw, sh; int32_t dx, dy, kx, ky; RFlip flip; RRect dclip; bool partial; } AMap;
+
+static void draw_part_axis(RTex *t, int pi, const AMap *m, const RRect *c)
+{
+    const Part *p = &t->parts[pi];
+    int u0 = p->x - m->sx, u1 = u0 + p->wpad, v0 = p->y - m->sy, v1 = v0 + p->h;
+    if (m->flip & R_FLIP_H) { int a = m->sw - u1; u1 = m->sw - u0; u0 = a; }
+    if (m->flip & R_FLIP_V) { int a = m->sh - v1; v1 = m->sh - v0; v0 = a; }
+    int32_t x0 = m->dx + (int32_t)((int64_t)u0 * m->kx), x1 = m->dx + (int32_t)((int64_t)u1 * m->kx);
+    int32_t y0 = m->dy + (int32_t)((int64_t)v0 * m->ky), y1 = m->dy + (int32_t)((int64_t)v1 * m->ky);
+    part_emit(t, pi, fl16(x0), fl16(y0), fl16(x1) - 1, fl16(y1) - 1, m->flip, NULL, c, m->partial ? &m->dclip : NULL);
+}
+
+/* Rotated draws: from texture space (the src rect) to the screen: dst, then rotation by angle (degrees, clockwise)
+ * about (cx, cy) in screen space, flips. */
+typedef struct { float sx, sy, sw, sh, dx, dy, dw, dh; float cs, sn, cx, cy; RFlip flip; } Map;
+
+static void map_pt(const Map *m, float u, float v, float *x, float *y)
+{
+    float fx = (u - m->sx) / m->sw, fy = (v - m->sy) / m->sh;
+    if (m->flip & R_FLIP_H) fx = 1 - fx;
+    if (m->flip & R_FLIP_V) fy = 1 - fy;
+    float px = m->dx + fx * m->dw, py = m->dy + fy * m->dh;
+    float ex = px - m->cx, ey = py - m->cy;
+    *x = m->cx + ex * m->cs - ey * m->sn; *y = m->cy + ex * m->sn + ey * m->cs;
+}
+
+static void draw_part_rot(RTex *t, int pi, const Map *m, const RRect *c, const RRect *dclip)
+{
+    const Part *p = &t->parts[pi];
+    float ax, ay, bx, by, cxx, cyy, dxx, dyy;
+    map_pt(m, p->x, p->y, &ax, &ay); map_pt(m, p->x + p->wpad, p->y, &bx, &by);
+    map_pt(m, p->x + p->wpad, p->y + p->h, &cxx, &cyy); map_pt(m, p->x, p->y + p->h, &dxx, &dyy);
+    float minx = fminf(fminf(ax, bx), fminf(cxx, dxx)), maxx = fmaxf(fmaxf(ax, bx), fmaxf(cxx, dxx));
+    float miny = fminf(fminf(ay, by), fminf(cyy, dyy)), maxy = fmaxf(fmaxf(ay, by), fmaxf(cyy, dyy));
+    int16_t q[8] = { clampc(ax), clampc(ay), clampc(bx - 1), clampc(by), clampc(cxx - 1), clampc(cyy - 1), clampc(dxx), clampc(dyy - 1) };
+    part_emit(t, pi, (int)floorf(minx), (int)floorf(miny), (int)floorf(maxx) - 1, (int)floorf(maxy) - 1, m->flip, q, c, dclip);
 }
 
 static void tex_draw(RTex *t, const RFRect *src, const RFRect *dst, double angle, const RFPoint *center, RFlip flip)
 {
     if (!t || !t->nparts) return;
     RRect c; if (!draw_clip(&c)) return;
-    RFRect s = src ? *src : (RFRect){ 0, 0, (float)t->w, (float)t->h };
-    RFRect d = dst ? *dst : (RFRect){ 0, 0, vp_on ? (float)viewport.w : (float)scr_w, vp_on ? (float)viewport.h : (float)scr_h };
-    if (s.w <= 0 || s.h <= 0 || d.w == 0 || d.h == 0) return;
-    if (vp_on) { d.x += viewport.x; d.y += viewport.y; }
-    Map m = { s.x, s.y, s.w, s.h, d.x, d.y, d.w, d.h, 1, 0, 0, 0, false, flip };
-    if (d.w < 0) { m.dx = d.x; m.dw = -d.w; m.flip ^= R_FLIP_H; }   /* r_tex_batch's mirrored tiles */
-    if (angle != 0) {
-        float a = (float)angle * 3.14159265f / 180.0f;
-        m.cs = cosf(a); m.sn = sinf(a); m.rot = true;
-        m.cx = m.dx + (center ? center->x : m.dw * 0.5f); m.cy = m.dy + (center ? center->y : m.dh * 0.5f);
-    }
-    const Unit *u = unit_exact(t, (int)s.x, (int)s.y, (int)s.w, (int)s.h);
-    if (tracing) printf("  tex %08X src %d,%d %dx%d dst %d,%d %dx%d a%u %s ncmd %d\n", (unsigned)t->tag, (int)s.x, (int)s.y, (int)s.w, (int)s.h,
-                        (int)d.x, (int)d.y, (int)d.w, (int)d.h, t->alpha, u ? "unit" : "rect", ncmd);
-    if (u && u->x == s.x && u->y == s.y) {
-        for (int i = 0; i < u->n; i++) draw_part(t, u->first + i, &m, &c, false);
+    int sx = 0, sy = 0, sw = t->w, sh = t->h;
+    if (src) { sx = fl16(fx16(src->x)); sy = fl16(fx16(src->y)); sw = fl16(fx16(src->w)); sh = fl16(fx16(src->h)); }
+    int32_t dx = 0, dy = 0, dw, dh;
+    if (dst) { dx = fx16(dst->x); dy = fx16(dst->y); dw = fx16(dst->w); dh = fx16(dst->h); }
+    else { dw = (vp_on ? viewport.w : scr_w) << 16; dh = (vp_on ? viewport.h : scr_h) << 16; }
+    if (sw <= 0 || sh <= 0 || dw == 0 || dh == 0) return;
+    if (vp_on) { dx += viewport.x << 16; dy += viewport.y << 16; }
+    if (dw < 0) { dw = -dw; flip ^= R_FLIP_H; }   /* r_tex_batch's mirrored tiles */
+    const Unit *u = unit_exact(t, sx, sy, sw, sh);
+    bool whole = u && u->x == sx && u->y == sy;
+    if (tracing) printf("  tex %08X src %d,%d %dx%d dst %d,%d %dx%d a%u %s ncmd %d\n", (unsigned)t->tag, sx, sy, sw, sh,
+                        fl16(dx), fl16(dy), fl16(dw), fl16(dh), t->alpha, u ? "unit" : "rect", ncmd);
+    RRect dclip = { fl16(dx), fl16(dy), ce16(dw), ce16(dh) };
+    uint64_t abits; memcpy(&abits, &angle, sizeof abits);   /* angle == 0 without a soft-double compare */
+    if (!(abits << 1)) {
+        AMap m = { sx, sy, sw, sh, dx, dy, dw == sw << 16 ? 1 << 16 : (int32_t)(((int64_t)dw) / sw),
+                   dh == sh << 16 ? 1 << 16 : (int32_t)(((int64_t)dh) / sh), flip, dclip, !whole };
+        if (whole) { for (int i = 0; i < u->n; i++) draw_part_axis(t, u->first + i, &m, &c); return; }
+        for (int i = 0; i < t->nparts; i++) {   /* any other rectangle: every part that overlaps it, clipped to the destination */
+            const Part *p = &t->parts[i];
+            if (p->x + p->w <= sx || p->y + p->h <= sy || p->x >= sx + sw || p->y >= sy + sh) continue;
+            draw_part_axis(t, i, &m, &c);
+        }
         return;
     }
-    /* any other rectangle: every part that overlaps it, clipped to the destination */
+    float a = (float)angle * 3.14159265f / 180.0f;
+    float fdx = dx / 65536.0f, fdy = dy / 65536.0f, fdw = dw / 65536.0f, fdh = dh / 65536.0f;
+    Map m = { (float)sx, (float)sy, (float)sw, (float)sh, fdx, fdy, fdw, fdh, cosf(a), sinf(a),
+              fdx + (center ? center->x : fdw * 0.5f), fdy + (center ? center->y : fdh * 0.5f), flip };
+    if (whole) { for (int i = 0; i < u->n; i++) draw_part_rot(t, u->first + i, &m, &c, NULL); return; }
     for (int i = 0; i < t->nparts; i++) {
         const Part *p = &t->parts[i];
-        if (p->x + p->w <= s.x || p->y + p->h <= s.y || p->x >= s.x + s.w || p->y >= s.y + s.h) continue;
-        draw_part(t, i, &m, &c, true);
+        if (p->x + p->w <= sx || p->y + p->h <= sy || p->x >= sx + sw || p->y >= sy + sh) continue;
+        draw_part_rot(t, i, &m, &c, &dclip);
     }
 }
 
+static void tex_draw_timed(RTex *t, const RFRect *src, const RFRect *dst, double angle, const RFPoint *center, RFlip flip)
+{
+    uint32_t a = sat_timer_us();
+    tex_draw(t, src, dst, angle, center, flip);
+    tm_tex += sat_timer_us() - a; tm_ntex++;
+}
+#define tex_draw tex_draw_timed
 void r_tex(Ren *r, RTex *t, const RFRect *src, const RFRect *dst) { (void)r; tex_draw(t, src, dst, 0, NULL, R_FLIP_NONE); }
 void r_tex_rot(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, double angle, const RFPoint *center, RFlip flip)
 { (void)r; tex_draw(t, src, dst, angle, center, flip); }
@@ -760,12 +884,12 @@ static void draw_backdrops(void)
         }
     }
     bool vp = vp_on, cl = clip_on;
-    vp_on = clip_on = false;
+    vp_on = clip_on = false; clip_dirty = true;
     for (int i = 0; i < nbackdrops; i++) {
         RFRect d = { (float)backdrop_x[i], (float)backdrop_y[i], (float)backdrop[i]->w, (float)backdrop[i]->h };
         tex_draw(backdrop[i], NULL, &d, 0, NULL, R_FLIP_NONE);
     }
-    vp_on = vp; clip_on = cl;
+    vp_on = vp; clip_on = cl; clip_dirty = true;
     pal_drawn = false;   /* under the planes: nothing is blended over them */
 }
 
@@ -782,22 +906,57 @@ static void colour_offset(void)
     regs->coar = (uint16_t)(orr & 0x1FF); regs->coag = (uint16_t)(og & 0x1FF); regs->coab = (uint16_t)(ob & 0x1FF);
 }
 
+/* SABER_PERF: where the end of a frame goes (microseconds, summed; rsat_timing) */
+
+void rsat_timing(uint32_t *planes, uint32_t *vdp1_wait, uint32_t *put, uint32_t *frames)
+{
+    *planes = tm_planes; *vdp1_wait = tm_wait; *put = tm_put; *frames = tm_frames;
+    if (tm_frames) printf("[perf] textured draws %u us a frame (%u calls, uploads %u us)\n",
+                          (unsigned)(tm_tex / tm_frames), (unsigned)(tm_ntex / tm_frames), (unsigned)(tm_upl / tm_frames));
+    tm_planes = tm_wait = tm_put = tm_frames = tm_tex = tm_ntex = tm_upl = 0;
+}
+
 void rsat_frame_end(void)
 {
+    uint32_t t0 = sat_timer_us();
     sat_planes_frame(scr_w);
+    uint32_t t1 = sat_timer_us();
     colour_offset();
     Cmd *k = &cmds[ncmd++]; memset(k, 0, sizeof *k); k->ctrl = C_END;
     vdp2_scrn_back_color_set(VDP2_VRAM_ADDR(3, 0x01FFFE), (rgb1555_t){ .raw = back_color });
     vdp1_sync_wait();
+    gouraud_upload();
+    uint32_t t2 = sat_timer_us();
     vdp1_sync_cmdt_put((const vdp1_cmdt_t *)cmds, (uint16_t)ncmd, 0);
     vdp1_sync_render();
     vdp1_sync();
+    uint32_t t3 = sat_timer_us();
+    tm_planes += t1 - t0; tm_wait += t2 - t1; tm_put += t3 - t2; tm_frames++;
 }
 
 void rsat_stats(unsigned *parts_resident, unsigned *vram_used, unsigned *uploads, unsigned *evicted)
 {
     uint32_t used = 0; for (int i = 0; i < nslots; i++) used += slots[i].size;
     *parts_resident = (unsigned)nslots; *vram_used = used; *uploads = uploads_frame; *evicted = evictions;
+}
+
+/* SABER_RBENCH=1 (debug): the cost of one textured draw with a warm cache (1000 draws of one 32x32 sprite) */
+void rsat_bench(void)
+{
+    uint32_t px[32 * 32];
+    for (int i = 0; i < 32 * 32; i++) px[i] = 0xFF00FF00u | (uint32_t)(i & 255);
+    RTex *t = rtex_create(&ren, 32, 32, R_TEX_STATIC, px);
+    if (!t) return;
+    rsat_frame_begin();
+    RFRect src = { 0, 0, 32, 32 }, dst = { 10, 10, 32, 32 };
+    uint32_t a = sat_timer_us();
+    for (int i = 0; i < 1000; i++) { ncmd = 3; r_tex(&ren, t, &src, &dst); }
+    uint32_t b = sat_timer_us();
+    for (int i = 0; i < 1000; i++) { (void)sat_timer_us(); }
+    uint32_t c = sat_timer_us();
+    printf("[bench] r_tex: %u ns a draw (warm), sat_timer_us: %u ns\n", (unsigned)(b - a), (unsigned)(c - b));
+    ncmd = 3;
+    rtex_destroy(t);
 }
 
 /* SABER_SHOT: nothing to save on the console (the harness takes screenshots from the emulator) */

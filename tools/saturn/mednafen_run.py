@@ -123,6 +123,8 @@ def main() -> int:
     ap.add_argument('--profile', type=Path, help='per-function instruction counts (TSV)')
     ap.add_argument('--profile-from', type=int, default=0)
     ap.add_argument('--cpu', type=int, default=0)
+    ap.add_argument('--callers', action='store_true', help='with --profile: which functions call the soft-float routines '
+                    '(and floorf & co.) how often, from the edge coverage (-> <profile>.callers.tsv)')
     ap.add_argument('--state-in', type=Path)
     ap.add_argument('--state-out', type=Path)
     ap.add_argument('--regs', action='store_true', help='at the end: both SH-2s\' PC / PR (with function names) and registers')
@@ -196,6 +198,9 @@ def main() -> int:
             emu.call('coverage_stop')
             raw = args.profile.with_suffix('.pc.tsv')
             emu.call('coverage_save', raw.resolve())
+            if args.callers:
+                edges = args.profile.with_suffix('.edges.tsv')
+                emu.call('edge_save', edges.resolve())
             per: dict[str, int] = {}
             total = 0
             hits: list[tuple[int, int]] = []
@@ -227,11 +232,57 @@ def main() -> int:
                 for name, n in sorted(per.items(), key=lambda kv: -kv[1]):
                     out.write(f'{name}\t{n}\t{n / frames:.0f}\t{100 * n / max(1, total):.2f}\n')
             print(f'profile: {total} instructions over {frames} frames = {total / frames:.0f} a frame -> {args.profile}')
+            if args.callers:
+                float_calls(edges, args, addrs, names, by_name, frames)
     finally:
         emu.close()
         if logf:
             logf.close()
     return 0
+
+
+FLOAT_ENTRY = ('__addsf3', '__subsf3', '__mulsf3', '__divsf3', '__ltsf2', '__lesf2', '__gtsf2', '__gesf2', '__eqsf2',
+               '__nesf2', '__fixsfsi', '__fixunssfsi', '__floatsisf', '__floatunsisf', '__extendsfdf2', '__truncdfsf2',
+               'floorf', 'ceilf', 'truncf', 'roundf', 'fabsf', 'fminf', 'fmaxf', 'fmodf', 'sqrtf', 'sinf', 'cosf',
+               'atan2f', 'hypotf', 'powf', 'expf', 'logf')
+
+
+def float_calls(edges: Path, args, addrs: list[int], names: list[str], by_name: dict[str, int], frames: int) -> None:
+    """calls into the float routines (edges whose target is one of their entry points), per calling function"""
+    entry = {}
+    for n in FLOAT_ENTRY:
+        for k in (n, '_' + n):
+            if k in by_name:
+                entry[by_name[k]] = n
+    calls: list[tuple[int, str, int]] = []
+    for line in edges.read_text().splitlines():
+        f = line.replace(',', '\t').split('\t')
+        try:
+            a, b, n = int(f[0], 16), int(f[1], 16), int(f[2])
+        except (ValueError, IndexError):
+            continue
+        if b in entry:
+            calls.append((a, entry[b], n))
+    a2l = Path(str(NM).replace('-nm', '-addr2line'))
+    res = subprocess.run([a2l, '-f', '-i', '-e', args.elf], input='\n'.join(hex(a) for a, _, _ in calls),
+                         check=True, capture_output=True, text=True).stdout.splitlines()
+    # with -i an address may print several (inlined) frames: re-run one at a time for the innermost caller
+    per: dict[tuple[str, str], int] = {}
+    for a, fn, n in calls:
+        r = subprocess.run([a2l, '-f', '-e', args.elf, hex(a)], check=True, capture_output=True, text=True).stdout.splitlines()
+        name = r[0] if r else '?'
+        loc = r[1].rsplit('/', 1)[-1] if len(r) > 1 else ''
+        per[(f'{name} ({loc})', fn)] = per.get((f'{name} ({loc})', fn), 0) + n
+    out = args.profile.with_suffix('.callers.tsv')
+    tot: dict[str, int] = {}
+    for (caller, _), n in per.items():
+        tot[caller] = tot.get(caller, 0) + n
+    with open(out, 'w') as o:
+        o.write('caller\tcalls_per_frame\troutines\n')
+        for caller, n in sorted(tot.items(), key=lambda kv: -kv[1]):
+            fns = sorted(((fn, m) for (c, fn), m in per.items() if c == caller), key=lambda kv: -kv[1])
+            o.write(f'{caller}\t{n / frames:.0f}\t' + ' '.join(f'{fn}:{m / frames:.0f}' for fn, m in fns) + '\n')
+    print(f'float calls by caller -> {out}')
 
 
 if __name__ == '__main__':

@@ -208,8 +208,15 @@ typedef union { float f; uint32_t u; int32_t i; } FU;
 
 float fabsf(float x) { FU v = { x }; v.u &= 0x7FFFFFFFu; return v.f; }
 float copysignf(float x, float y) { FU a = { x }, b = { y }; a.u = (a.u & 0x7FFFFFFFu) | (b.u & 0x80000000u); return a.f; }
-float fminf(float a, float b) { return a < b ? a : b; }
-float fmaxf(float a, float b) { return a > b ? a : b; }
+/* on the bits: float order is integer order once the sign is folded (no soft-float compare; nan compares as a number) */
+static int32_t fkey(float x) { FU v = { x }; if (!(v.u & 0x7F800000u)) return 0; return (v.u & 0x80000000u) ? -(int32_t)(v.u & 0x7FFFFFFFu) : (int32_t)v.u; }
+float fminf(float a, float b) { return fkey(a) <= fkey(b) ? a : b; }
+float fmaxf(float a, float b) { return fkey(a) >= fkey(b) ? a : b; }
+
+/* the fraction bits of 1.m x 2^e: 0x007FFFFF >> e as a table (a variable shift is a libgcc loop on the SH-2) */
+static const uint32_t FRAC_MASK[23] = {
+    0x7FFFFF, 0x3FFFFF, 0x1FFFFF, 0xFFFFF, 0x7FFFF, 0x3FFFF, 0x1FFFF, 0xFFFF, 0x7FFF, 0x3FFF, 0x1FFF, 0xFFF, 0x7FF,
+    0x3FF, 0x1FF, 0xFF, 0x7F, 0x3F, 0x1F, 0xF, 0x7, 0x3, 0x1 };
 
 float truncf(float x)
 {
@@ -217,11 +224,12 @@ float truncf(float x)
     int e = (int)((v.u >> 23) & 0xFF) - 127;
     if (e >= 23) return x;
     if (e < 0) { v.u &= 0x80000000u; return v.f; }
-    v.u &= ~(0x007FFFFFu >> e);
+    v.u &= ~FRAC_MASK[e];
     return v.f;
 }
-float floorf(float x) { float t = truncf(x); return t > x ? t - 1.0f : t; }
-float ceilf(float x) { float t = truncf(x); return t < x ? t + 1.0f : t; }
+/* truncation moved x (its bits changed) towards zero: one more step for the negatives (floor) / positives (ceil) */
+float floorf(float x) { FU a = { x }, t = { truncf(x) }; return (a.u & 0x80000000u) && a.u != t.u && (a.u & 0x7FFFFFFFu) ? t.f - 1.0f : t.f; }
+float ceilf(float x) { FU a = { x }, t = { truncf(x) }; return !(a.u & 0x80000000u) && a.u != t.u ? t.f + 1.0f : t.f; }
 float roundf(float x) { float t = truncf(x), d = x - t; return d >= 0.5f ? t + 1.0f : d <= -0.5f ? t - 1.0f : t; }
 long lroundf(float x) { return (long)roundf(x); }
 float fmodf(float x, float y) { return y == 0.0f ? 0.0f : x - truncf(x / y) * y; }

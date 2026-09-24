@@ -14,6 +14,7 @@ int  rnull_prims(void);
 static void rsat_init(void) { }
 static void rsat_frame_begin(void) { }
 static void rsat_frame_end(void) { }
+static void rsat_timing(uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d) { *a = *b = *c = *d = 0; }
 #endif
 
 static void vblank_out(void *work)
@@ -60,6 +61,9 @@ static void __attribute__((noreturn, noinline)) game_main(void)
     printf("saber rider: saturn build " __DATE__ " " __TIME__ "\n");
     cd_sat_init();
     rsat_init();
+#ifndef SAT_RENDER_NULL
+    if (plat_getenv("SABER_RBENCH")) rsat_bench();
+#endif
     report_memory("boot");
 
     const char *lv = plat_getenv("SABER_LEVEL");
@@ -84,7 +88,17 @@ static void __attribute__((noreturn, noinline)) game_main(void)
         if (!no_draw) app_draw();
         rsat_frame_end();
         uint32_t t_draw = sat_timer_us();
-        if (app_perf_on()) app_perf(t_upd - t0, t_draw - t_upd, fields * 16683u, steps, rsat_prims());
+        if (app_perf_on()) {
+            app_perf(t_upd - t0, t_draw - t_upd, fields * 16683u, steps, rsat_prims());
+            static uint32_t last_split, fsum, nsum;
+            fsum += fields; nsum++;
+            if (t0 - last_split > 1000000u) {   /* the draw's split (µs a frame): planes, waiting for VDP1, command DMA */
+                uint32_t pl, w, pu, n; rsat_timing(&pl, &w, &pu, &n);
+                if (n) printf("[perf] split: planes %u wait-vdp1 %u put %u us a frame, %u.%02u fields a frame\n", (unsigned)(pl / n),
+                              (unsigned)(w / n), (unsigned)(pu / n), (unsigned)(fsum / nsum), (unsigned)(fsum * 100 / nsum % 100));
+                fsum = nsum = 0; last_split = t0;
+            }
+        }
         vdp2_sync();
         vdp2_sync_wait();
         frames++;

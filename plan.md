@@ -665,3 +665,39 @@ columns, LEVL replaced by the plane streams, plan 4.3 / 8.4).
 Testing notes: the disc's area code includes North America, so mednafen picks the US BIOS; with only `sega_101.bin`,
 set `ss.region_autodetect 0` and `ss.region_default jp` (the headless kit's `set` command, kept in
 `mednafen-headless.cfg`).
+
+### M5 — platform renderer (in progress: level 1 on VDP2, 30-60 fps)
+
+**Planes** (`tools/saturn/layers.py`, `src/platform/saturn/vdp2_planes.c`, `build/saturn/planes_12DAD1A7.png` = PC
+render vs. planes at five camera positions). Level 1's 11 tile layers on NBG0-3:
+
+| Plane | Contents | Rate |
+|---|---|---|
+| NBG0 (line scroll, prio 2) | band 0-79 px: SkyBG (static); band 80-175: Far + Mountains merged, the sky as one colour a row | 0 / 0.3 (Far 0.2 on PC) |
+| NBG1 (3) | NearMountains | 0.4 |
+| NBG2 (4) | MidBG + Cars MidBG re-anchored per car (≤ 5 px off at the screen edges) | 0.875 (cars 0.9) |
+| NBG3 (5) | Playfield + Platforms + Cars | 1.0 |
+| VDP1 backdrop (prio 1) | sky rows 80-95 (the planet's lower edge the mountain band would cut), a palette sprite | static |
+| VDP1 (6) | sprites, ForegroundStuff (1.0), ForegroundStuf2 (1.2) | |
+
+8x8 4bpp cells deduplicated across flips: 11807 cells, 368 KB, all resident (no streaming needed); 96 palettes by
+lossy clustering (37.5 dB on the 5-bit scale; exact packing needed 455, CRAM holds 128); u16 names in LZ4 column
+chunks (103 KB) streamed into one 64x64 page per NBG. The level block ships without the planes' maps (171 KB instead
+of 700), in `stage.pck` (opened first); ForegroundStuff's tile bank is cut to its 27 tiles for VDP1 (11 KB instead
+of 294). Level 1 in RAM after loading from the menus: 17 KB high / 163 KB low free.
+
+Found on the way: libyaul's `vdp2_vram_control_set` resets CRAM to mode 0 (worked around); the VDP1 frame change
+must be variable (AUTO cut off slow frames); the vblank erase of the variable change misses the bottom ~40 lines
+(a transparent polygon clears the framebuffer while the planes are on); `DISP_NBGn` makes colour 0 opaque (use
+`DISPTP`).
+
+**Speed** (level 1, `bench_level1.env`, mednafen): 60 fps with 0-3 enemies, 30-60 with 5-9. Per frame: update 2-6 ms,
+draw 7-13 ms (textured draws ~6 ms, the planes 0.8, the core's own drawing the rest). Done so far: an integer path
+for unrotated textured draws (no soft-float), no libgcc variable shifts / divisions / soft-double compares in the
+draw path or the soft-float (multiplies by powers of two; still bit-exact: `make test`), `floorf` & co. on the bits,
+a division-free `sat_timer_us`, per-texture LRU stamps and grid lookups, gouraud tables uploaded once VDP1 is done,
+the enemy spawner's integer early-out (exact). `mednafen_run.py --callers` lists the soft-float callers.
+
+Next for M5: the slave SH-2 builds VDP1's list from recorded draws (plan 8.3; the master keeps update + the core's
+drawing); the remaining soft-float in physics / animation (fx); sprites between planes (Hyperjumper's layers 4 and 7:
+palette sprites with priority bits); the 224-line framing (the bottom 16 px of the PC view are cut now).

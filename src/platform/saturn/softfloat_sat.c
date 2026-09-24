@@ -34,6 +34,20 @@ static inline uint32_t divu_64_32(uint64_t n, uint32_t d, uint32_t *rem)
 #define QNAN 0x7FC00000u
 #define MANT 0x007FFFFFu
 
+/* Variable shifts are libgcc loops on the SH-2 (it shifts by 1, 2, 8 or 16 only): these multiply by a power of two
+ * instead (mul.l / dmulu.l, a few cycles). shr_sticky also says whether bits were shifted out. */
+static const uint32_t POW2[32] = {
+    1u, 1u << 1, 1u << 2, 1u << 3, 1u << 4, 1u << 5, 1u << 6, 1u << 7, 1u << 8, 1u << 9, 1u << 10, 1u << 11, 1u << 12,
+    1u << 13, 1u << 14, 1u << 15, 1u << 16, 1u << 17, 1u << 18, 1u << 19, 1u << 20, 1u << 21, 1u << 22, 1u << 23,
+    1u << 24, 1u << 25, 1u << 26, 1u << 27, 1u << 28, 1u << 29, 1u << 30, 1u << 31 };
+static inline uint32_t shl(uint32_t x, int n) { return x * POW2[n]; }                                     /* n 0..31 */
+static inline uint32_t shr(uint32_t x, int n) { return (uint32_t)(((uint64_t)x * POW2[32 - n]) >> 32); }  /* n 1..31 */
+static inline uint32_t shr_sticky(uint32_t x, int n)                                                      /* n 1..31 */
+{
+    uint64_t p = (uint64_t)x * POW2[32 - n];
+    return (uint32_t)(p >> 32) | ((uint32_t)p != 0);
+}
+
 /* leading zeros of x (x != 0), and x shifted so that bit 31 is set; constant shifts only */
 static inline uint32_t norm32(uint32_t x, int *lz)
 {
@@ -72,7 +86,7 @@ static uint32_t add_mag(uint32_t a, uint32_t b)   /* |a| >= |b|, the sign of a *
     int d = ea - eb;
     if (d) {
         if (d > 30) mb = mb ? 1 : 0;
-        else { uint32_t lost = mb & ((1u << d) - 1); mb = (mb >> d) | (lost != 0); }
+        else mb = shr_sticky(mb, d);
     }
     uint32_t m;
     if (!((a ^ b) & SIGN)) {   /* a sum: the leading one is at bit 29 or 30 */
@@ -155,7 +169,7 @@ SF_ATTR int32_t SF(__fixsfsi)(uint32_t a)
     if (e < 0) return 0;
     if (e >= 31) return (a & SIGN) ? INT32_MIN : INT32_MAX;
     uint32_t m = (a & MANT) | 0x800000u;
-    uint32_t v = e >= 23 ? m << (e - 23) : m >> (23 - e);
+    uint32_t v = e >= 23 ? shl(m, e - 23) : shr(m, 23 - e);
     return (a & SIGN) ? -(int32_t)v : (int32_t)v;
 }
 SF_ATTR uint32_t SF(__fixunssfsi)(uint32_t a)
@@ -165,7 +179,7 @@ SF_ATTR uint32_t SF(__fixunssfsi)(uint32_t a)
     if (e < 0) return 0;
     if (e >= 32) return UINT32_MAX;
     uint32_t m = (a & MANT) | 0x800000u;
-    return e >= 23 ? m << (e - 23) : m >> (23 - e);
+    return e >= 23 ? shl(m, e - 23) : shr(m, 23 - e);
 }
 
 /* comparisons, libgcc's conventions; unordered (nan) gives the value that makes the test false */

@@ -48,8 +48,10 @@ uint32_t sat_timer_us(void)
 {
     uint32_t hi, lo;
     do { hi = frt_high; lo = cpu_frt_count_get(); } while (hi != frt_high);
-    uint64_t counts = ((uint64_t)hi << 16) | lo;
-    return (uint32_t)(counts * 1000u / CPU_FRT_NTSC_320_32_COUNT_1MS);
+    /* counts * 1000 / COUNT_1MS as a multiply by a 16.16 constant (a 64-bit division is a libgcc call of hundreds of
+     * cycles); counts stays under 2^40 for days */
+    const uint64_t us_per_count = (1000ull << 16) / CPU_FRT_NTSC_320_32_COUNT_1MS;
+    return (uint32_t)(((((uint64_t)hi << 16) | lo) * us_per_count) >> 16);
 }
 
 void sat_vblank_tick(void) { vblanks++; }

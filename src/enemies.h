@@ -46,6 +46,7 @@ typedef struct {
     uint16_t interval_ms; uint8_t rand_n;
     float timer; int remaining, remaining_init, spawned;
     float wp[8][2]; int nwp;
+    int x_lo, x_hi;                 /* floor(cx - hx), ceil(cx + hx): an integer early-out before the float test */
 } Trigger;
 
 typedef struct {

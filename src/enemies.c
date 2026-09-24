@@ -46,6 +46,7 @@ void enemies_add_trigger(Enemies *E, const LevelObject *o)   /* FUN_00421070 + F
     memset(t, 0, sizeof *t);
     t->hx = o->spawn_x * 0.5f; t->hy = o->spawn_y * 0.5f;
     t->cx = o->x + t->hx; t->cy = o->y + t->hy;
+    t->x_lo = (int)floorf(t->cx - t->hx); t->x_hi = (int)ceilf(t->cx + t->hx);
     t->type = o->type; t->layer = o->layer;
     t->interval_ms = o->a; t->rand_n = o->c;
     t->timer = o->b * 0.001f + (o->d ? rnd(o->d + 1) * 0.02f : 0);
@@ -214,8 +215,12 @@ static void spawner_update(Enemies *E, Player *pl, const Level *L, const Physics
     Body *pb = &pl->ch.body;
     float pcx = pb->x + pb->ox, pcy = pb->y + pb->oy;
     if (!E->spawner_enabled) return;
+    /* integers first (soft-float on the Saturn): a trigger clearly left or right of the player needs no float test; the
+     * 2-unit margins keep every decision the float test would make */
+    int px = (int)floorf(pcx), phx = (int)ceilf(pb->hx);
     for (int i = 0; i < E->ntr; i++) {
         Trigger *t = &E->tr[i];
+        if (px + 2 < t->x_lo - phx || px - 2 > t->x_hi + phx) continue;
         if (fabsf(pcx - t->cx) > t->hx + pb->hx || fabsf(pcy - t->cy) > t->hy + pb->hy) continue;
         t->timer -= dt;
         while (t->timer <= 0.0f && t->remaining != 0) {
