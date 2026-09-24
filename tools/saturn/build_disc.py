@@ -35,6 +35,7 @@ sys.path.insert(0, str(ROOT / 'tools/dc'))
 sys.path.insert(0, str(HERE))
 import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
+import film  # noqa: E402
 import layers  # noqa: E402
 import pckwrite  # noqa: E402
 import satbake  # noqa: E402
@@ -193,6 +194,25 @@ def stage_dump(data: Path, work: Path, stage: int | None) -> Path | None:
 preview_dir: Path | None = None
 
 
+def bake_videos(data: Path, work: Path, stage: Path, log) -> None:
+    """the demo's intro and briefing videos and our power clips as SCPK files in the ISO root (film.py): the intro fills
+    the 224 lines, the briefing is made at the size the briefing screen shows it (a third), the clips at 320x224"""
+    dcprep = work / 'dcprep'
+    subprocess.run(['cc', '-O2', '-std=c11', '-Isrc', 'tools/dc/dcprep.c', 'src/pack.c', 'src/lzo1z.c',
+                    'src/platform/common/sfx_decode.c', 'src/platform/common/mups.c', '-o', str(dcprep)], cwd=ROOT, check=True)
+    vids = work / 'video'
+    if not (vids / '2FE798C3.m4v').exists():
+        vids.mkdir(parents=True, exist_ok=True)
+        subprocess.run([dcprep, 'video', data, vids], check=True, capture_output=True)
+    xvid = ['-r', '25', '-f', 'm4v']   # the pack videos: raw XviD, 25 fps (tools/dc/build_disc.py)
+    sound = lambda p: next((q for q in (p.with_suffix('.ogg'), p.with_suffix('.wav')) if q.exists()), None)
+    film.make(vids / 'E46721E5.m4v', stage / 'E46721E5.CPK', work / 'film', (296, 224), '', xvid, sound(vids / 'E46721E5.m4v'), log)
+    film.make(vids / '2FE798C3.m4v', stage / '2FE798C3.CPK', work / 'film', (256, 104), '', xvid, sound(vids / '2FE798C3.m4v'), log)
+    for clip in sorted((ROOT / 'assets/power').glob('*.m4v')):   # 320x240 at 24 fps, the voice in the .wav beside it
+        film.make(clip, stage / (clip.stem.upper()[:8] + '.CPK'), work / 'film', (320, 224), 'crop=320:224:0:8',
+                  ['-r', '24', '-f', 'm4v'], clip.with_suffix('.wav'), log)
+
+
 def build(args: argparse.Namespace) -> None:
     out = args.out.resolve()
     stage, work = out / 'stage', out / 'work'
@@ -215,6 +235,7 @@ def build(args: argparse.Namespace) -> None:
     global preview_dir
     preview_dir = out
     bake_stages(data, work, stage_pack, log)
+    bake_videos(data, work, stage, log)
     for source in sorted((ROOT / 'assets').rglob('*')):
         if not source.is_file():
             continue
@@ -222,8 +243,11 @@ def build(args: argparse.Namespace) -> None:
         if unused(rel):
             continue
         key, ext = namehash(rel.as_posix()), source.suffix.lower()
-        if ext in ('.wav', '.m4v'):
-            continue   # sound driver / FMV milestones
+        if ext == '.m4v':   # an empty entry, so asset_path finds the clip (the video is its .CPK file)
+            files.add(key, 'file', file_block(b''))
+            continue
+        if ext == '.wav':
+            continue   # the sound driver milestone (a clip's voice is in its .CPK)
         if ext == '.png':
             if rel.as_posix() in IMAGES:
                 files.add(key, 'image', image_block(source, IMAGES[rel.as_posix()]), lz4=True)

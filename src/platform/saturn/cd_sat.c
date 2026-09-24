@@ -137,3 +137,19 @@ FILE *fopen(const char *restrict path, const char *restrict mode)
 }
 
 void cd_sat_stats(unsigned long *reads, unsigned long *bytes, unsigned long *seeks) { *reads = reads_total; *bytes = bytes_total; if (seeks) *seeks = seeks_total; }
+
+/* how much a sequential read of f can take now without waiting for the drive (video_sat.c streams with it): the rest of
+ * the sector in cache and the sectors the CD block holds; starts the stream at f's position when it isn't there */
+size_t cd_sat_available(FILE *f)
+{
+    CdFile *c = f->cookie;
+    if (c->pos >= c->size) return 0;
+    uint32_t sec = c->pos / 2048, off = c->pos % 2048;
+    size_t avail = 0;
+    if (off && c->cached == (int32_t)sec) { avail = 2048 - off; sec++; }
+    fad_t next = c->fad + sec;
+    if (next >= c->fad_end) return avail;
+    if (!st_on || next != st_next) { if (!avail) stream_start(next, c->fad_end - next); return avail; }
+    avail += (size_t)cd_block_cmd_sector_number_get(0) * 2048u;
+    return avail > c->size - c->pos ? c->size - c->pos : avail;
+}

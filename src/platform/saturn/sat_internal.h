@@ -39,6 +39,24 @@ void rsat_tex_priority(struct RTex *t, int reg);
 void rsat_set_backdrops(struct RTex **t, const int *x, const int *y, int n, bool clear_framebuffer);
 
 void rsat_bench(void);   /* SABER_RBENCH */
+/* video_sat.c: a w x h 16bpp surface in VDP1 memory, written by hook(ud, pixels, pitch in pixels) once a frame while VDP1
+ * is idle; drawn by rsat_video_draw (a record, like any draw) */
+bool rsat_video_open(int w, int h, void (*hook)(void *ud, volatile uint16_t *px, int pitch), void *ud);
+void rsat_video_close(void);
+
+/* pcm_sat.c: one PCM stream on the SCSP (a slot looping over a ring in sound RAM, fed by the SH-2; no 68000 driver) */
+void     pcm_sat_init(void);
+bool     pcm_sat_start(int rate, const int16_t *lead, int lead_samples);   /* 16-bit mono, big-endian (the SH-2's own) */
+int      pcm_sat_space(void);                  /* samples that can be written now without overtaking the playback */
+void     pcm_sat_write(const int16_t *s, int n);   /* the next n samples */
+uint32_t pcm_sat_played(void);                 /* samples played since the start (the video's clock) */
+void     pcm_sat_finish(const int16_t *tail, int n);   /* the rest of the stream: plays out, then the slot stops */
+void     pcm_sat_stop(void);
+void     pcm_sat_poll(void);                   /* once a frame: feeds a finishing stream, stops it at its end */
+
+/* cd_sat.c: bytes a sequential read of f can take right now without waiting for the drive */
+#include <stdio.h>
+size_t   cd_sat_available(FILE *f);
 void rsat_timing(uint32_t *planes_us, uint32_t *vdp1_wait_us, uint32_t *put_us, uint32_t *frames);   /* since the last call */
 
 /* vdp2_planes.c: a level's tile layers as VDP2 planes (render.h r_layer); once a frame, before VDP1's list goes */

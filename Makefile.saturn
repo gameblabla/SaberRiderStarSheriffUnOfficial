@@ -17,13 +17,13 @@ OUT     := build/saturn
 SH_PROGRAM    := saber_rider
 SH_BUILD_DIR  := obj-saturn
 SH_OUTPUT_DIR := $(OUT)
-SH_SRCS := $(wildcard src/*.c) $(filter-out %/render_sat.c %/vdp2_planes.c,$(wildcard src/platform/saturn/*.c)) \
-	src/platform/null/aud_null.c src/platform/null/video_null.c
+SH_SRCS := $(wildcard src/*.c) $(filter-out %/render_sat.c %/vdp2_planes.c %/video_sat.c,$(wildcard src/platform/saturn/*.c)) \
+	src/platform/null/aud_null.c
 ifeq ($(RENDER),null)
-SH_SRCS   += src/platform/null/render_null.c
+SH_SRCS   += src/platform/null/render_null.c src/platform/null/video_null.c
 SH_CFLAGS += -DSAT_RENDER_NULL
 else
-SH_SRCS   += src/platform/saturn/render_sat.c src/platform/saturn/vdp2_planes.c
+SH_SRCS   += src/platform/saturn/render_sat.c src/platform/saturn/vdp2_planes.c src/platform/saturn/video_sat.c
 endif
 
 # REAL_FIXED, FX_NO_FLOAT: the core in 16.16 fixed point (src/real.h), no float anywhere - the SH-2 has no FPU, and the
