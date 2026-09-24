@@ -283,8 +283,8 @@ bool stage3_world_build(Level *L, Stage3World *w)
     }
     L->collision = w->collision;
     L->cols = cols;
-    L->width = (float)width;
-    w->width = (float)width;
+    L->width = r_int(width);
+    w->width = r_int(width);
     return true;
 }
 
@@ -301,9 +301,9 @@ void stage3_world_free(Stage3World *w)
  * always 260+ px past their thin trigger so they are placed off screen and
  * scrolled into view, never popped in. Streams mix walkers, grunts and the
  * grunt variant, from ahead and from behind, with random intervals. */
-#define RGT 100000.0f
-#define LFT -100000.0f
-typedef struct { int type; float x, zw; int nwp; float wp[3][2]; int interval_ms, loops, rand_n, delay_ms; } Stage3Trigger;
+#define RGT 100000
+#define LFT -100000
+typedef struct { int type; int x, zw; int nwp; int wp[3][2]; int interval_ms, loops, rand_n, delay_ms; } Stage3Trigger;
 static const Stage3Trigger TRIGGERS[] = {
     /* badlands: grunts run in, a kneeler waits behind the first wreck */
     { 2,  160, 400, 1, { { RGT, 160 } },                              1500,  3, 40,    0 },
@@ -338,8 +338,6 @@ static const Stage3Trigger TRIGGERS[] = {
     { 6, 5980,   8, 1, { { 6280, 160 } },                              0,  1,  0,    0 },
     { 2, 6050, 300, 1, { { RGT, 160 } },                              1200,  2, 40,    0 },
 };
-#undef RGT
-#undef LFT
 
 int stage3_triggers(LevelObject *out, int max, int player_layer)
 {
@@ -349,10 +347,13 @@ int stage3_triggers(LevelObject *out, int max, int player_layer)
         LevelObject *o = &out[n++];
         memset(o, 0, sizeof *o);
         o->type = (uint32_t)t->type;
-        o->x = t->x; o->y = 0;
-        o->spawn_x = t->zw; o->spawn_y = 208;   /* zone size */
+        o->x = r_int(t->x); o->y = 0;
+        o->spawn_x = r_int(t->zw); o->spawn_y = R(208);   /* zone size */
         o->n_wp = (uint8_t)t->nwp;
-        for (int k = 0; k < t->nwp && k < 3; k++) { o->wp[k][0] = t->wp[k][0]; o->wp[k][1] = t->wp[k][1]; }
+        for (int k = 0; k < t->nwp && k < 3; k++) {
+            int x = t->wp[k][0];
+            o->wp[k][0] = x == RGT ? WP_OFF_R : x == LFT ? WP_OFF_L : r_int(x); o->wp[k][1] = r_int(t->wp[k][1]);
+        }
         o->layer = (uint32_t)player_layer;
         o->a = (uint16_t)t->interval_ms; o->loops = (int8_t)t->loops;
         o->c = (uint8_t)t->rand_n; o->b = (uint16_t)t->delay_ms;

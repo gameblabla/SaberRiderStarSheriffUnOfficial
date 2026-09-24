@@ -29,8 +29,8 @@
  * new arrives, and the stage is won when the last Outrider on the field is gone. */
 enum { FF_WAIT, FF_ONSLAUGHT, FF_BOSS, FF_MOPUP, FF_WON };
 typedef struct {
-    int state; float t;
-    float arena_x; int sw;
+    int state; real t;
+    real arena_x; int sw;
     int tr0, ntr_onslaught, ntr;          /* its edge streams in Enemies.tr: the onslaught's, then the boss round's */
     bool scene_ambush;                    /* set when the finale starts: the game opens FOREST_SCRIPT_AMBUSH */
 } ForestFinale;
@@ -39,7 +39,7 @@ typedef struct {
     TileMap maps[FOREST_MAX_LAYERS];
     uint32_t *cells[FOREST_MAX_LAYERS];
     uint8_t *collision;
-    float width, start_x, start_y, exit_x;
+    real width, start_x, start_y, exit_x;
     LevelObject triggers[FOREST_MAX_TRIGGERS]; int ntriggers;
     ForestFinale fin;
 } Forest;
@@ -53,17 +53,17 @@ void forest_dispose(Forest *f);
 int forest_triggers(const Forest *f, LevelObject *out, int max, int player_layer);
 /* feet at (x, feet_y) up on a tower deck (at or above its one-way floor cells): the hero is drawn behind the rail
  * there, in the cabin like the gunmen; below a deck (jumping up through it) he stays in front of the planks */
-bool forest_on_deck(const Level *L, float x, float feet_y);
+bool forest_on_deck(const Level *L, real x, real feet_y);
 /* radio scenes (dialog_open_script format, written for Fireball like stage 3's): the drop-off, the ambush springing, the win */
 extern const char *const FOREST_SCRIPT_INTRO, *const FOREST_SCRIPT_AMBUSH, *const FOREST_SCRIPT_OUTRO;
 /* the opening, as in stage 3: the camera starts here, the hero off screen to its left walks in to INTRO_STOP, just short
  * of the first wave's zone (x 200), then FOREST_SCRIPT_INTRO */
-#define FOREST_INTRO_CAM 48.0f
-#define FOREST_INTRO_STOP (FOREST_INTRO_CAM + 96.0f)
+#define FOREST_INTRO_CAM R(48.0f)
+#define FOREST_INTRO_STOP (FOREST_INTRO_CAM + R(96.0f))
 
 /* the finale, every live step after enemies_update; true once it is won. hj = Hyperjumper (night_boss_load'ed,
  * manual). While it runs the camera stays put (fin.state != FF_WAIT). */
 bool forest_finale_update(Forest *f, Enemies *E, Night *hj, Effects *fx, const Level *L, const PhysicsWorld *W,
-                          const Player *pl, float cam_x, int sw, int sh, int layer, float dt);
+                          const Player *pl, real cam_x, int sw, int sh, int layer, real dt);
 /* the objective top right once Hyperjumper is down: the Outriders left (the ambush itself shows no timer) */
 void forest_finale_draw_hud(const Forest *f, const Enemies *E, const Night *hj, Ren *ren, int sw);

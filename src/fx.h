@@ -18,15 +18,15 @@ typedef int32_t fx;
 typedef int32_t fx_ang;
 
 #define FX_SHIFT 16
-#define FX_ONE   ((fx)0x10000)
-#define FX_HALF  ((fx)0x8000)
-#define FX_MAX   ((fx)0x7FFFFFFF)
-#define FX_MIN   ((fx)INT32_MIN)
+#define FX_ONE   ((int32_t)0x10000)
+#define FX_HALF  ((int32_t)0x8000)
+#define FX_MAX   ((int32_t)0x7FFFFFFF)
+#define FX_MIN   ((int32_t)INT32_MIN)
 /* a constant: FX(1.5), FX(-0.25) (rounded to nearest) */
-#define FX(c)    ((fx)((c) * 65536.0 + ((c) >= 0 ? 0.5 : -0.5)))
+#define FX(c)    ((int32_t)((double)(c) * 65536.0 + ((c) >= 0 ? 0.5 : -0.5)))   /* int32_t, not fx: a variable may be called fx */
 #define FX_ANG_TURN 65536
 /* a constant angle in degrees: FX_DEG(90) == 16384 */
-#define FX_DEG(d) ((fx_ang)((d) * (65536.0 / 360.0) + ((d) >= 0 ? 0.5 : -0.5)))
+#define FX_DEG(d) ((int32_t)((d) * (65536.0 / 360.0) + ((d) >= 0 ? 0.5 : -0.5)))
 
 static inline fx    fx_from_int(int i)     { return (fx)((uint32_t)i << FX_SHIFT); }
 #ifndef FX_NO_FLOAT   /* the Saturn build defines it: no float anywhere (host tools and the PC/DC backends may convert) */
@@ -41,7 +41,7 @@ fx fx_from_f32bits(uint32_t bits);
  * rounded up, as float's 1/60 (0.016666668) is, so a timer of n/60 s runs out on the nth step like the float code's.
  * A rate times the step (a velocity into a displacement, an acceleration into a velocity) is v/60 exactly (to 1/65536):
  * fx_mul_dt. Any other dt (a scaled or zero step) is an ordinary product. */
-#define FX_DT ((fx)1093)
+#define FX_DT ((int32_t)1093)
 static inline fx fx_mul_dt(fx v, fx dt)
 {
     if (dt == FX_DT) return (fx)(((int64_t)v * 71582788 + 0x80000000) >> 32);   /* 2^32 / 60 */

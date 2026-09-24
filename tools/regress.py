@@ -33,6 +33,13 @@ def cases():
         out['s%d_fuzz' % lv] = (lv, 'fuzz', 3600, {})
     for h in range(4): out['s1_power%d' % h] = (1, POWER, 3000, {'SABER_HERO': str(h)})
     for lv, h in ((3, 1), (4, 2), (5, 3), (7, 0)): out['s%d_power%d' % (lv, h)] = (lv, POWER, 3000, {'SABER_HERO': str(h)})
+    # the ends of the platform stages (their bosses), a death and respawn
+    out['s1_boss'] = (1, 'bench', 3000, {'SABER_START': '8000', 'SABER_BOSSHP': '12'})
+    out['s3_boss'] = (3, 'bench', 3000, {'SABER_START': '6700', 'SABER_BOSSHP': '12'})
+    out['s4_boss'] = (4, 'bench', 3600, {'SABER_START': '6200', 'SABER_BOSSHP': '12'})
+    out['s5_dark'] = (5, 'bench', 3000, {'SABER_START': '6500', 'SABER_DARK': '1', 'SABER_DARKHP': '12'})
+    out['s5_boss'] = (5, 'bench', 3000, {'SABER_START': '6500', 'SABER_BOSSHP': '12'})
+    out['s1_kill'] = (1, 'bench', 1500, {'SABER_KILL': '400'})
     return out
 
 

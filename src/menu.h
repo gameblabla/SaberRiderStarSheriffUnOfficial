@@ -20,7 +20,7 @@ enum { RATIO_WIDE = 0, RATIO_43 = -1, RATIO_STRETCH = 1 };
 enum { FILTER_NONE, FILTER_CRT, FILTER_DOUBLE, FILTER_DOUBLE_SCAN, FILTER_CRT_SCAN, FILTER_COUNT };
 
 typedef struct {
-    int state; float t, dur;   /* +0x58 state, +0x64 time, +0x60 period */
+    int state; real t, dur;   /* +0x58 state, +0x64 time, +0x60 period */
     int sel;                   /* main menu / options cursor (+0x70) */
     int character;             /* 0 Saber, 1 Fireball, 2 April, 3 Colt (+0x5c) */
     Video *video;
@@ -33,10 +33,10 @@ typedef struct {
     bool ending;               /* the last stage is won: MISSION ACCOMPLISHED rolls the credits, then the splash */
     int cleared_stage;         /* the stage MISSION ACCOMPLISHED celebrates (1-4): picks its art (assets/victory) */
     int idle_frames;           /* title attract timer */
-    float angle;               /* rotating background (DAT_00ac9a88 / DAT_00ac9a8c) */
-    int credits_page; float credits_t;
+    real angle;               /* rotating background (DAT_00ac9a88 / DAT_00ac9a8c) */
+    int credits_page; real credits_t;
     int bind_dev, bind_row, bind_col;   /* CONTROLS cursor */
-    float bind_t;              /* how long the current capture has waited */
+    real bind_t;              /* how long the current capture has waited */
     bool bind_wait;            /* a capture ended: ignore the buttons until all are released */
     /* settings (DAT_00aab780 difficulty, DAT_00aab788 lives, DAT_00aab784 continues, DAT_00ace3c0 screen, DAT_00aab770 ratio,
        DAT_00ace3bc filter, DAT_00ac9a9c music test) */
@@ -45,6 +45,6 @@ typedef struct {
 } Menu;
 
 void menu_enter(Menu *m, int state);
-void menu_update(Menu *m, const Input *in, float dt, int sw, Ren *r);
+void menu_update(Menu *m, const Input *in, real dt, int sw, Ren *r);
 void menu_draw(Menu *m, Ren *r, int sw, int sh);
 static inline bool menu_scanlines(const Menu *m) { return m->filter == FILTER_CRT || m->filter == FILTER_DOUBLE_SCAN || m->filter == FILTER_CRT_SCAN; }

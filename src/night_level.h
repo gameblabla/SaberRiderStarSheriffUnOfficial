@@ -17,7 +17,7 @@
 typedef struct {
     uint32_t *cells[LVL_MAX_LAYERS];   /* owned replacement cell arrays (NULL: layer unchanged) */
     uint8_t *collision;                /* owned replacement collision grid */
-    float width;
+    real width;
 } Stage3World;
 
 /* Rebuilds L in place (maps, collision, width); the pack data it pointed at is

@@ -20,36 +20,36 @@ enum { DA_OFF, DA_WAIT, DA_CALL, DA_APPEAR, DA_TALK, DA_READY, DA_FIGHT, DA_DYIN
 #define DARK_GHOSTS 4
 #define DARK_HIST 32
 
-typedef struct { float x, y, vx, vy, life, max; } DarkMote;
+typedef struct { real x, y, vx, vy, life, max; } DarkMote;
 
 typedef struct {
-    int state; float t;
+    int state; real t;
     Player p;                        /* her body: April's CRHC through the player's own controls */
     Input in; bool want[BTN_COUNT];  /* the buttons the AI holds this step (edges made by dark_update) */
     int hp, hp_max, difficulty;
-    float flash, iframes, alpha;
-    float arena_x; int sw;
-    int mode; float mode_t, dodge_cd, dodge_t; int dodge;
-    float counter_t;                 /* >0: ducking the hero's level fire and answering low; <0: time since */
-    float pref;                      /* ATTACK: the distance she keeps */
+    real flash, iframes, alpha;
+    real arena_x; int sw;
+    int mode; real mode_t, dodge_cd, dodge_t; int dodge;
+    real counter_t;                 /* >0: ducking the hero's level fire and answering low; <0: time since */
+    real pref;                      /* ATTACK: the distance she keeps */
     bool crouch_shoot, settled;
-    float player_idle, voice_t;
+    real player_idle, voice_t;
     uint8_t hist[DARK_HIST]; int hist_i;   /* the player's buttons, one byte a step (mirror delay) */
-    Character ghost[DARK_GHOSTS]; int nghost, ghost_i; float ghost_t;
+    Character ghost[DARK_GHOSTS]; int nghost, ghost_i; real ghost_t;
     DarkMote motes[DARK_MOTES];
     bool scene_call, scene_meet, scene_outro;   /* requests to the game: open that story scene now */
 } DarkApril;
 
 /* level 1's boss just burnt out: the arena is the locked screen at arena_x */
-void dark_begin(DarkApril *d, float arena_x, int sw, int difficulty);
+void dark_begin(DarkApril *d, real arena_x, int sw, int difficulty);
 /* every live step of stage 5 (live: no dialogue is open). pb = the hero's shots, eb = enemy shots (hers go there). */
 void dark_update(DarkApril *d, Player *pl, const Input *pin, const Level *L, const PhysicsWorld *W, Bullets *pb,
-                 Bullets *eb, Effects *fx, int layer, float dt, bool live);
-void dark_animate(DarkApril *d, float dt);   /* while a dialogue holds the world: she keeps breathing */
-void dark_draw(const DarkApril *d, float cam_x, float cam_y);
+                 Bullets *eb, Effects *fx, int layer, real dt, bool live);
+void dark_animate(DarkApril *d, real dt);   /* while a dialogue holds the world: she keeps breathing */
+void dark_draw(const DarkApril *d, real cam_x, real cam_y);
 void dark_draw_hud(const DarkApril *d, Ren *ren, int sw);
 bool dark_holds_arena(const DarkApril *d);
-void dark_power_hit(DarkApril *d, float frac);   /* a hero's power attack (power.c) */   /* from her arrival to her end: no waves, the camera stays */
+void dark_power_hit(DarkApril *d, real frac);   /* a hero's power attack (power.c) */   /* from her arrival to her end: no waves, the camera stays */
 
 /* the story scenes (dialog_open_script format). _APRIL ones are for April as the hero and are opened without the
  * hero swap (dialog_set_hero(HERO_FIREBALL) around the open); the others are written for Fireball like every stage */

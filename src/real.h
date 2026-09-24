@@ -14,7 +14,7 @@
  *   r_sin r_cos r_atan2  radians, like sinf / atan2f;  r_sqrt r_hypot r_abs r_min r_max r_fmod r_floorr
  *   r_bits(u)            the demo's data files' IEEE floats, from their bits
  *   r_fmt / RS(v, d)     text with d decimals (printf("%s", RS(x, 2)) for "%.2f"); RSG(v) for "%g"
- *   r_ms(ms)             milliseconds as seconds (ms * 0.001f)
+ *   r_ms(ms), r_milli(v) milliseconds (an int, a real) as seconds (* 0.001f)
  * Angles for r_tex_rot are `rdeg`: degrees, a double on the float build (as SDL takes them), fx otherwise.
  * In fixed point a real holds -32768 .. 32767.99998: squares of distances and the like go through r_hypot or 64 bits. */
 #include "fx.h"
@@ -52,6 +52,7 @@ static inline real r_bits(uint32_t b) { return fx_from_f32bits(b); }
 static inline char *r_fmt(char *buf, real v, int dec) { return fx_fmt(buf, v, dec); }
 static inline char *r_fmt_g(char *buf, real v) { return fx_fmt(buf, v, 4); }
 static inline real r_ms(int ms) { return (real)(((int64_t)ms * 65536 + (ms >= 0 ? 500 : -500)) / 1000); }   /* milliseconds to seconds */
+static inline real r_milli(real v) { return v / 1000; }
 static inline real r_parse(const char *s, const char **end) { return fx_parse(s, end); }
 /* radians (real) to r_tex_rot's degrees */
 static inline rdeg r_deg(real rad) { return fx_muldiv(rad, FX(180), FX(3.14159265)); }
@@ -88,6 +89,7 @@ static inline real r_bits(uint32_t b) { float f; memcpy(&f, &b, 4); return f; }
 static inline char *r_fmt(char *buf, real v, int dec) { snprintf(buf, 24, "%.*f", dec, (double)v); return buf; }
 static inline char *r_fmt_g(char *buf, real v) { snprintf(buf, 24, "%g", (double)v); return buf; }
 static inline real r_ms(int ms) { return ms * 0.001f; }
+static inline real r_milli(real v) { return v * 0.001f; }
 static inline real r_parse(const char *s, const char **end) { char *e; float f = strtof(s, &e); if (end) *end = e; return f; }
 static inline rdeg r_deg(real rad) { return rad * 180.0 / 3.14159265; }
 #endif

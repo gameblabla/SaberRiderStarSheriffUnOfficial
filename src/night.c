@@ -6,7 +6,6 @@
 #include "font.h"
 #include "gfx.h"
 
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,18 +30,18 @@ enum {
 #define FRONT_MUZZLE_X 93    /* hyperjumper_firing_sprite */
 #define FRONT_MUZZLE_Y 45
 
-typedef struct { float x0, y0, x1, y1; } Box;
+typedef struct { real x0, y0, x1, y1; } Box;
 /* sprite-local boxes (from the art's outline): the hull's hump, the hull, the keel hurt on
  * contact; the pilot and the aerial only take shots */
-static const Box SIDE_HULL[] = { { 57, 44, 116, 56 }, { 14, 56, 122, 78 }, { 40, 78, 101, 98 } };
-static const Box SIDE_PILOT = { 76, 24, 108, 44 };
-static const Box FRONT_HULL[] = { { 6, 58, 195, 98 }, { 82, 28, 118, 124 } };
+static const Box SIDE_HULL[] = { { R(57), R(44), R(116), R(56) }, { R(14), R(56), R(122), R(78) }, { R(40), R(78), R(101), R(98) } };
+static const Box SIDE_PILOT = { R(76), R(24), R(108), R(44) };
+static const Box FRONT_HULL[] = { { R(6), R(58), R(195), R(98) }, { R(82), R(28), R(118), R(124) } };
 
-#define HOVER_Y 66.0f        /* side hold: the keel clears a standing hero, a jump reaches it */
-#define FRONT_Y 56.0f
-#define DEATH_TIME 3.8f      /* kill(E, e, 0xed8) */
-#define FIRE_PERIOD 0.2f     /* the level-1 boss gun's cooldown (boss_fire: gun_cd = 0.2) */
-#define SIDE_SPEED 140.0f    /* the level-1 boss flying in to its hold spot */
+#define HOVER_Y R(66.0f)        /* side hold: the keel clears a standing hero, a jump reaches it */
+#define FRONT_Y R(56.0f)
+#define DEATH_TIME R(3.8f)      /* kill(E, e, 0xed8) */
+#define FIRE_PERIOD R(0.2f)     /* the level-1 boss gun's cooldown (boss_fire: gun_cd = 0.2) */
+#define SIDE_SPEED R(140.0f)    /* the level-1 boss flying in to its hold spot */
 
 /* Story: the same day as the frontier town and the Grand Prix. On the flight home Ramrod picks up Outriders
  * jumping in from the Vapor Zone at the end of a desert pass - the scout who got away in the frontier town
@@ -81,12 +80,12 @@ bool night_init(Night *n, Level *L, int difficulty)
 {
     memset(n, 0, sizeof *n);
     if (!stage3_world_build(L, &n->world)) { fprintf(stderr, "stage3: can't build the route\n"); return false; }
-    n->start_x = NIGHT_INTRO_CAM - 40.0f; n->start_y = 155.0f;   /* off screen: the hero walks in (game.c) */
-    n->intro_stop_x = NIGHT_INTRO_CAM + 96.0f;   /* just short of the first wave's zone (x 160) */
+    n->start_x = NIGHT_INTRO_CAM - R(40.0f); n->start_y = R(155.0f);   /* off screen: the hero walks in (game.c) */
+    n->intro_stop_x = NIGHT_INTRO_CAM + R(96.0f);   /* just short of the first wave's zone (x 160) */
     n->sky = load_sprite("stage3/native/stage3_night_sky.png", 0x48330009);
     n->moon = load_sprite("stage3/native/stage3_red_moon.png", 0x4833000A);
     night_boss_load(n, L, difficulty);
-    if (plat_getenv("SABER_TRACE")) fprintf(stderr, "stage3: route %.0f px, boss hp %d\n", L->width, n->hp);
+    if (plat_getenv("SABER_TRACE")) fprintf(stderr, "stage3: route %s px, boss hp %d\n", RS(L->width, 0), n->hp);
     return true;
 }
 
@@ -123,11 +122,11 @@ static bool front_pose(const Night *n)
 static Box world_box(const Night *n, Box b)
 {
     if (front_pose(n)) {
-        float l = floorf(n->bx) - FRONT_W / 2, t = floorf(n->by) - FRONT_H / 2;
+        real l = r_floorr(n->bx) - r_int(FRONT_W / 2), t = r_floorr(n->by) - r_int(FRONT_H / 2);
         return (Box){ l + b.x0, t + b.y0, l + b.x1, t + b.y1 };
     }
-    float l = floorf(n->bx) - SIDE_W / 2, t = floorf(n->by) - SIDE_H / 2;
-    if (n->dir > 0) { float x0 = SIDE_W - b.x1, x1 = SIDE_W - b.x0; b.x0 = x0; b.x1 = x1; }
+    real l = r_floorr(n->bx) - r_int(SIDE_W / 2), t = r_floorr(n->by) - r_int(SIDE_H / 2);
+    if (n->dir > 0) { real x0 = r_int(SIDE_W) - b.x1, x1 = r_int(SIDE_W) - b.x0; b.x0 = x0; b.x1 = x1; }
     return (Box){ l + b.x0, t + b.y0, l + b.x1, t + b.y1 };
 }
 
@@ -142,7 +141,7 @@ static void player_box(const Player *pl, Box *out)
 {
     const Character *c = &pl->ch;
     const HurtBox *h = character_hurt(c);
-    float cx = c->body.x + h->ox, cy = c->body.y + h->oy;
+    real cx = c->body.x + h->ox, cy = c->body.y + h->oy;
     *out = (Box){ cx - h->hw, cy - h->hh, cx + h->hw, cy + h->hh };
 }
 
@@ -156,7 +155,7 @@ static void hurt_player(Player *pl, int dir)
 }
 
 /* ---- attacks ---- */
-static void spawn_shot(Night *n, float x, float y, float vx, float vy, bool front)
+static void spawn_shot(Night *n, real x, real y, real vx, real vy, bool front)
 {
     for (int i = 0; i < HYPERJUMPER_SHOTS; i++) {
         HyperjumperShot *s = &n->shots[i];
@@ -169,54 +168,54 @@ static void spawn_shot(Night *n, float x, float y, float vx, float vy, bool fron
 static void fire_side(Night *n)
 {
     /* the pilot's gun, down-left as drawn / down-right mirrored, at the level-1 boss laser speed */
-    float l = floorf(n->bx) - SIDE_W / 2, t = floorf(n->by) - SIDE_H / 2;
-    float mx = n->dir > 0 ? l + SIDE_W - SIDE_MUZZLE_X : l + SIDE_MUZZLE_X, my = t + SIDE_MUZZLE_Y;
-    float v = 333.3333f * 0.70710678f;
+    real l = r_floorr(n->bx) - r_int(SIDE_W / 2), t = r_floorr(n->by) - r_int(SIDE_H / 2);
+    real mx = n->dir > 0 ? l + r_int(SIDE_W) - r_int(SIDE_MUZZLE_X) : l + r_int(SIDE_MUZZLE_X), my = t + r_int(SIDE_MUZZLE_Y);
+    real v = R(333.3333f * 0.70710678f);
     spawn_shot(n, mx, my, n->dir * v, v, false);
     sfx_play(SFX_GUN, 0);
 }
 
 static void fire_front(Night *n)
 {
-    float l = floorf(n->bx) - FRONT_W / 2, t = floorf(n->by) - FRONT_H / 2;
-    spawn_shot(n, l + FRONT_MUZZLE_X, t + FRONT_MUZZLE_Y, 0, 300.0f, true);
+    real l = r_floorr(n->bx) - r_int(FRONT_W / 2), t = r_floorr(n->by) - r_int(FRONT_H / 2);
+    spawn_shot(n, l + r_int(FRONT_MUZZLE_X), t + r_int(FRONT_MUZZLE_Y), 0, R(300.0f), true);
     sfx_play(SFX_PILOT_GUN, 0);
 }
 
 /* The shooting animation cycles frame 1 (muzzle flash) and frame 2, 0.1 s each; the shot leaves at
  * the start of frame 1, so the ship fires every 0.2 s like the level-1 boss. was: shooting last step. */
-static void gun_cycle(Night *n, float dt, bool front, bool was)
+static void gun_cycle(Night *n, real dt, bool front, bool was)
 {
     if (!was) n->fire_t = 0;
     n->shooting = true;
-    if (n->fire_t <= 1e-4f) { if (front) fire_front(n); else fire_side(n); n->fire_t += FIRE_PERIOD; }
+    if (n->fire_t <= R(1e-4f)) { if (front) fire_front(n); else fire_side(n); n->fire_t += FIRE_PERIOD; }
     n->fire_t -= dt;
 }
 
-static bool flash_frame(const Night *n) { return n->shooting && FIRE_PERIOD - n->fire_t < FIRE_PERIOD * 0.5f; }
+static bool flash_frame(const Night *n) { return n->shooting && FIRE_PERIOD - n->fire_t < FIRE_PERIOD / 2; }
 
 static void set_state(Night *n, HyperState s)
 {
     n->state = s; n->st = 0;
-    if (plat_getenv("SABER_TRACE")) fprintf(stderr, "stage3: hyperjumper state %d at %.0f,%.0f hp %d\n", s, n->bx, n->by, n->hp);
+    if (plat_getenv("SABER_TRACE")) fprintf(stderr, "stage3: hyperjumper state %d at %s,%s hp %d\n", s, RS(n->bx, 0), RS(n->by, 0), n->hp);
 }
 
 static void begin_side(Night *n, int dir)
 {
     set_state(n, HJ_SIDE_IN);
     n->dir = dir;
-    n->bx = dir < 0 ? n->arena_x + n->sw + SIDE_W * 0.5f + 16 : n->arena_x - SIDE_W * 0.5f - 16;
+    n->bx = dir < 0 ? n->arena_x + r_int(n->sw) + r_int(SIDE_W) / 2 + R(16) : n->arena_x - r_int(SIDE_W) / 2 - R(16);
     n->by = HOVER_Y;
     n->speed = SIDE_SPEED;
     sfx_play(SFX_ENGINE, 0);
 }
 
-static float low_pass_y(void)
+static real low_pass_y(void)
 {
     /* The hero's hurtboxes sit on the feet: 46 px standing, 34 jumping, 24 crouched, 12 sliding.
      * The keel passes 3 px over a slide; the hull's top is 69 px off the ground, under the
      * 87 px jump, so a jump carries the hero over it too. */
-    return 208.0f - 12.0f - 3.0f - (98 - SIDE_H / 2);
+    return R(208.0f) - R(12.0f) - R(3.0f) - r_int(98 - SIDE_H / 2);
 }
 
 static void begin_low(Night *n, int dir)
@@ -224,17 +223,17 @@ static void begin_low(Night *n, int dir)
     set_state(n, HJ_LOW_WARN);
     n->dir = dir;
     n->by = low_pass_y();
-    n->bx = dir > 0 ? n->arena_x - SIDE_W * 0.5f - 8 : n->arena_x + n->sw + SIDE_W * 0.5f + 8;
+    n->bx = dir > 0 ? n->arena_x - r_int(SIDE_W) / 2 - R(8) : n->arena_x + r_int(n->sw) + r_int(SIDE_W) / 2 + R(8);
     sfx_play(SFX_ENGINE, 0);
 }
 
 static void begin_front(Night *n, const Player *pl)
 {
     set_state(n, HJ_FRONT_IN);
-    float lo = n->arena_x + FRONT_W * 0.5f - 12, hi = n->arena_x + n->sw - FRONT_W * 0.5f + 12;
-    float px = pl->ch.body.x;
+    real lo = n->arena_x + r_int(FRONT_W) / 2 - R(12), hi = n->arena_x + r_int(n->sw) - r_int(FRONT_W) / 2 + R(12);
+    real px = pl->ch.body.x;
     n->bx = px < lo ? lo : px > hi ? hi : px;
-    n->by = -FRONT_H * 0.5f - 8;
+    n->by = r_int(-FRONT_H) / 2 - R(8);
     sfx_play(SFX_ENGINE, 0);
 }
 
@@ -246,35 +245,35 @@ static void begin_death(Night *n)
     for (int i = 0; i < HYPERJUMPER_SHOTS; i++) n->shots[i].alive = false;
 }
 
-static void hit_boss(Night *n, Effects *fx, float x, float y)
+static void hit_boss(Night *n, Effects *fx, real x, real y)
 {
     if (--n->hp <= 0) { n->hp = 0; begin_death(n); return; }
-    n->hit_flash = 0.08f;
-    AnimDef a = { 0, 4, 8, 4, 0.03f, 0 };
-    effects_spawn(fx, 0x8623249C, n->fx_layer, &a, x, y, 8, 8, 0);
+    n->hit_flash = R(0.08f);
+    AnimDef a = { 0, 4, 8, 4, R(0.03f), 0 };
+    effects_spawn(fx, 0x8623249C, n->fx_layer, &a, x, y, R(8), R(8), 0);
 }
 
-static void update_shots(Night *n, Player *pl, Effects *fx, float dt)
+static void update_shots(Night *n, Player *pl, Effects *fx, real dt)
 {
     Box pb; player_box(pl, &pb);
     for (int i = 0; i < HYPERJUMPER_SHOTS; i++) {
         HyperjumperShot *s = &n->shots[i];
         if (!s->alive) continue;
-        s->x += s->vx * dt; s->y += s->vy * dt;
-        float rx = s->front ? 3.0f : 4.0f, ry = s->front ? 6.0f : 4.0f;
+        s->x += r_mul_dt(s->vx, dt); s->y += r_mul_dt(s->vy, dt);
+        real rx = s->front ? R(3.0f) : R(4.0f), ry = s->front ? R(6.0f) : R(4.0f);
         Box sb = { s->x - rx, s->y - ry, s->x + rx, s->y + ry };
         if (overlap(sb, pb) && pl->ch.state != CS_DEAD && !(pl->ch.flags & CF_HIT)) {
             hurt_player(pl, s->front ? AIM_D : s->vx < 0 ? AIM_DL : AIM_DR);
             s->alive = false;
             continue;
         }
-        if (s->y >= 206.0f) {   /* splashes on the ground */
-            AnimDef a = { 0, 0, 4, 0, 0.03f, 0 };
-            effects_spawn(fx, 0x8623249C, n->fx_layer, &a, s->x, 204.0f, 8, 8, 0);
+        if (s->y >= R(206.0f)) {   /* splashes on the ground */
+            AnimDef a = { 0, 0, 4, 0, R(0.03f), 0 };
+            effects_spawn(fx, 0x8623249C, n->fx_layer, &a, s->x, R(204.0f), R(8), R(8), 0);
             s->alive = false;
             continue;
         }
-        if (s->x < n->arena_x - 32 || s->x > n->arena_x + n->sw + 32) s->alive = false;
+        if (s->x < n->arena_x - R(32) || s->x > n->arena_x + r_int(n->sw) + R(32)) s->alive = false;
     }
 }
 
@@ -291,12 +290,12 @@ static void boss_collisions(Night *n, Player *pl, Bullets *pb, Effects *fx)
     /* the hero's shots: the whole ship takes hits while it is on screen */
     for (int i = 0; i < pb->n; ) {
         Bullet *b = &pb->b[i];
-        bool on_screen = b->x > n->arena_x + 2 && b->x < n->arena_x + n->sw - 2;
+        bool on_screen = b->x > n->arena_x + R(2) && b->x < n->arena_x + r_int(n->sw) - R(2);
         bool hit = false;
         for (int k = 0; k < nb && on_screen && !hit; k++)
-            hit = b->x > boxes[k].x0 - 3 && b->x < boxes[k].x1 + 3 && b->y > boxes[k].y0 - 3 && b->y < boxes[k].y1 + 3;
+            hit = b->x > boxes[k].x0 - R(3) && b->x < boxes[k].x1 + R(3) && b->y > boxes[k].y0 - R(3) && b->y < boxes[k].y1 + R(3);
         if (!hit) { i++; continue; }
-        float x = b->x, y = b->y;
+        real x = b->x, y = b->y;
         pb->b[i] = pb->b[--pb->n];
         hit_boss(n, fx, x, y);
         if (n->state == HJ_DYING) return;
@@ -305,11 +304,11 @@ static void boss_collisions(Night *n, Player *pl, Bullets *pb, Effects *fx)
     /* ramming: hull and keel (the pilot and the aerial don't hurt) */
     Box hb; player_box(pl, &hb);
     for (int k = 0; k < nh; k++)
-        if (overlap(boxes[k], hb)) { hurt_player(pl, n->bx > (hb.x0 + hb.x1) * 0.5f ? AIM_L : AIM_R); break; }
+        if (overlap(boxes[k], hb)) { hurt_player(pl, n->bx > (hb.x0 + hb.x1) / 2 ? AIM_L : AIM_R); break; }
 }
 
 void night_update(Night *n, Player *pl, Bullets *pb, Effects *fx, const Level *L,
-                  float cam_x, int sw, float dt, bool live)
+                  real cam_x, int sw, real dt, bool live)
 {
     if (n->hit_flash > 0) n->hit_flash -= dt;
     if (!live) return;
@@ -317,84 +316,84 @@ void night_update(Night *n, Player *pl, Bullets *pb, Effects *fx, const Level *L
     n->shooting = false;
     n->st += dt;
     if (n->state != HJ_DORMANT && n->state != HJ_DYING && n->state != HJ_DONE) update_shots(n, pl, fx, dt);
-    const float right = n->arena_x + n->sw;
+    const real right = n->arena_x + r_int(n->sw);
     bool p2 = phase2(n);
     switch (n->state) {
     case HJ_DORMANT:
         /* the route's end: the camera has stopped on the open ground and the hero is out on it (stage 4 calls it in) */
-        if (!n->manual && pl->ch.state != CS_DEAD && cam_x >= L->width - sw - 0.5f && pl->ch.body.x >= L->width - sw * 0.5f - 8.0f)
-            night_boss_summon(n, L->width - sw, sw);
+        if (!n->manual && pl->ch.state != CS_DEAD && cam_x >= L->width - r_int(sw) - R(0.5f) && pl->ch.body.x >= L->width - r_int(sw) / 2 - R(8.0f))
+            night_boss_summon(n, L->width - r_int(sw), sw);
         break;
     case HJ_FAR_PASS:     /* far behind the mesas, right to left (level 1: the far layer pass) */
-        n->bx -= 330.0f * dt;
-        if (n->bx < n->arena_x - 40) set_state(n, HJ_FAR_GAP);
+        n->bx -= r_mul_dt(R(330.0f), dt);
+        if (n->bx < n->arena_x - R(40)) set_state(n, HJ_FAR_GAP);
         break;
     case HJ_FAR_GAP:
-        if (n->st >= 1.3f) { set_state(n, HJ_MID_PASS); n->dir = 1; n->bx = n->arena_x - 60; n->by = 44; sfx_play(SFX_ENGINE, 0); }
+        if (n->st >= R(1.3f)) { set_state(n, HJ_MID_PASS); n->dir = 1; n->bx = n->arena_x - R(60); n->by = R(44); sfx_play(SFX_ENGINE, 0); }
         break;
     case HJ_MID_PASS:     /* nearer, left to right, behind the play plane's rocks */
-        n->bx += 390.0f * dt;
-        n->by = 44 + sinf(n->st * 4.0f) * 3.0f;
-        if (n->bx > right + 60) set_state(n, HJ_MID_GAP);
+        n->bx += r_mul_dt(R(390.0f), dt);
+        n->by = R(44) + r_mul(r_sin(r_mul(n->st, R(4.0f))), R(3.0f));
+        if (n->bx > right + R(60)) set_state(n, HJ_MID_GAP);
         break;
     case HJ_MID_GAP:
-        if (n->st >= 1.0f) begin_side(n, -1);
+        if (n->st >= R(1.0f)) begin_side(n, -1);
         break;
     case HJ_SIDE_IN: {    /* flies in at 140 px/s to one half of the arena, firing once its gun is on
                            * screen (level 1: boss state 1 shoots on the way to centre +128 / -160) */
-        float target = n->arena_x + n->sw * 0.5f - n->dir * 96.0f;
-        float d = target - n->bx;
-        if (fabsf(d) <= SIDE_SPEED * dt) { n->bx = target; set_state(n, HJ_SIDE_HOLD); }
-        else n->bx += (d > 0 ? 1 : -1) * SIDE_SPEED * dt;
-        n->by = HOVER_Y + sinf(n->st * 3.0f) * 2.0f;
-        if (n->bx > n->arena_x + 8 && n->bx < right - 8) gun_cycle(n, dt, false, was_shooting);
+        real target = n->arena_x + r_int(n->sw) / 2 - n->dir * R(96.0f);
+        real d = target - n->bx;
+        if (r_abs(d) <= r_mul_dt(SIDE_SPEED, dt)) { n->bx = target; set_state(n, HJ_SIDE_HOLD); }
+        else n->bx += r_mul_dt((d > 0 ? 1 : -1) * SIDE_SPEED, dt);
+        n->by = HOVER_Y + r_mul(r_sin(r_mul(n->st, R(3.0f))), R(2.0f));
+        if (n->bx > n->arena_x + R(8) && n->bx < right - R(8)) gun_cycle(n, dt, false, was_shooting);
         break; }
     case HJ_SIDE_HOLD:    /* hovers and keeps spraying the ground diagonally for 0x50 frames */
-        n->by = HOVER_Y + sinf(n->st * 3.0f) * 2.0f;
+        n->by = HOVER_Y + r_mul(r_sin(r_mul(n->st, R(3.0f))), R(2.0f));
         gun_cycle(n, dt, false, was_shooting);
-        if (n->st >= (p2 ? 1.8f : 80.0f / 60.0f)) { set_state(n, HJ_SIDE_OUT); n->speed = SIDE_SPEED; }
+        if (n->st >= (p2 ? R(1.8f) : R(80.0f / 60.0f))) { set_state(n, HJ_SIDE_OUT); n->speed = SIDE_SPEED; }
         break;
     case HJ_SIDE_OUT:     /* boosts away the way it faces */
-        n->speed += 520.0f * dt; if (n->speed > 400.0f) n->speed = 400.0f;
-        n->bx += n->dir * n->speed * dt;
-        n->by = HOVER_Y - n->st * 20.0f;
-        if (n->dir < 0 ? n->bx < n->arena_x - SIDE_W * 0.5f - 8 : n->bx > right + SIDE_W * 0.5f + 8) begin_low(n, -n->dir);
+        n->speed += r_mul_dt(R(520.0f), dt); if (n->speed > R(400.0f)) n->speed = R(400.0f);
+        n->bx += r_mul_dt(n->dir * n->speed, dt);
+        n->by = HOVER_Y - r_mul(n->st, R(20.0f));
+        if (n->dir < 0 ? n->bx < n->arena_x - r_int(SIDE_W) / 2 - R(8) : n->bx > right + r_int(SIDE_W) / 2 + R(8)) begin_low(n, -n->dir);
         break;
     case HJ_LOW_WARN: {   /* the nose shows at the edge, engine howling, before the ground run */
-        float peek = n->dir > 0 ? n->arena_x - SIDE_W * 0.5f + 30 : right + SIDE_W * 0.5f - 30;
-        n->bx += (peek - n->bx) * (dt * 8.0f > 1 ? 1 : dt * 8.0f);
-        if (n->st >= (n->difficulty == 2 ? 0.6f : 0.8f)) { set_state(n, HJ_LOW_PASS); n->speed = p2 ? 330.0f : 290.0f; }
+        real peek = n->dir > 0 ? n->arena_x - r_int(SIDE_W) / 2 + R(30) : right + r_int(SIDE_W) / 2 - R(30);
+        n->bx += r_mul(peek - n->bx, (dt * 8 > R(1) ? R(1) : dt * 8));
+        if (n->st >= (n->difficulty == 2 ? R(0.6f) : R(0.8f))) { set_state(n, HJ_LOW_PASS); n->speed = p2 ? R(330.0f) : R(290.0f); }
         break; }
     case HJ_LOW_PASS:     /* jump over it or slide under it */
-        n->bx += n->dir * n->speed * dt;
-        if (n->dir > 0 ? n->bx > right + SIDE_W * 0.5f + 8 : n->bx < n->arena_x - SIDE_W * 0.5f - 8) begin_front(n, pl);
+        n->bx += r_mul_dt(n->dir * n->speed, dt);
+        if (n->dir > 0 ? n->bx > right + r_int(SIDE_W) / 2 + R(8) : n->bx < n->arena_x - r_int(SIDE_W) / 2 - R(8)) begin_front(n, pl);
         break;
     case HJ_FRONT_IN:     /* drops in facing the hero */
-        n->by += 150.0f * dt;
+        n->by += r_mul_dt(R(150.0f), dt);
         if (n->by >= FRONT_Y) { n->by = FRONT_Y; set_state(n, HJ_FRONT_FIRE); }
         break;
     case HJ_FRONT_FIRE: { /* drifts after the hero, bursts of bolts straight down from the pilot's gun */
-        float lo = n->arena_x + FRONT_W * 0.5f - 12, hi = right - FRONT_W * 0.5f + 12;
-        float px = pl->ch.body.x; if (px < lo) px = lo; if (px > hi) px = hi;
-        float drift = (p2 ? 70.0f : 50.0f) * dt, d = px - n->bx;
-        n->bx += fabsf(d) <= drift ? d : (d > 0 ? drift : -drift);
-        n->by = FRONT_Y + sinf(n->st * 2.5f) * 3.0f;
+        real lo = n->arena_x + r_int(FRONT_W) / 2 - R(12), hi = right - r_int(FRONT_W) / 2 + R(12);
+        real px = pl->ch.body.x; if (px < lo) px = lo; if (px > hi) px = hi;
+        real drift = r_mul_dt(p2 ? R(70.0f) : R(50.0f), dt), d = px - n->bx;
+        n->bx += r_abs(d) <= drift ? d : (d > 0 ? drift : -drift);
+        n->by = FRONT_Y + r_mul(r_sin(r_mul(n->st, R(2.5f))), R(3.0f));
         /* the pilot's gun at the same 0.2 s rate, in 1.2 s bursts with a breather between them
          * (the level-1 rider also holds fire for part of each round) */
-        if (n->st > 0.35f && fmodf(n->st - 0.35f, p2 ? 1.55f : 1.7f) < 1.2f) gun_cycle(n, dt, true, was_shooting);
-        if (n->st >= (p2 ? 5.0f : 4.2f)) set_state(n, HJ_FRONT_OUT);
+        if (n->st > R(0.35f) && r_fmod(n->st - R(0.35f), p2 ? R(1.55f) : R(1.7f)) < R(1.2f)) gun_cycle(n, dt, true, was_shooting);
+        if (n->st >= (p2 ? R(5.0f) : R(4.2f))) set_state(n, HJ_FRONT_OUT);
         break; }
     case HJ_FRONT_OUT:
-        n->by -= 190.0f * dt;
-        if (n->by < -FRONT_H * 0.5f - 8) { n->cycle++; begin_side(n, (n->cycle & 1) ? 1 : -1); }
+        n->by -= r_mul_dt(R(190.0f), dt);
+        if (n->by < r_int(-FRONT_H) / 2 - R(8)) { n->cycle++; begin_side(n, (n->cycle & 1) ? 1 : -1); }
         break;
     case HJ_DYING:        /* level-1 boss state 9: the wreck drops, jitters and burns for 0xed8 ms */
-        n->death_vy += 480.0f * dt;
-        n->by += n->death_vy * dt;
-        n->bx += (float)rnd(180) / 60.0f - 153.0f / 60.0f;
+        n->death_vy += r_mul_dt(R(480.0f), dt);
+        n->by += r_mul_dt(n->death_vy, dt);
+        n->bx += r_int(rnd(180)) / 60 - R(153.0f / 60.0f);
         if (rnd(10) >= 9) {
-            AnimDef a = { 0, 0, 11, 11, 0.025f, 0 };
-            effects_spawn(fx, 0x9C861FF3, n->fx_layer, &a, n->bx - 40 + rnd(80), n->by - 30 + rnd(60), 32, 32, 0);
+            AnimDef a = { 0, 0, 11, 11, R(0.025f), 0 };
+            effects_spawn(fx, 0x9C861FF3, n->fx_layer, &a, n->bx - R(40) + r_int(rnd(80)), n->by - R(30) + r_int(rnd(60)), R(32), R(32), 0);
             if (n->death_phase < 0x40 && (n->death_phase & 1)) sfx_play(SFX_BLAST, 0);
         }
         if (n->death_phase == 8) sfx_play(SFX_DOWN, 0);
@@ -409,18 +408,18 @@ void night_update(Night *n, Player *pl, Bullets *pb, Effects *fx, const Level *L
 
 /* ours: a hero's power attack (power.c) lands while Hyperjumper is in the fight: frac of its hit points, blasts all
  * over the hull; clear_shots also burns its bolts out of the air */
-void night_power_hit(Night *n, Effects *fx, float frac, bool clear_shots)
+void night_power_hit(Night *n, Effects *fx, real frac, bool clear_shots)
 {
     if (clear_shots) for (int i = 0; i < HYPERJUMPER_SHOTS; i++) n->shots[i].alive = false;
     if (!fighting(n)) return;
-    AnimDef a = { 0, 0, 11, 11, 0.025f, 0 };
-    for (int k = 0; k < 6; k++) effects_spawn(fx, 0x9C861FF3, n->fx_layer, &a, n->bx - 50 + rnd(100), n->by - 25 + rnd(50), 32, 32, 0);
-    n->hp -= (int)ceilf(n->hp_max * frac);
+    AnimDef a = { 0, 0, 11, 11, R(0.025f), 0 };
+    for (int k = 0; k < 6; k++) effects_spawn(fx, 0x9C861FF3, n->fx_layer, &a, n->bx - R(50) + r_int(rnd(100)), n->by - R(25) + r_int(rnd(50)), R(32), R(32), 0);
+    n->hp -= r_ceil(n->hp_max * frac);
     if (n->hp <= 0) { n->hp = 0; begin_death(n); }
-    else n->hit_flash = 0.3f;
+    else n->hit_flash = R(0.3f);
 }
 
-void night_boss_summon(Night *n, float arena_x, int sw)
+void night_boss_summon(Night *n, real arena_x, int sw)
 {
     if (n->state != HJ_DORMANT) return;
     n->boss_started = true;
@@ -428,7 +427,7 @@ void night_boss_summon(Night *n, float arena_x, int sw)
     if (!n->manual) music_play(MUSIC_BOSS, true);   /* stage 4's finale already runs the boss music */
     sfx_play(SFX_ENGINE, 0);   /* boss phase 0: FUN_00412750 */
     set_state(n, HJ_FAR_PASS);
-    n->dir = -1; n->bx = n->arena_x + sw + 40; n->by = 58;
+    n->dir = -1; n->bx = n->arena_x + r_int(sw) + R(40); n->by = R(58);
 }
 
 /* ---- drawing ---- */
@@ -448,43 +447,43 @@ bool night_layer_tint(const Night *n, const Layer *ly, uint8_t *r, uint8_t *g, u
     return true;
 }
 
-void night_draw_background(Night *n, float cam_x, int sw, int sh)
+void night_draw_background(Night *n, real cam_x, int sw, int sh)
 {
     (void)sh;
     if (n->sky) {
         int w = n->sky->w;
-        float x = -fmodf(floorf(cam_x * 0.05f), (float)w);
-        for (; x < sw; x += w) sprite_draw(n->sky, 0, x, 0, false);
+        real x = -r_fmod(r_floorr(r_mul(cam_x, R(0.05f))), r_int(w));
+        for (; x < r_int(sw); x += r_int(w)) sprite_draw(n->sky, 0, x, 0, false);
     }
     /* the moon hangs behind every tile layer, drifting a little over the whole route */
-    if (n->moon) sprite_draw(n->moon, 0, floorf(sw * 0.70f - cam_x * 0.02f), 22, false);
+    if (n->moon) sprite_draw(n->moon, 0, r_floorr(r_mul(r_int(sw), R(0.70f)) - r_mul(cam_x, R(0.02f))), R(22), false);
 }
 
-static void draw_sprite(Ren *ren, const Sprite *s, float cx, float cy, float scale, bool flip,
-                        uint8_t r, uint8_t g, uint8_t b, float angle)
+static void draw_sprite(Ren *ren, const Sprite *s, real cx, real cy, real scale, bool flip,
+                        uint8_t r, uint8_t g, uint8_t b, real angle)
 {
     if (!s) return;
-    RFRect src = { 0, 0, (float)s->w, (float)s->h };
-    float w = roundf(s->w * scale), h = roundf(s->h * scale);
-    RFRect dst = { floorf(cx) - floorf(w * 0.5f), floorf(cy) - floorf(h * 0.5f), w, h };
+    RFRect src = { 0, 0, r_int(s->w), r_int(s->h) };
+    real w = r_int(r_round(s->w * scale)), h = r_int(r_round(s->h * scale));
+    RFRect dst = { r_floorr(cx) - r_floorr(w / 2), r_floorr(cy) - r_floorr(h / 2), w, h };   /* / 2: * 0.5f */
     rtex_set_color_mod(sprite_tex(s), r, g, b);
     r_tex_rot(ren, sprite_tex(s), &src, &dst, angle, NULL, flip ? R_FLIP_H : R_FLIP_NONE);
     rtex_set_color_mod(sprite_tex(s), 255, 255, 255);
 }
 
-void night_draw_layer(Night *n, Ren *ren, int layer, float cam_x, float cam_y)
+void night_draw_layer(Night *n, Ren *ren, int layer, real cam_x, real cam_y)
 {
-    float x = n->bx - cam_x, y = n->by - cam_y;
-    bool blink = ((int)(n->st * 30.0f)) & 1;
+    real x = n->bx - cam_x, y = n->by - cam_y;
+    bool blink = r_trunc(n->st * 30) & 1;
     if (layer == n->far_layer && n->state == HJ_FAR_PASS)
-        draw_sprite(ren, blink ? n->side_boost : n->side_normal, x, y, 0.4f, n->dir > 0, 96, 96, 140, 0);
+        draw_sprite(ren, blink ? n->side_boost : n->side_normal, x, y, R(0.4f), n->dir > 0, 96, 96, 140, 0);
     if (layer == n->mid_layer && n->state == HJ_MID_PASS)
-        draw_sprite(ren, blink ? n->side_boost : n->side_normal, x, y, 0.65f, n->dir > 0, 150, 150, 190, 0);
+        draw_sprite(ren, blink ? n->side_boost : n->side_normal, x, y, R(0.65f), n->dir > 0, 150, 150, 190, 0);
     if (layer != n->play_layer) return;
 
     if (fighting(n) || n->state == HJ_DYING) {
         const Sprite *s;
-        float angle = 0;
+        real angle = 0;
         uint8_t r = 255, g = 255, b = 255;
         if (n->hit_flash > 0) { g = 150; b = 150; }
         if (front_pose(n)) s = flash_frame(n) ? n->front_fire : n->front_idle;
@@ -493,18 +492,18 @@ void night_draw_layer(Night *n, Ren *ren, int layer, float cam_x, float cam_y)
                  n->state == HJ_SIDE_IN) s = n->side_boost;
         else s = n->side_normal;
         if (n->state == HJ_DYING) {
-            angle = n->st * (n->death_front ? 6.0f : -12.0f);
-            uint8_t v = (uint8_t)(255 - 110 * (n->st / DEATH_TIME));
+            angle = r_mul(n->st, n->death_front ? R(6.0f) : R(-12.0f));
+            uint8_t v = (uint8_t)r_trunc(R(255) - 110 * r_div(n->st, DEATH_TIME));
             r = g = b = v;
-            if (((int)(n->st * 20)) & 1) { g = (uint8_t)(v * 0.6f); b = (uint8_t)(v * 0.5f); }
+            if (r_trunc(n->st * 20) & 1) { g = (uint8_t)r_trunc(v * R(0.6f)); b = (uint8_t)(v / 2); }
         }
-        draw_sprite(ren, s, x, y, 1.0f, !front_pose(n) && n->dir > 0, r, g, b, angle);
+        draw_sprite(ren, s, x, y, R(1.0f), !front_pose(n) && n->dir > 0, r, g, b, angle);
     }
     for (int i = 0; i < HYPERJUMPER_SHOTS; i++) {
         const HyperjumperShot *s = &n->shots[i];
         if (!s->alive) continue;
         const Sprite *spr = s->front ? n->projectile_front : n->projectile_diagonal;
-        draw_sprite(ren, spr, s->x - cam_x, s->y - cam_y, 1.0f, s->flip, 255, 255, 255, 0);
+        draw_sprite(ren, spr, s->x - cam_x, s->y - cam_y, R(1.0f), s->flip, 255, 255, 255, 0);
     }
 }
 
@@ -513,13 +512,13 @@ void night_draw_hud(Night *n, Ren *ren, int sw, int sh)
     (void)sh;
     if (!n->boss_started || n->state < HJ_SIDE_IN || n->state >= HJ_DONE) return;
     Font *f = font_get(0x12072E60);
-    float bw = 96, x = sw - bw - 10, y = 20;
-    if (f) font_draw(f, "HYPERJUMPER", (int)x, 8, 220, 226, 245);
+    real bw = R(96), x = r_int(sw) - bw - R(10), y = R(20);
+    if (f) font_draw(f, "HYPERJUMPER", r_int(r_trunc(x)), R(8), 220, 226, 245);
     r_set_draw_blend(ren, R_BLEND_BLEND);
     r_set_draw_color(ren, 10, 12, 30, 200);
-    RFRect bg = { x - 1, y - 1, bw + 2, 7 };
+    RFRect bg = { x - R(1), y - R(1), bw + R(2), R(7) };
     r_fill_rect(ren, &bg);
     r_set_draw_color(ren, 230, 50, 50, 255);
-    RFRect fg = { x, y, bw * (float)n->hp / (float)n->hp_max, 5 };
+    RFRect fg = { x, y, bw * n->hp / n->hp_max, R(5) };
     r_fill_rect(ren, &fg);
 }
