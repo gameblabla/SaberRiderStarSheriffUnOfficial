@@ -1,0 +1,23 @@
+# Headless host build (src/platform/null/main_null.c): the core on the null renderer, audio and video, at a fixed 60 Hz
+# with simulated time. For regression checks between builds (tools/regress.py): SABER_TRACE=3, SABER_DRAWLOG=file.
+#   make -f Makefile.headless          -> build/headless/saber_headless
+CC      ?= cc
+CFLAGS  += -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -Isrc $(shell pkg-config --cflags libpng)
+LDLIBS  += $(shell pkg-config --libs libpng) -lm
+OUT     := build/headless
+SRC     := $(wildcard src/*.c) src/platform/null/main_null.c src/platform/null/render_null.c \
+           src/platform/null/aud_null.c src/platform/null/video_null.c
+OBJ     := $(SRC:src/%.c=$(OUT)/obj/%.o)
+
+$(OUT)/saber_headless: $(OBJ)
+	$(CC) $(OBJ) -o $@ $(LDLIBS)
+
+$(OUT)/obj/%.o: src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+-include $(OBJ:.o=.d)
+
+.PHONY: clean
+clean:
+	rm -rf $(OUT)
