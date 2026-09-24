@@ -50,7 +50,7 @@ import levl
 import pckwrite
 
 CHUNK_COLS = 16
-PALETTES = 96              # of CRAM's 128 16-colour palettes (the rest: VDP1's 8bpp textures)
+PALETTES = 64              # of CRAM's 128 16-colour palettes (the other 64: VDP1's 8bpp sprites; 96 left them too few in a level)
 CELL_CHUNK = 1024          # 32 KB: the renderer's staging buffer
 SCREEN_W = 352             # the widest mode (anchoring uses the middle of the screen)
 

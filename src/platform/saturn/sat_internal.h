@@ -42,7 +42,7 @@ void rsat_bench(void);   /* SABER_RBENCH */
 void rsat_timing(uint32_t *planes_us, uint32_t *vdp1_wait_us, uint32_t *put_us, uint32_t *frames);   /* since the last call */
 
 /* vdp2_planes.c: a level's tile layers as VDP2 planes (render.h r_layer); once a frame, before VDP1's list goes */
-void sat_planes_frame(int screen_w);
+void sat_planes_frame(int screen_w, bool delayed);   /* delayed: the frame before's planes (the slave's pipeline) */
 
 /* input_sat.c */
 bool sat_reset_combo(void);           /* A+B+C+Start held on pad 1 */

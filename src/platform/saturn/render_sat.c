@@ -63,12 +63,14 @@ struct RTex {
     uint8_t mr, mg, mb, alpha; RBlend blend; uint32_t tag;
     uint8_t prio;               /* 8bpp parts: sprite priority register (their colour code's bits 14-12) */
     bool owned_block;           /* built here (runtime texture) */
+    bool dead;                  /* destroyed: its memory waits until no recorded frame can still draw it */
+    uint32_t rec_seq;           /* the recording (frame) that last drew it */
+    RTex *next_dead;
 };
 struct RFloor { int unused; };
 
 static Ren ren;
 Ren *rsat_renderer(void) { return &ren; }
-int  rsat_prims(void) { return ren.prims; }
 
 static uint16_t be16(const uint8_t *p) { return (uint16_t)(p[0] << 8 | p[1]); }
 static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
@@ -82,8 +84,17 @@ static Slot slots[MAX_SLOTS]; static int nslots;
 static uint32_t frame_no = 2;
 static uint8_t *staging;
 static unsigned uploads_frame, upload_bytes_frame, evictions, cram_uploads;
-static uint32_t tm_planes, tm_wait, tm_put, tm_frames, tm_tex, tm_ntex, tm_upl;   /* SABER_PERF timing (rsat_timing) */
+static uint32_t tm_planes, tm_wait, tm_put, tm_frames, tm_tex, tm_ntex, tm_upl, tm_slave_wait;   /* SABER_PERF timing (rsat_timing) */
 static int trace_from, traced; static bool tracing;   /* SABER_RTRACE=n: every draw of frames n, n+10, ... n+50 */
+
+/* the slave's pipeline (recording / replay, below) */
+typedef struct { int ncmd, ngouraud, prims, ntex; unsigned upload_bytes; uint16_t back_color; uint16_t clofen, coar, coag, coab; } Result;
+static Result res;          /* the last replay's, for the submit (read by the master after the slave is done) */
+static int rec_w;           /* the record buffer the master records into */
+static uint32_t rec_seq = 1;   /* the recording's number (one a frame) */
+static bool use_slave;
+static void slave_idle(void);
+static void slave_entry(void);
 
 /* when a slot's part was last drawn: its texture keeps it (an orphaned slot, its own copy) */
 static uint32_t slot_used(int i) { return slots[i].t ? slots[i].t->used[slots[i].part] : slots[i].used; }
@@ -190,6 +201,7 @@ static void cram_release(int g)
 /* colour RAM entries [0, n) go to the VDP2 planes (vdp2_planes.c); VDP1's banks there are dropped (a level's start) */
 void rsat_cram_reserve(int entries)
 {
+    slave_idle();
     int n = (entries + 63) / 64;
     for (int g = 0; g < CRAM_GRAN; g++) {
         if (g < n) {
@@ -240,7 +252,6 @@ static uint16_t part_resident(RTex *t, int i)
     const Part *p = &t->parts[i];
     t->used[i] = frame_no;
     if (t->loc[i]) return t->loc[i];
-    uint32_t tu = sat_timer_us();
     uint32_t raw = part_raw_size(p), off;
     if (raw > STAGING_SIZE || !vram_alloc(raw, t, i, &off)) {
         static int warned;
@@ -259,7 +270,7 @@ static uint16_t part_resident(RTex *t, int i)
         src = staging;
     } else if ((uintptr_t)src & 3) { memcpy(staging, src, raw); src = staging; }
     vram_copy(off, src, raw);
-    uploads_frame++; upload_bytes_frame += raw; tm_upl += sat_timer_us() - tu;
+    uploads_frame++; upload_bytes_frame += raw;
     t->loc[i] = (uint16_t)(off / 8);
     return t->loc[i];
 }
@@ -400,6 +411,7 @@ RTex *rtex_create_rows(Ren *r, int w, int h, RTexRows rows, void *ud)
 void rtex_update(RTex *t, const uint32_t *px, int pitch_bytes)
 {
     if (!t) return;
+    slave_idle();
     size_t size; uint8_t *b = block_from_rgba(t->w, t->h, px, pitch_bytes / 4, &size);
     if (!b) return;
     RTex *n = tex_from_block(t->r, b, size, true);
@@ -412,11 +424,22 @@ void rtex_update(RTex *t, const uint32_t *px, int pitch_bytes)
     free(n);
 }
 
+static void slave_idle(void);
+static RTex *graveyard[2];   /* destroyed textures, freed once the frames recorded while they lived are replayed */
+
+static void tex_free_mem(RTex *t)
+{
+    free(t->block); free((void *)t->units); free((void *)t->parts); free(t->loc); free(t->used); free(t->grid); free(t);
+}
+
 void rtex_destroy(RTex *t)
 {
     if (!t) return;
-    tex_free_vram(t);
-    free(t->block); free((void *)t->units); free((void *)t->parts); free(t->loc); free(t->used); free(t->grid); free(t);
+    slave_idle();          /* the slave's replay may be using the texture's video memory records */
+    tex_free_vram(t);      /* its video memory / colour RAM: orphaned, reclaimed when the frames in flight are done */
+    t->dead = true;        /* a replay skips it */
+    if (t->rec_seq != rec_seq) { tex_free_mem(t); return; }   /* no frame still to replay draws it: its memory now */
+    t->next_dead = graveyard[rec_w]; graveyard[rec_w] = t;    /* the frame being recorded drew it: after its replay */
 }
 void rtex_size(const RTex *t, int *w, int *h) { if (w) *w = t ? t->w : 0; if (h) *h = t ? t->h : 0; }
 void rtex_set_color_mod(RTex *t, uint8_t r, uint8_t g, uint8_t b) { if (t) { t->mr = r; t->mg = g; t->mb = b; } }
@@ -439,6 +462,11 @@ static bool pal_drawn;                              /* palette pixels may be in 
 static int fade_cmd = -1; static uint8_t fade_r, fade_g, fade_b, fade_a;   /* a full-screen translucent fill */
 static RTex *backdrop[4]; static int backdrop_x[4], backdrop_y[4], nbackdrops; static bool clear_fb;
 static void draw_backdrops(void);
+
+/* the texture state of the draw being built (its colour mod, alpha, blend at the time the core drew it: recorded with
+ * the draw, since the core sets them just before a draw and resets them just after) */
+typedef struct { uint8_t mr, mg, mb, alpha; RBlend blend; uint8_t prio; } TexState;
+static TexState cur;
 
 static int32_t fx16(float f);   /* float -> 16.16 without soft-float (below) */
 static int16_t pix16(int32_t v) { int i = v >> 16; return (int16_t)(i < -2048 ? -2048 : i > 2047 ? 2047 : i); }   /* floor, clamped */
@@ -517,16 +545,12 @@ static uint16_t gouraud_for(uint8_t r, uint8_t g, uint8_t b)
 static void gouraud_upload(void)
 {
     volatile uint32_t *d = (volatile uint32_t *)(VDP1_VRAM_BASE + GOURAUD_OFF);
-    for (int i = 0; i < ngouraud; i++) { uint32_t v = (uint32_t)gour[i] << 16 | gour[i]; d[i * 2] = v; d[i * 2 + 1] = v; }
+    for (int i = 0; i < res.ngouraud; i++) { uint32_t v = (uint32_t)gour[i] << 16 | gour[i]; d[i * 2] = v; d[i * 2 + 1] = v; }
 }
 
 static int16_t clampc(float v) { return v < -2048 ? -2048 : v > 2047 ? 2047 : (int16_t)floorf(v); }
 
 /* ---------------------------------------------------------------- draw state */
-void r_set_draw_color(Ren *r, uint8_t R, uint8_t G, uint8_t B, uint8_t A) { (void)r; draw_r = R; draw_g = G; draw_b = B; draw_a = A; }
-void r_set_draw_blend(Ren *r, RBlend b) { (void)r; draw_blend = b; }
-void r_set_clip(Ren *r, const RRect *c) { (void)r; clip_on = c != NULL; if (c) clip = *c; clip_dirty = true; }
-void r_set_viewport(Ren *r, const RRect *v) { (void)r; vp_on = v != NULL; if (v) viewport = *v; clip_dirty = true; }
 bool r_rect_intersect(const RRect *a, const RRect *b, RRect *out)
 {
     int x0 = a->x > b->x ? a->x : b->x, y0 = a->y > b->y ? a->y : b->y;
@@ -564,18 +588,16 @@ static void polygon(const int32_t *xy, uint8_t R, uint8_t G, uint8_t B, uint8_t 
     ren.prims++;
 }
 
-void r_clear(Ren *r)
+static void exec_clear(void)
 {
-    (void)r;
     back_color = rgb555(draw_r, draw_g, draw_b);
     ncmd = 3;   /* keep the preamble: everything drawn so far is covered */
     uclip_active = false; pal_drawn = false; fade_cmd = -1;
     draw_backdrops();
 }
 
-void r_fill_rect(Ren *r, const RFRect *q)
+static void exec_fill(const RFRect *q)
 {
-    (void)r;
     int32_t x, y, w, h;
     if (q) { x = fx16(q->x); y = fx16(q->y); w = fx16(q->w); h = fx16(q->h); }
     else { x = y = 0; w = (vp_on ? viewport.w : scr_w) << 16; h = (vp_on ? viewport.h : scr_h) << 16; }
@@ -593,7 +615,6 @@ void r_fill_rect(Ren *r, const RFRect *q)
         fade_cmd = before; fade_r = draw_r; fade_g = draw_g; fade_b = draw_b; fade_a = draw_a;
     }
 }
-void r_fill_rects(Ren *r, const RFRect *q, int n) { for (int i = 0; i < n; i++) r_fill_rect(r, &q[i]); }
 
 static void line_cmd(int type, const float *xy, int n)
 {
@@ -609,31 +630,6 @@ static void line_cmd(int type, const float *xy, int n)
     for (int i = 0; i < 4; i++) { int j = i < n ? i : n - 1; v[i * 2] = pix16(fx16(xy[j * 2]) + ox); v[i * 2 + 1] = pix16(fx16(xy[j * 2 + 1]) + oy); }
     ren.prims++;
 }
-void r_rect(Ren *r, const RFRect *q)
-{
-    (void)r;
-    if (!q) return;
-    float xy[8] = { q->x, q->y, q->x + q->w - 1, q->y, q->x + q->w - 1, q->y + q->h - 1, q->x, q->y + q->h - 1 };
-    line_cmd(C_POLYLINE, xy, 4);
-}
-void r_line(Ren *r, float x0, float y0, float x1, float y1) { (void)r; float xy[4] = { x0, y0, x1, y1 }; line_cmd(C_LINE, xy, 2); }
-void r_point(Ren *r, float x, float y) { (void)r; float xy[4] = { x, y, x, y }; line_cmd(C_LINE, xy, 2); }
-
-void r_geometry(Ren *r, RTex *t, const RVertex *v, int nv, const int *idx, int ni)
-{
-    (void)r; (void)t;
-    int n = idx ? ni : nv;
-    for (int i = 0; i + 2 < n; i += 3) {
-        const RVertex *a = &v[idx ? idx[i] : i], *b = &v[idx ? idx[i + 1] : i + 1], *c = &v[idx ? idx[i + 2] : i + 2];
-        float cr = (a->color.r + b->color.r + c->color.r) / 3, cg = (a->color.g + b->color.g + c->color.g) / 3;
-        float cb = (a->color.b + b->color.b + c->color.b) / 3, ca = (a->color.a + b->color.a + c->color.a) / 3;
-        int32_t xy[8] = { fx16(a->position.x), fx16(a->position.y), fx16(b->position.x), fx16(b->position.y),
-                          fx16(c->position.x), fx16(c->position.y), fx16(c->position.x), fx16(c->position.y) };
-        polygon(xy,
-                (uint8_t)(cr * 255), (uint8_t)(cg * 255), (uint8_t)(cb * 255), (uint8_t)(ca * 255), draw_blend);
-    }
-}
-
 /* ---------------------------------------------------------------- textured draws */
 /* the unit whose rectangle is exactly src (binary search: units are sorted by y, then x) */
 static const Unit *unit_exact(const RTex *t, int x, int y, int w, int h)
@@ -686,7 +682,7 @@ static void part_emit(RTex *t, int pi, int ix0, int iy0, int ix1, int iy1, RFlip
     const Part *p = &t->parts[pi];
     int fmt = p->fmt & 0x7F;
     uint16_t pm = PM_ECD;
-    if (!blend_bits(t->alpha, t->blend, &pm)) return;
+    if (!blend_bits(cur.alpha, cur.blend, &pm)) return;
     if (fmt == FMT_8BPP && (pm & PM_HALF)) pm = (uint16_t)((pm & ~PM_HALF) | PM_MESH);   /* no VDP1 blending of palette pixels */
     else if (pal_drawn && (pm & PM_HALF)) pm = (uint16_t)((pm & ~PM_HALF) | PM_MESH);
     if (ix1 < c->x || iy1 < c->y || ix0 >= c->x + c->w || iy0 >= c->y + c->h) {
@@ -694,23 +690,23 @@ static void part_emit(RTex *t, int pi, int ix0, int iy0, int ix1, int iy1, RFlip
         return;
     }
     uint16_t loc = part_resident(t, pi);
-    if (tracing) printf("    part %d fmt %d %dx%d at %d,%d loc %u tint %02X%02X%02X\n", pi, p->fmt, p->wpad, p->h, ix0, iy0, loc, t->mr, t->mg, t->mb);
+    if (tracing) printf("    part %d fmt %d %dx%d at %d,%d loc %u tint %02X%02X%02X\n", pi, p->fmt, p->wpad, p->h, ix0, iy0, loc, cur.mr, cur.mg, cur.mb);
     if (!loc) return;
     RRect cc = *c;
     if (dclip && !r_rect_intersect(&cc, dclip, &cc)) return;   /* a draw of part of a unit: clip to the destination too */
     int bank = 0;
-    if (fmt == FMT_8BPP && (bank = cram_bank(t, t->mr, t->mg, t->mb)) < 0) {
+    if (fmt == FMT_8BPP && (bank = cram_bank(t, cur.mr, cur.mg, cur.mb)) < 0) {
         static int warned; if (!warned++) printf("render: colour RAM full (texture %08X)\n", (unsigned)t->tag);
         return;
     }
     pm |= clip_bits(&cc, ix0, iy0, ix1, iy1);
-    uint16_t gr = fmt == FMT_8BPP ? 0 : gouraud_for(t->mr, t->mg, t->mb);
+    uint16_t gr = fmt == FMT_8BPP ? 0 : gouraud_for(cur.mr, cur.mg, cur.mb);
     if (gr) pm |= PM_GOURAUD;
     Cmd *k = cmd_new(); if (!k) return;
     if (fmt == FMT_4BPP) { pm |= PM_LUT; k->colr = loc; k->srca = (uint16_t)(loc + 4); }   /* the table, then the texels */
     else if (fmt == FMT_8BPP) {   /* colour bank: 64 (mode 2), 128 (3) or 256 (4) colours */
         int g = pal_granules(t->npal);
-        pm |= (uint16_t)((g == 1 ? 2 : g == 2 ? 3 : 4) << 3); k->colr = (uint16_t)(bank | t->prio << 12); k->srca = loc;
+        pm |= (uint16_t)((g == 1 ? 2 : g == 2 ? 3 : 4) << 3); k->colr = (uint16_t)(bank | cur.prio << 12); k->srca = loc;
         pal_drawn = true;
     }
     else { pm |= PM_RGB; k->srca = loc; }
@@ -786,7 +782,7 @@ static void tex_draw(RTex *t, const RFRect *src, const RFRect *dst, double angle
     const Unit *u = unit_exact(t, sx, sy, sw, sh);
     bool whole = u && u->x == sx && u->y == sy;
     if (tracing) printf("  tex %08X src %d,%d %dx%d dst %d,%d %dx%d a%u %s ncmd %d\n", (unsigned)t->tag, sx, sy, sw, sh,
-                        fl16(dx), fl16(dy), fl16(dw), fl16(dh), t->alpha, u ? "unit" : "rect", ncmd);
+                        fl16(dx), fl16(dy), fl16(dw), fl16(dh), cur.alpha, u ? "unit" : "rect", ncmd);
     RRect dclip = { fl16(dx), fl16(dy), ce16(dw), ce16(dh) };
     uint64_t abits; memcpy(&abits, &angle, sizeof abits);   /* angle == 0 without a soft-double compare */
     if (!(abits << 1)) {
@@ -812,17 +808,129 @@ static void tex_draw(RTex *t, const RFRect *src, const RFRect *dst, double angle
     }
 }
 
-static void tex_draw_timed(RTex *t, const RFRect *src, const RFRect *dst, double angle, const RFPoint *center, RFlip flip)
+/* ---------------------------------------------------------------- recording (the master) and replay (the slave)
+ * The core's draw calls are recorded (a few stores each); the frame's list is replayed into VDP1 commands on the slave
+ * SH-2 while the master runs the next frame (plan 8.3), then handed to VDP1 at the frame end after. A texture's colour
+ * mod / alpha / blend are recorded with the draw (the core sets them around it). SABER_NOSLAVE: replay on the master,
+ * right at the frame end (no frame of delay: for comparisons). */
+enum { OP_TEX, OP_ROT, OP_FILL, OP_LINE, OP_QUAD, OP_CLIP, OP_VP, OP_CLEAR };
+typedef struct { uint8_t op, flags, r, g, b, a, blend, prio; RTex *t; union { float f[8]; int32_t i[8]; uint32_t u[8]; } v; } Rec;
+#define REC_MAX 512       /* a frame's draws (level 1: ~80-200; 22 KB a buffer, two of them, in low RAM) */
+static Rec *recbuf[2]; static int rec_n[2];
+static unsigned rec_overflow; static int rec_peak;
+static uint8_t m_r = 255, m_g = 255, m_b = 255, m_a = 255; static RBlend m_blend = R_BLEND_BLEND;   /* the master's draw state */
+
+static Rec *rec_new(uint8_t op)
 {
-    uint32_t a = sat_timer_us();
-    tex_draw(t, src, dst, angle, center, flip);
-    tm_tex += sat_timer_us() - a; tm_ntex++;
+    if (rec_n[rec_w] >= REC_MAX) { rec_overflow++; return NULL; }
+    Rec *e = &recbuf[rec_w][rec_n[rec_w]++];
+    e->op = op; e->flags = 0; e->r = m_r; e->g = m_g; e->b = m_b; e->a = m_a; e->blend = (uint8_t)m_blend; e->prio = 0;
+    return e;
 }
-#define tex_draw tex_draw_timed
-void r_tex(Ren *r, RTex *t, const RFRect *src, const RFRect *dst) { (void)r; tex_draw(t, src, dst, 0, NULL, R_FLIP_NONE); }
+
+void r_set_draw_color(Ren *r, uint8_t R, uint8_t G, uint8_t B, uint8_t A) { (void)r; m_r = R; m_g = G; m_b = B; m_a = A; }
+void r_set_draw_blend(Ren *r, RBlend b) { (void)r; m_blend = b; }
+static void rec_rect(uint8_t op, const RRect *c)
+{
+    Rec *e = rec_new(op); if (!e) return;
+    e->flags = c != NULL;
+    if (c) { e->v.i[0] = c->x; e->v.i[1] = c->y; e->v.i[2] = c->w; e->v.i[3] = c->h; }
+}
+void r_set_clip(Ren *r, const RRect *c) { (void)r; rec_rect(OP_CLIP, c); }
+void r_set_viewport(Ren *r, const RRect *v) { (void)r; rec_rect(OP_VP, v); }
+void r_clear(Ren *r) { (void)r; rec_new(OP_CLEAR); }
+void r_fill_rect(Ren *r, const RFRect *q)
+{
+    (void)r;
+    Rec *e = rec_new(OP_FILL); if (!e) return;
+    if (q) { e->flags = 1; e->v.f[0] = q->x; e->v.f[1] = q->y; e->v.f[2] = q->w; e->v.f[3] = q->h; }
+}
+void r_fill_rects(Ren *r, const RFRect *q, int n) { for (int i = 0; i < n; i++) r_fill_rect(r, &q[i]); }
+static void rec_line(int type, const float *xy, int n)
+{
+    Rec *e = rec_new(OP_LINE); if (!e) return;
+    e->flags = (uint8_t)n; e->prio = (uint8_t)type;
+    memcpy(e->v.f, xy, sizeof(float) * 2 * (size_t)n);
+}
+void r_rect(Ren *r, const RFRect *q)
+{
+    (void)r;
+    if (!q) return;
+    float xy[8] = { q->x, q->y, q->x + q->w - 1, q->y, q->x + q->w - 1, q->y + q->h - 1, q->x, q->y + q->h - 1 };
+    rec_line(C_POLYLINE, xy, 4);
+}
+void r_line(Ren *r, float x0, float y0, float x1, float y1) { (void)r; float xy[4] = { x0, y0, x1, y1 }; rec_line(C_LINE, xy, 2); }
+void r_point(Ren *r, float x, float y) { (void)r; float xy[4] = { x, y, x, y }; rec_line(C_LINE, xy, 2); }
+void r_geometry(Ren *r, RTex *t, const RVertex *v, int nv, const int *idx, int ni)
+{
+    (void)r; (void)t;   /* flat triangles in the vertices' average colour (the core uses it for untextured shapes) */
+    int n = idx ? ni : nv;
+    for (int i = 0; i + 2 < n; i += 3) {
+        const RVertex *a = &v[idx ? idx[i] : i], *b = &v[idx ? idx[i + 1] : i + 1], *c = &v[idx ? idx[i + 2] : i + 2];
+        Rec *e = rec_new(OP_QUAD); if (!e) return;
+        e->r = (uint8_t)((a->color.r + b->color.r + c->color.r) * 85); e->g = (uint8_t)((a->color.g + b->color.g + c->color.g) * 85);
+        e->b = (uint8_t)((a->color.b + b->color.b + c->color.b) * 85); e->a = (uint8_t)((a->color.a + b->color.a + c->color.a) * 85);
+        int32_t xy[8] = { fx16(a->position.x), fx16(a->position.y), fx16(b->position.x), fx16(b->position.y),
+                          fx16(c->position.x), fx16(c->position.y), fx16(c->position.x), fx16(c->position.y) };
+        memcpy(e->v.i, xy, sizeof xy);
+    }
+}
+static void rec_tex(RTex *t, const RFRect *src, const RFRect *dst, const double *angle, const RFPoint *center, RFlip flip)
+{
+    if (!t) return;
+    Rec *e = rec_new(OP_TEX); if (!e) return;
+    t->rec_seq = rec_seq;
+    e->t = t; e->r = t->mr; e->g = t->mg; e->b = t->mb; e->a = t->alpha; e->blend = (uint8_t)t->blend; e->prio = t->prio;
+    e->flags = (uint8_t)((src ? 1 : 0) | (dst ? 2 : 0) | (flip & 3) << 4);
+    if (src) memcpy(&e->v.f[0], src, sizeof *src);
+    if (dst) memcpy(&e->v.f[4], dst, sizeof *dst);
+    uint64_t abits = 0;
+    if (angle) memcpy(&abits, angle, sizeof abits);
+    if (abits << 1) {   /* rotated: the angle (its bits) and centre in an extension record */
+        Rec *x = rec_new(OP_ROT); if (!x) { rec_n[rec_w]--; return; }
+        e->flags |= 8;
+        x->flags = center != NULL;
+        if (center) { x->v.f[0] = center->x; x->v.f[1] = center->y; }
+        x->v.u[2] = (uint32_t)(abits >> 32); x->v.u[3] = (uint32_t)abits;
+    }
+}
+void r_tex(Ren *r, RTex *t, const RFRect *src, const RFRect *dst) { (void)r; rec_tex(t, src, dst, NULL, NULL, R_FLIP_NONE); }
 void r_tex_rot(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, double angle, const RFPoint *center, RFlip flip)
-{ (void)r; tex_draw(t, src, dst, angle, center, flip); }
-void r_tex_batch(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, int n) { (void)r; for (int i = 0; i < n; i++) tex_draw(t, &src[i], &dst[i], 0, NULL, R_FLIP_NONE); }
+{ (void)r; rec_tex(t, src, dst, &angle, center, flip); }
+void r_tex_batch(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, int n) { (void)r; for (int i = 0; i < n; i++) rec_tex(t, &src[i], &dst[i], NULL, NULL, R_FLIP_NONE); }
+
+static void replay_ops(const Rec *R, int n)
+{
+    for (int i = 0; i < n; i++) {
+        const Rec *e = &R[i];
+        switch (e->op) {
+        case OP_TEX: {
+            double angle = 0; RFPoint ctr; const RFPoint *pc = NULL;
+            if ((e->flags & 8) && i + 1 < n && R[i + 1].op == OP_ROT) {
+                const Rec *x = &R[++i];
+                uint64_t ab = (uint64_t)x->v.u[2] << 32 | x->v.u[3];
+                memcpy(&angle, &ab, sizeof angle);
+                if (x->flags & 1) { ctr.x = x->v.f[0]; ctr.y = x->v.f[1]; pc = &ctr; }
+            }
+            if (e->t->dead) break;
+            cur = (TexState){ e->r, e->g, e->b, e->a, (RBlend)e->blend, e->prio };
+            tex_draw(e->t, (e->flags & 1) ? (const RFRect *)&e->v.f[0] : NULL, (e->flags & 2) ? (const RFRect *)&e->v.f[4] : NULL,
+                     angle, pc, (RFlip)((e->flags >> 4) & 3));
+            res.ntex++;
+            break;
+        }
+        case OP_FILL: draw_r = e->r; draw_g = e->g; draw_b = e->b; draw_a = e->a; draw_blend = (RBlend)e->blend;
+                      exec_fill((e->flags & 1) ? (const RFRect *)e->v.f : NULL); break;
+        case OP_LINE: draw_r = e->r; draw_g = e->g; draw_b = e->b; draw_a = e->a; draw_blend = (RBlend)e->blend;
+                      line_cmd(e->prio, e->v.f, e->flags); break;
+        case OP_QUAD: polygon(e->v.i, e->r, e->g, e->b, e->a, (RBlend)e->blend); break;
+        case OP_CLIP: clip_on = e->flags & 1; if (clip_on) clip = (RRect){ e->v.i[0], e->v.i[1], e->v.i[2], e->v.i[3] }; clip_dirty = true; break;
+        case OP_VP:   vp_on = e->flags & 1; if (vp_on) viewport = (RRect){ e->v.i[0], e->v.i[1], e->v.i[2], e->v.i[3] }; clip_dirty = true; break;
+        case OP_CLEAR: draw_r = e->r; draw_g = e->g; draw_b = e->b; exec_clear(); break;
+        default: break;
+        }
+    }
+}
 
 /* ---------------------------------------------------------------- the floor (Mode 7): VDP2 RBG0 comes with M9 */
 RFloor *r_floor_create(Ren *r, const RFloorDesc *d) { (void)r; (void)d; return calloc(1, sizeof(RFloor)); }
@@ -845,26 +953,64 @@ void rsat_init(void)
     for (int i = 0; i < CRAM_GRAN; i++) cowner[i] = -1;
     cmds = hw_memalign(32, sizeof(Cmd) * CMD_MAX);
     staging = hw_memalign(32, STAGING_SIZE);
-    if (!cmds || !staging) printf("render: no RAM for the command list\n");
+    recbuf[0] = malloc(sizeof(Rec) * REC_MAX); recbuf[1] = malloc(sizeof(Rec) * REC_MAX);
+    if (!cmds || !staging || !recbuf[0] || !recbuf[1]) printf("render: no RAM for the command list\n");
+    use_slave = !plat_getenv("SABER_NOSLAVE");
+    if (use_slave) {   /* the slave SH-2 replays the recorded frames (slave_entry, on the master's notification) */
+        cpu_dual_comm_mode_set(CPU_DUAL_ENTRY_ICI);
+        cpu_dual_slave_set(slave_entry);
+    }
     vdp1_sync_interval_set(-1);   /* variable: the framebuffers change once VDP1 has finished the frame (AUTO (0) changes
                                    * them every field and cuts off a frame VDP1 needs longer for) */
 }
 
-void rsat_frame_begin(void)
+/* the replay's frame: the preamble (clips, the backdrops), the recorded ops, the end */
+static void colour_offset(void);
+
+static void replay(const Rec *R, int n)
 {
     frame_no++;
     tracing = trace_from > 0 && traced < 6 && frame_no >= (unsigned)trace_from && (frame_no - (unsigned)trace_from) % 10 == 0;
     if (tracing) { traced++; printf("render trace: frame %u\n", (unsigned)frame_no); }
-    ren.prims = 0; ngouraud = 0; uploads_frame = upload_bytes_frame = 0;
+    ren.prims = 0; ngouraud = 0; uploads_frame = upload_bytes_frame = 0; res.ntex = 0;
     ncmd = 0; uclip_active = false; pal_drawn = false; fade_cmd = -1;
     Cmd *k = cmd_new(); k->ctrl = C_SYS_CLIP; k->xc = (int16_t)(scr_w - 1); k->yc = (int16_t)(scr_h - 1);
     k = cmd_new(); k->ctrl = C_USER_CLIP; k->xc = (int16_t)(scr_w - 1); k->yc = (int16_t)(scr_h - 1);
     k = cmd_new(); k->ctrl = C_LOCAL;
     draw_backdrops();
+    replay_ops(R, n);
+    colour_offset();
+    k = &cmds[ncmd++]; memset(k, 0, sizeof *k); k->ctrl = C_END;
+    res.ncmd = ncmd; res.ngouraud = ngouraud; res.prims = ren.prims; res.back_color = back_color; res.upload_bytes = upload_bytes_frame;
+}
+
+/* ---- the slave */
+static volatile uint32_t slave_busy __uncached;   /* 1 while the slave replays */
+static volatile uint32_t slave_buf __uncached;    /* the record buffer it replays */
+
+static void slave_entry(void)
+{
+    cpu_cache_purge();   /* the master wrote the records and textures: no stale lines here */
+    replay(recbuf[slave_buf], rec_n[slave_buf]);
+    slave_busy = 0;
+}
+
+/* wait for the slave to finish its replay; the master then reads / changes the renderer's state safely */
+static void slave_idle(void)
+{
+    if (!use_slave) return;
+    while (slave_busy) { }
+    cpu_cache_purge();   /* the slave wrote the renderer's state */
+}
+
+void rsat_frame_begin(void)
+{
+    /* the master records into rec_w; nothing else to do before the core draws */
 }
 
 void rsat_set_backdrops(RTex **t, const int *x, const int *y, int n, bool clear)
 {
+    slave_idle();
     clear_fb = clear;
     nbackdrops = n < 4 ? n : 4;
     for (int i = 0; i < nbackdrops; i++) { backdrop[i] = t[i]; backdrop_x[i] = x[i]; backdrop_y[i] = y[i]; }
@@ -886,6 +1032,7 @@ static void draw_backdrops(void)
     bool vp = vp_on, cl = clip_on;
     vp_on = clip_on = false; clip_dirty = true;
     for (int i = 0; i < nbackdrops; i++) {
+        cur = (TexState){ 255, 255, 255, 255, R_BLEND_BLEND, backdrop[i]->prio };
         RFRect d = { (float)backdrop_x[i], (float)backdrop_y[i], (float)backdrop[i]->w, (float)backdrop[i]->h };
         tex_draw(backdrop[i], NULL, &d, 0, NULL, R_FLIP_NONE);
     }
@@ -896,14 +1043,12 @@ static void draw_backdrops(void)
 /* the colour offset (VDP2, every layer): the fade fill ending the frame, lerp towards its colour approximated as an add */
 static void colour_offset(void)
 {
-    vdp2_ioregs_t *regs = vdp2_regs_get();
-    if (fade_cmd < 0 || fade_cmd != ncmd - 1) { regs->clofen = 0; return; }
+    if (fade_cmd < 0 || fade_cmd != ncmd - 1) { res.clofen = 0; return; }
     ncmd--;   /* the fill's polygon: not drawn */
     int a = fade_a;
     int orr = a * (fade_r * 2 - 255) / 255, og = a * (fade_g * 2 - 255) / 255, ob = a * (fade_b * 2 - 255) / 255;
-    regs->clofen = 0x7F;   /* NBG0-3, RBG0, back screen, sprites */
-    regs->clofsl = 0;      /* offset A */
-    regs->coar = (uint16_t)(orr & 0x1FF); regs->coag = (uint16_t)(og & 0x1FF); regs->coab = (uint16_t)(ob & 0x1FF);
+    res.clofen = 0x7F;   /* NBG0-3, RBG0, back screen, sprites */
+    res.coar = (uint16_t)(orr & 0x1FF); res.coag = (uint16_t)(og & 0x1FF); res.coab = (uint16_t)(ob & 0x1FF);
 }
 
 /* SABER_PERF: where the end of a frame goes (microseconds, summed; rsat_timing) */
@@ -911,27 +1056,65 @@ static void colour_offset(void)
 void rsat_timing(uint32_t *planes, uint32_t *vdp1_wait, uint32_t *put, uint32_t *frames)
 {
     *planes = tm_planes; *vdp1_wait = tm_wait; *put = tm_put; *frames = tm_frames;
-    if (tm_frames) printf("[perf] textured draws %u us a frame (%u calls, uploads %u us)\n",
-                          (unsigned)(tm_tex / tm_frames), (unsigned)(tm_ntex / tm_frames), (unsigned)(tm_upl / tm_frames));
-    tm_planes = tm_wait = tm_put = tm_frames = tm_tex = tm_ntex = tm_upl = 0;
+    if (tm_frames) printf("[perf] %s: waiting for its replay %u us a frame (%u textured draws, uploads %u bytes; at most %d records)\n",
+                          use_slave ? "slave" : "no slave", (unsigned)(tm_slave_wait / tm_frames), (unsigned)(tm_ntex / tm_frames),
+                          (unsigned)(tm_upl / tm_frames), rec_peak);
+    tm_planes = tm_wait = tm_put = tm_frames = tm_tex = tm_ntex = tm_upl = tm_slave_wait = 0;
 }
 
-void rsat_frame_end(void)
+/* hand the last replay's list to VDP1 (and its VDP2 side: planes, colour offset, back colour) */
+static void submit(bool planes_delayed)
 {
     uint32_t t0 = sat_timer_us();
-    sat_planes_frame(scr_w);
+    sat_planes_frame(scr_w, planes_delayed);
     uint32_t t1 = sat_timer_us();
-    colour_offset();
-    Cmd *k = &cmds[ncmd++]; memset(k, 0, sizeof *k); k->ctrl = C_END;
-    vdp2_scrn_back_color_set(VDP2_VRAM_ADDR(3, 0x01FFFE), (rgb1555_t){ .raw = back_color });
+    vdp2_ioregs_t *regs = vdp2_regs_get();
+    regs->clofen = res.clofen;
+    if (res.clofen) { regs->clofsl = 0; regs->coar = res.coar; regs->coag = res.coag; regs->coab = res.coab; }
+    vdp2_scrn_back_color_set(VDP2_VRAM_ADDR(3, 0x01FFFE), (rgb1555_t){ .raw = res.back_color });
     vdp1_sync_wait();
     gouraud_upload();
     uint32_t t2 = sat_timer_us();
-    vdp1_sync_cmdt_put((const vdp1_cmdt_t *)cmds, (uint16_t)ncmd, 0);
+    vdp1_sync_cmdt_put((const vdp1_cmdt_t *)cmds, (uint16_t)res.ncmd, 0);
     vdp1_sync_render();
     vdp1_sync();
     uint32_t t3 = sat_timer_us();
     tm_planes += t1 - t0; tm_wait += t2 - t1; tm_put += t3 - t2; tm_frames++;
+    tm_ntex += (uint32_t)res.ntex; tm_upl += res.upload_bytes;
+}
+
+static bool pending;   /* a replay whose list hasn't gone to VDP1 yet */
+int rsat_prims(void) { return res.prims; }
+
+void rsat_frame_end(void)
+{
+    if (rec_overflow) { printf("render: %u draws over the %d a frame recorded\n", rec_overflow, REC_MAX); rec_overflow = 0; }
+    if (rec_n[rec_w] > rec_peak) rec_peak = rec_n[rec_w];
+    if (!use_slave) {   /* SABER_NOSLAVE: replay here and now */
+        replay(recbuf[rec_w], rec_n[rec_w]);
+        submit(false);
+        rec_n[rec_w] = 0;
+        rec_seq++;
+        for (RTex *t = graveyard[rec_w], *nx; t; t = nx) { nx = t->next_dead; tex_free_mem(t); }
+        graveyard[rec_w] = NULL;
+        return;
+    }
+    uint32_t tw = sat_timer_us();
+    slave_idle();                   /* the replay of the frame before */
+    tm_slave_wait += sat_timer_us() - tw;
+    if (pending) submit(true);
+    /* textures destroyed while the frame the slave just replayed was recorded: nothing can draw them any more */
+    int done = rec_w ^ 1;
+    for (RTex *t = graveyard[done], *nx; t; t = nx) { nx = t->next_dead; tex_free_mem(t); }
+    graveyard[done] = NULL;
+    rec_n[done] = 0;
+    rec_seq++;
+    /* this frame's records to the slave; the master records the next frame into the other buffer */
+    slave_buf = (uint32_t)rec_w;
+    slave_busy = 1;
+    cpu_dual_slave_notify();
+    pending = true;
+    rec_w = done;
 }
 
 void rsat_stats(unsigned *parts_resident, unsigned *vram_used, unsigned *uploads, unsigned *evicted)
@@ -947,16 +1130,16 @@ void rsat_bench(void)
     for (int i = 0; i < 32 * 32; i++) px[i] = 0xFF00FF00u | (uint32_t)(i & 255);
     RTex *t = rtex_create(&ren, 32, 32, R_TEX_STATIC, px);
     if (!t) return;
-    rsat_frame_begin();
     RFRect src = { 0, 0, 32, 32 }, dst = { 10, 10, 32, 32 };
+    cur = (TexState){ 255, 255, 255, 255, R_BLEND_BLEND, 0 };
     uint32_t a = sat_timer_us();
-    for (int i = 0; i < 1000; i++) { ncmd = 3; r_tex(&ren, t, &src, &dst); }
+    for (int i = 0; i < 1000; i++) { ncmd = 3; tex_draw(t, &src, &dst, 0, NULL, R_FLIP_NONE); }
     uint32_t b = sat_timer_us();
     for (int i = 0; i < 1000; i++) { (void)sat_timer_us(); }
     uint32_t c = sat_timer_us();
     printf("[bench] r_tex: %u ns a draw (warm), sat_timer_us: %u ns\n", (unsigned)(b - a), (unsigned)(c - b));
     ncmd = 3;
-    rtex_destroy(t);
+    tex_free_vram(t); tex_free_mem(t);
 }
 
 /* SABER_SHOT: nothing to save on the console (the harness takes screenshots from the emulator) */

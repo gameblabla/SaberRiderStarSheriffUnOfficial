@@ -241,8 +241,12 @@ static void update_band(BandRt *br, int sw)
     br->lo = c0; br->hi = c1;
 }
 
-void sat_planes_frame(int sw)
+void sat_planes_frame(int sw, bool delayed)
 {
+    /* delayed: the list going to VDP1 is the frame before's (the slave replayed it): so are the planes */
+    static bool prev_asked; static float prev_x, prev_y;
+    bool asked = P.asked; float cx = P.cam_x, cy = P.cam_y;
+    if (delayed) { P.asked = prev_asked; P.cam_x = prev_x; P.cam_y = prev_y; prev_asked = asked; prev_x = cx; prev_y = cy; }
     if (!P.asked) {   /* no level on screen: planes off, colour RAM back to VDP1 */
         if (P.shown) { vdp2_scrn_display_set(VDP2_SCRN_DISP_NONE); rsat_set_backdrops(NULL, NULL, NULL, 0, false); P.shown = false; }
         if (P.palettes_in) { rsat_cram_reserve(0); P.palettes_in = false; }

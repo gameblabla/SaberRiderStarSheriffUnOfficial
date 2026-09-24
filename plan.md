@@ -691,13 +691,23 @@ must be variable (AUTO cut off slow frames); the vblank erase of the variable ch
 (a transparent polygon clears the framebuffer while the planes are on); `DISP_NBGn` makes colour 0 opaque (use
 `DISPTP`).
 
-**Speed** (level 1, `bench_level1.env`, mednafen): 60 fps with 0-3 enemies, 30-60 with 5-9. Per frame: update 2-6 ms,
+**Speed** (level 1, `bench_level1.env`, mednafen), before the slave SH-2 took the list building: 60 fps with 0-3
+enemies, 30-60 with 5-9. Per frame: update 2-6 ms,
 draw 7-13 ms (textured draws ~6 ms, the planes 0.8, the core's own drawing the rest). Done so far: an integer path
 for unrotated textured draws (no soft-float), no libgcc variable shifts / divisions / soft-double compares in the
 draw path or the soft-float (multiplies by powers of two; still bit-exact: `make test`), `floorf` & co. on the bits,
 a division-free `sat_timer_us`, per-texture LRU stamps and grid lookups, gouraud tables uploaded once VDP1 is done,
 the enemy spawner's integer early-out (exact). `mednafen_run.py --callers` lists the soft-float callers.
 
-Next for M5: the slave SH-2 builds VDP1's list from recorded draws (plan 8.3; the master keeps update + the core's
-drawing); the remaining soft-float in physics / animation (fx); sprites between planes (Hyperjumper's layers 4 and 7:
-palette sprites with priority bits); the 224-line framing (the bottom 16 px of the PC view are cut now).
+**The slave SH-2** (plan 8.3, `render_sat.c`): the core's draw calls are recorded on the master (a few stores each,
+with the texture's colour mod / alpha / blend of the moment); at the frame end the slave replays them into VDP1's
+list while the master runs the next frame, and the list goes to VDP1 at the frame end after (one frame of delay; the
+planes, the colour offset and the back colour follow the list they belong to). Texture destroy / update wait for the
+slave; a texture the frame being recorded drew is freed after that frame's replay. `SABER_NOSLAVE` replays on the
+master (for comparisons). Level 1: the master's draw 5-7 ms (was 12-14), 1.00-1.03 fields a frame in most of the run,
+1.1-1.6 with 7-8 enemies (the update, 3-5 ms, is the rest). The planes' palettes went from 96 to 64 (35.9 dB): VDP1's
+8bpp sprites needed more than 8 colour banks in a level (April's power attack art found none).
+
+Next for M5: the remaining soft-float in physics / animation (fx); sprites between planes (Hyperjumper's layers 4
+and 7: palette sprites with priority bits); the 224-line framing (the bottom 16 px of the PC view are cut now); a
+thin dark line at y 80 during the power attack's white flash (the backdrop strip's edge).
