@@ -23,7 +23,8 @@ const char *plat_base_path(void);
 const char *plat_default_data_dir(void);
 
 /* the logical screen: sw x sh game pixels. ratio: 0 wide (426x240, plat_wide_width), -1 4:3 (320x240), 1 stretched to the display.
- * screen: the SCREEN option (0 fullscreen, n = a window n+1 times the game size; Dreamcast: 0 640x480, 1 832x480 on VGA);
+ * screen: the SCREEN option (0 fullscreen, n = a window n+1 times the game size; Dreamcast WIP: 320x240 only,
+ * more modes behind DC_HIRES_MODES);
  * -1 keeps the current one. */
 void plat_apply_screen(Ren *r, int sw, int sh, int ratio, int screen);
 /* the SCREEN option's choices and their label ("FULL 852x480", "WINDOWED x2", "VGA 832x480") */

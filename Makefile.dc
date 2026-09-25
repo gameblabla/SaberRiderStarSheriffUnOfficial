@@ -12,6 +12,9 @@ OBJ     := $(SRC:src/%.c=$(OBJDIR)/%.o)
 OBJ     := $(OBJ:third_party/%.c=$(OBJDIR)/third_party/%.o)
 # PLAT_BAKED_ASSETS: textures, samples and our other files come baked into tex.pck / snd.pck / files.pck (build_disc.py)
 DEFS    := -DPLAT_DREAMCAST -DPLAT_LOW_MEMORY -DPLAT_BAKED_ASSETS -DDCFMV_NO_ZSTD -DDCFMV_NUM_BUFFERS=8
+# Temporary WIP: 640x480/832x480 + stretch/wide stay hidden (320x240 + original 4:3 only) until the 640x480
+# performance issues are fixed. Uncomment to work on them:
+# DEFS += -DDC_HIRES_MODES
 # KOS, kos-ports and the game must all use one SH4 float ABI: environ.sh sets
 # KOS_SH4_PRECISION=-m4-single-only (32-bit double). Mixing it with -m4-single links the wrong
 # newlib multilib and libm/printf return garbage (floorf(96) == 0).

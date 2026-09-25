@@ -35,7 +35,7 @@ const char *plat_getenv(const char *name)
 uint64_t plat_ticks_ms(void) { return timer_ms_gettime64(); }
 const char *plat_base_path(void) { return "/cd/"; }
 const char *plat_default_data_dir(void) { return "/cd/data"; }
-int plat_default_ratio(void) { return -1; }   /* 4:3: 320x240 doubled to 640x480, every pixel exact */
+int plat_default_ratio(void) { return -1; }   /* original 4:3 (320x240, every pixel exact) */
 
 /* ---- display modes. KOS's 640x480 and 320x240 (DM_320x240: pixel/line doubled on VGA, 240p NTSC on RGB / S-video /
  * composite; always 4:3), and on a VGA cable 832x480 at 60 Hz, the CVT reduced-blanking v2 timing of the 960x704_Dreamcast sample's
@@ -44,12 +44,20 @@ int plat_default_ratio(void) { return -1; }   /* 4:3: 320x240 doubled to 640x480
  * so it waits for the end of a frame: dc_video_update. */
 enum { MODE_640, MODE_832, MODE_320 };
 static const struct { int w, h; } MODE_SIZE[3] = { { 640, 480 }, { 832, 480 }, { 320, 240 } };
+/* Temporary WIP: only 320x240 is offered. 640x480 suffers performance issues and needs fixing first;
+ * the 640x480 / 832x480 / stretch / wide modes stay behind DC_HIRES_MODES (-DDC_HIRES_MODES, see
+ * Makefile.dc) until then. */
 /* the SCREEN choices for the cable: VGA 640x480 / 832x480 / 320x240, anything else 640x480 / 320x240 */
 static int screen_mode(int screen)
 {
+#ifndef DC_HIRES_MODES
+    (void)screen;
+    return MODE_320;
+#else
     if (screen <= 0) return MODE_640;
     if (vid_check_cable() == CT_VGA) return screen == 1 ? MODE_832 : MODE_320;
     return MODE_320;
+#endif
 }
 static const pvr_init_params_t PVR_PARAMS = {
     .opb_sizes = { PVR_BINSIZE_0, PVR_BINSIZE_0, PVR_BINSIZE_32, PVR_BINSIZE_0, PVR_BINSIZE_0 },   /* everything is in the translucent list */
@@ -96,7 +104,7 @@ static void set_mode(int mode)
 void dc_video_init(void)
 {
     boot_sync_width = PVR_GET(REG_SYNC_WIDTH); boot_hpos_irq = PVR_GET(PVR_HPOS_IRQ);
-    set_mode(MODE_640);
+    set_mode(MODE_320);   /* Temporary WIP: 320x240 only (see screen_mode) */
     pvr_init(&PVR_PARAMS);
     pvr_set_bg_color(0, 0, 0);
 }
@@ -110,7 +118,11 @@ void dc_video_update(void)
     if (!rdc_vram_park()) { apply_view(); return; }
     pvr_shutdown();
     set_mode(mode);
+#ifdef DC_HIRES_MODES
     if (vid_mode->width != MODE_SIZE[mode].w) { printf("video: %dx%d refused, back to 640x480\n", MODE_SIZE[mode].w, MODE_SIZE[mode].h); set_mode(MODE_640); }
+#else
+    if (vid_mode->width != MODE_SIZE[mode].w) { printf("video: %dx%d refused, back to 320x240\n", MODE_SIZE[mode].w, MODE_SIZE[mode].h); set_mode(MODE_320); }
+#endif
     pvr_init(&PVR_PARAMS);
     pvr_set_bg_color(0, 0, 0);
     rdc_vram_unpark();
@@ -118,7 +130,14 @@ void dc_video_update(void)
     apply_view();
 }
 
-int plat_screen_modes(void) { return vid_check_cable() == CT_VGA ? 3 : 2; }
+int plat_screen_modes(void)
+{
+#ifdef DC_HIRES_MODES
+    return vid_check_cable() == CT_VGA ? 3 : 2;
+#else
+    return 1;   /* Temporary WIP: 320x240 only (see screen_mode) */
+#endif
+}
 bool plat_screen_43_only(int screen) { return screen_mode(screen) == MODE_320; }   /* 320x240 is never wide */
 int plat_wide_width(int screen) { return screen_mode(screen) == MODE_832 ? 416 : 426; }
 void plat_screen_label(int screen, char *buf, size_t n)

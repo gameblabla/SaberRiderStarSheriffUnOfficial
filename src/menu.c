@@ -48,6 +48,17 @@ static void lives_caps(int difficulty, int *max_lives, int *max_cont)
     *max_lives = difficulty == 0 ? 7 : difficulty == 1 ? 5 : 3;
     *max_cont  = difficulty == 0 ? 5 : difficulty == 1 ? 4 : 3;
 }
+/* an option the cursor may stop on (and that gets a row). Dreamcast hides SCREEN / RATIO for now
+ * (Temporary WIP: 320x240 + original 4:3 forced until the 640x480 performance issues are fixed);
+ * CONTROLS hides where the platform has no remapping. */
+static bool opt_selectable(int opt)
+{
+    if (opt == OPT_CONTROLS && !plat_bind_supported()) return false;
+#ifdef PLAT_DREAMCAST
+    if (opt == OPT_SCREEN || opt == OPT_RATIO) return false;
+#endif
+    return true;
+}
 
 static void open_briefing(Menu *m, Ren *r)
 {
@@ -185,13 +196,11 @@ void menu_update(Menu *m, const Input *in, real dt, int sw, Ren *r)
     case MS_OPTIONS: {
         int maxl, maxc;
         if (btn_pressed(in, BTN_UP)) {
-            m->sel = m->sel == 0 ? OPT_COUNT - 1 : m->sel - 1;
-            if (m->sel == OPT_CONTROLS && !plat_bind_supported()) m->sel--;
+            do { m->sel = m->sel == 0 ? OPT_COUNT - 1 : m->sel - 1; } while (!opt_selectable(m->sel));
             sfx_play(0, 0);
         }
         if (btn_pressed(in, BTN_DOWN)) {
-            m->sel = m->sel == OPT_COUNT - 1 ? 0 : m->sel + 1;
-            if (m->sel == OPT_CONTROLS && !plat_bind_supported()) m->sel++;
+            do { m->sel = m->sel == OPT_COUNT - 1 ? 0 : m->sel + 1; } while (!opt_selectable(m->sel));
             sfx_play(0, 0);
         }
         int dir = btn_pressed(in, BTN_RIGHT) ? 1 : btn_pressed(in, BTN_LEFT) ? -1 : 0;
@@ -202,12 +211,16 @@ void menu_update(Menu *m, const Input *in, real dt, int sw, Ren *r)
             break;
         case OPT_PLAYER: lives_caps(m->difficulty, &maxl, &maxc); m->lives += dir; if (m->lives < 0) m->lives = 0; if (m->lives > maxl) m->lives = maxl; break;
         case OPT_CONTINUE: lives_caps(m->difficulty, &maxl, &maxc); m->continues += dir; if (m->continues < 0) m->continues = 0; if (m->continues > maxc) m->continues = maxc; break;
+#ifndef PLAT_DREAMCAST
         case OPT_SCREEN:
             if (dir) { int n = plat_screen_modes(); m->screen = (m->screen + n + dir) % n; m->apply_screen_mode = true; if (plat_screen_43_only(m->screen)) m->ratio = RATIO_43; }
             break;
         case OPT_RATIO:   /* WIDE -> 4:3 -> STRETCH -> WIDE (held at 4:3 on a 4:3-only screen) */
             if (dir && !plat_screen_43_only(m->screen)) { m->ratio = m->ratio == RATIO_WIDE ? (dir > 0 ? RATIO_43 : RATIO_STRETCH) : m->ratio == RATIO_43 ? (dir > 0 ? RATIO_STRETCH : RATIO_WIDE) : (dir > 0 ? RATIO_WIDE : RATIO_43); m->apply_screen_mode = true; }
             break;
+#else
+        /* SCREEN / RATIO are hidden on Dreamcast for now (320x240 + original 4:3 forced) */
+#endif
         case OPT_FILTER: if (dir) m->filter = (m->filter + FILTER_COUNT + dir) % FILTER_COUNT; break;
         case OPT_MUSIC:
             if (dir || confirm(in)) {
@@ -355,10 +368,13 @@ static void draw_options(Menu *m, Ren *r, int sw, int sh)
     const char *rows[7][2] = { { "LEVEL", DIFF[m->difficulty] }, { "PLAYER", lives }, { "CONTINUE", cont }, { "SCREEN", scr },
                                { "RATIO", m->ratio == RATIO_WIDE ? "WIDE" : m->ratio == RATIO_43 ? "4:3" : "STRETCH" }, { "FILTER", FILT[m->filter] }, { "MUSIC TEST", mus } };
     int dy = plat_bind_supported() ? 0x0e : 0x10;   /* an eighth row (CONTROLS) fits above BACKER CREDITS at 14 px */
+    int vi = 0;
     for (int i = 0; i < 7; i++) {
+        if (!opt_selectable(OPT_LEVEL + i)) continue;   /* hidden options leave no row (Dreamcast SCREEN/RATIO) */
         hilite(m->sel == OPT_LEVEL + i, &R, &G, &B);
-        font_draw(f, rows[i][0], r_int(lx), r_int(y0 + 0xd8 + i * dy), R, G, B);
-        font_draw(f, rows[i][1], r_int(vx), r_int(y0 + 0xd8 + i * dy), 255, 255, 255);
+        font_draw(f, rows[i][0], r_int(lx), r_int(y0 + 0xd8 + vi * dy), R, G, B);
+        font_draw(f, rows[i][1], r_int(vx), r_int(y0 + 0xd8 + vi * dy), 255, 255, 255);
+        vi++;
     }
     if (plat_bind_supported()) {
         hilite(m->sel == OPT_CONTROLS, &R, &G, &B);
