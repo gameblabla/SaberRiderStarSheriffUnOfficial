@@ -20,7 +20,11 @@ static void rsat_timing(uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d) { *a
 static void vblank_out(void *work)
 {
     (void)work;
-    smpc_peripheral_intback_issue();
+    /* INTBACK is polled from an interrupt.  libyaul waits for SMPC SF to
+     * clear before issuing it; a long SMPC command can otherwise trap the
+     * master SH-2 inside this callback and freeze video and CD loading. */
+    if ((*(volatile uint8_t *)0x20100063u & 1u) == 0)
+        smpc_peripheral_intback_issue();
     sat_vblank_tick();
 }
 
@@ -60,7 +64,7 @@ static void __attribute__((noreturn, noinline)) game_main(void)
     sat_timer_init();
     printf("saber rider: saturn build " __DATE__ " " __TIME__ "\n");
     cd_sat_init();
-    pcm_sat_init();
+    rsat_video_preload();
     rsat_init();
 #ifndef SAT_RENDER_NULL
     if (plat_getenv("SABER_RBENCH")) rsat_bench();
@@ -88,7 +92,6 @@ static void __attribute__((noreturn, noinline)) game_main(void)
         rsat_frame_begin();
         if (!no_draw) app_draw();
         rsat_frame_end();
-        pcm_sat_poll();
         uint32_t t_draw = sat_timer_us();
         if (app_perf_on()) {
             app_perf(t_upd - t0, t_draw - t_upd, fields * 16683u, steps, rsat_prims());

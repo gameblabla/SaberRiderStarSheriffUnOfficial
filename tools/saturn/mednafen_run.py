@@ -113,6 +113,7 @@ def main() -> int:
     ap.add_argument('--elf', type=Path, default=ROOT / 'obj-saturn/saber_rider.elf')
     ap.add_argument('--mednafen', type=Path, default=Path(os.environ.get('MEDNAFEN', KIT)))
     ap.add_argument('--base', type=Path, help='isolated mednafen base directory (parallel runs)')
+    ap.add_argument('--firmware', type=Path, help='firmware directory to use with an isolated --base')
     ap.add_argument('--frames', type=int, default=1200)
     ap.add_argument('--chunk', type=int, default=60, help='frames between log reads')
     ap.add_argument('--pad', default='', help='FRAME:BUTTONS,... held from that frame on')
@@ -137,6 +138,8 @@ def main() -> int:
     emu = Mednafen(args.mednafen, args.base)
     logf = open(args.log, 'w') if args.log else None
     try:
+        if args.firmware:
+            emu.call('set', 'filesys.path_firmware', args.firmware.resolve())
         emu.call('load', args.cue.resolve(), 'ss')
         if args.state_in:
             emu.call('load_state', args.state_in.resolve())

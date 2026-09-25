@@ -6,6 +6,7 @@
 #include "dialog.h"
 #include "heroes.h"
 #include "namehash.h"
+#include "pack.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,8 +26,15 @@
 /* The floor is a material map at 8 world units per cell (wraps at 8192 units); every material is a 32x32 texture sampled
  * by world position, so a material continues seamlessly across cells and the road's edges/kerbs can follow the track
  * at 8-unit resolution instead of 32-unit tiles. Textures carry 4 mip levels against far-row shimmer. */
+/* Saturn has 1 MiB of low work RAM.  Keep the 8192-unit world but use
+ * 16-unit cells there: the original 1024x1024 byte map alone cannot fit. */
+#ifdef PLAT_SATURN
+#define MAPN 512
+#define MAPSH 4
+#else
 #define MAPN 1024            /* cells per side (wraps) */
 #define MAPSH 3              /* log2(cell size): 8 units */
+#endif
 #define WORLD (MAPN << MAPSH)
 #define TEX 32               /* material texture size */
 #define MIPS 4
@@ -183,8 +191,11 @@ static bool load_atlas(Mode7 *m)
     snprintf(txt, sizeof txt, "%s", p);
     const char *png = asset_path("mode7.png");
     if (!png) { fprintf(stderr, "assets/mode7.png missing (run tools/build_mode7_assets.py)\n"); return false; }
-    int w, h; uint32_t *px = png_load_rgba(png, &w, &h);
+    int w = 0, h = 0;
+#ifndef PLAT_SATURN
+    uint32_t *px = png_load_rgba(png, &w, &h);
     if (!px) return false;
+#endif
     FILE *f = asset_fopen(txt);
     char name[64]; int x, y, sw, sh, n; int found = 0;
     while (f && fscanf(f, "%63s %d %d %d %d %d", name, &x, &y, &sw, &sh, &n) == 6) {
@@ -196,13 +207,37 @@ static bool load_atlas(Mode7 *m)
 #ifdef PLAT_BAKED_ASSETS
     m->atlas = gfx_image_tex(png, NULL, NULL);   /* the console's baked texture */
 #endif
+#ifdef PLAT_SATURN
+    if (!m->atlas) return false;
+#else
     if (!m->atlas) m->atlas = rtex_create(m->ren, w, h, R_TEX_STATIC, px);
+#endif
     rtex_set_blend(m->atlas, R_BLEND_BLEND); rtex_set_scale(m->atlas, R_SCALE_NEAREST);
     /* floor materials into memory, with box-filtered mips */
     Spr *fl = &m->spr[S_FLOOR];
+#ifdef PLAT_SATURN
+    /* FILES.PCK stores only the 352x32 floor strip.  Expanding it back to
+     * the 1024x215 atlas would need almost all of low work RAM. */
+    const PackEntry *floor_entry = packs_find_type(asset_key(png), RES_IMAGE);
+    if (!floor_entry || floor_entry->size < 32 || memcmp(floor_entry->data, "RGBA", 4)) return false;
+    const uint8_t *d = floor_entry->data;
+    int rx = d[8] | d[9] << 8, ry = d[10] | d[11] << 8;
+    int rw = d[12] | d[13] << 8, rh = d[14] | d[15] << 8;
+    if (rw < fl->w * T_COUNT || rh < TEX || fl->x < rx || fl->y < ry ||
+        fl->x + fl->w * T_COUNT > rx + rw || fl->y + TEX > ry + rh ||
+        floor_entry->size < 32u + (uint32_t)rw * rh * 4u) {
+        packs_release_type(asset_key(png), RES_IMAGE);
+        return false;
+    }
+    const uint32_t *floor_px = (const uint32_t *)(d + 32) + (fl->y - ry) * rw + (fl->x - rx);
+    int floor_stride = rw;
+#else
+    const uint32_t *floor_px = px + (size_t)fl->y * w + fl->x;
+    int floor_stride = w;
+#endif
     for (int t = 0; t < T_COUNT && t < fl->frames; t++) {
         for (int yy = 0; yy < TEX; yy++)
-            memcpy(m->tiles[t][0] + yy * TEX, px + (size_t)(fl->y + yy) * w + fl->x + t * fl->w, TEX * 4);
+            memcpy(m->tiles[t][0] + yy * TEX, floor_px + (size_t)yy * floor_stride + t * fl->w, TEX * 4);
         for (int L = 1; L < MIPS; L++) {
             int n = TEX >> L, pn = TEX >> (L - 1); const uint32_t *src = m->tiles[t][L - 1]; uint32_t *dst = m->tiles[t][L];
             for (int yy = 0; yy < n; yy++) for (int xx = 0; xx < n; xx++) {
@@ -213,7 +248,11 @@ static bool load_atlas(Mode7 *m)
             }
         }
     }
+#ifdef PLAT_SATURN
+    packs_release_type(asset_key(png), RES_IMAGE);
+#else
     free(px);
+#endif
     return true;
 }
 

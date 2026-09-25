@@ -33,12 +33,21 @@ static real clampf(real v, real lo, real hi) { return v < lo ? lo : v > hi ? hi 
 static real ease_out(real t) { t = clampf(t, 0, R(1)); return R(1) - r_mul(r_mul(R(1) - t, R(1) - t), R(1) - t); }
 static int hero_of(const Power *pw) { return pw->hero & 3; }
 
+static void preload_clip(const Power *pw)
+{
+    const char *clip = pw->bomb ? NULL : CLIP[hero_of(pw)];
+    if (!clip) { video_preload_file(NULL, 0); return; }
+    char buf[64]; snprintf(buf, sizeof buf, "%s.m4v", clip);
+    video_preload_file(asset_path(buf), R(24.0f));
+}
+
 void power_reset(Power *pw, int hero, bool bomb)
 {
     power_close(pw);
     memset(pw, 0, sizeof *pw);
     pw->hero = hero & 3; pw->bomb = bomb; pw->items = POWER_ITEMS;
     if (plat_getenv("SABER_POWER")) pw->items = atoi(plat_getenv("SABER_POWER"));   /* debug: items at the start */
+    preload_clip(pw);
     static const char *const SFX[] = { "power/saber_intermission.wav", "space/charge.wav", "sfx/turbo_start.wav", "voice/april_ok.wav" };
     for (size_t i = 0; i < sizeof SFX / sizeof *SFX; i++) sfx_preload_file(asset_path(SFX[i]));   /* loaded before they play */
 }
@@ -58,7 +67,16 @@ void power_start(Power *pw, Ren *ren)
     if (clip) {
         char buf[64]; snprintf(buf, sizeof buf, "%s.m4v", clip);
         pw->video = video_open_file(ren, asset_path(buf), R(24.0f));
-        if (pw->video) { snprintf(buf, sizeof buf, "%s.wav", clip); voice_play_file(asset_path(buf)); pw->dur = R_MAX; }
+        if (pw->video) {
+#if !defined(PLAT_SATURN)
+            /* PC/Dreamcast clips use the sidecar WAV.  Saturn's generated CPK
+             * already multiplexes that WAV as ADX, so playing it here too would
+             * double the voice over the movie audio. */
+            snprintf(buf, sizeof buf, "%s.wav", clip);
+            voice_play_file(asset_path(buf));
+#endif
+            pw->dur = R_MAX;
+        }
     }
     if (!pw->video) sfx_play_file(asset_path("space/charge.wav"));
 }
@@ -67,6 +85,7 @@ static void end_cutin(Power *pw)
 {
     if (pw->video) { video_close(pw->video); pw->video = NULL; }
     pw->phase = PW_FLASH; pw->t = 0; pw->strike = true;
+    pw->preload_pending = pw->items > 0 && !pw->bomb && CLIP[hero_of(pw)] != NULL;
     pw->cooldown = pw->cooldown_max = pw->bomb ? BOMB_COOLDOWN : COOLDOWN;
     music_set_duck(R(1.0f));
     int h = hero_of(pw);
@@ -86,7 +105,13 @@ void power_update(Power *pw, const Input *in, real dt)
         } else if (pw->t >= pw->dur || skip) end_cutin(pw);
         return;
     }
-    if (pw->phase == PW_FLASH && (pw->t += dt) >= FLASH_DUR) pw->phase = PW_IDLE;
+    if (pw->phase == PW_FLASH) {
+        /* One flash frame is already on screen before this runs.  Warm the
+         * remaining clip here so a second power press later has the same
+         * low latency without freezing live gameplay on a CD seek. */
+        if (pw->preload_pending) { preload_clip(pw); pw->preload_pending = false; }
+        if ((pw->t += dt) >= FLASH_DUR) pw->phase = PW_IDLE;
+    }
     if (pw->cooldown > 0) pw->cooldown -= dt;
     if (pw->boost_t > 0) pw->boost_t -= dt;
 }
@@ -96,6 +121,8 @@ bool power_take_strike(Power *pw) { bool s = pw->strike; pw->strike = false; ret
 void power_close(Power *pw)
 {
     if (pw->video) { video_close(pw->video); pw->video = NULL; voice_stop(); }
+    video_preload_file(NULL, 0);
+    pw->preload_pending = false;
     if (pw->phase == PW_CUTIN) music_set_duck(R(1.0f));
     pw->phase = PW_IDLE;
 }

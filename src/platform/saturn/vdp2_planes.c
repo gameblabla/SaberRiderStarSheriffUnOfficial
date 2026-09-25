@@ -164,8 +164,8 @@ static bool load(uint32_t level)
     P.nbackdrops = 0;
     for (int i = 0; i < h->nbackdrops && i < 4; i++) {
         const PackEntry *t = packs_find_type(bd[i].tex, RES_TEX);
-        RTex *tex = t ? rtex_create_baked(rsat_renderer(), (uint8_t *)t->data, t->size) : NULL;
-        if (t) packs_release_type(bd[i].tex, RES_TEX);
+        uint8_t *owned = t ? packs_take_type(bd[i].tex, RES_TEX) : NULL;
+        RTex *tex = owned ? rtex_create_baked(rsat_renderer(), owned, t->size) : NULL;
         if (!tex) { printf("planes %08X: backdrop %08X missing\n", (unsigned)level, (unsigned)bd[i].tex); continue; }
         rsat_tex_priority(tex, bd[i].prio);
         P.backdrop[P.nbackdrops++] = tex;

@@ -395,7 +395,7 @@ static void draw_briefing(Menu *m, Ren *r, int sw, int sh)
         if (m->dlg.active && !m->dlg.closing && m->dlg.frame < 21) half = r_mul(m->dlg.frame * R(0.0075757f), r_int(vh));
         if (m->dlg.closing) half = r_mul(m->dlg.frame * R(0.0075757f), r_int(vh));
         if (half > 0) {
-            RRect clip = { (int)x, (int)(cy - half), (int)w + 1, (int)(half * 2) + 1 };
+            RRect clip = { r_trunc(x), r_trunc(cy - half), r_trunc(w) + 1, r_trunc(half * 2) + 1 };
             r_set_clip(r, &clip);
             video_draw_rect(m->video, r, x, cy - h / 2, w, h);
             r_set_clip(r, NULL);

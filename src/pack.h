@@ -39,6 +39,8 @@ const PackEntry *pack_find(const Pack *p, uint32_t id);
 bool  packs_open(const char *data_dir, const char *const *names, int n);
 const PackEntry *packs_find(uint32_t id);
 const PackEntry *packs_find_type(uint32_t id, ResType t);
+/* Transfer an already loaded block to its caller; caller must free it. */
+uint8_t *packs_take_type(uint32_t id, ResType t);
 /* the entry without reading its data (type / size queries) */
 const PackEntry *packs_peek(uint32_t id);
 const PackEntry *packs_peek_type(uint32_t id, ResType t);

@@ -9,6 +9,9 @@
 #define SAT_WIDE_W   352
 
 /* cd_sat.c: the ISO's file list (fopen reads the CD through it) */
+void *lw_malloc(size_t n);
+void *lw_memalign(size_t align, size_t n);
+
 void cd_sat_init(void);
 void cd_sat_stats(unsigned long *reads, unsigned long *bytes, unsigned long *seeks);
 void cd_sat_stream_stop(void);   /* the data stream gives the drive up (CD-DA takes it) */
@@ -43,6 +46,8 @@ void rsat_bench(void);   /* SABER_RBENCH */
  * is idle; drawn by rsat_video_draw (a record, like any draw) */
 bool rsat_video_open(int w, int h, void (*hook)(void *ud, volatile uint16_t *px, int pitch), void *ud);
 void rsat_video_close(void);
+void rsat_video_preload(void);             /* load movie SCSP driver during boot */
+bool rsat_sound_driver_init(void);          /* shared PoneSound driver for game + movie audio */
 
 /* pcm_sat.c: one PCM stream on the SCSP (a slot looping over a ring in sound RAM, fed by the SH-2; no 68000 driver) */
 void     pcm_sat_init(void);

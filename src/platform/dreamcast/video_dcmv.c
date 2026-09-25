@@ -113,6 +113,8 @@ Video *video_open(Ren *r, uint32_t id)
     return v;
 }
 
+void video_preload_file(const char *path, real fps) { (void)path; (void)fps; }
+
 Video *video_open_file(Ren *r, const char *path, float fps)
 {
     (void)r; (void)fps;   /* the rate is in the DCMV header */

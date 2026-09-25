@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Stage the Sega Saturn disc tree (build/saturn/stage) from the original demo packs and our assets.
 
-Makefile.saturn turns the stage into the ISO + CUE (libyaul's make-iso / make-cue; the program goes in as A.BIN).
+Makefile.saturn turns the stage into the ISO + CUE (libyaul's make-iso / make-cue; the program goes in as 0.BIN).
 Everything sits in the ISO root under an 8.3 upper-case name (src/platform/saturn/cd_sat.c opens files by name):
 
   PACK.PCK COMMON.PCK LEVELS.PCK MENU.PCK LEVEL1.PCK   the demo's packs, as they are (read block by block)
   TEX.PCK     every graphic as a "SAT1" block (tools/saturn/satbake.py): pack sprites, cblocks and fonts under their
               own id, our PNGs under namehash(path)
-  SND.PCK     the samples (the sound driver milestone fills it; empty until then)
+  SND.PCK     SCSP-ADPCM-derived SADP samples (core SFX 2-bit, asset/voice SFX 4-bit)
   FILES.PCK   our other files (text, level blobs) and the RGBA of the few images the game reads as pixels, stored as
               host-order (big-endian) 0xAABBGGRR integers, the way the core reads pixels
   STAGE.PCK   blocks that replace the demo's, opened before the other packs (tools/saturn/layers.py): a level without
@@ -194,8 +194,79 @@ def stage_dump(data: Path, work: Path, stage: int | None) -> Path | None:
 preview_dir: Path | None = None
 
 
+
+def bake_audio(data: Path, work: Path, stage: Path, snd: pckwrite.Pack, log) -> None:
+    """Saturn game audio.
+
+    Core pack SFX use celeriyacon/scspadpcm's predictor in 2-bit mode so all
+    32 low-latency effects can be copied to otherwise-unused SCSP sound RAM at
+    boot.  Asset/voice WAVs use its 4-bit mode and are decoded as streams by
+    the SH-2 mixer.  Music is high-quality stereo 44.1 kHz CRI ADX streamed
+    from the CD; unlike CD-DA this leaves the data track available.
+    """
+    aw = work / 'audio'; sfx_dir = aw / 'sfx'; music_dir = aw / 'music'
+    aw.mkdir(parents=True, exist_ok=True); sfx_dir.mkdir(exist_ok=True); music_dir.mkdir(exist_ok=True)
+    dcprep = work / 'dcprep'
+    if not dcprep.exists():
+        subprocess.run(['cc', '-O2', '-std=c11', '-Isrc', 'tools/dc/dcprep.c', 'src/pack.c', 'src/lzo1z.c',
+                        'src/platform/common/sfx_decode.c', 'src/platform/common/mups.c', '-o', str(dcprep)], cwd=ROOT, check=True)
+    if not any(sfx_dir.glob('*.wav')):
+        subprocess.run([dcprep, 'sfx', data, sfx_dir], check=True, capture_output=True)
+    if not any(music_dir.glob('*')):
+        subprocess.run([dcprep, 'music', data, music_dir], check=True, capture_output=True)
+
+    enc = aw / 'adpencode'
+    src = ROOT / 'tools/saturn/adpencode.cpp'
+    if not enc.exists() or enc.stat().st_mtime < src.stat().st_mtime:
+        subprocess.run(['c++', '-O3', '-std=c++17', str(src), '-o', str(enc)], check=True)
+
+    def encode(key: int, source: Path, fmt: int, tag: str) -> None:
+        stem = f'{key:08X}-{fmt}'
+        raw, out = aw / (stem + '.s16'), aw / (stem + '.sadp')
+        newest = max(source.stat().st_mtime, src.stat().st_mtime)
+        if not out.exists() or out.stat().st_mtime < newest:
+            subprocess.run(['ffmpeg', '-y', '-v', 'error', '-i', str(source), '-ac', '1', '-ar', '44100',
+                            '-f', 's16le', str(raw)], check=True)
+            subprocess.run([str(enc), str(fmt), '44100', str(raw), str(out)], check=True)
+            raw.unlink(missing_ok=True)
+        snd.add(key, 'sample', out.read_bytes())
+        log(f'audio {tag}: {source.name} -> {out.name} ({out.stat().st_size} bytes)')
+
+    # The shared 68k driver leaves only fragmented SCSP banks for resident
+    # compressed effects.  Keep the most frequently triggered UI/gun/explosion
+    # sounds at 2-bit and use 1-bit for the rest; all 32 core effects then fit
+    # without spending scarce SH-2 work RAM.  The codec/predictor is the
+    # uploaded scspadpcm implementation in both cases.
+    core_2bit = {
+        0xE418A101,                         # menu/UI tick
+        0xC66E1894, 0xC6801BB9,            # player weapon variants
+        0xBF4917FF, 0xBF5B14EA, 0xBF6D1599,
+        0x89389611, 0x8923950D, 0xFE10EB78,
+    }
+    for wav in sorted(sfx_dir.glob('*.wav')):
+        try: key = int(wav.stem, 16)
+        except ValueError: continue
+        fmt = 1 if key in core_2bit else 2   # 2-bit frequent SFX, 1-bit other resident SFX
+        encode(key, wav, fmt, 'pack-sfx')
+
+    for source in sorted((ROOT / 'assets').rglob('*.wav')):
+        rel = source.relative_to(ROOT / 'assets')
+        if unused(rel): continue
+        encode(namehash(rel.as_posix()), source, 0, 'asset-sfx')  # 4-bit: voices/custom effects
+
+    for source in sorted(music_dir.iterdir()):
+        if not source.is_file(): continue
+        try: int(source.stem, 16)
+        except ValueError: continue
+        out = stage / (source.stem.upper()[:8] + '.ADX')
+        if not out.exists() or out.stat().st_mtime < source.stat().st_mtime:
+            subprocess.run(['ffmpeg', '-y', '-v', 'error', '-i', str(source), '-ac', '2', '-ar', '44100',
+                            '-af', 'asetpts=N/SR/TB',
+                            '-c:a', 'adpcm_adx', '-f', 'adx', str(out)], check=True)
+        log(f'music: {source.name} -> {out.name} ({out.stat().st_size} bytes)')
+
 def bake_videos(data: Path, work: Path, stage: Path, log) -> None:
-    """the demo's intro and briefing videos and our power clips as SCPK files in the ISO root (film.py): the intro fills
+    """the demo's intro and briefing videos and our power clips as Sega FILM/CPK files with ADX audio in the ISO root (film.py): the intro fills
     the 224 lines, the briefing is made at the size the briefing screen shows it (a third), the clips at 320x224"""
     dcprep = work / 'dcprep'
     subprocess.run(['cc', '-O2', '-std=c11', '-Isrc', 'tools/dc/dcprep.c', 'src/pack.c', 'src/lzo1z.c',
@@ -211,6 +282,7 @@ def bake_videos(data: Path, work: Path, stage: Path, log) -> None:
     for clip in sorted((ROOT / 'assets/power').glob('*.m4v')):   # 320x240 at 24 fps, the voice in the .wav beside it
         film.make(clip, stage / (clip.stem.upper()[:8] + '.CPK'), work / 'film', (320, 224), 'crop=320:224:0:8',
                   ['-r', '24', '-f', 'm4v'], clip.with_suffix('.wav'), log)
+    shutil.copy2(ROOT / 'third_party/libyaul_cinepak/cd/SNDDRV.BIN', stage / 'SNDDRV.BIN')
 
 
 def build(args: argparse.Namespace) -> None:
@@ -235,6 +307,7 @@ def build(args: argparse.Namespace) -> None:
     global preview_dir
     preview_dir = out
     bake_stages(data, work, stage_pack, log)
+    bake_audio(data, work, stage, snd, log)
     bake_videos(data, work, stage, log)
     for source in sorted((ROOT / 'assets').rglob('*')):
         if not source.is_file():
@@ -247,7 +320,7 @@ def build(args: argparse.Namespace) -> None:
             files.add(key, 'file', file_block(b''))
             continue
         if ext == '.wav':
-            continue   # the sound driver milestone (a clip's voice is in its .CPK)
+            continue   # baked into SND.PCK above (a power clip's voice is also in its .CPK)
         if ext == '.png':
             if rel.as_posix() in IMAGES:
                 files.add(key, 'image', image_block(source, IMAGES[rel.as_posix()]), lz4=True)

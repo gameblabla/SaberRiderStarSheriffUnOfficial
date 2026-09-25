@@ -17,13 +17,15 @@ OUT     := build/saturn
 SH_PROGRAM    := saber_rider
 SH_BUILD_DIR  := obj-saturn
 SH_OUTPUT_DIR := $(OUT)
-SH_SRCS := $(wildcard src/*.c) $(filter-out %/render_sat.c %/vdp2_planes.c %/video_sat.c,$(wildcard src/platform/saturn/*.c)) \
-	src/platform/null/aud_null.c
+SH_SRCS := $(wildcard src/*.c) $(filter-out %/render_sat.c %/vdp2_planes.c %/video_sat.c,$(wildcard src/platform/saturn/*.c))
 ifeq ($(RENDER),null)
 SH_SRCS   += src/platform/null/render_null.c src/platform/null/video_null.c
 SH_CFLAGS += -DSAT_RENDER_NULL
 else
-SH_SRCS   += src/platform/saturn/render_sat.c src/platform/saturn/vdp2_planes.c src/platform/saturn/video_sat.c
+CPK_DIR := third_party/libyaul_cinepak
+SH_SRCS += src/platform/saturn/render_sat.c src/platform/saturn/vdp2_planes.c src/platform/saturn/video_sat.c \
+	$(addprefix $(CPK_DIR)/,base.c film_buff.c film_cvid.c film_lib.c film_snd.c pcmsys.c snd_adx.c)
+SH_CFLAGS += -I$(CPK_DIR)
 endif
 
 # REAL_FIXED, FX_NO_FLOAT: the core in 16.16 fixed point (src/real.h), no float anywhere - the SH-2 has no FPU, and the
@@ -39,7 +41,7 @@ SH_LDFLAGS +=
 
 IMAGE_DIRECTORY        := $(OUT)/stage
 AUDIO_TRACKS_DIRECTORY := $(OUT)/tracks
-IMAGE_1ST_READ_BIN     := A.BIN
+IMAGE_1ST_READ_BIN     := 0.BIN
 
 IP_VERSION           := V0.100
 IP_RELEASE_DATE      := 20260924
@@ -65,7 +67,7 @@ $(SH_BUILD_PATH)/$(SH_PROGRAM).nofloat: $(SH_BUILD_PATH)/$(SH_PROGRAM).elf
 	fi; touch $@
 
 # the image also follows the staged files (build_disc.py), not only the program
-$(SH_OUTPUT_PATH)/$(SH_PROGRAM).iso: $(filter-out %/A.BIN,$(wildcard $(IMAGE_DIRECTORY)/*))
+$(SH_OUTPUT_PATH)/$(SH_PROGRAM).iso: $(filter-out %/0.BIN,$(wildcard $(IMAGE_DIRECTORY)/*))
 
 .PHONY: disc
 disc:

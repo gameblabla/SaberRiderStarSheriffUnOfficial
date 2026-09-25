@@ -40,6 +40,8 @@ static const cdfs_filelist_entry_t *find(const char *path)
     return NULL;
 }
 
+const cdfs_filelist_entry_t *cd_sat_entry(const char *name) { return find(name); }
+
 typedef struct {
     fad_t fad, fad_end;       /* the file's first sector and the one after its last */
     uint32_t size, pos;
@@ -126,9 +128,13 @@ FILE *fopen(const char *restrict path, const char *restrict mode)
     if (!path || !mode || mode[0] != 'r') return NULL;
     const cdfs_filelist_entry_t *e = find(path);
     if (!e) return NULL;
-    FILE *f = calloc(1, sizeof *f);
-    CdFile *c = hw_malloc(sizeof *c);   /* the cache takes 16-bit writes from the CD block's data register */
+    /* FILE and its 2 KiB sector cache are CPU-owned.  Keep both in low work
+     * RAM: gameplay can leave only a few KiB in the high-RAM heap, and movie
+     * fopen() must not compete with VDP/renderer allocations there. */
+    FILE *f = lw_malloc(sizeof *f);
+    CdFile *c = lw_malloc(sizeof *c);
     if (!f || !c) { free(f); free(c); return NULL; }
+    memset(f, 0, sizeof *f);
     c->fad = e->starting_fad; c->size = (uint32_t)e->size; c->pos = 0; c->cached = -1;
     c->fad_end = c->fad + (c->size + 2047u) / 2048u;
     f->fd = -1; f->cookie = c;

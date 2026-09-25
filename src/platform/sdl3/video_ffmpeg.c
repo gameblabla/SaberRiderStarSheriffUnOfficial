@@ -90,6 +90,8 @@ static bool decode_next_stream(Video *v)
     }
 }
 
+void video_preload_file(const char *path, real fps) { (void)path; (void)fps; }
+
 Video *video_open_file(Ren *ren, const char *path, float fps)
 {
     SDL_IOStream *io = path ? SDL_IOFromFile(path, "rb") : NULL;

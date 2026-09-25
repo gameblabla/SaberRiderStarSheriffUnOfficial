@@ -3,6 +3,8 @@
 #include <stddef.h>
 
 Video *video_open(Ren *r, uint32_t id) { (void)r; (void)id; return NULL; }
+void video_preload_file(const char *path, real fps) { (void)path; (void)fps; }
+
 Video *video_open_file(Ren *r, const char *path, real fps) { (void)r; (void)path; (void)fps; return NULL; }
 bool   video_update(Video *v, real dt) { (void)v; (void)dt; return false; }
 void   video_draw(Video *v, Ren *r, int sw, int sh) { (void)v; (void)r; (void)sw; (void)sh; }

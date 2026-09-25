@@ -67,7 +67,7 @@ struct RTex {
     uint32_t rec_seq;           /* the recording (frame) that last drew it */
     RTex *next_dead;
 };
-struct RFloor { int unused; };
+struct RFloor { RFloorDesc desc; RTex *tex; int w, h; };
 
 static Ren ren;
 Ren *rsat_renderer(void) { return &ren; }
@@ -357,12 +357,10 @@ static RTex *tex_from_block(Ren *r, uint8_t *block, size_t size, bool owned)
 
 RTex *rtex_create_baked(Ren *r, uint8_t *block, size_t size)
 {
-    /* the block is the pack's buffer (released by the caller): keep a copy, in low work RAM when it is big */
-    uint8_t *copy = alloc_retry(size);
-    if (!copy) { printf("render: no RAM for a %u KB texture\n", (unsigned)(size / 1024)); return NULL; }
-    memcpy(copy, block, size);
-    RTex *t = tex_from_block(r, copy, size, true);
-    if (!t) free(copy);
+    /* The caller transfers the loaded pack buffer.  Copying it here doubles
+     * the peak low-RAM cost and can fail while a stage is being assembled. */
+    RTex *t = tex_from_block(r, block, size, true);
+    if (!t) free(block);
     return t;
 }
 
@@ -987,11 +985,87 @@ static void video_step(void)
     if (vid_state == VID_CLOSING && frame_no >= vid_frame + 3) vid_state = VID_NONE;
 }
 
-/* ---------------------------------------------------------------- the floor (Mode 7): VDP2 RBG0 comes with M9 */
-RFloor *r_floor_create(Ren *r, const RFloorDesc *d) { (void)r; (void)d; return calloc(1, sizeof(RFloor)); }
-void    r_floor_cells_changed(RFloor *f) { (void)f; }
-void    r_floor_draw(Ren *r, RFloor *f, const RFloorView *v) { (void)r; (void)f; (void)v; }
-void    r_floor_destroy(RFloor *f) { free(f); }
+/* ---------------------------------------------------------------- the floor (Mode 7)
+ * Rasterize into a streaming VDP1 texture.  The core supplies fixed point
+ * view values on Saturn; no software floating point is linked.  Keeping the
+ * existing 16-bit SAT1 block and replacing its pixels avoids a 70 KiB malloc
+ * and free on every frame. */
+RFloor *r_floor_create(Ren *r, const RFloorDesc *d)
+{
+    (void)r;
+    RFloor *f = calloc(1, sizeof *f);
+    if (f) f->desc = *d;
+    return f;
+}
+void r_floor_cells_changed(RFloor *f) { (void)f; }
+
+void r_floor_draw(Ren *r, RFloor *f, const RFloorView *v)
+{
+    if (!f || v->sw <= 0 || v->y1 <= v->y0) return;
+    int rows = v->y1 - v->y0;
+    if (!f->tex || f->w != v->sw || f->h != rows) {
+        if (f->tex) rtex_destroy(f->tex);
+        f->tex = rtex_create(r, v->sw, rows, R_TEX_STREAMING, NULL);
+        f->w = v->sw; f->h = rows;
+        if (!f->tex) return;
+        rtex_set_scale(f->tex, R_SCALE_NEAREST);
+        rtex_set_blend(f->tex, R_BLEND_NONE);
+    }
+    RTex *t = f->tex;
+    const RFloorDesc *d = &f->desc;
+    int tsh = 0;
+    while ((1 << tsh) < d->tex) tsh++;
+    real rx = -v->fy, ry = v->fx;
+    uint32_t mapmask = (uint32_t)d->mapn - 1u;
+    slave_idle();
+    for (int row = 0; row < rows; row++) {
+        int y = v->y0 + row;
+        real den = r_int(y) + v->row_off - v->horizon;
+        if (den <= 0) continue;
+        real dd = r_div(r_mul(v->cam_h, v->focal), den);
+        real step = r_div(dd, v->focal);
+        real fog = r_div(dd - v->fog0, v->fog1 - v->fog0);
+        if (fog < 0) fog = 0;
+        if (fog > R(1)) fog = R(1);
+        int fa = r_trunc(r_mul(fog, r_int(v->fog_max)));
+        int mip = 0;
+        real threshold = v->mip_step;
+        while (mip < d->mips - 1 && step >= threshold) { mip++; threshold *= 2; }
+        int mask = (d->tex >> mip) - 1, shift = tsh - mip;
+        real dx = r_mul(rx, step), dy = r_mul(ry, step);
+        real wx = v->cam_x + r_mul(v->fx, dd) - (int64_t)dx * (v->sw / 2);
+        real wy = v->cam_y + r_mul(v->fy, dd) - (int64_t)dy * (v->sw / 2);
+        int part_i = 0;
+        while (part_i + 1 < t->nparts && row >= t->parts[part_i].y + t->parts[part_i].h) part_i++;
+        const Part *p = &t->parts[part_i];
+        uint16_t *out = (uint16_t *)(t->block + p->off) + (row - p->y) * p->wpad;
+        for (int x = 0; x < v->sw; x++) {
+            int ix = wx >> 16, iy = wy >> 16;
+            uint8_t mat = d->cells[(((uint32_t)iy >> d->cell_shift) & mapmask) * d->mapn +
+                                   (((uint32_t)ix >> d->cell_shift) & mapmask)];
+            if (mat >= d->nmat) mat = 0;
+            uint32_t c = d->mat[mat * d->mips + mip][(((iy >> mip) & mask) << shift) + ((ix >> mip) & mask)];
+            int cr = c & 255, cg = (c >> 8) & 255, cb = (c >> 16) & 255;
+            if (fa) {
+                cr = (cr * (256 - fa) + (int)(v->haze & 255) * fa) >> 8;
+                cg = (cg * (256 - fa) + (int)((v->haze >> 8) & 255) * fa) >> 8;
+                cb = (cb * (256 - fa) + (int)((v->haze >> 16) & 255) * fa) >> 8;
+            }
+            out[x] = (uint16_t)(0x8000 | (cb >> 3) << 10 | (cg >> 3) << 5 | (cr >> 3));
+            wx += dx; wy += dy;
+        }
+    }
+    tex_free_vram(t);
+    RFRect src = { 0, 0, r_int(v->sw), r_int(rows) };
+    RFRect dst = { 0, r_int(v->y0), r_int(v->sw), r_int(rows) };
+    r_tex(r, t, &src, &dst);
+}
+void r_floor_destroy(RFloor *f)
+{
+    if (!f) return;
+    if (f->tex) rtex_destroy(f->tex);
+    free(f);
+}
 
 /* ---------------------------------------------------------------- frames */
 void rsat_init(void)

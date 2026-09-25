@@ -215,6 +215,20 @@ const PackEntry *packs_find_type(uint32_t id, ResType t)
     for (int i = 0; i < g_npacks; i++) { PackEntry *e = pack_lookup_type(&g_packs[i], id, t); if (e) return entry_load(&g_packs[i], e) ? e : NULL; }
     return NULL;
 }
+uint8_t *packs_take_type(uint32_t id, ResType t)
+{
+    for (int i = 0; i < g_npacks; i++) {
+        PackEntry *e = pack_lookup_type(&g_packs[i], id, t);
+        if (e) {
+            if (!e->owned) return NULL;
+            uint8_t *data = (uint8_t *)e->data;
+            e->data = NULL;
+            e->owned = false;
+            return data;
+        }
+    }
+    return NULL;
+}
 
 void packs_release(uint32_t id)
 {

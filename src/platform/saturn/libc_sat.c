@@ -59,6 +59,8 @@ void *memalign(size_t align, size_t n) { return any_alloc(align, n); }
 void *aligned_alloc(size_t align, size_t n) { return any_alloc(align, n); }
 void *hw_malloc(size_t n) { heaps_init(); return pool_alloc(hw_heap, 4, n ? n : 1); }
 void *hw_memalign(size_t align, size_t n) { heaps_init(); return pool_alloc(hw_heap, align, n ? n : 1); }
+void *lw_malloc(size_t n) { heaps_init(); return pool_alloc(lw_heap, 4, n ? n : 1); }
+void *lw_memalign(size_t align, size_t n) { heaps_init(); return pool_alloc(lw_heap, align, n ? n : 1); }
 
 void free(void *p)
 {

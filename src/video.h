@@ -11,6 +11,7 @@ Video *video_open(Ren *r, uint32_t id);          /* a pack video by resource id 
 /* one of our own clips (assets/, e.g. "power/fireball.m4v"): a raw MPEG-4 part 2 stream (ffmpeg -f m4v), 320x240,
  * no sound (play it alongside) */
 Video *video_open_file(Ren *r, const char *path, real fps);
+void   video_preload_file(const char *path, real fps); /* optional platform warm-up; NULL discards */
 bool   video_update(Video *v, real dt);          /* returns false when finished */
 void   video_draw(Video *v, Ren *r, int sw, int sh);   /* letterboxed to the screen */
 void   video_draw_rect(Video *v, Ren *r, real x, real y, real w, real h);

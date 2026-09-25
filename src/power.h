@@ -26,6 +26,7 @@ typedef struct {
     int items; real cooldown, cooldown_max;
     int phase; real t, dur;         /* the cut-in, then the flash over the running world */
     Video *video;
+    bool preload_pending;           /* Saturn hides the next CPK warm-up under the post-movie flash */
     bool strike;                     /* the cut-in has just ended: the caller lands the hit (power_take_strike) */
     real boost_t, boost_max;        /* April's speed / Colt's rapid fire left */
     Character trail[POWER_TRAIL]; real trail_life[POWER_TRAIL]; int trail_i; real trail_t;

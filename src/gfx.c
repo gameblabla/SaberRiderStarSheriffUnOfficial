@@ -53,8 +53,14 @@ static RTex *baked_tex(uint32_t key, int *w, int *h, uint8_t **meta)
         *meta = malloc(n + 2);
         if (*meta) memcpy(*meta, d + off, n);
     }
-    RTex *t = rtex_create_baked(R, (uint8_t *)d, e->size);   /* may remap the block's palette indices in place */
+    RTex *t;
+#ifdef PLAT_SATURN
+    uint8_t *owned = packs_take_type(key, RES_TEX);
+    t = owned ? rtex_create_baked(R, owned, e->size) : NULL;
+#else
+    t = rtex_create_baked(R, (uint8_t *)d, e->size);   /* may remap the block's palette indices in place */
     packs_release_type(key, RES_TEX);
+#endif
     return finish_tex(t, key, *w, *h);
 }
 #endif
