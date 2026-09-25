@@ -5,11 +5,14 @@
 #   make -f Makefile.dc rebake     -> the same, reusing the converted music and videos (textures, sounds, files baked again)
 #   make -f Makefile.dc repack     -> only the new ELF
 # The core game (src/*.c) + the Dreamcast platform (src/platform/dreamcast) + the vendored FMV player.
-# FMV/pack decompression is LZ40 (src/platform/dreamcast/dcfmv/lz40.h, header-only): no third-party lib is linked.
+# FMV/pack decompression runs VincentNLOBJ's SH-4 LZ40 ASM (lz40_dec.S): no third-party lib is linked.
 TARGET  := saber_rider.elf
 OBJDIR  := obj-dc
 SRC     := $(wildcard src/*.c) $(wildcard src/platform/dreamcast/*.c) src/platform/dreamcast/dcfmv/dcfmv.c
 OBJ     := $(SRC:src/%.c=$(OBJDIR)/%.o)
+ASMSRC  := src/platform/dreamcast/dcfmv/lz40_dec.S
+ASMOBJ  := $(ASMSRC:src/%.S=$(OBJDIR)/%.o)
+OBJ     += $(ASMOBJ)
 # PLAT_BAKED_ASSETS: textures, samples and our other files come baked into tex.pck / snd.pck / files.pck (build_disc.py)
 DEFS    := -DPLAT_DREAMCAST -DPLAT_LOW_MEMORY -DPLAT_BAKED_ASSETS -DDCFMV_NO_ZSTD -DDCFMV_NUM_BUFFERS=8
 # Temporary WIP: 640x480/832x480 + stretch/wide stay hidden (320x240 + original 4:3 only) until the 640x480
@@ -33,6 +36,10 @@ $(TARGET): $(OBJ)
 	kos-cc -o $@ $(OBJ) $(LIBS)
 
 $(OBJDIR)/%.o: src/%.c
+	@mkdir -p $(dir $@)
+	kos-cc $(CFLAGS) -c $< -o $@
+
+$(OBJDIR)/%.o: src/%.S
 	@mkdir -p $(dir $@)
 	kos-cc $(CFLAGS) -c $< -o $@
 

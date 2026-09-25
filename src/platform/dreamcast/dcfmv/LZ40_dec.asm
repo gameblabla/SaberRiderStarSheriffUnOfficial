@@ -8,9 +8,9 @@
 ; Credits: Original LZX (LZ40) format by CUE
 ;   Reference: https://www.romhacking.net/utilities/826/
 ; ------------------------------------------------------
-; Saber Rider note: this ASM is the reference for the Dreamcast FMV/pack
-; LZ40 format. The build uses the portable C port in lz40.h (same byte
-; format, no extra tables/mallocs); this file is not assembled.
+; Saber Rider note: this file is the upstream reference. The Dreamcast build
+; assembles the GCC GAS port next to it (lz40_dec.S, same logic) and calls it
+; as LZ40_decompress(dst r4, src r5) via lz40.h; host tools use lz40.h's C port.
 ; ------------------------------------------------------
 
 ; ------------------------------------------------------
