@@ -37,7 +37,7 @@ bool game_init(Game *g, Ren *ren, int sw, int sh, int start_level)
     if (plat_getenv("SABER_STAGE")) { g->stage = atoi(plat_getenv("SABER_STAGE")); if (g->stage >= 2 && g->stage <= 7) return level_start(g); }   /* debug: straight into stage 2..6 (7 = stage 6's final phase) */
     if (!plat_getenv("SABER_MENU") && (plat_getenv("SABER_START") || plat_getenv("SABER_SCRIPT"))) return level_start(g);   /* debug: straight into the level */
     if (plat_getenv("SABER_CLEARED")) g->menu.cleared_stage = atoi(plat_getenv("SABER_CLEARED"));   /* debug: SABER_MENU=15 art for that stage */
-    menu_enter(&g->menu, plat_getenv("SABER_MENU") ? atoi(plat_getenv("SABER_MENU")) : MS_SPLASH0);
+    menu_enter(&g->menu, plat_getenv("SABER_MENU") ? atoi(plat_getenv("SABER_MENU")) : MS_INTRO);
     return true;
 }
 
