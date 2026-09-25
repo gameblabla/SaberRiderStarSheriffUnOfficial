@@ -60,9 +60,10 @@ static void open_briefing(Menu *m, Ren *r)
     m->video = video_open(r, 0x2FE798C3);
 }
 
-/* Our own credits text: the demo's entry 0x7E11BC19 lists hundreds of Kickstarter backers by name plus
- * "- See YOUR NAME here -" placeholder pages. Ours credits the authors and thanks all backers in one line. */
-static const char CREDITS_TEXT[] =
+/* Our own credits: our pages first, then the demo's entry 0x7E11BC19 (which still names Erik "Gronkh" Range,
+ * Erkan Kasap and all the other backers) with only its "- See YOUR NAME here -" placeholder pages filtered out.
+ * Built once; the entry below points at the filtered copy (or the demo's text when that fails). */
+static const char CREDITS_PREFIX[] =
 "<cffaaaa>MAIN PROGRAMMER\n"
 "Gameblabla\n"
 "\n"
@@ -71,22 +72,50 @@ static const char CREDITS_TEXT[] =
 "<cffaaaa>ADDITIONAL GRAPHICS\n"
 "Gameblabla\n"
 "\n"
-"[fade]\n"
-"\n"
-"<cffaaaa>KICKSTARTER BACKERS\n"
-"All 1,072 original backers\n"
-"Thank you!\n"
-"\n"
-"[fade]\n"
-"See you again...\n";
+"[fade]\n";
+static bool page_is_placeholder(const char *p, size_t n)
+{
+    static const char NEEDLE[] = "See YOUR NAME here";
+    size_t m = sizeof NEEDLE - 1;
+    if (n < m) return false;
+    for (size_t i = 0; i + m <= n; i++)
+        if (!memcmp(p + i, NEEDLE, m)) return true;
+    return false;
+}
 static const PackEntry *credits_entry(void)
 {
-    static PackEntry e; static bool init;
-    if (!init) {
-        e.id = 0x7E11BC19; e.type = RES_DATA;
-        e.data = (const uint8_t *)CREDITS_TEXT; e.size = sizeof CREDITS_TEXT - 1;
-        init = true;
+    static PackEntry e; static bool done;
+    if (done) return &e;
+    done = true;
+    const PackEntry *src = packs_find(0x7E11BC19);
+    size_t pre = sizeof CREDITS_PREFIX - 1;
+    char *out = src && src->data && src->size > 0 && src->size < 11000 ? malloc(pre + src->size + 1) : NULL;
+    if (!out) { if (src) { e = *src; } return &e; }   /* no filtered copy: the demo's text (or nothing) */
+    memcpy(out, CREDITS_PREFIX, pre);
+    size_t n = pre;
+    /* copy the demo's pages except the placeholder ones (a dropped page takes its [fade]/[roll] line with it) */
+    const char *p = (const char *)src->data, *end = p + src->size, *page = p;
+    for (;;) {
+        const char *q = page, *marker = NULL; size_t marker_len = 0;
+        while (q < end) {
+            const char *nl = memchr(q, '\n', (size_t)(end - q));
+            const char *le = nl ? nl : end;
+            size_t ll = (size_t)(le - q);
+            while (ll && q[ll - 1] == '\r') ll--;   /* the credits parser ignores a trailing CR too */
+            if (ll == 6 && (!memcmp(q, "[fade]", 6) || !memcmp(q, "[roll]", 6))) { marker = q; marker_len = (size_t)((nl ? nl + 1 : end) - q); break; }
+            q = nl ? nl + 1 : end;
+        }
+        const char *pe = marker ? marker : end;
+        if (!page_is_placeholder(page, (size_t)(pe - page))) {
+            memcpy(out + n, page, (size_t)(pe - page)); n += (size_t)(pe - page);
+            if (marker) { memcpy(out + n, marker, marker_len); n += marker_len; }
+        }
+        if (!marker || marker + marker_len >= end) break;
+        page = marker + marker_len;
     }
+    out[n] = 0;
+    e.id = 0x7E11BC19; e.type = RES_DATA;
+    e.data = (const uint8_t *)out; e.size = (uint32_t)n;
     return &e;
 }
 
