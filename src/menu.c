@@ -60,6 +60,36 @@ static void open_briefing(Menu *m, Ren *r)
     m->video = video_open(r, 0x2FE798C3);
 }
 
+/* Our own credits text: the demo's entry 0x7E11BC19 lists hundreds of Kickstarter backers by name plus
+ * "- See YOUR NAME here -" placeholder pages. Ours credits the authors and thanks all backers in one line. */
+static const char CREDITS_TEXT[] =
+"<cffaaaa>MAIN PROGRAMMER\n"
+"Gameblabla\n"
+"\n"
+"[fade]\n"
+"\n"
+"<cffaaaa>ADDITIONAL GRAPHICS\n"
+"Gameblabla\n"
+"\n"
+"[fade]\n"
+"\n"
+"<cffaaaa>KICKSTARTER BACKERS\n"
+"All 1,072 original backers\n"
+"Thank you!\n"
+"\n"
+"[fade]\n"
+"See you again...\n";
+static const PackEntry *credits_entry(void)
+{
+    static PackEntry e; static bool init;
+    if (!init) {
+        e.id = 0x7E11BC19; e.type = RES_DATA;
+        e.data = (const uint8_t *)CREDITS_TEXT; e.size = sizeof CREDITS_TEXT - 1;
+        init = true;
+    }
+    return &e;
+}
+
 void menu_enter(Menu *m, int state)
 {
     if (m->video) { video_close(m->video); m->video = NULL; }
@@ -191,7 +221,7 @@ void menu_update(Menu *m, const Input *in, real dt, int sw, Ren *r)
     controls_done:
         break; }
     case MS_CREDITS: {
-        const PackEntry *e = packs_find(0x7E11BC19);
+        const PackEntry *e = credits_entry();
         int pages = 1; if (e) for (uint32_t i = 0; i + 6 <= e->size; i++) if (!memcmp(e->data + i, "[fade]", 6)) pages++;
         m->credits_t += dt;
         if (m->credits_t >= R(3.5f)) { m->credits_t = 0; m->credits_page++; }
@@ -501,7 +531,7 @@ static void draw_credits(Menu *m, Ren *r, int sw, int sh)
     }
     uint8_t R, G, B; hilite(1, &R, &G, &B);
     if (ex) sprite_draw_mod(ex, 0, r_int((sw - ex->w) / 2), R(0xc5), R, G, B, 255);
-    const PackEntry *e = packs_find(0x7E11BC19); Font *f = font_get(0x7405B203);
+    const PackEntry *e = credits_entry(); Font *f = font_get(0x7405B203);
     if (!e || !f) return;
     /* page = block between [fade] markers; lines centred; <cRRGGBB> colours a line */
     char buf[12000]; size_t n = e->size < sizeof buf - 1 ? e->size : sizeof buf - 1; memcpy(buf, e->data, n); buf[n] = 0;
