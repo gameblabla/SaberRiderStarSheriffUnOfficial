@@ -7,8 +7,10 @@
 #ifdef PLAT_DREAMCAST
 #include <malloc.h>
 #endif
-#ifdef PLAT_BAKED_ASSETS
-#include "platform/dreamcast/dcfmv/lz4_mini.h"
+#ifdef PLAT_DREAMCAST
+#include <lz4.h>   /* third_party/lz4 */
+#elif defined(PLAT_BAKED_ASSETS)
+#include "platform/dreamcast/dcfmv/lz4_mini.h"   /* Saturn keeps the mini decoder for now */
 #endif
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
@@ -137,7 +139,9 @@ static bool entry_load(const Pack *p, PackEntry *pe)
     if (pe->stored == pe->declen) { pe->data = raw; pe->size = pe->declen; pe->owned = true; return true; }
     uint8_t *buf = block_alloc(pe->declen + 16);
     int r = !buf ? -1
-#ifdef PLAT_BAKED_ASSETS
+#if defined(PLAT_DREAMCAST)
+          : pe->lz4 ? (LZ4_decompress_safe((const char *)raw, (char *)buf, (int)pe->stored, (int)pe->declen) == (int)pe->declen ? (int)pe->declen : -1)   /* stops at declen: padding follows */
+#elif defined(PLAT_BAKED_ASSETS)
           : pe->lz4 ? (lz4_mini_decode(raw, (int)pe->stored, buf, (int)pe->declen, (int)pe->declen) == (int)pe->declen ? (int)pe->declen : -1)   /* stops at declen: padding follows */
 #endif
           : lzo1z_decompress(raw, pe->stored, buf, pe->declen + 16);

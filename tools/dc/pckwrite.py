@@ -41,7 +41,7 @@ def lzo_literals(data: bytes) -> bytes:
 
 
 def lz4_compress(data: bytes) -> bytes:
-    """an LZ4 block at the highest HC level (src/platform/dreamcast/dcfmv/lz4_mini.h decodes it)"""
+    """an LZ4 block at the highest HC level (third_party/lz4's LZ4_decompress_safe decodes it)"""
     global _lz4
     if _lz4 is None:
         name = ctypes.util.find_library('lz4')

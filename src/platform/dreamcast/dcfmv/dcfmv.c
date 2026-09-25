@@ -5,7 +5,8 @@
 #include <string.h>
 #include <math.h>
 /* Saber Rider: vendored from Dreamcast/dreamcast-fmv (GPF). KOS ships neither liblz4 nor libzstd here: LZ4 comes
- * from lz4_mini.h and zstd-compressed movies are refused (build them with COMPRESSION_BACKEND=lz4). */
+ * from third_party/lz4 (lib/lz4.c built into the ELF) and zstd-compressed movies are refused (build them with
+ * COMPRESSION_BACKEND=lz4). */
 #ifdef DCFMV_NO_ZSTD
 typedef struct ZSTD_DCtx_s ZSTD_DCtx;
 typedef struct { const void *src; size_t size, pos; } ZSTD_inBuffer;
@@ -18,7 +19,7 @@ static inline unsigned ZSTD_isError(size_t r) { return r == (size_t)-1; }
 #else
 #include <zstd/zstd.h>
 #endif
-#include "lz4_mini.h"
+#include <lz4.h>
 
 enum {
     DCFMV_LOG_CHUNK  = 1 << 0,
@@ -888,13 +889,15 @@ static int dcfmv_frames_decode_frame(dcfmv_t *fmv, int total_frame, int buf_inde
         if (out.pos != (size_t)fmv->video_frame_size) return -1;
     } else {
         double decode_start_ms = dcfmv_decode_timer_ms();
-        int res = LZ4_decompress_fast(
+        int res = LZ4_decompress_safe(
             (const char *)fmv->compressed_buffer,
             (char *)fmv->frame_buffer[buf_index],
+            (int)compressed_size,
             fmv->video_frame_size);
         double decode_elapsed_ms = dcfmv_decode_timer_ms() - decode_start_ms;
-        if (res < 0) {
-            DCMV_Error("LZ4_decompress_fast failed for frame %d (buf %d)", unique_frame, buf_index);
+        if (res != fmv->video_frame_size) {
+            DCMV_Error("LZ4_decompress_safe failed for frame %d (buf %d): out=%d expected=%d",
+                       unique_frame, buf_index, res, fmv->video_frame_size);
             return -1;
         }
         DCMV_LOG(DCFMV_LOG_DECODE, "[LZ4] frame=%d buf=%d compressed=%lu decoded=%d time=%.3fms",
