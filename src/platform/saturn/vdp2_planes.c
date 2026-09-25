@@ -30,7 +30,7 @@
 #define MAX_PLANES   4
 #define MAX_BANDS    8
 #define MAX_ROWS     32
-#define CELLS_END    0x60000u      /* the cells may use A0, A1, B0 */
+#define CELLS_END    0x5c400u
 #define PAGE(nbg)    (0x60000u + (uint32_t)(nbg) * 0x4000u)
 #define LS_TABLE(n)  (0x70000u + (uint32_t)(n) * 0x800u)   /* 224 lines x (x, y) */
 #define VRAM(off)    ((volatile uint32_t *)(0x25E00000u + (off)))
@@ -105,11 +105,11 @@ static void set_cycle_patterns(void)
 static void setup_screens(void)
 {
     const vdp2_vram_ctl_t ctl = { .coeff_table = VDP2_VRAM_CTL_COEFF_TABLE_VRAM, .vram_mode = VDP2_VRAM_CTL_MODE_PART_BANK_BOTH };
+    uint16_t floor_ramctl = sat_floor_visible() ? (uint16_t)(vdp2_regs_get()->ramctl & 0x00FFu) : 0;
     vdp2_vram_control_set(&ctl);
-    /* libyaul's vdp2_vram_control_set clears RAMCTL bit 12 (CRAM mode 1 -> 0: 1024 colours, mirrored) and sets bit 0
-     * (a rotation data bank select): back to CRAM mode 1, no bank for RBG0 */
-    vdp2_regs_get()->ramctl &= (uint16_t)~0x00FFu;
     vdp2_cram_mode_set(1);
+    vdp2_ioregs_t *regs = vdp2_regs_get();
+    regs->ramctl = (uint16_t)((regs->ramctl & (uint16_t)~0x00FFu) | floor_ramctl);
     set_cycle_patterns();
     for (int i = 0; i < P.h->nplanes; i++) {
         const SplPlane *pl = &P.planes[i];
@@ -156,7 +156,7 @@ static bool load(uint32_t level)
     P.cellpal = e->data + h->cellpal_off;
     P.chunks = (const uint32_t *)(e->data + h->names_off);
     for (int i = 0; i < h->nbands; i++) P.band[i].b = (const SplBand *)(e->data + h->bands_off) + i;
-    vdp2_scrn_display_set(VDP2_SCRN_DISP_NONE);
+    vdp2_scrn_display_set(sat_floor_visible() ? VDP2_SCRN_DISPTP_RBG0 : VDP2_SCRN_DISP_NONE);
     if (!load_cells(level, h->ncells)) return false;
     setup_screens();
     load_palettes();
@@ -275,15 +275,16 @@ void sat_planes_frame(int sw, bool delayed)
     static bool prev_asked; static fx prev_x, prev_y;
     bool asked = P.asked; fx cx = P.cam_x, cy = P.cam_y;
     if (delayed) { P.asked = prev_asked; P.cam_x = prev_x; P.cam_y = prev_y; prev_asked = asked; prev_x = cx; prev_y = cy; }
-    if (!P.asked) {   /* no level on screen: planes off, colour RAM back to VDP1 */
-        if (P.shown) { vdp2_scrn_display_set(VDP2_SCRN_DISP_NONE); rsat_set_backdrops(NULL, NULL, NULL, 0, false); P.shown = false; }
+    if (!P.asked) {
+        vdp2_scrn_display_set(sat_floor_visible() ? VDP2_SCRN_DISPTP_RBG0 : VDP2_SCRN_DISP_NONE);
+        if (P.shown) { rsat_set_backdrops(NULL, NULL, NULL, 0, false); P.shown = false; }
         if (P.palettes_in) { rsat_cram_reserve(0); P.palettes_in = false; }
         return;
     }
     P.asked = false;
     if (!P.palettes_in) load_palettes();
     for (int i = 0; i < P.h->nbands; i++) update_band(&P.band[i], sw);
-    vdp2_scrn_disp_t disp = VDP2_SCRN_DISP_NONE;
+    vdp2_scrn_disp_t disp = sat_floor_visible() ? VDP2_SCRN_DISPTP_RBG0 : VDP2_SCRN_DISP_NONE;
     for (int i = 0; i < P.h->nplanes; i++) {
         const SplPlane *pl = &P.planes[i];
         vdp2_scrn_t s = scrn_of(pl->nbg);

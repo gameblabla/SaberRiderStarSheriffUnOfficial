@@ -67,7 +67,36 @@ struct RTex {
     uint32_t rec_seq;           /* the recording (frame) that last drew it */
     RTex *next_dead;
 };
-struct RFloor { RFloorDesc desc; RTex *tex; int w, h; };
+#define RFLOOR_MATS 16
+#define RFLOOR_MAP_SIDE 64
+#define RFLOOR_MAP_ENTRIES (RFLOOR_MAP_SIDE * RFLOOR_MAP_SIDE)
+#define RFLOOR_PATTERN_BYTES 128
+#define RFLOOR_MAX_LEVELS 2
+#define RFLOOR_CPD_BYTES 0x1c00u
+#define RFLOOR_CPD_ADDR VDP2_VRAM_ADDR(2, 0x1c400)
+#define RFLOOR_PND_A_ADDR VDP2_VRAM_ADDR(3, 0x14000)
+#define RFLOOR_PND_B_ADDR VDP2_VRAM_ADDR(3, 0x16000)
+#define RFLOOR_COEF_A 0xe0000000u
+#define RFLOOR_COEF_B 0xe1000000u
+#define RFLOOR_COEF_A_ADDR VDP2_VRAM_ADDR(3, 0x18000)
+#define RFLOOR_COEF_B_ADDR VDP2_VRAM_ADDR(3, 0x18400)
+#define RFLOOR_RP_ADDR VDP2_VRAM_ADDR(3, 0x18800)
+
+typedef struct { int size, chunks, base; } RFloorMip;
+
+struct RFloor {
+    RFloorDesc desc;
+    int levels, pattern_count;
+    RFloorMip mip[RFLOOR_MAX_LEVELS];
+    uint16_t palette[RFLOOR_MATS][16];
+    uint16_t *map_a, *map_b;
+    int map_ax, map_ay, map_bx, map_by;
+    bool map_valid, cells_dirty, hw_ready;
+};
+
+typedef struct { bool valid; RFloor *f; RFloorView view; } RFloorState;
+static RFloorState floor_state[2];
+static bool floor_visible;
 
 static Ren ren;
 Ren *rsat_renderer(void) { return &ren; }
@@ -196,6 +225,7 @@ static uint32_t part_raw_size(const Part *p)
 typedef struct { RTex *t; uint32_t tint, used; uint8_t n; } CSlot;   /* at its first granule; n 0: free */
 static CSlot cslots[CRAM_GRAN];
 static int8_t cowner[CRAM_GRAN];   /* granule -> its bank's first granule, -1 free */
+static int floor_cram_granules;
 
 static int pal_granules(int npal) { return npal < 64 ? 1 : npal < 128 ? 2 : 4; }
 
@@ -214,8 +244,23 @@ void rsat_cram_reserve(int entries)
         if (g < n) {
             if (cowner[g] >= 0) cram_release(cowner[g]);
             cowner[g] = -2;
-        } else if (cowner[g] == -2) cowner[g] = -1;
+        } else if (cowner[g] == -2 && (floor_cram_granules <= 0 || g >= floor_cram_granules)) {
+            cowner[g] = -1;
+        }
     }
+}
+
+static void rsat_cram_reserve_floor(int entries)
+{
+    rsat_cram_reserve(entries);
+    floor_cram_granules = (entries + 63) / 64;
+}
+
+static void rsat_cram_release_floor(void)
+{
+    int n = floor_cram_granules;
+    floor_cram_granules = 0;
+    for (int g = 0; g < n; g++) if (cowner[g] == -2) cowner[g] = -1;
 }
 
 /* the colour code of t's palette tinted by (r, g, b) / 255, uploading it if needed; -1 if colour RAM is full */
@@ -985,87 +1030,396 @@ static void video_step(void)
     if (vid_state == VID_CLOSING && frame_no >= vid_frame + 3) vid_state = VID_NONE;
 }
 
-/* ---------------------------------------------------------------- the floor (Mode 7)
- * Rasterize into a streaming VDP1 texture.  The core supplies fixed point
- * view values on Saturn; no software floating point is linked.  Keeping the
- * existing 16-bit SAT1 block and replacing its pixels avoids a 70 KiB malloc
- * and free on every frame. */
+static RFloor *floor_hw_floor;
+static bool floor_hw_active;
+static bool floor_cram_reserved;
+
+static int floor_div_i(int a, int b)
+{
+    int q = a / b;
+    if (a % b < 0) --q;
+    return q;
+}
+
+static int floor_mod_i(int a, int b)
+{
+    int r = a % b;
+    return r < 0 ? r + b : r;
+}
+
+static uint32_t floor_bits(real v) { return (uint32_t)(int32_t)v; }
+
+static void floor_vram_copy(uint32_t addr, const void *src, size_t bytes)
+{
+    const uint8_t *s = (const uint8_t *)src;
+    volatile uint32_t *d = (volatile uint32_t *)addr;
+    for (size_t i = 0; i < bytes; i += 4) {
+        uint32_t w;
+        memcpy(&w, s + i, sizeof w);
+        d[i / 4] = w;
+    }
+}
+
+static uint16_t floor_color(uint32_t c)
+{
+    return (uint16_t)(((c >> 19) & 31u) << 10 | ((c >> 11) & 31u) << 5 | ((c >> 3) & 31u));
+}
+
+static int floor_palette_index(const RFloor *f, int mat, uint32_t c)
+{
+    int r = (c >> 3) & 31, g = (c >> 11) & 31, b = (c >> 19) & 31;
+    int best = 1, bd = 1 << 30;
+    for (int i = 1; i < 16; i++) {
+        uint16_t p = f->palette[mat][i];
+        int dr = r - (p & 31), dg = g - ((p >> 5) & 31), db = b - ((p >> 10) & 31);
+        int d = dr * dr * 3 + dg * dg * 6 + db * db * 2;
+        if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+}
+
+static void floor_make_palette(RFloor *f, int mat)
+{
+    const RFloorDesc *d = &f->desc;
+    uint16_t colors[256];
+    unsigned counts[256];
+    int ncolors = 0;
+    int size = f->mip[0].size;
+    const uint32_t *src = d->mat[mat * d->mips];
+    for (int i = 0; i < size * size; i++) {
+        uint32_t c = src[i];
+        if (c < 0x80000000u) continue;
+        uint16_t q = floor_color(c);
+        int j;
+        for (j = 0; j < ncolors; j++) if (colors[j] == q) break;
+        if (j == ncolors) {
+            if (ncolors == 256) continue;
+            colors[ncolors] = q;
+            counts[ncolors] = 0;
+            ncolors++;
+        }
+        counts[j]++;
+    }
+    f->palette[mat][0] = 0;
+    bool used[256] = { false };
+    for (int k = 1; k < 16; k++) {
+        int best = -1;
+        for (int i = 0; i < ncolors; i++) if (!used[i] && (best < 0 || counts[i] > counts[best])) best = i;
+        if (best < 0) f->palette[mat][k] = f->palette[mat][1];
+        else { f->palette[mat][k] = colors[best]; used[best] = true; }
+    }
+}
+
+static bool floor_prepare_meta(RFloor *f)
+{
+    const RFloorDesc *d = &f->desc;
+    f->levels = d->mips < RFLOOR_MAX_LEVELS ? d->mips : RFLOOR_MAX_LEVELS;
+    if (f->levels < 1) return false;
+    f->pattern_count = 0;
+    for (int l = 0; l < f->levels; l++) {
+        int size = d->tex >> l;
+        if (size < 1) return false;
+        int chunks = (size + 15) / 16;
+        f->mip[l].size = size;
+        f->mip[l].chunks = chunks;
+        f->mip[l].base = f->pattern_count;
+        f->pattern_count += chunks * chunks;
+    }
+    int mats = d->nmat < RFLOOR_MATS ? d->nmat : RFLOOR_MATS;
+    if (mats < 1 || (uint32_t)mats * f->pattern_count * RFLOOR_PATTERN_BYTES > RFLOOR_CPD_BYTES) return false;
+    for (int m = 0; m < mats; m++) {
+        if (!d->mat[m * d->mips]) return false;
+        floor_make_palette(f, m);
+    }
+    return true;
+}
+
+static void floor_write_pattern(RFloor *f, int mat, int level, int chunk_x, int chunk_y, uint32_t addr)
+{
+    const RFloorDesc *d = &f->desc;
+    const uint32_t *src = d->mat[mat * d->mips + level];
+    int size = f->mip[level].size;
+    int chunks = f->mip[level].chunks;
+    uint8_t bytes[RFLOOR_PATTERN_BYTES];
+    memset(bytes, 0, sizeof bytes);
+    for (int cy = 0; cy < 2; cy++) for (int cx = 0; cx < 2; cx++) {
+        uint8_t *cell = bytes + (cy * 2 + cx) * 32;
+        for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) {
+            int tx = floor_mod_i(chunk_x * 16 + cx * 8 + x, size);
+            int ty = floor_mod_i(chunk_y * 16 + cy * 8 + y, size);
+            uint32_t c = src[ty * size + tx];
+            int pix = c < 0x80000000u ? 0 : floor_palette_index(f, mat, c);
+            cell[y * 4 + (x >> 1)] |= (uint8_t)(pix << ((x & 1) ? 0 : 4));
+        }
+    }
+    (void)chunks;
+    floor_vram_copy(addr, bytes, sizeof bytes);
+}
+
+static void floor_upload_patterns(RFloor *f)
+{
+    int mats = f->desc.nmat < RFLOOR_MATS ? f->desc.nmat : RFLOOR_MATS;
+    for (int m = 0; m < mats; m++) for (int l = 0; l < f->levels; l++) {
+        int chunks = f->mip[l].chunks;
+        for (int y = 0; y < chunks; y++) for (int x = 0; x < chunks; x++) {
+            int pattern = m * f->pattern_count + f->mip[l].base + y * chunks + x;
+            floor_write_pattern(f, m, l, x, y, RFLOOR_CPD_ADDR + (uint32_t)pattern * RFLOOR_PATTERN_BYTES);
+        }
+    }
+}
+
+static void floor_upload_palettes(RFloor *f)
+{
+    int mats = f->desc.nmat < RFLOOR_MATS ? f->desc.nmat : RFLOOR_MATS;
+    for (int m = 0; m < mats; m++) {
+        volatile uint16_t *p = (volatile uint16_t *)VDP2_CRAM_MODE_1_OFFSET(0, m, 0);
+        for (int i = 0; i < 16; i++) p[i] = f->palette[m][i];
+    }
+}
+
+static void floor_copy_map(const uint16_t *map, uint32_t addr)
+{
+    volatile uint32_t *d = (volatile uint32_t *)addr;
+    for (int i = 0; i < RFLOOR_MAP_ENTRIES / 2; i++) d[i] = (uint32_t)map[i * 2] << 16 | map[i * 2 + 1];
+}
+
+static void floor_make_map(RFloor *f, int level, int base_x, int base_y, uint16_t *map)
+{
+    const RFloorDesc *d = &f->desc;
+    int mats = d->nmat < RFLOOR_MATS ? d->nmat : RFLOOR_MATS;
+    int cell_size = 1 << d->cell_shift;
+    int world_step = 16 << level;
+    int size = f->mip[level].size;
+    int chunks = f->mip[level].chunks;
+    for (int sy = 0; sy < RFLOOR_MAP_SIDE; sy++) {
+        int wy = base_y + sy * world_step;
+        int cy = floor_div_i(wy, cell_size) & (d->mapn - 1);
+        int ty = floor_mod_i(floor_div_i(wy, 1 << level), size);
+        int chunk_y = (ty / 16) % chunks;
+        for (int sx = 0; sx < RFLOOR_MAP_SIDE; sx++) {
+            int wx = base_x + sx * world_step;
+            int cx = floor_div_i(wx, cell_size) & (d->mapn - 1);
+            int mat = d->cells[cy * d->mapn + cx];
+            if (mat >= mats) mat = 0;
+            int tx = floor_mod_i(floor_div_i(wx, 1 << level), size);
+            int chunk_x = (tx / 16) % chunks;
+            int pattern = mat * f->pattern_count + f->mip[level].base + chunk_y * chunks + chunk_x;
+            uint32_t cpd = RFLOOR_CPD_ADDR + (uint32_t)pattern * RFLOOR_PATTERN_BYTES;
+            uint32_t pal = VDP2_CRAM_MODE_1_OFFSET(0, mat, 0);
+            map[sy * RFLOOR_MAP_SIDE + sx] = (uint16_t)VDP2_SCRN_PND_CONFIG_2(1, cpd, pal, 0, 0);
+        }
+    }
+}
+
+static bool floor_hw_setup(RFloor *f)
+{
+    if (f->hw_ready && floor_hw_active && floor_hw_floor == f) return true;
+    if (!floor_prepare_meta(f)) return false;
+    if (floor_hw_active) {
+        RFloor *old = floor_hw_floor;
+        vdp2_ioregs_t *regs = vdp2_regs_get();
+        regs->ramctl &= (uint16_t)~0x00FFu;
+        if (floor_cram_reserved) rsat_cram_release_floor();
+        floor_cram_reserved = false;
+        floor_hw_active = false;
+        floor_hw_floor = NULL;
+        if (old) old->hw_ready = false;
+    }
+    rsat_cram_reserve_floor((f->desc.nmat < RFLOOR_MATS ? f->desc.nmat : RFLOOR_MATS) * 16);
+    floor_cram_reserved = true;
+    floor_upload_patterns(f);
+    floor_upload_palettes(f);
+    vdp2_scrn_rotation_map_t map_a;
+    vdp2_scrn_rotation_map_t map_b;
+    memset(&map_a, 0, sizeof map_a);
+    memset(&map_b, 0, sizeof map_b);
+    map_a.single = false;
+    map_b.single = false;
+    for (int i = 0; i < 16; i++) {
+        map_a.base_addr[i] = RFLOOR_PND_A_ADDR + (uint32_t)(i & 3) * 0x800u;
+        map_b.base_addr[i] = RFLOOR_PND_B_ADDR + (uint32_t)(i & 3) * 0x800u;
+    }
+    vdp2_scrn_cell_format_t format = {
+        .scroll_screen = VDP2_SCRN_RBG0_PA,
+        .ccc = VDP2_SCRN_CCC_PALETTE_16,
+        .char_size = VDP2_SCRN_CHAR_SIZE_2X2,
+        .pnd_size = 1,
+        .aux_mode = VDP2_SCRN_AUX_MODE_0,
+        .plane_size = VDP2_SCRN_PLANE_SIZE_2X2,
+        .cpd_base = RFLOOR_CPD_ADDR,
+        .palette_base = VDP2_CRAM_MODE_1_OFFSET(0, 0, 0)
+    };
+    vdp2_scrn_rotation_cell_format_set(&format, &map_a);
+    format.scroll_screen = VDP2_SCRN_RBG0_PB;
+    vdp2_scrn_rotation_cell_format_set(&format, &map_b);
+    vdp2_regs_get()->pncr = 0x8008u;
+    vdp2_cram_offset_set(VDP2_SCRN_RBG0, VDP2_CRAM_MODE_1_OFFSET(0, 0, 0));
+    vdp2_scrn_rp_table_t table;
+    memset(&table, 0, sizeof table);
+    vdp2_scrn_rotation_params_t params = {
+        .rp_mode = f->levels > 1 ? VDP2_SCRN_RP_MODE_2 : VDP2_SCRN_RP_MODE_0,
+        .rsop_type = VDP2_SCRN_RSOP_TYPE_REPEAT,
+        .coeff_params = {
+            .usage = VDP2_SCRN_COEFF_USAGE_KX_KY,
+            .word_size = VDP2_SCRN_COEFF_WORD_SIZE_2,
+            .enable = 1
+        },
+        .rp_table = &table,
+        .rp_table_base = RFLOOR_RP_ADDR
+    };
+    vdp2_scrn_rotation_rp_mode_set(&params);
+    vdp2_scrn_rotation_rp_table_set(&params);
+    vdp2_ioregs_t *regs = vdp2_regs_get();
+    regs->rpmd = (regs->rpmd & (uint16_t)~0x0003u) | (f->levels > 1 ? 0x0002u : 0u);
+    regs->rprctl = 0;
+    regs->rptau = 3;
+    regs->rptal = 0xc400;
+    vdp2_scrn_rotation_coeff_params_set(&params);
+    vdp2_scrn_rotation_coeff_table_set(&params);
+    vdp2_scrn_rotation_sop_set(&params);
+    regs->ktctl &= (uint16_t)~0xFFFFu;
+    regs->ktctl |= f->levels > 1 ? 0x0101u : 0x0001u;
+    regs->ktaof = 0x0101;
+    regs->plsz = (regs->plsz & 0x00FFu) | 0x3300u;
+    regs->ramctl = (regs->ramctl & (uint16_t)~0x00FFu) | 0x00B0u;
+    vdp2_scrn_priority_set(VDP2_SCRN_RBG0, 1);
+    f->map_valid = false;
+    f->hw_ready = true;
+    floor_hw_floor = f;
+    floor_hw_active = true;
+    return true;
+}
+
+static bool floor_update_hw(RFloor *f, const RFloorView *v)
+{
+    int level_b = f->levels > 1 ? 1 : 0;
+    int step_a = 16;
+    int step_b = 16 << level_b;
+    int base_a = floor_div_i(r_floor(v->cam_x), step_a) * step_a - (RFLOOR_MAP_SIDE / 2) * step_a;
+    int base_b = floor_div_i(r_floor(v->cam_x), step_b) * step_b - (RFLOOR_MAP_SIDE / 2) * step_b;
+    int base_y_a = floor_div_i(r_floor(v->cam_y), step_a) * step_a - (RFLOOR_MAP_SIDE / 2) * step_a;
+    int base_y_b = floor_div_i(r_floor(v->cam_y), step_b) * step_b - (RFLOOR_MAP_SIDE / 2) * step_b;
+    if (!f->map_valid || f->cells_dirty || base_a != f->map_ax || base_y_a != f->map_ay || base_b != f->map_bx || base_y_b != f->map_by) {
+        floor_make_map(f, 0, base_a, base_y_a, f->map_a);
+        floor_make_map(f, level_b, base_b, base_y_b, f->map_b);
+        floor_copy_map(f->map_a, RFLOOR_PND_A_ADDR);
+        floor_copy_map(f->map_b, RFLOOR_PND_B_ADDR);
+        f->map_ax = base_a; f->map_ay = base_y_a; f->map_bx = base_b; f->map_by = base_y_b;
+        f->map_valid = true;
+        f->cells_dirty = false;
+    }
+    real rx = -v->fy, ry = v->fx;
+    real xst = r_mul(v->fx, v->focal) - r_mul(rx, r_int(v->sw / 2));
+    vdp2_scrn_rp_table_t a;
+    vdp2_scrn_rp_table_t b;
+    memset(&a, 0, sizeof a);
+    memset(&b, 0, sizeof b);
+    a.xst = floor_bits(xst); a.yst = floor_bits(r_mul(v->fy, v->focal) - r_mul(ry, r_int(v->sw / 2))); a.delta_x = floor_bits(rx); a.delta_y = floor_bits(ry); a.matrix.param.a = 0x10000u; a.matrix.param.e = 0x10000u;
+    a.mx = floor_bits(v->cam_x - r_int(base_a)); a.my = floor_bits(v->cam_y - r_int(base_y_a));
+    a.kx = 0x10000u; a.ky = 0x10000u; a.kast = RFLOOR_COEF_A; a.delta_kast = 0x10000u;
+    b.xst = floor_bits(xst); b.yst = floor_bits(r_mul(v->fy, v->focal) - r_mul(ry, r_int(v->sw / 2))); b.delta_x = floor_bits(rx); b.delta_y = floor_bits(ry); b.matrix.param.a = 0x10000u; b.matrix.param.e = 0x10000u;
+    b.mx = floor_bits((v->cam_x - r_int(base_b)) >> 1); b.my = floor_bits((v->cam_y - r_int(base_y_b)) >> 1);
+    b.kx = 0x10000u; b.ky = 0x10000u; b.kast = RFLOOR_COEF_B; b.delta_kast = 0x10000u;
+    floor_vram_copy(RFLOOR_RP_ADDR, &a, sizeof a);
+    floor_vram_copy(RFLOOR_RP_ADDR + 0x80, &b, sizeof b);
+    for (int y = 0; y < SAT_SCREEN_H; y++) {
+        real den = r_int(y) + v->row_off - v->horizon;
+        uint32_t ka = 0x10000u, kb = 0x10000u;
+        int use_b = 0;
+        if (y >= v->y0 && y < v->y1 && den > 0) {
+            real k = r_div(v->cam_h, den);
+            int32_t scale = (int32_t)k;
+            if (scale < 0) scale = 0;
+            if (scale > 0x007FFFFF) scale = 0x007FFFFF;
+            ka = (uint32_t)scale;
+            kb = (uint32_t)(scale >> 1);
+            use_b = f->levels > 1 && k >= v->mip_step;
+        }
+        volatile uint32_t *ca = (volatile uint32_t *)(RFLOOR_COEF_A_ADDR + (uint32_t)y * 4);
+        volatile uint32_t *cb = (volatile uint32_t *)(RFLOOR_COEF_B_ADDR + (uint32_t)y * 4);
+        if (y < v->y0 || y >= v->y1 || den <= 0) {
+            *ca = 0x80000000u;
+            *cb = 0x80000000u;
+        } else {
+            *ca = (use_b ? 0x80000000u : 0u) | ka;
+            *cb = kb;
+        }
+    }
+    return true;
+}
+
+static void floor_disable_hw(void)
+{
+    RFloor *old = floor_hw_floor;
+    floor_visible = false;
+    if (!floor_hw_active) {
+        if (floor_cram_reserved) rsat_cram_release_floor();
+        floor_cram_reserved = false;
+        floor_hw_floor = NULL;
+        return;
+    }
+    vdp2_ioregs_t *regs = vdp2_regs_get();
+    regs->ramctl &= (uint16_t)~0x00FFu;
+    if (floor_cram_reserved) rsat_cram_release_floor();
+    floor_cram_reserved = false;
+    floor_hw_active = false;
+    floor_hw_floor = NULL;
+    if (old) old->hw_ready = false;
+}
+
+static void floor_submit(const RFloorState *state)
+{
+    floor_visible = false;
+    if (!state || !state->valid || !state->f) {
+        floor_disable_hw();
+        return;
+    }
+    RFloor *f = state->f;
+    if (floor_hw_floor && floor_hw_floor != f) floor_disable_hw();
+    if (!floor_hw_setup(f) || !floor_update_hw(f, &state->view)) {
+        floor_disable_hw();
+        return;
+    }
+    floor_visible = true;
+    vdp2_scrn_display_set(vdp2_scrn_display_get() | VDP2_SCRN_DISPTP_RBG0);
+}
+
 RFloor *r_floor_create(Ren *r, const RFloorDesc *d)
 {
     (void)r;
+    if (!d || d->mapn < 1 || (d->mapn & (d->mapn - 1)) || d->cell_shift < 0 || d->cell_shift > 15 || d->tex < 1 || d->mips < 1 || d->nmat < 1 || !d->cells || !d->mat) return NULL;
     RFloor *f = calloc(1, sizeof *f);
-    if (f) f->desc = *d;
+    if (!f) return NULL;
+    f->desc = *d;
+    f->map_a = calloc(RFLOOR_MAP_ENTRIES, sizeof *f->map_a);
+    f->map_b = calloc(RFLOOR_MAP_ENTRIES, sizeof *f->map_b);
+    if (!f->map_a || !f->map_b) { free(f->map_a); free(f->map_b); free(f); return NULL; }
+    f->cells_dirty = true;
     return f;
 }
-void r_floor_cells_changed(RFloor *f) { (void)f; }
+
+void r_floor_cells_changed(RFloor *f) { if (f) f->cells_dirty = true; }
 
 void r_floor_draw(Ren *r, RFloor *f, const RFloorView *v)
 {
-    if (!f || v->sw <= 0 || v->y1 <= v->y0) return;
-    int rows = v->y1 - v->y0;
-    if (!f->tex || f->w != v->sw || f->h != rows) {
-        if (f->tex) rtex_destroy(f->tex);
-        f->tex = rtex_create(r, v->sw, rows, R_TEX_STREAMING, NULL);
-        f->w = v->sw; f->h = rows;
-        if (!f->tex) return;
-        rtex_set_scale(f->tex, R_SCALE_NEAREST);
-        rtex_set_blend(f->tex, R_BLEND_NONE);
-    }
-    RTex *t = f->tex;
-    const RFloorDesc *d = &f->desc;
-    int tsh = 0;
-    while ((1 << tsh) < d->tex) tsh++;
-    real rx = -v->fy, ry = v->fx;
-    uint32_t mapmask = (uint32_t)d->mapn - 1u;
-    slave_idle();
-    for (int row = 0; row < rows; row++) {
-        int y = v->y0 + row;
-        real den = r_int(y) + v->row_off - v->horizon;
-        if (den <= 0) continue;
-        real dd = r_div(r_mul(v->cam_h, v->focal), den);
-        real step = r_div(dd, v->focal);
-        real fog = r_div(dd - v->fog0, v->fog1 - v->fog0);
-        if (fog < 0) fog = 0;
-        if (fog > R(1)) fog = R(1);
-        int fa = r_trunc(r_mul(fog, r_int(v->fog_max)));
-        int mip = 0;
-        real threshold = v->mip_step;
-        while (mip < d->mips - 1 && step >= threshold) { mip++; threshold *= 2; }
-        int mask = (d->tex >> mip) - 1, shift = tsh - mip;
-        real dx = r_mul(rx, step), dy = r_mul(ry, step);
-        real wx = v->cam_x + r_mul(v->fx, dd) - (int64_t)dx * (v->sw / 2);
-        real wy = v->cam_y + r_mul(v->fy, dd) - (int64_t)dy * (v->sw / 2);
-        int part_i = 0;
-        while (part_i + 1 < t->nparts && row >= t->parts[part_i].y + t->parts[part_i].h) part_i++;
-        const Part *p = &t->parts[part_i];
-        uint16_t *out = (uint16_t *)(t->block + p->off) + (row - p->y) * p->wpad;
-        for (int x = 0; x < v->sw; x++) {
-            int ix = wx >> 16, iy = wy >> 16;
-            uint8_t mat = d->cells[(((uint32_t)iy >> d->cell_shift) & mapmask) * d->mapn +
-                                   (((uint32_t)ix >> d->cell_shift) & mapmask)];
-            if (mat >= d->nmat) mat = 0;
-            uint32_t c = d->mat[mat * d->mips + mip][(((iy >> mip) & mask) << shift) + ((ix >> mip) & mask)];
-            int cr = c & 255, cg = (c >> 8) & 255, cb = (c >> 16) & 255;
-            if (fa) {
-                cr = (cr * (256 - fa) + (int)(v->haze & 255) * fa) >> 8;
-                cg = (cg * (256 - fa) + (int)((v->haze >> 8) & 255) * fa) >> 8;
-                cb = (cb * (256 - fa) + (int)((v->haze >> 16) & 255) * fa) >> 8;
-            }
-            out[x] = (uint16_t)(0x8000 | (cb >> 3) << 10 | (cg >> 3) << 5 | (cr >> 3));
-            wx += dx; wy += dy;
-        }
-    }
-    tex_free_vram(t);
-    RFRect src = { 0, 0, r_int(v->sw), r_int(rows) };
-    RFRect dst = { 0, r_int(v->y0), r_int(v->sw), r_int(rows) };
-    r_tex(r, t, &src, &dst);
+    (void)r;
+    if (!f || !v || v->sw <= 0 || v->y1 <= v->y0) return;
+    floor_state[rec_w].valid = true;
+    floor_state[rec_w].f = f;
+    floor_state[rec_w].view = *v;
 }
+
 void r_floor_destroy(RFloor *f)
 {
     if (!f) return;
-    if (f->tex) rtex_destroy(f->tex);
+    for (int i = 0; i < 2; i++) if (floor_state[i].f == f) floor_state[i].valid = false;
+    if (floor_hw_floor == f) floor_disable_hw();
+    free(f->map_a);
+    free(f->map_b);
     free(f);
 }
+
+bool sat_floor_visible(void) { return floor_visible; }
 
 /* ---------------------------------------------------------------- frames */
 void rsat_init(void)
@@ -1134,7 +1488,7 @@ static void slave_idle(void)
 
 void rsat_frame_begin(void)
 {
-    /* the master records into rec_w; nothing else to do before the core draws */
+    floor_state[rec_w].valid = false;
 }
 
 void rsat_set_backdrops(RTex **t, const int *x, const int *y, int n, bool clear)
@@ -1195,9 +1549,11 @@ void rsat_timing(uint32_t *planes, uint32_t *vdp1_wait, uint32_t *put, uint32_t 
 }
 
 /* hand the last replay's list to VDP1 (and its VDP2 side: planes, colour offset, back colour) */
-static void submit(bool planes_delayed)
+static void submit(bool planes_delayed, int floor_slot)
 {
     uint32_t t0 = sat_timer_us();
+    floor_submit(&floor_state[floor_slot]);
+    floor_state[floor_slot].valid = false;
     sat_planes_frame(scr_w, planes_delayed);
     uint32_t t1 = sat_timer_us();
     vdp2_ioregs_t *regs = vdp2_regs_get();
@@ -1225,7 +1581,7 @@ void rsat_frame_end(void)
     if (rec_n[rec_w] > rec_peak) rec_peak = rec_n[rec_w];
     if (!use_slave) {   /* SABER_NOSLAVE: replay here and now */
         replay(recbuf[rec_w], rec_n[rec_w]);
-        submit(false);
+        submit(false, rec_w);
         rec_n[rec_w] = 0;
         rec_seq++;
         for (RTex *t = graveyard[rec_w], *nx; t; t = nx) { nx = t->next_dead; tex_free_mem(t); }
@@ -1235,7 +1591,7 @@ void rsat_frame_end(void)
     uint32_t tw = sat_timer_us();
     slave_idle();                   /* the replay of the frame before */
     tm_slave_wait += sat_timer_us() - tw;
-    if (pending) submit(true);
+    if (pending) submit(true, (int)slave_buf);
     /* textures destroyed while the frame the slave just replayed was recorded: nothing can draw them any more */
     int done = rec_w ^ 1;
     for (RTex *t = graveyard[done], *nx; t; t = nx) { nx = t->next_dead; tex_free_mem(t); }
