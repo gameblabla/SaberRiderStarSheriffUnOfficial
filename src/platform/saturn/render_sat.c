@@ -67,20 +67,29 @@ struct RTex {
     uint32_t rec_seq;           /* the recording (frame) that last drew it */
     RTex *next_dead;
 };
+/* The rotary map is a 4x4 grid of 512x512 pixel pages of 32x32 cells of 2x2 characters (16x16
+ * pixels) with 16 bit name table entries.  One map pixel per world unit matches the materials,
+ * whose textures are one texel per world unit, so a cell is exactly one 16x16 character of the
+ * material in it: the map is a 2048 pixel window of the world for level 0 and (one map pixel per
+ * two world units) twice as far for level 1.  It is put out a page row at a time as the camera
+ * moves, so no frame pays for a whole move. */
 #define RFLOOR_MATS 16
-#define RFLOOR_MAP_SIDE 64
+#define RFLOOR_PAGE_CELLS 32
+#define RFLOOR_MAP_SIDE 128
 #define RFLOOR_MAP_ENTRIES (RFLOOR_MAP_SIDE * RFLOOR_MAP_SIDE)
+#define RFLOOR_MAP_STEPS 8                    /* map rows put out a frame */
+#define RFLOOR_MAP_ROWS (RFLOOR_MAP_SIDE / RFLOOR_MAP_STEPS)
+#define RFLOOR_MAP_STEP 256                   /* world units between map moves */
 #define RFLOOR_PATTERN_BYTES 128
 #define RFLOOR_MAX_LEVELS 2
-#define RFLOOR_CPD_BYTES 0x1c00u
-#define RFLOOR_CPD_ADDR VDP2_VRAM_ADDR(2, 0x1c400)
-#define RFLOOR_PND_A_ADDR VDP2_VRAM_ADDR(3, 0x14000)
-#define RFLOOR_PND_B_ADDR VDP2_VRAM_ADDR(3, 0x16000)
-#define RFLOOR_COEF_A 0xe0000000u
-#define RFLOOR_COEF_B 0xe1000000u
-#define RFLOOR_COEF_A_ADDR VDP2_VRAM_ADDR(3, 0x18000)
-#define RFLOOR_COEF_B_ADDR VDP2_VRAM_ADDR(3, 0x18400)
-#define RFLOOR_RP_ADDR VDP2_VRAM_ADDR(3, 0x18800)
+#define RFLOOR_CPD_BYTES 0x1e00u
+/* bank 1 holds the name tables (RDBS: name), bank 2 the floor's character patterns (RDBS: char) */
+#define RFLOOR_PND_A_ADDR VDP2_VRAM_ADDR(1, 0x00000u)
+#define RFLOOR_PND_B_ADDR VDP2_VRAM_ADDR(1, 0x08000u)
+#define RFLOOR_COEF_A_ADDR VDP2_VRAM_ADDR(1, 0x10000u)
+#define RFLOOR_COEF_B_ADDR VDP2_VRAM_ADDR(1, 0x10400u)
+#define RFLOOR_RP_ADDR VDP2_VRAM_ADDR(1, 0x10800u)
+#define RFLOOR_CPD_ADDR VDP2_VRAM_ADDR(2, 0x00000u)
 
 typedef struct { int size, chunks, base; } RFloorMip;
 
@@ -90,7 +99,7 @@ struct RFloor {
     RFloorMip mip[RFLOOR_MAX_LEVELS];
     uint16_t palette[RFLOOR_MATS][16];
     uint16_t *map_a, *map_b;
-    int map_ax, map_ay, map_bx, map_by;
+    int map_ax, map_ay, map_bx, map_by, map_half;
     bool map_valid, cells_dirty, hw_ready;
 };
 
@@ -1177,39 +1186,80 @@ static void floor_upload_palettes(RFloor *f)
     }
 }
 
-static void floor_copy_map(const uint16_t *map, uint32_t addr)
+/* A name table page is 32x32 cells of one 16 bit entry each, and the rotary map addresses
+ * plane p = (px | py * 4) as px, py in 0..3, so the rows are put out in page order, two cells to
+ * a word; a map move is done in steps of rows, so no frame pays for all of it. */
+static void floor_write_pages(const uint16_t *map, uint32_t addr, int y0, int y1)
 {
+    int pages = RFLOOR_MAP_SIDE / RFLOOR_PAGE_CELLS;
     volatile uint32_t *d = (volatile uint32_t *)addr;
-    for (int i = 0; i < RFLOOR_MAP_ENTRIES / 2; i++) d[i] = (uint32_t)map[i * 2] << 16 | map[i * 2 + 1];
-}
-
-static void floor_make_map(RFloor *f, int level, int base_x, int base_y, uint16_t *map)
-{
-    const RFloorDesc *d = &f->desc;
-    int mats = d->nmat < RFLOOR_MATS ? d->nmat : RFLOOR_MATS;
-    int cell_size = 1 << d->cell_shift;
-    int world_step = 16 << level;
-    int size = f->mip[level].size;
-    int chunks = f->mip[level].chunks;
-    for (int sy = 0; sy < RFLOOR_MAP_SIDE; sy++) {
-        int wy = base_y + sy * world_step;
-        int cy = floor_div_i(wy, cell_size) & (d->mapn - 1);
-        int ty = floor_mod_i(floor_div_i(wy, 1 << level), size);
-        int chunk_y = (ty / 16) % chunks;
-        for (int sx = 0; sx < RFLOOR_MAP_SIDE; sx++) {
-            int wx = base_x + sx * world_step;
-            int cx = floor_div_i(wx, cell_size) & (d->mapn - 1);
-            int mat = d->cells[cy * d->mapn + cx];
-            if (mat >= mats) mat = 0;
-            int tx = floor_mod_i(floor_div_i(wx, 1 << level), size);
-            int chunk_x = (tx / 16) % chunks;
-            int pattern = mat * f->pattern_count + f->mip[level].base + chunk_y * chunks + chunk_x;
-            uint32_t cpd = RFLOOR_CPD_ADDR + (uint32_t)pattern * RFLOOR_PATTERN_BYTES;
-            uint32_t pal = VDP2_CRAM_MODE_1_OFFSET(0, mat, 0);
-            map[sy * RFLOOR_MAP_SIDE + sx] = (uint16_t)VDP2_SCRN_PND_CONFIG_2(1, cpd, pal, 0, 0);
+    for (int y = y0; y < y1; y++) {
+        int py = y / RFLOOR_PAGE_CELLS, ly = y % RFLOOR_PAGE_CELLS;
+        for (int px = 0; px < pages; px++) {
+            volatile uint32_t *page = d + (px + py * pages) * (RFLOOR_PAGE_CELLS * RFLOOR_PAGE_CELLS / 2);
+            const uint16_t *src = map + y * RFLOOR_MAP_SIDE + px * RFLOOR_PAGE_CELLS;
+            for (int x = 0; x < RFLOOR_PAGE_CELLS; x += 2)
+                page[(ly * RFLOOR_PAGE_CELLS + x) / 2] = (uint32_t)src[x] << 16 | src[x + 1];
         }
     }
 }
+
+/* One map cell is one 16x16 character of the material the cell holds, taken from the texture at
+ * one texel per world unit (so the cell is a 16x16 texel crop of it, wrapping like the texture
+ * does), at the level's scale: a cell covers 16 << level world units.  The world step, the cell
+ * size and the texture size are all powers of two, so the whole map is shifts and masks. */
+static void floor_make_map(RFloor *f, int level, int base_x, int base_y, uint16_t *map, int y0, int y1)
+{
+    const RFloorDesc *d = &f->desc;
+    int mats = d->nmat < RFLOOR_MATS ? d->nmat : RFLOOR_MATS;
+    const uint8_t *cells = d->cells;
+    int mapn = d->mapn, shift = d->cell_shift;
+    int cmask = mapn - 1;
+    int world_step = 16 << level;
+    int size = f->mip[level].size;
+    int smask = size - 1;
+    int chunks = f->mip[level].chunks;
+    int cmask_tex = chunks - 1;
+    uint16_t pnd[RFLOOR_MATS * RFLOOR_MAX_LEVELS * 4];
+    for (int m = 0; m < RFLOOR_MATS; m++) {
+        uint32_t pal = VDP2_CRAM_MODE_1_OFFSET(0, m < mats ? m : 0, 0);
+        for (int l = 0; l < f->levels; l++) {
+            int c = f->mip[l].chunks;
+            for (int cy = 0; cy < c; cy++) for (int cx = 0; cx < c; cx++) {
+                int mm = m < mats ? m : 0;
+                int pattern = mm * f->pattern_count + f->mip[l].base + cy * c + cx;
+                uint32_t cpd = RFLOOR_CPD_ADDR + (uint32_t)pattern * RFLOOR_PATTERN_BYTES;
+                pnd[(l * RFLOOR_MATS + m) * 4 + cy * c + cx] = (uint16_t)VDP2_SCRN_PND_CONFIG_2(1, cpd, pal, 0, 0);
+            }
+        }
+    }
+    int per_col = world_step >> shift;          /* material cells a map cell spans */
+    int step = 1;                               /* columns per four cell load */
+    if (per_col == 1) step = 4;
+    else if (per_col == 2) step = 2;
+    for (int sy = y0; sy < y1; sy++) {
+        int wy = base_y + sy * world_step;
+        int chunk_y = (((wy >> level) & smask) >> 4) & cmask_tex;
+        uint16_t *row = map + sy * RFLOOR_MAP_SIDE;
+        const uint8_t *crow = cells + ((wy >> shift) & cmask) * mapn;
+        const uint16_t *rbase = pnd + (level * RFLOOR_MATS) * 4 + chunk_y * chunks;
+        int c0 = (base_x >> shift) & cmask;
+        for (int g = 0; g < RFLOOR_MAP_SIDE; g += step) {
+            for (int c = 0; c < step; c++) {
+                int wx = base_x + (g + c) * world_step;
+                int mat = crow[(c0 + (g + c) * per_col) & cmask];
+                int chunk_x = (((wx >> level) & smask) >> 4) & cmask_tex;
+                row[g + c] = rbase[mat * 4 + chunk_x];
+            }
+        }
+    }
+}
+
+/* The rotation parameter's coefficient address is a 32 bit register holding the table's word
+ * address inside video memory; the rotation parameter table itself is addressed by RPTAU (bank)
+ * and RPTAL (word address), so both are derived from the addresses written below. */
+static uint32_t floor_vram_word(uint32_t addr) { return ((((addr >> 17) & 3u) << 16) | ((addr & 0x1FFFFu) >> 1)) & 0x3FFFFu; }
+static uint32_t floor_kast(uint32_t addr) { return (floor_vram_word(addr) >> 1) << 16; }
 
 static bool floor_hw_setup(RFloor *f)
 {
@@ -1236,8 +1286,9 @@ static bool floor_hw_setup(RFloor *f)
     map_a.single = false;
     map_b.single = false;
     for (int i = 0; i < 16; i++) {
-        map_a.base_addr[i] = RFLOOR_PND_A_ADDR + (uint32_t)(i & 3) * 0x800u;
-        map_b.base_addr[i] = RFLOOR_PND_B_ADDR + (uint32_t)(i & 3) * 0x800u;
+        /* plane p is page (p & 3, p >> 2) of the 4x4 grid, one page per 512x512 pixel block */
+        map_a.base_addr[i] = RFLOOR_PND_A_ADDR + (uint32_t)i * 0x800u;
+        map_b.base_addr[i] = RFLOOR_PND_B_ADDR + (uint32_t)i * 0x800u;
     }
     vdp2_scrn_cell_format_t format = {
         .scroll_screen = VDP2_SCRN_RBG0_PA,
@@ -1245,7 +1296,7 @@ static bool floor_hw_setup(RFloor *f)
         .char_size = VDP2_SCRN_CHAR_SIZE_2X2,
         .pnd_size = 1,
         .aux_mode = VDP2_SCRN_AUX_MODE_0,
-        .plane_size = VDP2_SCRN_PLANE_SIZE_2X2,
+        .plane_size = VDP2_SCRN_PLANE_SIZE_1X1,
         .cpd_base = RFLOOR_CPD_ADDR,
         .palette_base = VDP2_CRAM_MODE_1_OFFSET(0, 0, 0)
     };
@@ -1271,19 +1322,23 @@ static bool floor_hw_setup(RFloor *f)
     vdp2_scrn_rotation_rp_table_set(&params);
     vdp2_ioregs_t *regs = vdp2_regs_get();
     regs->rpmd = (regs->rpmd & (uint16_t)~0x0003u) | (f->levels > 1 ? 0x0002u : 0u);
-    regs->rprctl = 0;
-    regs->rptau = 3;
-    regs->rptal = 0xc400;
+    regs->rptau = (uint16_t)((RFLOOR_RP_ADDR >> 17) & 3u);
+    regs->rptal = (uint16_t)((RFLOOR_RP_ADDR & 0x1FFFFu) >> 1);
     vdp2_scrn_rotation_coeff_params_set(&params);
     vdp2_scrn_rotation_coeff_table_set(&params);
     vdp2_scrn_rotation_sop_set(&params);
+    /* the coefficient table is addressed by the rotation parameter's own address, so the
+     * parameter control's offset mode stays off */
+    regs->rprctl = 0;
     regs->ktctl &= (uint16_t)~0xFFFFu;
     regs->ktctl |= f->levels > 1 ? 0x0101u : 0x0001u;
-    regs->ktaof = 0x0101;
-    regs->plsz = (regs->plsz & 0x00FFu) | 0x3300u;
-    regs->ramctl = (regs->ramctl & (uint16_t)~0x00FFu) | 0x00B0u;
+    regs->ktaof = 0;
+    regs->plsz &= (uint16_t)~0x3F00u;
+    /* RDBS: banks 0/1 name tables (the floor's are in bank 1), banks 2/3 character patterns */
+    regs->ramctl = (uint16_t)((regs->ramctl & 0xFF00u) | 0x003Au);
     vdp2_scrn_priority_set(VDP2_SCRN_RBG0, 1);
     f->map_valid = false;
+    f->map_half = RFLOOR_MAP_STEPS;
     f->hw_ready = true;
     floor_hw_floor = f;
     floor_hw_active = true;
@@ -1292,48 +1347,71 @@ static bool floor_hw_setup(RFloor *f)
 
 static bool floor_update_hw(RFloor *f, const RFloorView *v)
 {
+    /* the maps are 2048 pixel windows, moved in coarse steps: the projection needs less than a
+     * whole window, so a step of a few hundred units keeps the sampling inside it */
     int level_b = f->levels > 1 ? 1 : 0;
-    int step_a = 16;
-    int step_b = 16 << level_b;
-    int base_a = floor_div_i(r_floor(v->cam_x), step_a) * step_a - (RFLOOR_MAP_SIDE / 2) * step_a;
-    int base_b = floor_div_i(r_floor(v->cam_x), step_b) * step_b - (RFLOOR_MAP_SIDE / 2) * step_b;
-    int base_y_a = floor_div_i(r_floor(v->cam_y), step_a) * step_a - (RFLOOR_MAP_SIDE / 2) * step_a;
-    int base_y_b = floor_div_i(r_floor(v->cam_y), step_b) * step_b - (RFLOOR_MAP_SIDE / 2) * step_b;
-    if (!f->map_valid || f->cells_dirty || base_a != f->map_ax || base_y_a != f->map_ay || base_b != f->map_bx || base_y_b != f->map_by) {
-        floor_make_map(f, 0, base_a, base_y_a, f->map_a);
-        floor_make_map(f, level_b, base_b, base_y_b, f->map_b);
-        floor_copy_map(f->map_a, RFLOOR_PND_A_ADDR);
-        floor_copy_map(f->map_b, RFLOOR_PND_B_ADDR);
+    int half_a = (RFLOOR_MAP_SIDE / 2) * 16;
+    int half_b = (RFLOOR_MAP_SIDE / 2) * (16 << level_b);
+    int base_a = floor_div_i(r_floor(v->cam_x), RFLOOR_MAP_STEP) * RFLOOR_MAP_STEP - half_a;
+    int base_y_a = floor_div_i(r_floor(v->cam_y), RFLOOR_MAP_STEP) * RFLOOR_MAP_STEP - half_a;
+    int base_b = floor_div_i(r_floor(v->cam_x), RFLOOR_MAP_STEP * 2) * (RFLOOR_MAP_STEP * 2) - half_b;
+    int base_y_b = floor_div_i(r_floor(v->cam_y), RFLOOR_MAP_STEP * 2) * (RFLOOR_MAP_STEP * 2) - half_b;
+    /* a move is put out a page row at a time, so no frame pays for all of it */
+    if (f->map_half >= RFLOOR_MAP_STEPS && (!f->map_valid || f->cells_dirty || base_a != f->map_ax ||
+                             base_y_a != f->map_ay || base_b != f->map_bx || base_y_b != f->map_by)) {
         f->map_ax = base_a; f->map_ay = base_y_a; f->map_bx = base_b; f->map_by = base_y_b;
-        f->map_valid = true;
-        f->cells_dirty = false;
+        f->map_half = 0;
     }
+    if (f->map_half < RFLOOR_MAP_STEPS) {
+        int y0 = f->map_half * RFLOOR_MAP_ROWS, y1 = y0 + RFLOOR_MAP_ROWS;
+        floor_make_map(f, 0, f->map_ax, f->map_ay, f->map_a, y0, y1);
+        floor_make_map(f, level_b, f->map_bx, f->map_by, f->map_b, y0, y1);
+        floor_write_pages(f->map_a, RFLOOR_PND_A_ADDR, y0, y1);
+        floor_write_pages(f->map_b, RFLOOR_PND_B_ADDR, y0, y1);
+        if (++f->map_half >= RFLOOR_MAP_STEPS) { f->map_valid = true; f->cells_dirty = false; }
+    }
+    /* one map pixel per world unit (level 0) or per two (level 1): the view point, the ray and the
+     * per line scale are the whole projection, the per line coefficient is its perspective */
     real rx = -v->fy, ry = v->fx;
     real xst = r_mul(v->fx, v->focal) - r_mul(rx, r_int(v->sw / 2));
+    real yst = r_mul(v->fy, v->focal) - r_mul(ry, r_int(v->sw / 2));
     vdp2_scrn_rp_table_t a;
     vdp2_scrn_rp_table_t b;
     memset(&a, 0, sizeof a);
     memset(&b, 0, sizeof b);
-    a.xst = floor_bits(xst); a.yst = floor_bits(r_mul(v->fy, v->focal) - r_mul(ry, r_int(v->sw / 2))); a.delta_x = floor_bits(rx); a.delta_y = floor_bits(ry); a.matrix.param.a = 0x10000u; a.matrix.param.e = 0x10000u;
+    a.xst = floor_bits(xst); a.yst = floor_bits(yst);
+    a.delta_x = floor_bits(rx); a.delta_y = floor_bits(ry);
+    a.matrix.param.a = 0x10000u; a.matrix.param.e = 0x10000u;
     a.mx = floor_bits(v->cam_x - r_int(base_a)); a.my = floor_bits(v->cam_y - r_int(base_y_a));
-    a.kx = 0x10000u; a.ky = 0x10000u; a.kast = RFLOOR_COEF_A; a.delta_kast = 0x10000u;
-    b.xst = floor_bits(xst); b.yst = floor_bits(r_mul(v->fy, v->focal) - r_mul(ry, r_int(v->sw / 2))); b.delta_x = floor_bits(rx); b.delta_y = floor_bits(ry); b.matrix.param.a = 0x10000u; b.matrix.param.e = 0x10000u;
-    b.mx = floor_bits((v->cam_x - r_int(base_b)) >> 1); b.my = floor_bits((v->cam_y - r_int(base_y_b)) >> 1);
-    b.kx = 0x10000u; b.ky = 0x10000u; b.kast = RFLOOR_COEF_B; b.delta_kast = 0x10000u;
+    a.kx = 0x10000u; a.ky = 0x10000u; a.kast = floor_kast(RFLOOR_COEF_A_ADDR); a.delta_kast = 0x10000u;
+    b.xst = floor_bits(xst / 2); b.yst = floor_bits(yst / 2);
+    b.delta_x = floor_bits(rx / 2); b.delta_y = floor_bits(ry / 2);
+    b.matrix.param.a = 0x10000u; b.matrix.param.e = 0x10000u;
+    b.mx = floor_bits((v->cam_x - r_int(base_b)) / 2); b.my = floor_bits((v->cam_y - r_int(base_y_b)) / 2);
+    b.kx = 0x10000u; b.ky = 0x10000u; b.kast = floor_kast(RFLOOR_COEF_B_ADDR); b.delta_kast = 0x10000u;
     floor_vram_copy(RFLOOR_RP_ADDR, &a, sizeof a);
     floor_vram_copy(RFLOOR_RP_ADDR + 0x80, &b, sizeof b);
+    int focal_px = (int)(v->focal >> 16);
     for (int y = 0; y < SAT_SCREEN_H; y++) {
-        real den = r_int(y) + v->row_off - v->horizon;
+        int32_t den = (int32_t)((r_int(y) + v->row_off - v->horizon) >> 16);
         uint32_t ka = 0x10000u, kb = 0x10000u;
         int use_b = 0;
         if (y >= v->y0 && y < v->y1 && den > 0) {
-            real k = r_div(v->cam_h, den);
-            int32_t scale = (int32_t)k;
+            /* the per line scale (world units per pixel, 16.16 like the table) from one 32 bit
+             * divide: a fixed point divide would go through the DVD unit */
+            int32_t scale = (int32_t)v->cam_h / den;
             if (scale < 0) scale = 0;
             if (scale > 0x007FFFFF) scale = 0x007FFFFF;
             ka = (uint32_t)scale;
             kb = (uint32_t)(scale >> 1);
-            use_b = f->levels > 1 && k >= v->mip_step;
+            use_b = f->levels > 1 && (real)scale >= v->mip_step;
+            /* the far rows reach past the map window: leave them to the sky rather than repeat it.
+             * The reach is the row's lateral half and its depth (the scale times the focal
+             * length, so no division), halved for level 1's map. */
+            int32_t reach = ((scale >> 8) * (v->sw / 2 + focal_px) + 128) >> 8;
+            if (use_b) reach >>= 1;
+            if (reach > (RFLOOR_MAP_SIDE * 16) / 2 - RFLOOR_MAP_STEP)
+                ka = 0x80000000u, kb = 0x80000000u;
         }
         volatile uint32_t *ca = (volatile uint32_t *)(RFLOOR_COEF_A_ADDR + (uint32_t)y * 4);
         volatile uint32_t *cb = (volatile uint32_t *)(RFLOOR_COEF_B_ADDR + (uint32_t)y * 4);
