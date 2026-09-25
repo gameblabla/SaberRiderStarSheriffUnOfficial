@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Package a release: two separate zips in release/
+# Package a release: three separate zips in release/
 #   saber_rider-linux-x86_64-<version>.zip  the SDL3 build, its bundled libraries, assets/ and the demo's data/*.pck
+#   saber_rider-windows-x86_64-<version>.zip  the MinGW-w64 static build (no DLLs to ship), assets/ and the demo's data/*.pck
 #   saber_rider-dreamcast-<version>.zip     the self-booting CDI (the packs are on the disc)
 #
-#   tools/release.sh [--linux] [--dc] [--full-disc] [DATA_DIR]
-#     --linux / --dc   only that package (default: both)
+#   tools/release.sh [--linux] [--win] [--dc] [--full-disc] [DATA_DIR]
+#     --linux / --win / --dc   only those packages (default: all)
 #     --full-disc      rebuild the whole Dreamcast disc (music and FMV conversion too) instead of re-baking build/dc/stage
 #     DATA_DIR         the demo's data/ folder with the .pck packs (default SaberRider/data, the copy in this repo)
 # The Dreamcast part sources $KOS_ENV (default /opt/toolchains/dc/kos/environ.sh).
@@ -13,10 +14,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-want_linux=0 want_dc=0 full_disc=0 DATA=""
+want_linux=0 want_win=0 want_dc=0 full_disc=0 DATA=""
 for a in "$@"; do
     case "$a" in
         --linux) want_linux=1 ;;
+        --win|--windows) want_win=1 ;;
         --dc) want_dc=1 ;;
         --full-disc) full_disc=1 ;;
         -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
@@ -24,13 +26,13 @@ for a in "$@"; do
         *) DATA="$a" ;;
     esac
 done
-[ $want_linux = 0 ] && [ $want_dc = 0 ] && want_linux=1 want_dc=1
+[ $want_linux = 0 ] && [ $want_win = 0 ] && [ $want_dc = 0 ] && want_linux=1 want_win=1 want_dc=1
 DATA="$(cd "${DATA:-$ROOT/SaberRider/data}" && pwd)"
 PACKS=(pack.pck common.pck levels.pck menu.pck level1.pck video.pck)
 for p in "${PACKS[@]}"; do [ -f "$DATA/$p" ] || { echo "missing $DATA/$p (pass the demo's data/ folder)" >&2; exit 1; }; done
 
 VERSION="$(date +%Y%m%d)-$(git rev-parse --short HEAD)"
-git diff --quiet HEAD -- src assets Makefile Makefile.dc tools || VERSION="$VERSION-dirty"
+git diff --quiet HEAD -- src assets Makefile Makefile.dc Makefile.win tools || VERSION="$VERSION-dirty"
 OUT="$ROOT/release"
 mkdir -p "$OUT"
 
@@ -91,6 +93,22 @@ EOF
     echo "-> $zipf ($(du -h "$zipf" | cut -f1))"
 }
 
+# ---------------------------------------------------------------- Windows
+package_win() {
+    echo "== Windows build"
+    make -f Makefile.win -j"$(nproc)" DATA="$DATA"
+    local stage="$OUT/windows" dir="$OUT/windows/SaberRider"
+    rm -rf "$stage"; mkdir -p "$dir/data"
+    "${CROSS:-x86_64-w64-mingw32-}strip" -o "$dir/saber_rider.exe" build/win/saber_rider.exe
+    cp -r assets "$dir/assets"
+    sed 's/$/\r/' tools/win/README.txt > "$dir/README.txt"
+    for p in "${PACKS[@]}"; do cp "$DATA/$p" "$dir/data/"; done
+    local zipf="$OUT/saber_rider-windows-x86_64-$VERSION.zip"
+    rm -f "$zipf"
+    (cd "$stage" && zip -qr9 "$zipf" SaberRider)
+    echo "-> $zipf ($(du -h "$zipf" | cut -f1))"
+}
+
 # ---------------------------------------------------------------- Dreamcast
 package_dc() {
     echo "== Dreamcast build"
@@ -130,5 +148,6 @@ EOF
 }
 
 [ $want_linux = 1 ] && package_linux
+[ $want_win = 1 ] && package_win
 [ $want_dc = 1 ] && package_dc
 ls -la "$OUT"/*.zip
