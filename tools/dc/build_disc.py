@@ -4,13 +4,13 @@
 The original E2DM packs are user supplied. All generated media stays under
 --out; the source packs and assets are never modified.
 
-Nothing on the disc is decoded at run time (beyond an LZ4 unpack): every texture (the packs' sprites,
+Nothing on the disc is decoded at run time (beyond an LZ40 unpack): every texture (the packs' sprites,
 tile banks and fonts, our PNGs) is baked into data/tex.pck in the PVR's own
 formats (tools/dc/texbake.py), every sample (the packs' sfx, our WAVs) into
 data/snd.pck as AICA ADPCM, and our other files (text, level blobs, the RGBA of
 the few images the game reads pixels from) into data/files.pck. Each block is
 32-byte aligned and padded, read in one go and DMA'd on; a few big ones are
-stored LZ4-compressed instead (the disc reads slowly, the decode is quick). Music (ADX) and video
+stored LZ40-compressed instead (the disc reads slowly, the SH-4 decode is quick). Music (ADX) and video
 (DCMV) stay files: they stream.
 
 A CD-R on the Dreamcast is read at constant linear velocity from the inside
@@ -56,9 +56,9 @@ def mode7_floor(path: Path) -> tuple[int, int, int, int]:
 
 
 # images whose pixels the game reads (floor materials, hit masks): their RGBA goes to files.pck besides the texture,
-# LZ4-compressed, cut down to the part the game reads where a function says which
+# LZ40-compressed, cut down to the part the game reads where a function says which
 IMAGES = {'mode7.png': mode7_floor, 'ramrod/floor.png': None, 'space/boss.png': None}
-# our PNGs whose texture blocks are LZ4-compressed: stage 2's load read 330 KB of them off the disc (~3 s in Flycast)
+# our PNGs whose texture blocks are LZ40-compressed: stage 2's load read 330 KB of them off the disc (~3 s in Flycast)
 LZ4_TEX = ('mode7.png', 'sky_mode7.png')
 PAD_TO_MIB = 650   # the padded image size: an 80-minute CD-R holds ~700 MiB, less the second session's lead-in/out
 
@@ -167,7 +167,7 @@ def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log) -> None:
             continue
         block, desc, vram = texbake.bake(np.array(Image.open(source).convert('RGBA')),
                                          log=lambda m, r=rel: log(f'    {r}: {m}'))
-        stored = tex.add(namehash(rel.as_posix()), 'tex', block, lz4=rel.as_posix() in LZ4_TEX)
+        stored = tex.add(namehash(rel.as_posix()), 'tex', block, lz40=rel.as_posix() in LZ4_TEX)
         total += vram
         log(f'tex {rel} {desc} {vram // 1024} KB' + (f', {stored // 1024} KB stored' if stored < len(block) else ''))
     log(f'textures: {total // 1024} KB of VRAM if all were loaded at once')
@@ -200,7 +200,7 @@ def convert_video(source: Path, soundtrack: Path | None, target: Path,
         'AUDIO_RATE': '32000' if soundtrack else '0',
         'CHANNELS': '1' if soundtrack else '0',
         'DCMV_CONTAINER': 'frames',
-        'COMPRESSION_BACKEND': 'lz4',
+        'COMPRESSION_BACKEND': 'lz40',
         'USE_DEDUP': 'false',
         'SKIP_IF_EXISTS': 'false',
         'CLEANUP_TEMP': 'true',
@@ -330,7 +330,7 @@ def build(args: argparse.Namespace) -> None:
             snd.add(key, 'sample', sample_block(source, work))
         elif ext == '.png':
             if rel.as_posix() in IMAGES:
-                files.add(key, 'image', image_block(source, IMAGES[rel.as_posix()]), lz4=True)
+                files.add(key, 'image', image_block(source, IMAGES[rel.as_posix()]), lz40=True)
         elif ext == '.m4v':
             files.add(key, 'file', file_block(b''))
         else:

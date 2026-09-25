@@ -60,6 +60,7 @@
 
 #include <lz4.h>
 #include <lz4hc.h>
+#include "lz40enc.h"   /* Dreamcast LZ40 (-ewl WRAM) */
 
 #define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
@@ -94,7 +95,7 @@ typedef struct __attribute__((packed)) {
     uint32_t num_total_frames;
     uint32_t uncompressed_frame_size;
     uint32_t max_compressed_frame_size;
-    uint8_t compression_type;       // 0=LZ4, 1=Zstd
+    uint8_t compression_type;       // 0=LZ4, 1=Zstd, 2=LZ40
     float chunk_duration;           // Seconds per chunk
     uint32_t num_chunks;
     uint32_t chunk_index_offset;
@@ -570,10 +571,13 @@ int main(int argc, char **argv) {
 
     // Determine compression
     int use_zstd = 0;
+    int use_lz40 = 0;
     if (strcmp(compression_arg, "zstd") == 0) {
         use_zstd = 1;
+    } else if (strcmp(compression_arg, "lz40") == 0) {
+        use_lz40 = 1;
     } else if (strcmp(compression_arg, "lz4") != 0) {
-        fprintf(stderr, "❌ Invalid compression: %s (use 'lz4' or 'zstd')\n", compression_arg);
+        fprintf(stderr, "❌ Invalid compression: %s (use 'lz4', 'lz40' or 'zstd')\n", compression_arg);
         return 1;
     }
 
@@ -590,7 +594,7 @@ int main(int argc, char **argv) {
            get_frame_type_name(frame_type), width, height, scale_width, scale_height);
     printf("   FPS: %.2f, Audio: %dHz, %d channel(s)\n", fps, sample_rate, channels);
     printf("   Unique frames: %u, Total frames: %u\n", num_unique_frames, num_total_frames);
-    printf("   Compression: %s\n", use_zstd ? "Zstandard" : "LZ4");
+    printf("   Compression: %s\n", use_zstd ? "Zstandard" : (use_lz40 ? "LZ40" : "LZ4"));
     printf("   Chunk duration: %.2f seconds\n", chunk_duration);
 
     // Calculate chunk parameters
@@ -738,6 +742,8 @@ int main(int argc, char **argv) {
         ZSTD_CCtx_setParameter(cctx, ZSTD_c_contentSizeFlag, 0);
 
         comp_bound = ZSTD_compressBound(frame_size);
+    } else if (use_lz40) {
+        comp_bound = 4 + frame_size + (frame_size + 7) / 8 + 16;
     } else {
         comp_bound = (size_t)LZ4_compressBound((int)frame_size);
     }
@@ -882,6 +888,14 @@ int main(int argc, char **argv) {
                     return 1;
                 }
                 comp_size = output.pos;
+            } else if (use_lz40) {
+                size_t enc_size = lz40_encode(frame_buf, frame_size, compressed_buf, comp_bound);
+                if (enc_size == 0) {
+                    fprintf(stderr, "\n❌ LZ40 compression failed (frame=%d)\n", unique_frame);
+                    free(already_compressed);
+                    return 1;
+                }
+                comp_size = enc_size;
             } else {
                 int result = LZ4_compress_HC(
                     (const char *)frame_buf,
@@ -1073,7 +1087,7 @@ pad_to_alignment(out, 2048);
     header.num_total_frames = num_total_frames;
     header.uncompressed_frame_size = (uint32_t)frame_size;
     header.max_compressed_frame_size = max_compressed_size;
-    header.compression_type = (uint8_t)(use_zstd ? 1 : 0);
+    header.compression_type = (uint8_t)(use_zstd ? 1 : (use_lz40 ? 2 : 0));
     header.chunk_duration = chunk_duration;
     header.num_chunks = (uint32_t)num_chunks;
     header.chunk_index_offset = (uint32_t)chunk_index_table_pos;

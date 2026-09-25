@@ -20,6 +20,7 @@ typedef struct {
     uint32_t off, stored, declen;   /* where the block is in the file, its stored (maybe compressed) and full size */
     bool     owned;        /* data was malloc'd by us */
     bool     lz4;          /* a console pack's block stored LZ4-compressed (directory type "<type>+lz4"), not LZO */
+    bool     lz40;         /* Dreamcast: LZ40-compressed ("<type>+lz40", src/platform/dreamcast/dcfmv/lz40.h) */
 } PackEntry;
 
 typedef struct {

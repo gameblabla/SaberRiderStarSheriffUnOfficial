@@ -4,9 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-/* Saber Rider: vendored from Dreamcast/dreamcast-fmv (GPF). KOS ships neither liblz4 nor libzstd here: LZ4 comes
- * from third_party/lz4 (lib/lz4.c built into the ELF) and zstd-compressed movies are refused (build them with
- * COMPRESSION_BACKEND=lz4). */
+/* Saber Rider: vendored from Dreamcast/dreamcast-fmv (GPF). KOS ships neither liblz4 nor libzstd here: Dreamcast
+ * movies use LZ40 (src/platform/dreamcast/dcfmv/lz40.h, the C port of VincentNLOBJ's SH-4 LZ40 decoder;
+ * build them with COMPRESSION_BACKEND=lz40, compression type 2). Old LZ4 movies (type 0) still decode via
+ * lz4_mini.h; zstd-compressed movies are refused. */
 #ifdef DCFMV_NO_ZSTD
 typedef struct ZSTD_DCtx_s ZSTD_DCtx;
 typedef struct { const void *src; size_t size, pos; } ZSTD_inBuffer;
@@ -19,7 +20,8 @@ static inline unsigned ZSTD_isError(size_t r) { return r == (size_t)-1; }
 #else
 #include <zstd/zstd.h>
 #endif
-#include <lz4.h>
+#include "lz40.h"
+#include "lz4_mini.h"   /* type 0 fallback (pre-LZ40 discs) */
 
 enum {
     DCFMV_LOG_CHUNK  = 1 << 0,
@@ -292,8 +294,10 @@ static int dcfmv_read_header_v6(dcfmv_t *fmv) {
     if (fs_read(fmv->video_fd, &fmv->max_compressed_size, sizeof(uint32_t)) != (ssize_t)sizeof(uint32_t)) return -1;
     if (fs_read(fmv->video_fd, &fmv->audio_offset, sizeof(uint32_t)) != (ssize_t)sizeof(uint32_t)) return -1;
     if (fs_read(fmv->video_fd, &compression_type, sizeof(uint8_t)) != (ssize_t)sizeof(uint8_t)) return -1;
+    if (compression_type != 0 && compression_type != 1 && compression_type != 2) return -1;
 
     fmv->use_zstd = (compression_type == 1);
+    fmv->use_lz40 = (compression_type == 2);
     fmv->frame_duration = 1000.0f / fmv->fps;
     dcfmv_init_timebase_from_fps(fmv, fmv->fps);
 
@@ -702,7 +706,9 @@ static int dcfmv_chunk_load_header(dcfmv_t *fmv) {
     fmv->chunk_duration = header.chunk_duration;
     fmv->chunk_count = header.num_chunks;
     fmv->chunk_index_offset = header.chunk_index_offset;
+    if (header.compression_type != 0 && header.compression_type != 1 && header.compression_type != 2) return -1;
     fmv->use_zstd = header.compression_type == 1;
+    fmv->use_lz40 = header.compression_type == 2;
     fmv->frame_duration = 1000.0f / fmv->fps;
     dcfmv_init_timebase_from_fps(fmv, fmv->fps);
 
@@ -887,16 +893,36 @@ static int dcfmv_frames_decode_frame(dcfmv_t *fmv, int total_frame, int buf_inde
             if (ZSTD_isError(ret)) return -1;
         }
         if (out.pos != (size_t)fmv->video_frame_size) return -1;
-    } else {
+    } else if (fmv->use_lz40) {
         double decode_start_ms = dcfmv_decode_timer_ms();
-        int res = LZ4_decompress_safe(
-            (const char *)fmv->compressed_buffer,
-            (char *)fmv->frame_buffer[buf_index],
+        int res = lz40_decode(
+            fmv->compressed_buffer,
             (int)compressed_size,
+            fmv->frame_buffer[buf_index],
             fmv->video_frame_size);
         double decode_elapsed_ms = dcfmv_decode_timer_ms() - decode_start_ms;
         if (res != fmv->video_frame_size) {
-            DCMV_Error("LZ4_decompress_safe failed for frame %d (buf %d): out=%d expected=%d",
+            DCMV_Error("lz40_decode failed for frame %d (buf %d): out=%d expected=%d",
+                       unique_frame, buf_index, res, fmv->video_frame_size);
+            return -1;
+        }
+        DCMV_LOG(DCFMV_LOG_DECODE, "[LZ40] frame=%d buf=%d compressed=%lu decoded=%d time=%.3fms",
+                 unique_frame,
+                 buf_index,
+                 (unsigned long)compressed_size,
+                 fmv->video_frame_size,
+                 decode_elapsed_ms);
+    } else {
+        double decode_start_ms = dcfmv_decode_timer_ms();
+        int res = lz4_mini_decode(
+            fmv->compressed_buffer,
+            (int)compressed_size,
+            fmv->frame_buffer[buf_index],
+            fmv->video_frame_size,
+            -1);
+        double decode_elapsed_ms = dcfmv_decode_timer_ms() - decode_start_ms;
+        if (res != fmv->video_frame_size) {
+            DCMV_Error("lz4_mini_decode failed for frame %d (buf %d): out=%d expected=%d",
                        unique_frame, buf_index, res, fmv->video_frame_size);
             return -1;
         }
@@ -1055,16 +1081,32 @@ static int dcfmv_chunks_decode_frame(dcfmv_t *fmv, int total_frame, int buf_inde
             if (ZSTD_isError(ret)) return -1;
         }
         if (out.pos != (size_t)fmv->video_frame_size) return -1;
-    } else {
+    } else if (fmv->use_lz40) {
         double decode_start_ms = dcfmv_decode_timer_ms();
-        int res = LZ4_decompress_safe(
-            (const char *)(slot->video_section + off),
-            (char *)fmv->frame_buffer[buf_index],
+        int res = lz40_decode(
+            slot->video_section + off,
             (int)sz,
+            fmv->frame_buffer[buf_index],
             fmv->video_frame_size);
         double decode_elapsed_ms = dcfmv_decode_timer_ms() - decode_start_ms;
         if (res != fmv->video_frame_size) {
-            DCMV_Error("LZ4_decompress_safe failed for total frame %d unique %d (buf %d): out=%d expected=%d",
+            DCMV_Error("lz40_decode failed for total frame %d unique %d (buf %d): out=%d expected=%d",
+                       total_frame, unique_frame, buf_index, res, fmv->video_frame_size);
+            return -1;
+        }
+        DCMV_LOG(DCFMV_LOG_DECODE, "[LZ40-chunk] total=%d unique=%d buf=%d compressed=%lu decoded=%d time=%.3fms",
+                 total_frame, unique_frame, buf_index, (unsigned long)sz, fmv->video_frame_size, decode_elapsed_ms);
+    } else {
+        double decode_start_ms = dcfmv_decode_timer_ms();
+        int res = lz4_mini_decode(
+            slot->video_section + off,
+            (int)sz,
+            fmv->frame_buffer[buf_index],
+            fmv->video_frame_size,
+            -1);
+        double decode_elapsed_ms = dcfmv_decode_timer_ms() - decode_start_ms;
+        if (res != fmv->video_frame_size) {
+            DCMV_Error("lz4_mini_decode failed for total frame %d unique %d (buf %d): out=%d expected=%d",
                        total_frame, unique_frame, buf_index, res, fmv->video_frame_size);
             return -1;
         }
@@ -1467,6 +1509,7 @@ dcfmv_t *dcfmv_create(enum dcfmv_present_mode present_mode) {
     fmv->g_disable_fmv_audio = 0;
     fmv->audio_started = 0;
     fmv->use_zstd = 0;
+    fmv->use_lz40 = 0;
     fmv->audio_unmute_pending = 0;
     fmv->audio_clock_resume_pending = 0;
     atomic_store(&fmv->audio_clock_resume_until_ms, 0.0);

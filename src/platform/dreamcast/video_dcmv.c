@@ -1,4 +1,4 @@
-/* video.h on the Dreamcast: the videos converted to DCMV (VQ-compressed YUV422 textures, LZ4-packed, with an
+/* video.h on the Dreamcast: the videos converted to DCMV (VQ-compressed YUV422 textures, LZ40-packed, with an
  * ADPCM soundtrack; Dreamcast/dreamcast-fmv) played by the vendored dcfmv module in client-present mode: its
  * worker thread reads and unpacks frames ahead, video_draw DMAs the current one into its texture and draws a
  * quad through the PVR renderer like any other texture, so the game can put a video in a window (the briefing

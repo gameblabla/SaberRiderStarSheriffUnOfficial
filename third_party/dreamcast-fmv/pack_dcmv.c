@@ -27,9 +27,9 @@
  *   4 bytes  - Number of unique frames
  *   4 bytes  - Number of total frames (including duplicates)
  *   4 bytes  - Uncompressed frame size
- *   4 bytes  - Maximum compressed frame size (for LZ4 or Zstd)
+ *   4 bytes  - Maximum compressed frame size (for LZ4/LZ40 or Zstd)
  *   4 bytes  - Audio stream offset (absolute file position)
- *   1 byte   - Compression type (0 = LZ4, 1 = Zstandard)
+ *   1 byte   - Compression type (0 = LZ4, 1 = Zstandard, 2 = LZ40 SH-4)
  *
  *   Offset Table:
  *     (num_unique_frames + 1) uint32_t values
@@ -60,6 +60,7 @@
 #include <errno.h>
 #include <lz4.h>
 #include <lz4hc.h>
+#include "lz40enc.h"   /* Dreamcast LZ40 (-ewl WRAM): lz40_encode, no lib needed */
 #define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
 
@@ -245,6 +246,11 @@ int main(int argc, char **argv) {
     const char *durations_path = argv[12];
     const char *compression = argv[13];
     int use_zstd = (strcmp(compression, "zstd") == 0);
+    int use_lz40 = (strcmp(compression, "lz40") == 0);
+    if (!use_zstd && !use_lz40 && strcmp(compression, "lz4") != 0) {
+        fprintf(stderr, "Invalid compression: %s (use 'lz4', 'lz40' or 'zstd')\n", compression);
+        return 1;
+    }
 
     if (channels == 0) {
         sample_rate = 0;
@@ -353,6 +359,13 @@ int main(int argc, char **argv) {
             fprintf(stderr, "Memory allocation failed for compressed_buf (Zstd)\n");
             return 1;
         }
+    } else if (use_lz40) {
+        size_t bound = 4 + frame_size + (frame_size + 7) / 8 + 16;
+        compressed_buf = malloc(bound);
+        if (!compressed_buf) {
+            fprintf(stderr, "Memory allocation failed for compressed_buf (LZ40)\n");
+            return 1;
+        }
     } else {
         compressed_buf = malloc(LZ4_compressBound(frame_size));
         if (!compressed_buf) {
@@ -402,6 +415,20 @@ int main(int argc, char **argv) {
             if ((uint32_t)output.pos < min_compressed_size)
                 min_compressed_size = output.pos;
 
+        } else if (use_lz40) {
+            // LZ40 compression path (Dreamcast SH-4 decoder: lz40.h / LZ40_dec.asm)
+            size_t bound = 4 + frame_size + (frame_size + 7) / 8 + 16;
+            size_t enc_size = lz40_encode(frame_buf, frame_size, compressed_buf, bound);
+            if (enc_size == 0) {
+                fprintf(stderr, "LZ40 compression failed on frame %u\n", i);
+                return 1;
+            }
+
+            fwrite(compressed_buf, 1, enc_size, out);
+            if (enc_size > max_compressed_size) max_compressed_size = (uint32_t)enc_size;
+            total_compressed_bytes += enc_size;
+            if ((uint32_t)enc_size < min_compressed_size)
+                min_compressed_size = (uint32_t)enc_size;
         } else {
             // LZ4 compression path
             int comp_size = LZ4_compress_HC((const char *)frame_buf, (char *)compressed_buf,
@@ -470,7 +497,7 @@ int main(int argc, char **argv) {
 
     // Write header
     fseek(out, 0, SEEK_SET);
-    uint8_t compression_type = use_zstd ? 1 : 0;
+    uint8_t compression_type = use_zstd ? 1 : (use_lz40 ? 2 : 0);
     write_header(out, frame_type, width, height, scale_width, scale_height, fps,
              sample_rate, channels, num_unique_frames, num_total_frames,
              frame_size, max_compressed_size, audio_offset, compression_type);

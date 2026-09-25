@@ -8,7 +8,8 @@
 #include <malloc.h>
 #endif
 #ifdef PLAT_DREAMCAST
-#include <lz4.h>   /* third_party/lz4 */
+#include "platform/dreamcast/dcfmv/lz40.h"      /* Dreamcast packs/FMV: LZ40 SH-4 (VincentNLOBJ/CUE) */
+#include "platform/dreamcast/dcfmv/lz4_mini.h"  /* old +lz4 blocks (pre-LZ40 discs) still decode */
 #elif defined(PLAT_BAKED_ASSETS)
 #include "platform/dreamcast/dcfmv/lz4_mini.h"   /* Saturn keeps the mini decoder for now */
 #endif
@@ -114,8 +115,11 @@ bool pack_load(Pack *p, const char *path)
         const char *nl = memchr(eq, '\n', end - eq); if (!nl) nl = end;
         if (nl - eq - 1 >= 8) {
             uint32_t id = hex_id(eq + 1);
-            size_t tn = eq - s; bool lz4 = tn > 4 && !memcmp(eq - 4, "+lz4", 4);
-            for (int i = 0; i < n; i++) if (p->entries[i].id == id) { p->entries[i].type = type_of(s, lz4 ? tn - 4 : tn); p->entries[i].lz4 = lz4; break; }
+            size_t tn = eq - s;
+            bool lz40 = tn > 5 && !memcmp(eq - 5, "+lz40", 5);
+            bool lz4 = !lz40 && tn > 4 && !memcmp(eq - 4, "+lz4", 4);
+            size_t tlen = lz40 ? tn - 5 : (lz4 ? tn - 4 : tn);
+            for (int i = 0; i < n; i++) if (p->entries[i].id == id) { p->entries[i].type = type_of(s, tlen); p->entries[i].lz4 = lz4; p->entries[i].lz40 = lz40; break; }
         }
         s = nl + 1;
     }
@@ -140,7 +144,8 @@ static bool entry_load(const Pack *p, PackEntry *pe)
     uint8_t *buf = block_alloc(pe->declen + 16);
     int r = !buf ? -1
 #if defined(PLAT_DREAMCAST)
-          : pe->lz4 ? (LZ4_decompress_safe((const char *)raw, (char *)buf, (int)pe->stored, (int)pe->declen) == (int)pe->declen ? (int)pe->declen : -1)   /* stops at declen: padding follows */
+          : pe->lz40 ? (lz40_decode(raw, (int)pe->stored, buf, (int)pe->declen) == (int)pe->declen ? (int)pe->declen : -1)   /* stops at declen: padding follows */
+          : pe->lz4 ? (lz4_mini_decode(raw, (int)pe->stored, buf, (int)pe->declen, (int)pe->declen) == (int)pe->declen ? (int)pe->declen : -1)   /* old discs */
 #elif defined(PLAT_BAKED_ASSETS)
           : pe->lz4 ? (lz4_mini_decode(raw, (int)pe->stored, buf, (int)pe->declen, (int)pe->declen) == (int)pe->declen ? (int)pe->declen : -1)   /* stops at declen: padding follows */
 #endif

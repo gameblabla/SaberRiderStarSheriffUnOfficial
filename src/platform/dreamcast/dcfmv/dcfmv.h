@@ -181,6 +181,7 @@ size_t              chunk_audio_ring_read_pos;
     int soundbufferalloc;
     volatile int audio_started;
     int use_zstd;
+    int use_lz40;   /* DCMV compression type 2: LZ40 SH-4 (new); 0 without it is old LZ4 via lz4_mini */
     unsigned int audio_start_generation;
     unsigned int audio_logged_start_generation;
     unsigned int audio_logged_poll_generation;

@@ -2,7 +2,8 @@
 
 Every block starts on a 32-byte boundary and is a multiple of 32 bytes long, so the game reads one straight into a
 32-byte aligned buffer in a single read and can DMA it on to video or sound memory. Blocks are stored raw (no LZO), or
-LZ4-compressed where asked (directory type "<type>+lz4"; the game decodes those into a new buffer). The packer lays
+LZ40-compressed where asked (directory type "<type>+lz40"; the Dreamcast decodes those with
+src/platform/dreamcast/dcfmv/lz40.h, the C port of VincentNLOBJ's SH-4 LZ40 decoder). The packer lays
 blocks out in the order they are added: put the ones a stage loads together next to each other.
 
 Layout: "HEADLIST", directory offset, directory length (unpacked); 16-byte entries from 0x10 (8 hex digits of id,
@@ -10,11 +11,9 @@ offset, size) ended by a zero entry; the LZO1Z-coded "type=ID\\n" directory; the
 """
 from __future__ import annotations
 
-import ctypes
-import ctypes.util
 import struct
 
-_lz4 = None
+from lz40 import lz40_compress
 
 
 def pad32(data: bytes) -> bytes:
@@ -41,19 +40,8 @@ def lzo_literals(data: bytes) -> bytes:
 
 
 def lz4_compress(data: bytes) -> bytes:
-    """an LZ4 block at the highest HC level (third_party/lz4's LZ4_decompress_safe decodes it)"""
-    global _lz4
-    if _lz4 is None:
-        name = ctypes.util.find_library('lz4')
-        if not name:
-            raise RuntimeError('liblz4 not found (needed to compress blocks)')
-        _lz4 = ctypes.CDLL(name)
-    cap = _lz4.LZ4_compressBound(len(data))
-    out = ctypes.create_string_buffer(cap)
-    n = _lz4.LZ4_compress_HC(data, out, len(data), cap, 12)
-    if n <= 0:
-        raise RuntimeError('LZ4_compress_HC failed')
-    return out.raw[:n]
+    """Historical name: now an LZ40 stream (src/platform/dreamcast/dcfmv/lz40.h decodes it)."""
+    return lz40_compress(data)
 
 
 class Pack:
@@ -61,16 +49,18 @@ class Pack:
         self.blocks: list[tuple[int, str, bytes, int]] = []
         self.ids: set[tuple[int, str]] = set()
 
-    def add(self, rid: int, rtype: str, data: bytes, lz4: bool = False) -> int:
-        """lz4: store it compressed if that is smaller (fewer bytes off the disc, a quick decode). Returns the stored size."""
+    def add(self, rid: int, rtype: str, data: bytes, lz4: bool = False, lz40: bool = False) -> int:
+        """lz40 (historical name lz4): store it LZ40-compressed if that is smaller (fewer bytes off the disc, a quick
+        SH-4 decode). Returns the stored size."""
+        want = lz40 or lz4
         key = (rid & 0xFFFFFFFF, rtype)
         if key in self.ids:
             raise ValueError(f'{rtype} {rid:08X} added twice')
         self.ids.add(key)
         data = pad32(data)
-        packed = pad32(lz4_compress(data)) if lz4 else data
+        packed = pad32(lz40_compress(data)) if want else data
         if len(packed) < len(data):
-            self.blocks.append((rid & 0xFFFFFFFF, rtype + '+lz4', packed, len(data)))
+            self.blocks.append((rid & 0xFFFFFFFF, rtype + '+lz40', packed, len(data)))
         else:
             self.blocks.append((rid & 0xFFFFFFFF, rtype, data, len(data)))
         return len(self.blocks[-1][2])

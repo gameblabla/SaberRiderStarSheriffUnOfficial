@@ -5,11 +5,11 @@
 #   make -f Makefile.dc rebake     -> the same, reusing the converted music and videos (textures, sounds, files baked again)
 #   make -f Makefile.dc repack     -> only the new ELF
 # The core game (src/*.c) + the Dreamcast platform (src/platform/dreamcast) + the vendored FMV player.
+# FMV/pack decompression is LZ40 (src/platform/dreamcast/dcfmv/lz40.h, header-only): no third-party lib is linked.
 TARGET  := saber_rider.elf
 OBJDIR  := obj-dc
-SRC     := $(wildcard src/*.c) $(wildcard src/platform/dreamcast/*.c) src/platform/dreamcast/dcfmv/dcfmv.c third_party/lz4/lib/lz4.c
+SRC     := $(wildcard src/*.c) $(wildcard src/platform/dreamcast/*.c) src/platform/dreamcast/dcfmv/dcfmv.c
 OBJ     := $(SRC:src/%.c=$(OBJDIR)/%.o)
-OBJ     := $(OBJ:third_party/%.c=$(OBJDIR)/third_party/%.o)
 # PLAT_BAKED_ASSETS: textures, samples and our other files come baked into tex.pck / snd.pck / files.pck (build_disc.py)
 DEFS    := -DPLAT_DREAMCAST -DPLAT_LOW_MEMORY -DPLAT_BAKED_ASSETS -DDCFMV_NO_ZSTD -DDCFMV_NUM_BUFFERS=8
 # Temporary WIP: 640x480/832x480 + stretch/wide stay hidden (320x240 + original 4:3 only) until the 640x480
@@ -22,7 +22,7 @@ ifneq ($(KOS_SH4_PRECISION),-m4-single-only)
 $(error KOS_SH4_PRECISION is '$(KOS_SH4_PRECISION)'; set it to -m4-single-only in environ.sh and rebuild KOS + kos-ports)
 endif
 # KOS_CFLAGS brings -O3 -ffast-math; the game keeps IEEE infinities out of fast-math's way
-CFLAGS  := -std=gnu11 -Isrc -Ithird_party/lz4/lib $(DEFS) -MMD -MP -fno-finite-math-only -Wno-unused-parameter -Wno-misleading-indentation -Wno-format
+CFLAGS  := -std=gnu11 -Isrc $(DEFS) -MMD -MP -fno-finite-math-only -Wno-unused-parameter -Wno-misleading-indentation -Wno-format
 LIBS    := -lADX -lsh4zam -lm -Wl,--wrap=snd_stream_shutdown -Wl,--wrap=snd_stream_start -Wl,--wrap=snd_stream_poll   # see aud_dc.c
 DATA    ?= SaberRider/data
 
@@ -33,10 +33,6 @@ $(TARGET): $(OBJ)
 	kos-cc -o $@ $(OBJ) $(LIBS)
 
 $(OBJDIR)/%.o: src/%.c
-	@mkdir -p $(dir $@)
-	kos-cc $(CFLAGS) -c $< -o $@
-
-$(OBJDIR)/third_party/%.o: third_party/%.c
 	@mkdir -p $(dir $@)
 	kos-cc $(CFLAGS) -c $< -o $@
 
