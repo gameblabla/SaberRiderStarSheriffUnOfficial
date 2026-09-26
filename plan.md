@@ -837,3 +837,7 @@ The front end, the loading screens and level 1 look as before (screenshots).
   mednafen through both paths), and `cd_sat_cdda_update` keeps running. A one-shot asked for during a clip (the START
   click that closes the box) plays when the driver is back, within 200 ms. START on the main menu now takes ~4 s to
   show the briefing (was ~2.6 s).
+- **GAME START: a black LOADING screen** (2026-09-26): START on the title goes black with LOADING at once (as after
+  character select) for the ~3.3 s the briefing's reads take, instead of a frozen title. The LOADING font is read when
+  the title opens, before its music; the load waits for three drawn LOADING frames (`Menu.loading`, counted in
+  `draw_main`, not in steps: a slow frame makes the loop catch up several steps without a draw).

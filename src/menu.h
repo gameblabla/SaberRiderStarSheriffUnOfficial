@@ -25,6 +25,7 @@ typedef struct {
     int character;             /* 0 Saber, 1 Fireball, 2 April, 3 Colt (+0x5c) */
     Video *video;
     Dialog dlg;                /* briefing text */
+    int loading;               /* START on the title: 1 + the frames of black + LOADING drawn before the briefing loads */
     bool start_level;          /* set when character select finished -> game starts the level */
     bool continue_now;         /* CONTINUE? accepted: the game restarts the stage with fresh lives */
     int continues_left;        /* shown on the CONTINUE? screen (the game keeps the count) */

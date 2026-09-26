@@ -142,13 +142,15 @@ void menu_enter(Menu *m, int state)
     if (m->video) { video_close(m->video); m->video = NULL; }
     int prev = m->state;
     if (plat_getenv("SABER_TRACE")) fprintf(stderr, "menu %d -> %d\n", prev, state);
-    m->state = state; m->t = 0; m->dur = MENU_PERIOD; m->idle_frames = 0;
+    m->state = state; m->t = 0; m->dur = MENU_PERIOD; m->idle_frames = 0; m->loading = 0;
     switch (state) {
     case MS_SPLASH0: case MS_SPLASH1: case MS_SPLASH2: case MS_SPLASH3: case MS_INTRO:
         music_stop(); if (state == MS_INTRO) m->dur = 0; break;   /* FUN_00411480 when a result screen / the title hands over */
     case MS_MAIN:
         if (prev == MS_OPTIONS || prev == MS_CREDITS) m->t = m->dur / 2;   /* no zoom-in when coming back from a sub menu */
-        m->sel = 0; music_play(0, true); break;
+        m->sel = 0;
+        font_get(0x4058897F);   /* LOADING, for GAME START: read now, before the music (a read stops CD-DA on the Saturn) */
+        music_play(0, true); break;
     case MS_OPTIONS:
         m->sel = prev == MS_CONTROLS ? OPT_CONTROLS : 1; m->music_track = 0;
         if (prev != MS_CREDITS && prev != MS_CONTROLS) music_play(3, true);
@@ -186,6 +188,10 @@ void menu_update(Menu *m, const Input *in, real dt, int sw, Ren *r)
         if (!video_update(m->video, dt) || confirm(in)) menu_enter(m, MS_MAIN);
         break;
     case MS_MAIN: {
+        /* the black LOADING screen is on the display before the briefing's reads block: drawn frames are counted
+         * (draw_main), not steps - the Saturn puts a frame's list up at the start of the next one, and the font's
+         * read makes the loop catch up several steps without a draw */
+        if (m->loading) { if (m->loading > 3) { menu_enter(m, MS_BRIEFING); open_briefing(m, r); } break; }
         real f = ease(m->t, m->dur);
         if (f < R(1.0f) && m->t < m->dur / 2) { m->t += dt; break; }   /* zoom-in */
         bool any = false;
@@ -195,7 +201,7 @@ void menu_update(Menu *m, const Input *in, real dt, int sw, Ren *r)
         if (confirm(in)) {
             sfx_play(0, 0);
             if (m->sel == 1) menu_enter(m, MS_OPTIONS);
-            else { menu_enter(m, MS_BRIEFING); open_briefing(m, r); }
+            else { m->loading = 1; music_stop(); }
             break;
         }
         m->idle_frames = any ? 0 : m->idle_frames + 1;
@@ -450,10 +456,20 @@ static void draw_controls(Menu *m, Ren *r, int sw, int sh)
     font_draw(f, hint, r_int((sw - font_text_width(f, hint)) / 2), r_int(sh - f->h - 4), 200, 200, 200);
 }
 
+/* LOADING in the bottom right corner, as the original after character select (FUN_004296d0) */
+static void draw_loading_text(int sw, int sh)
+{
+    Font *f = font_get(0x4058897F);
+    if (f) font_draw(f, "LOADING", r_int(sw - font_text_width(f, "LOADING") - 8), r_int(sh - 16), 255, 255, 255);
+}
+
+static void draw_loading(Ren *r, int sw, int sh) { fill(r, sw, sh, 0, 0, 0, 255); draw_loading_text(sw, sh); }
+
 static void draw_main(Menu *m, Ren *r, int sw, int sh)
 {
     Sprite *bg = sprite_get(0xD7DEBAC0), *logo = sprite_get(0xB04BAC5F), *shadow = sprite_get(0x989121EC);
     Sprite *start = sprite_get(0x01E9B701), *opt = sprite_get(0x8FF0AB30);
+    if (m->loading) { draw_loading(r, sw, sh); m->loading++; return; }
     real f = ease(m->t, m->dur);
     if (f < R(1.0f) && m->t < m->dur / 2) {   /* zoom-in from 32x, fading up from black (FUN_00428b30) */
         real s = zoom_scale(f);
@@ -559,8 +575,7 @@ static void draw_charsel(Menu *m, Ren *r, int sw, int sh)
     if (m->t < R(0.0f)) fill(r, sw, sh, 0, 0, 0, clamp255(-m->t * 4 * 255));
     else if (m->t > R(0.0f)) {
         fill(r, sw, sh, 0, 0, 0, clamp255(ease(m->t, m->dur) * 255));
-        Font *f = font_get(0x4058897F);
-        if (f && m->t > R(0.5f)) font_draw(f, "LOADING", r_int(sw - font_text_width(f, "LOADING") - 8), r_int(sh - 16), 255, 255, 255);
+        if (m->t > R(0.5f)) draw_loading_text(sw, sh);
     }
 }
 
