@@ -136,13 +136,14 @@ static const PackEntry *credits_entry(void)
 }
 
 static void charsel_preload(void);
+static Sprite *victory_art(int stage, int character);
 
 void menu_enter(Menu *m, int state)
 {
     if (m->video) { video_close(m->video); m->video = NULL; }
     int prev = m->state;
     if (plat_getenv("SABER_TRACE")) fprintf(stderr, "menu %d -> %d\n", prev, state);
-    m->state = state; m->t = 0; m->dur = MENU_PERIOD; m->idle_frames = 0; m->loading = 0;
+    m->state = state; m->t = 0; m->dur = MENU_PERIOD; m->idle_frames = 0; m->loading = 0; m->drawn = 0;
     switch (state) {
     case MS_SPLASH0: case MS_SPLASH1: case MS_SPLASH2: case MS_SPLASH3: case MS_INTRO:
         music_stop(); if (state == MS_INTRO) m->dur = 0; break;   /* FUN_00411480 when a result screen / the title hands over */
@@ -164,7 +165,12 @@ void menu_enter(Menu *m, int state)
     case MS_CHARSEL: m->t = R(-0.25f); m->character = 1; charsel_preload(); music_play(1, true); break;
     case MS_GAMEOVER: m->dur = R(3.0f); music_play(4, false); break;        /* FUN_0042d690 -> state 9 + music 4 */
     case MS_CONTINUE: music_stop(); m->continue_now = false; break;      /* silence but the clock ticks */
-    case MS_ACCOMPLISHED: m->dur = R(10.0f); music_play(7, false); break;   /* state 0xf + music 7 */
+    case MS_ACCOMPLISHED:   /* state 0xf + music 7; its art read first (a read stops CD-DA on the Saturn, and ~200 KB of
+                             * painting read on the first frame used to take most of the zoom-in away) */
+        m->dur = R(10.0f);
+        if (!victory_art(m->cleared_stage, m->character)) sprite_get(0xE963788C);
+        sprite_get(0xF6172502); sprite_get(0xF629241D);
+        music_play(7, false); break;
     case MS_CREDITS: m->credits_page = 0; m->credits_t = 0; music_play(9, true); break;   /* FUN_004265a0: backer credits music */
     default: break;
     }
@@ -334,6 +340,7 @@ void menu_update(Menu *m, const Input *in, real dt, int sw, Ren *r)
         if (confirm(in)) { sfx_play(8, 0); m->continue_now = true; }
         break; }
     case MS_ACCOMPLISHED:   /* FUN_00429de0: 4 s, then a 1 s countdown to the splash (or the next stage) */
+        if (m->drawn < 2) break;   /* the steps catching up after the reads: the zoom starts once it is on screen */
         m->t += dt;
         if (m->t > R(5.0f)) { if (m->more_stages) { m->more_stages = false; m->next_stage = true; music_stop(); } else menu_enter(m, m->ending ? MS_CREDITS : MS_SPLASH1); }
         break;
@@ -703,6 +710,7 @@ void menu_draw(Menu *m, Ren *r, int sw, int sh)
                                * v = min(2.1 sin(pi|t|/2), 2)/2 under a black veil; t runs 0..4, then -1..0 zooms
                                * back out under a white veil (FUN_00429de0) */
         fill(r, sw, sh, 0, 0, 0, 255);
+        m->drawn++;
         Sprite *bg = victory_art(m->cleared_stage, m->character), *a = sprite_get(0xF6172502), *b = sprite_get(0xF629241D);
         if (!bg) bg = sprite_get(0xE963788C);   /* the demo's Fireball art when ours is missing */
         real t = m->t <= R(4.0f) ? m->t : m->t - R(5.0f), v = R(1.0f);

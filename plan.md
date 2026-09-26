@@ -841,3 +841,11 @@ The front end, the loading screens and level 1 look as before (screenshots).
   character select) for the ~3.3 s the briefing's reads take, instead of a frozen title. The LOADING font is read when
   the title opens, before its music; the load waits for three drawn LOADING frames (`Menu.loading`, counted in
   `draw_main`, not in steps: a slow frame makes the loop catch up several steps without a draw).
+- **MISSION ACCOMPLISHED choking** (2026-09-26): the painting (~200 KB of 16bpp) and the MISSION / ACCOMPLISHED
+  pictures were read on the screen's first frames (0.77 s, then two more stalls of 8-10 fields), and the steps catching
+  up after them took most of the 1 s zoom-in: ~13 frames of it were left. `menu_enter` reads them before music 7, and the
+  clock waits for two drawn frames (`Menu.drawn`): the whole zoom plays (~30 frames, 1-3 fields each). And
+  `part_emit_cropped` (render_sat.c): a magnified, unflipped part reaching > 32 px past the clip is drawn as its texel
+  rows on screen only (texture address moved down), or one command a row cut to the columns on screen when much of each
+  line is off screen - VDP1 walks a line's pixels up to the clip (mednafen stops at its end, the hardware may not), and
+  at 32x the corners wrapped past 13 bits.

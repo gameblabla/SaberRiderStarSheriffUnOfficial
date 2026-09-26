@@ -26,6 +26,7 @@ typedef struct {
     Video *video;
     Dialog dlg;                /* briefing text */
     int loading;               /* START on the title: 1 + the frames of black + LOADING drawn before the briefing loads */
+    int drawn;                 /* MISSION ACCOMPLISHED: its frames drawn (its clock waits for the first after the reads) */
     bool start_level;          /* set when character select finished -> game starts the level */
     bool continue_now;         /* CONTINUE? accepted: the game restarts the stage with fresh lives */
     int continues_left;        /* shown on the CONTINUE? screen (the game keeps the count) */

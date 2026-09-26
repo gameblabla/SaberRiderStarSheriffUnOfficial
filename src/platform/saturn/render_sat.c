@@ -736,6 +736,48 @@ static const Unit *unit_exact(const RTex *t, int x, int y, int w, int h)
 static int fl16(int32_t v) { return v >> 16; }                  /* floor */
 static int ce16(int32_t v) { return (v + 0xFFFF) >> 16; }       /* ceiling */
 
+static int floordiv(int a, int b) { return a >= 0 ? a / b : -((b - 1 - a) / b); }
+
+/* A magnified, unflipped part reaching well past the clip (base: its command but for the corners and size). VDP1 walks
+ * every pixel of a line up to the clip, and the corners wrap past 4096: a victory painting zooming in from 32x took
+ * ~2000 pixels a line, 6.9 fields a frame. So only its texel rows on screen are drawn (the texture address moved down
+ * to the first); when much of a line is still off screen, as one command a row, cut to the columns on screen too (the
+ * address moved along the row: at height 1 the row's stride doesn't matter). c is the clip already cut to the part's
+ * rectangle: the user clip hides the rest of the whole texels drawn. false: nothing emitted (a single command then). */
+static bool part_emit_cropped(const Cmd *base, int bits, int wpad, int h, int ix0, int iy0, int W, int H, const RRect *c)
+{
+    int rowbytes = wpad * bits / 8;
+    int r0 = (c->y - iy0) * h / H, r1 = (c->y + c->h - iy0) * h / H;   /* texel rows / columns covering c (or one more) */
+    int c0 = (c->x - ix0) * wpad / W, c1 = (c->x + c->w - ix0) * wpad / W;
+    if (r1 > h - 1) r1 = h - 1;
+    if (c1 > wpad - 1) c1 = wpad - 1;
+    int per = 64 / bits;   /* texels in 8 bytes (the address unit): the first column's step */
+    c0 -= c0 % per;
+    int n = (c1 + 1 - c0 + 7) & ~7;
+    if (W - c->w > 32 && r1 - r0 < 128 && n + 8 <= 504) {
+        for (int r = r0; r <= r1; r++) {
+            int off = r * rowbytes + c0 * bits / 8, cs = c0, nn = n;
+            if (off & 7) { off -= 4; cs -= 8; nn += 8; }   /* 4bpp, a row of an odd number of 8-byte units */
+            Cmd *k = cmd_new(); if (!k) return true;
+            *k = *base; k->ctrl = C_SCALED; k->srca = (uint16_t)(base->srca + off / 8); k->size = (uint16_t)((nn / 8) << 8 | 1);
+            k->xa = (int16_t)(ix0 + floordiv(cs * W, wpad)); k->xc = (int16_t)(ix0 + floordiv((cs + nn) * W, wpad) - 1);
+            k->ya = (int16_t)(iy0 + r * H / h); k->yc = (int16_t)(iy0 + (r + 1) * H / h - 1);
+            ren.prims++;
+        }
+        return true;
+    }
+    if (W > 4096) return false;
+    int off = r0 * rowbytes;
+    if (off & 7) { r0--; off -= rowbytes; }
+    if (r0 == 0 && r1 == h - 1) return false;
+    Cmd *k = cmd_new(); if (!k) return true;
+    *k = *base; k->ctrl = C_SCALED; k->srca = (uint16_t)(base->srca + off / 8); k->size = (uint16_t)((wpad / 8) << 8 | (r1 - r0 + 1));
+    k->xa = (int16_t)ix0; k->xc = (int16_t)(ix0 + W - 1);
+    k->ya = (int16_t)(iy0 + r0 * H / h); k->yc = (int16_t)(iy0 + (r1 + 1) * H / h - 1);
+    ren.prims++;
+    return true;
+}
+
 /* A part's command, its screen rectangle known: [ix0, ix1] x [iy0, iy1] inclusive, or quad (4 corners, rotated) */
 static void part_emit(RTex *t, int pi, int ix0, int iy0, int ix1, int iy1, RFlip flip, const int16_t *quad, const RRect *c, const RRect *dclip)
 {
@@ -759,10 +801,14 @@ static void part_emit(RTex *t, int pi, int ix0, int iy0, int ix1, int iy1, RFlip
         static int warned; if (!warned++) printf("render: colour RAM full (texture %08X)\n", (unsigned)t->tag);
         return;
     }
-    pm |= clip_bits(&cc, ix0, iy0, ix1, iy1);
+    int W = ix1 - ix0 + 1, H = iy1 - iy0 + 1;
+    RRect pc = { ix0, iy0, W, H };
+    bool crop = !quad && !flip && W >= p->wpad && H >= p->h && (W > p->wpad || H > p->h) &&
+                (W - cc.w > 32 || H - cc.h > 32) && r_rect_intersect(&cc, &pc, &pc);
+    pm |= clip_bits(crop ? &pc : &cc, ix0, iy0, ix1, iy1);
     uint16_t gr = fmt == FMT_8BPP ? 0 : gouraud_for(cur.mr, cur.mg, cur.mb);
     if (gr) pm |= PM_GOURAUD;
-    Cmd *k = cmd_new(); if (!k) return;
+    Cmd base = { 0 }, *k = crop ? &base : cmd_new(); if (!k) return;
     if (fmt == FMT_4BPP) { pm |= PM_LUT; k->colr = loc; k->srca = (uint16_t)(loc + 4); }   /* the table, then the texels */
     else if (fmt == FMT_8BPP) {   /* colour bank: 64 (mode 2), 128 (3) or 256 (4) colours */
         int g = pal_granules(t->npal);
@@ -782,6 +828,11 @@ static void part_emit(RTex *t, int pi, int ix0, int iy0, int ix1, int iy1, RFlip
     } else {
         k->ctrl = C_SCALED | fl;
         k->xa = (int16_t)ix0; k->ya = (int16_t)iy0; k->xc = (int16_t)ix1; k->yc = (int16_t)iy1;
+    }
+    if (crop) {
+        if (part_emit_cropped(k, fmt == FMT_4BPP ? 4 : fmt == FMT_8BPP ? 8 : 16, p->wpad, p->h, ix0, iy0, W, H, &pc)) return;
+        Cmd *c = cmd_new(); if (!c) return;
+        *c = base;
     }
     ren.prims++;
 }
