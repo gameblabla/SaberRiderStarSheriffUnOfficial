@@ -99,6 +99,27 @@ class LogRing:
         return ([f'[log: {lost} bytes lost]'] if lost else []) + lines
 
 
+# The acceptance criterion for the audio cutoff, as a test: once the level's music owns the drive, nothing may read
+# a pack. Each of these lines is the game reporting that it happened (or that it refused to).
+TRIPWIRE_MARKERS = (
+    ('read under the music', 'cd_sat.c stopped CD-DA for a data read'),
+    ('TRIPWIRE', 'game.c leave_level counted a pack read during play'),
+    ('NONRESIDENT', 'aud_sat.c wanted a sample that was not in the scene bank'),
+)
+
+
+def tripwire_hit(line: str) -> str | None:
+    """the reason this log line fails the no-read-under-music rule, or None"""
+    for marker, why in TRIPWIRE_MARKERS:
+        if marker in line:
+            return why
+    if 'locked misses' in line:   # the perf line: "locked misses N" must be 0
+        tail = line.rsplit('locked misses', 1)[1].strip()
+        if tail.split() and tail.split()[0].isdigit() and int(tail.split()[0]) > 0:
+            return 'gfx.c refused a texture reload: a scene texture was not resident'
+    return None
+
+
 def parse_pad(script: str) -> list[tuple[int, str]]:
     events = []
     for item in filter(None, (s.strip() for s in script.split(','))):
@@ -130,6 +151,10 @@ def main() -> int:
     ap.add_argument('--state-out', type=Path)
     ap.add_argument('--regs', action='store_true', help='at the end: both SH-2s\' PC / PR (with function names) and registers')
     ap.add_argument('--quiet', action='store_true', help='no log lines on stdout (still written with --log)')
+    ap.add_argument('--tripwire', action='store_true',
+                    help='fail (exit 1) if the run breaks the no-disc-read-under-music rule: a "read under the music" '
+                         'line from cd_sat.c, a "TRIPWIRE" line from game.c (leave_level), a non-zero "locked misses" '
+                         'count in the perf line, or a "NONRESIDENT" sample. The run passes only if none appear.')
     ap.add_argument('--log', type=Path, help='also write the game log here')
     args = ap.parse_args()
 
@@ -137,6 +162,7 @@ def main() -> int:
     log_addr = by_name.get('_saber_log')
     emu = Mednafen(args.mednafen, args.base)
     logf = open(args.log, 'w') if args.log else None
+    violations: list[tuple[str, str]] = []   # (log line, why it fails the tripwire)
     try:
         if args.firmware:
             emu.call('set', 'filesys.path_firmware', args.firmware.resolve())
@@ -178,6 +204,8 @@ def main() -> int:
                     print(text, flush=True)
                 if logf:
                     print(text, file=logf, flush=True)
+                if args.tripwire and (why := tripwire_hit(line)) and (text, why) not in violations:
+                    violations.append((text, why))
         if args.regs:
             def fn(a: int) -> str:
                 i = bisect.bisect_right(addrs, a) - 1
@@ -241,6 +269,13 @@ def main() -> int:
         emu.close()
         if logf:
             logf.close()
+    if args.tripwire and violations:
+        print(f'TRIPWIRE FAILED: {len(violations)} line(s) broke the no-disc-read-under-music rule', file=sys.stderr)
+        for text, why in violations:
+            print(f'  {text.strip()}\n      -> {why}', file=sys.stderr)
+        return 1
+    if args.tripwire:
+        print('TRIPWIRE PASS: no pack read, no refused texture and no non-resident sample while the music played')
     return 0
 
 

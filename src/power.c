@@ -33,6 +33,19 @@ static real clampf(real v, real lo, real hi) { return v < lo ? lo : v > hi ? hi 
 static real ease_out(real t) { t = clampf(t, 0, R(1)); return R(1) - r_mul(r_mul(R(1) - t, R(1) - t), R(1) - t); }
 static int hero_of(const Power *pw) { return pw->hero & 3; }
 
+/* The Saturn: claim the drawn cut-in's textures while the heap is emptiest, and keep them. Its frame-baked twin
+ * (2DEF1664: four hero pieces at 14 x 15 tiles, 43 KB) is the scene's largest single texture. Two things have to be
+ * true before the disc is locked at music_play, or the first in-game cut-in wants a data read under the music:
+ * it must be BUILT (level_load and the enemy/HUD preloads leave low work RAM with ~47 KB in one block, which is a
+ * coin flip against 43 KB) and it must be RETAINED, because the tail of the load still runs out of memory and
+ * packs_evict takes any texture not yet marked - gfx_keep_loaded() comes too late to rebuild what it already lost.
+ * Called from level_start right after the stage trim; power_reset()'s own preload then finds it cached. */
+void power_warm_cutin(int hero)
+{
+    if (CLIP[hero & 3]) return;   /* Saber and Fireball draw a .CPK clip instead, streamed and bracketed by the film player */
+    gfx_keep_cblock(cblock_get(0x2DEF1664));
+}
+
 static void preload_clip(const Power *pw)
 {
     const char *clip = pw->bomb ? NULL : CLIP[hero_of(pw)];
@@ -53,8 +66,12 @@ void power_reset(Power *pw, int hero, bool bomb)
     pw->hero = hero & 3; pw->bomb = bomb; pw->items = POWER_ITEMS;
     if (plat_getenv("SABER_POWER")) pw->items = atoi(plat_getenv("SABER_POWER"));   /* debug: items at the start */
     preload_clip(pw);
-    static const char *const SFX[] = { "power/saber_intermission.wav", "space/charge.wav", "sfx/turbo_start.wav", "voice/april_ok.wav" };
+    static const char *const SFX[] = { "power/saber_intermission.wav", "space/charge.wav" };
     for (size_t i = 0; i < sizeof SFX / sizeof *SFX; i++) sfx_preload_file(asset_path(SFX[i]));   /* loaded before they play */
+    if (!bomb && hero == HERO_APRIL) {
+        sfx_preload_file(asset_path("sfx/turbo_start.wav"));
+        sfx_preload_file(asset_path("voice/april_ok.wav"));
+    }
 }
 
 bool power_can_start(const Power *pw) { return pw->items > 0 && pw->cooldown <= 0 && pw->phase == PW_IDLE && pw->boost_t <= 0; }

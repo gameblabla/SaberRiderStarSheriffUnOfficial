@@ -41,6 +41,17 @@ void  gfx_trim(void);   /* drop every pack / PNG texture (made again on the next
 bool  gfx_keep_sprite(const Sprite *s);   /* keep a prepared scene texture out of both eviction paths */
 bool  gfx_keep_cblock(const CBlock *c);
 void  gfx_keep_loaded(void);              /* retain the warmed scene set at the music ownership boundary */
+/* the same, but reload anything the load tail already evicted before keeping it (the disc is still unlocked here):
+ * returns how many textures could not be made resident, each named on stderr. Without this, a texture dropped during
+ * the load is flagged as present and its first draw becomes a locked read - a missing texture during gameplay. */
+unsigned gfx_prepare_scene(void);
+/* Saturn: from the music ownership boundary (game.c, just before music_play) to the next gfx_trim(), a draw must not
+ * read the disc. The drive serves one thing at a time, so such a read stops the CD-DA music dead for the length of
+ * the seek (see cd_sat.c read_sectors -> stream_start -> cdda_interrupt). While locked, a texture that was evicted
+ * under memory pressure comes back as NULL - a missing texture and a logged id - never as a seek. gfx_trim() unlocks. */
+void  gfx_lock_reads(void);
+void  gfx_unlock_reads(void);
+unsigned gfx_locked_reads(void);         /* textures a locked draw could not reload: 0 = the scene stayed fully resident */
 /* the texture of one of our images (assets/): the console's baked one, else the PNG decoded; w, h may be NULL */
 RTex *gfx_image_tex(const char *path, int *w, int *h);
 /* once per drawn frame: the clock that decides which textures are idle enough to evict under memory pressure */

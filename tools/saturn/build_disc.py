@@ -7,7 +7,9 @@ Everything sits in the ISO root under an 8.3 upper-case name (src/platform/satur
   PACK.PCK COMMON.PCK LEVELS.PCK MENU.PCK LEVEL1.PCK   the demo's packs, as they are (read block by block)
   TEX.PCK     every graphic as a "SAT1" block (tools/saturn/satbake.py): pack sprites, cblocks and fonts under their
               own id, our PNGs under namehash(path)
-  SND.PCK     adp68k ADPCM samples, "ADPK" blocks (core SFX 2/1-bit, asset/voice SFX 4-bit; bake_audio)
+  SND.PCK     adp68k ADPCM samples, "ADPK" blocks, all at 1 bit a sample = 1.5 bits with the block headers
+              (SATURN_ADPCM_FORMAT; bake_audio)
+  SOUNDS.BIN  checked resident sample sets for every stage and hero (no playback disc reads)
   MUSIC.TXT   music id -> CD-DA track and playable sector count (the tracks: build/saturn/tracks, in the CUE)
   FILES.PCK   our other files (text, level blobs) and the RGBA of the few images the game reads as pixels, stored as
               host-order (big-endian) 0xAABBGGRR integers, the way the core reads pixels
@@ -62,14 +64,13 @@ READ_TOGETHER = (0x0EAE8AEB, 0x2DEF1664,
                  0x957325FD, 0xF6CBB2F4, 0xBFFFBB29, 0xEEE2331F, 0x217B03F1, 0x4058897F)
 FRAME_ROW_W = 2048   # the frames side by side, rows of at most this many pixels
 
-# April's Saturn voice takes are a little larger than the complete Stage 5 sound bank can hold.
-# Keep one hurt take and one death take: every event still has its own sound, while these alternate
-# takes can be left out of the Saturn image. The WAV sources and every other platform's build remain intact.
-SATURN_OMITTED_VOICES = {
-    'voice/april_hurt2.wav',
-    'voice/april_hurt3.wav',
-    'voice/april_huh_anime_hurt.wav',
-    'voice/april_death2.wav',
+# Source voices the Saturn build has no caller for, so they are left out of SND.PCK rather than baked with a scene
+# mask of 0 (present in the image, resident in no scene, dead weight). The WAVs stay for the other platforms:
+# saber_ok is only used where a hero's power cut-in has no clip, which on Saturn is April alone (power.c), and
+# dark_death2 is an alternate Dark April death take the game never requests.
+SATURN_UNUSED_SOUNDS = {
+    'voice/saber_ok.wav',
+    'voice/dark_death2.wav',
 }
 SATURN_SFX_TABLE = (
     0xE418A101, 0xEB3309DC, 0xEB450AED, 0x8ADE82B6, 0x8ACB81A0, 0x8AB88092, 0x9C7B3FD9, 0xC66E1894,
@@ -78,8 +79,12 @@ SATURN_SFX_TABLE = (
     0x8AEB8147, 0xF11FCC31, 0x0AFC505A, 0x15A00BA1, 0x82EFBA26, 0x47D886A1, 0xE105C92A, 0xABC6A6E8,
 )
 SATURN_SOUND_BANK_BYTES = 0x78000 - 0x2400
-# With one hurt take, Stage 5 leaves 13,512 bytes free; all required scene sounds are preloaded before music starts.
+# Every stage/hero combination must fit, including dialogue and all random variants.
 SATURN_SOUND_BANK_RESERVE = 12 * 1024
+# adpencode format for every sample: 2 = 1 bit a sample, i.e. 1.5 bits with the per-block filter/shift header
+# (the SCSP ADPCM decoder plays 4/2/1 bit natively; 1 is the driver's lowest format and its 524288-sample /
+# 11.9 s ceiling is above our longest sample at 4.7 s). Raise a sample to 1 or 0 to trade bank space for quality.
+SATURN_ADPCM_FORMAT = 2
 _spec = importlib.util.spec_from_file_location('dc_build_disc', ROOT / 'tools/dc/build_disc.py')
 dc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(dc)   # the Dreamcast builder: its asset tables and helpers
@@ -269,9 +274,10 @@ def bake_audio(data: Path, work: Path, stage: Path, out: Path, snd: pckwrite.Pac
     channels at 44.1 kHz, fed by the SCSP's own slots. Each sample is the original adpencode's file, looped at its
     start (block 0 has no prediction, so the same data plays once or looped: aud_sat.c sets the loop word), in an
     "ADPK" block: magic, u32le sample count, the .adp bytes. A slot's 16-bit loop registers cap a sample at 8190
-    blocks of data bytes: ~2.97 s at 4 bits, 5.9 s at 2, 11.9 s at 1; a longer one drops to fewer bits.
-    Music is CD-DA (tracks/Tnn.BIN, 44.1 kHz stereo, a 2 s pregap each), mixed in through the driver's DSP CD input;
-    MUSIC.TXT in the ISO root maps a music id to its track and playable sector count.
+    blocks of data bytes: ~2.97 s at 4 bits, 5.9 s at 2, 11.9 s at 1. Every sample is encoded at 1 bit
+    (SATURN_ADPCM_FORMAT), 1.5 bits a sample with the block headers. Music is CD-DA (tracks/Tnn.BIN, 44.1 kHz
+    stereo, a 2 s pregap each), mixed in through the driver's DSP CD input; MUSIC.TXT in the ISO root maps a music id
+    to its track and playable sector count.
     """
     aw = work / 'audio'; sfx_dir = aw / 'sfx'; music_dir = aw / 'music'
     aw.mkdir(parents=True, exist_ok=True); sfx_dir.mkdir(exist_ok=True); music_dir.mkdir(exist_ok=True)
@@ -315,61 +321,79 @@ def bake_audio(data: Path, work: Path, stage: Path, out: Path, snd: pckwrite.Pac
             snd.add(key, 'sample', block)
             stored_bytes = (len(block) + 31) & ~31
             encoded[key] = {'id': f'{key:08X}', 'path': source.name if tag == 'pack-sfx' else source.relative_to(ROOT / 'assets').as_posix(),
-                            'tag': tag, 'adp_bytes': len(block) - 8, 'bank_bytes': (stored_bytes - 8 + 1) & ~1}
+                            'tag': tag, 'format_bits': (4, 2, 1)[f], 'adp_bytes': len(block) - 8, 'bank_bytes': (stored_bytes - 8 + 1) & ~1}
             log(f'audio {tag}: {source.name} -> {adp.name} ({adp.stat().st_size} bytes, {samples / 44100:.2f} s)')
             return
-        log(f'audio {tag}: {source.name} too long for the driver even at 1 bit, left out')
+        raise ValueError(f'audio {tag}: {source.name} too long for the driver even at 1 bit')
 
-    # sound RAM holds the 32 core effects for good (aud_keep at boot) and the stage's own samples: the frequently
-    # triggered ones at 2 bits, the rest at 1 bit (the codec's 1.5 / 2.5 bits a sample with the block headers)
-    core_2bit = {
-        0xE418A101,                         # menu/UI tick
-        0xC66E1894, 0xC6801BB9,            # player weapon variants
-        0xBF4917FF, 0xBF5B14EA, 0xBF6D1599,
-        0x89389611, 0x8923950D, 0xFE10EB78,
-    }
+    # Sound RAM is the scarce resource, so every sample is encoded in the driver's 1-bit format: 16 samples per
+    # 3-byte block (1 filter/shift header byte + 2 data bytes) is 1.5 bits a sample with the block headers, against
+    # 2.5 at 2 bits and 4.5 at 4. The SCSP DSP still decodes it, so this costs no SH-2 time.
     for wav in sorted(sfx_dir.glob('*.wav')):
         try: key = int(wav.stem, 16)
         except ValueError: continue
-        encode(key, wav, 1 if key in core_2bit else 2, 'pack-sfx')
+        encode(key, wav, SATURN_ADPCM_FORMAT, 'pack-sfx')
 
     for source in sorted((ROOT / 'assets').rglob('*.wav')):
         rel = source.relative_to(ROOT / 'assets')
-        if rel.as_posix() in SATURN_OMITTED_VOICES:
-            log(f'audio asset-sfx: {rel} omitted from Saturn build (redundant April voice variation)')
+        if rel.as_posix() in SATURN_UNUSED_SOUNDS:
+            log(f'audio asset-sfx: {rel} left out of the Saturn image (no caller on this platform)')
             continue
         if unused(rel) or rel.parts[0] == 'power' and (source.with_suffix('.m4v')).exists():
             continue   # a power clip's voice is in its .CPK
-        encode(namehash(rel.as_posix()), source, 0, 'asset-sfx')   # 4-bit: voices/custom effects
+        encode(namehash(rel.as_posix()), source, SATURN_ADPCM_FORMAT, 'asset-sfx')
 
-    april_required = (
-        'voice/april_jump.wav', 'voice/april_hurt1.wav',
-        'voice/april_death1.wav', 'voice/april_fall.wav',
-    )
-    stage5_required = [*SATURN_SFX_TABLE, *(namehash(p) for p in april_required),
-                       *(namehash(p) for p in ('power/saber_intermission.wav', 'space/charge.wav',
-                                                'sfx/turbo_start.wav', 'voice/april_ok.wav')),
-                       *(namehash(p) for p in ('voice/dark_hurt1.wav', 'voice/dark_hurt2.wav', 'voice/dark_hurt3.wav',
-                                               'voice/dark_death1.wav', 'voice/april_huh.wav'))]
-    stage5_ids = list(dict.fromkeys(stage5_required))
-    missing = [f'{key:08X}' for key in stage5_ids if key not in encoded]
-    if missing:
-        raise ValueError('Stage 5 April sound budget is missing samples: ' + ', '.join(missing))
-    stage5_bytes = sum(int(encoded[key]['bank_bytes']) for key in stage5_ids)
-    stage5_headroom = SATURN_SOUND_BANK_BYTES - stage5_bytes
-    if stage5_headroom < SATURN_SOUND_BANK_RESERVE:
-        raise ValueError(f'Stage 5 April sound set needs {stage5_bytes} bytes; '
-                         f'bank has {SATURN_SOUND_BANK_BYTES}, reserve is {SATURN_SOUND_BANK_RESERVE}')
-    manifest = {
-        'bank_bytes': SATURN_SOUND_BANK_BYTES,
-        'reserve_bytes': SATURN_SOUND_BANK_RESERVE,
-        'samples': sorted(encoded.values(), key=lambda sample: str(sample['id'])),
-        'profiles': {'stage5_april': {'sample_ids': [f'{key:08X}' for key in stage5_ids],
-                                      'resident_bytes': stage5_bytes, 'headroom_bytes': stage5_headroom}},
-    }
+    # All original pack effects/lines stay resident in every scene, including menus.
+    # Custom sounds are scoped to the stage; this exact manifest also drives runtime loading.
+    pack_ids = {key for key, sample in encoded.items() if sample['tag'] == 'pack-sfx'}
+    power_paths = ('power/saber_intermission.wav', 'space/charge.wav')
+    profiles = {}
+    masks = {key: 0 for key in encoded}
+    heroes = ('saber', 'fireball', 'april', 'colt')
+    for level in range(8):
+        for hero, hero_name in enumerate(heroes):
+            paths = set()
+            if level in (1, 3, 4, 5, 7):
+                paths.update(power_paths)
+            if level in (1, 3, 4, 5) and hero_name == 'april':
+                paths.update(('sfx/turbo_start.wav', 'voice/april_ok.wav'))
+            if level in (1, 3, 4, 5) and hero_name != 'fireball':
+                # every take heroes.c sfx_set_override can pick between, April included (her hurt list is the long one)
+                takes = ('jump', 'hurt1', 'hurt2', 'hurt3', 'death1', 'death2', 'fall')
+                paths.update(f'voice/{hero_name}_{take}.wav' for take in takes)
+                if hero_name == 'april':
+                    paths.add('voice/april_huh_anime_hurt.wav')   # her fourth hurt take (heroes.c april_sfx)
+            if level == 5:
+                paths.update(f'voice/dark_{take}.wav' for take in ('hurt1', 'hurt2', 'hurt3', 'death1'))
+                paths.add('voice/april_huh.wav')
+            if level in (2, 6, 7):
+                directory = {2: 'sfx/', 6: 'ramrod/', 7: 'space/'}[level]
+                paths.update(str(sample['path']) for sample in encoded.values()
+                             if str(sample['path']).startswith(directory))
+            required = pack_ids | {namehash(p) for p in paths}
+            missing = required - encoded.keys()
+            if missing:
+                raise ValueError(f'Stage {level} {hero_name}: missing samples {sorted(missing)}')
+            total = sum(int(encoded[key]['bank_bytes']) for key in required)
+            free = SATURN_SOUND_BANK_BYTES - total
+            if free < SATURN_SOUND_BANK_RESERVE:
+                raise ValueError(f'Stage {level} {hero_name} needs {total} bytes; '
+                                 f'bank {SATURN_SOUND_BANK_BYTES}, reserve {SATURN_SOUND_BANK_RESERVE}')
+            for key in required:
+                masks[key] |= 1 << (level * 4 + hero)
+            profiles[f'stage{level}_{hero_name}'] = {
+                'sample_ids': [f'{key:08X}' for key in sorted(required)],
+                'resident_bytes': total, 'headroom_bytes': free}
+            log(f'audio budget: Stage {level} {hero_name.title()} {total} / {SATURN_SOUND_BANK_BYTES} bytes '
+                f'({free} bytes free, {len(required)} unique samples)')
+    manifest = {'bank_bytes': SATURN_SOUND_BANK_BYTES, 'reserve_bytes': SATURN_SOUND_BANK_RESERVE,
+                'samples': sorted(encoded.values(), key=lambda sample: str(sample['id'])), 'profiles': profiles}
     (out / 'audio_budget.json').write_text(json.dumps(manifest, indent=2) + '\n')
-    log(f'audio budget: Stage 5 April {stage5_bytes} / {SATURN_SOUND_BANK_BYTES} bytes '
-        f'({stage5_headroom} bytes free, {len(stage5_ids)} unique samples)')
+    rows = [struct.pack('<III', key, int(encoded[key]['bank_bytes']), mask)
+            for key, mask in sorted(masks.items())]
+    if len(rows) > 192:
+        raise ValueError('Sound manifest exceeds aud_sat.c MAX_SAMPLES')
+    (stage / 'SOUNDS.BIN').write_bytes(b'SBN1' + struct.pack('<I', len(rows)) + b''.join(rows))
 
     tracks = out / 'tracks'
     for old in tracks.glob('*'):

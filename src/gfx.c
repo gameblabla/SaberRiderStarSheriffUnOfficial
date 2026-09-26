@@ -11,6 +11,35 @@
 static Ren *R;
 static uint32_t g_frame = 2;
 
+/* the Saturn: a draw between gfx_lock_reads() and gfx_trim() may not read the disc (it would stop the CD-DA music).
+ * See gfx.h. g_locked_refused counts the textures such a draw had to do without, and names each once. */
+static bool g_locked;
+static unsigned g_locked_refused;
+#define REFUSED_MAX 256
+static uint32_t g_refused_id[REFUSED_MAX];
+static int g_nrefused;
+
+static bool may_read(uint32_t id)
+{
+    if (!g_locked) return true;
+    for (int i = 0; i < g_nrefused; i++) if (g_refused_id[i] == id) return false;
+    if (g_nrefused < (int)(sizeof g_refused_id / sizeof *g_refused_id)) g_refused_id[g_nrefused++] = id;
+    fprintf(stderr, "gfx: %08X not resident and the disc is locked (music is playing): a missing texture, "
+                    "not a data read\n", id);
+    g_locked_refused++;
+    return false;
+}
+
+/* Everything first touched while the disc is locked belongs to the running scene, so it starts retained: an entry made
+ * after gfx_keep_loaded() would otherwise be the one evict_any() drops next, and its next draw would be the seek this
+ * whole mechanism exists to prevent. Retaining it all can still exhaust the heap; that surfaces as a logged missing
+ * texture (may_read), which is a far better failure than stopping the music. */
+static bool keep_new(void) { return g_locked; }
+
+void gfx_lock_reads(void) { g_locked = true; g_locked_refused = 0; g_nrefused = 0; }
+void gfx_unlock_reads(void) { g_locked = false; }
+unsigned gfx_locked_reads(void) { return g_locked_refused; }
+
 static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 
@@ -168,7 +197,7 @@ CBlock *cblock_get(uint32_t id)
     if (g_ncb == MAX_CB) { fprintf(stderr, "cblock %08X: cache full\n", id); return NULL; }
     CBlock *c = &g_cb[g_ncb];
     memset(c, 0, sizeof *c);
-    c->id = id; c->from_pack = true;
+    c->id = id; c->from_pack = true; c->retained = keep_new();
     if (!cblock_build(c, true)) { free((void *)c->cells); free((void *)c->mask); memset(c, 0, sizeof *c); return NULL; }
     g_ncb++;
     return c;
@@ -182,6 +211,7 @@ static CBlock *cblock_sheet(uint32_t id, RTex *tex, int w, int h, int tw, int th
     CBlock *c = &g_cb[g_ncb];
     memset(c, 0, sizeof *c);
     c->id = id; c->frames = 1; c->cols = w / tw; c->rows = h / th; c->tw = tw; c->th = th;
+    c->retained = keep_new();
     c->ntiles = c->cols * c->rows;
     uint16_t *cells = malloc((size_t)c->ntiles * 2 + 2);
     if (!cells) { rtex_destroy(tex); return NULL; }
@@ -207,7 +237,7 @@ CBlock *cblock_from_png(uint32_t id, const char *path, int tw, int th)
     int w, h; RTex *t = gfx_image_tex(path, &w, &h);
     if (t) rtex_set_tag(t, id);
     CBlock *c = cblock_sheet(id, t, w, h, tw, th);
-    if (c) c->file = strdup(path);
+    if (c) { c->file = strdup(path); c->retained = keep_new(); }
     return c;
 }
 
@@ -215,6 +245,7 @@ RTex *cblock_tex(const CBlock *cc)
 {
     if (!cc) return NULL;
     CBlock *c = (CBlock *)cc;
+    if (!c->tex && (c->from_pack || c->file) && !may_read(c->id)) { c->last_used = g_frame; return NULL; }
     if (!c->tex && c->from_pack) cblock_build(c, false);
     else if (!c->tex && c->file) { int w, h; if ((c->tex = gfx_image_tex(c->file, &w, &h))) rtex_set_tag(c->tex, c->id); }
     c->last_used = g_frame;
@@ -283,6 +314,7 @@ static RTex *cblock_frames_tex(CBlock *c)
 {
     if (c->fstate < 0 || !c->from_pack) return NULL;
     if (!c->ftex) {
+        if (!may_read(c->id ^ FRM_XOR)) return NULL;
         int w, h; uint8_t *meta = NULL;
         c->ftex = baked_tex(c->id ^ FRM_XOR, &w, &h, c->fstate ? NULL : &meta);
         if (!c->fstate) {
@@ -433,7 +465,7 @@ Sprite *sprite_from_png(uint32_t id, const char *path, int frame_w)
     int w, h; RTex *t = gfx_image_tex(path, &w, &h);
     if (t) rtex_set_tag(t, id);
     Sprite *s = t ? sprite_strip(id, t, w, h, frame_w > 0 && w >= frame_w ? w / frame_w : 1) : NULL;
-    if (s) s->file = strdup(path);
+    if (s) { s->file = strdup(path); s->retained = keep_new(); }
     return s;
 }
 
@@ -444,7 +476,7 @@ Sprite *sprite_get(uint32_t id)
     if (g_nspr < MAX_SPR && packs_peek_type(id, RES_TEX)) {
         Sprite *s = &g_spr[g_nspr]; memset(s, 0, sizeof *s);
         s->id = id;
-        if (sprite_baked(s, true)) { s->from_pack = true; g_nspr++; return s; }
+        if (sprite_baked(s, true)) { s->from_pack = true; s->retained = keep_new(); g_nspr++; return s; }
     }
 #endif
     const PackEntry *e = packs_find_type(id, RES_SPRITE);
@@ -453,7 +485,7 @@ Sprite *sprite_get(uint32_t id)
 #ifdef PLAT_LOW_MEMORY
     packs_release(id);
 #endif
-    if (s) s->from_pack = true;
+    if (s) { s->from_pack = true; s->retained = keep_new(); }
     return s;
 }
 
@@ -461,6 +493,7 @@ RTex *sprite_tex(const Sprite *cs)
 {
     if (!cs) return NULL;
     Sprite *s = (Sprite *)cs;
+    if (!s->tex && (s->from_pack || s->file) && !may_read(s->id)) { s->last_used = g_frame; return NULL; }
     if (!s->tex && s->from_pack) {
 #ifdef PLAT_BAKED_ASSETS
         if (sprite_baked(s, false)) { s->last_used = g_frame; return s->tex; }
@@ -499,6 +532,34 @@ void gfx_keep_loaded(void)
     for (int i = 0; i < g_ncb; i++) if (g_cb[i].tex || g_cb[i].ftex) g_cb[i].retained = true;
 }
 
+/* The scene's whole warmed set, made resident and then kept - the step gfx_keep_loaded() could not do. Flagging alone is
+ * not enough: the tail of a stage load still runs out of memory, and packs_evict takes any texture not yet marked, so
+ * by this point an enemy sheet or the cut-in can already be gone with fstate still set. Flagging it then leaves the
+ * first draw to want the disc (aud_sat.c's rule, gfx.c's may_read), i.e. an enemy that is invisible for the level, or a
+ * cut-in that stalls the music. So reload first - the disc is still unlocked here, this is the load boundary - and only
+ * then keep. Returns how many could not be made resident, each named on stderr: a missing texture is a bug to see, not
+ * a silent hole in the picture. */
+unsigned gfx_prepare_scene(void)
+{
+    unsigned missing = 0;
+    for (int i = 0; i < g_nspr; i++) {
+        Sprite *s = &g_spr[i];
+        if (!(s->from_pack || s->file)) continue;
+        if (!s->tex && !sprite_tex(s)) { fprintf(stderr, "gfx: scene sprite %08X could not be made resident\n", s->id); missing++; continue; }
+        s->retained = true;
+    }
+    for (int i = 0; i < g_ncb; i++) {
+        CBlock *c = &g_cb[i];
+        if (!(c->from_pack || c->file)) continue;
+        if (!c->tex && !cblock_tex(c)) { fprintf(stderr, "gfx: scene cblock %08X could not be made resident\n", c->id); missing++; continue; }
+#ifdef PLAT_SATURN
+        cblock_frames_tex(c);
+#endif
+        c->retained = true;
+    }
+    return missing;
+}
+
 /* ---- memory pressure: drop the pack (or PNG) texture drawn longest ago (not in this frame or the one being rendered) ---- */
 static bool evict_one(void)
 {
@@ -526,9 +587,11 @@ static bool evict_any(void)
 }
 
 /* a stage change: every pack / PNG texture goes (each is made again when next drawn), so the next stage's load finds
- * the memory the last one's graphics held (the Saturn: its sheets' blocks live in work RAM) */
+ * the memory the last one's graphics held (the Saturn: its sheets' blocks live in work RAM). Also the end of the
+ * locked window: the next stage's load is allowed to read, which is what it has to do to get its graphics at all. */
 void gfx_trim(void)
 {
+    gfx_unlock_reads();
     for (int i = 0; i < g_nspr; i++) {
         g_spr[i].retained = false;
         if ((g_spr[i].from_pack || g_spr[i].file) && g_spr[i].tex) { rtex_destroy(g_spr[i].tex); g_spr[i].tex = NULL; }

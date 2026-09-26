@@ -33,7 +33,11 @@ bool app_init(Ren *ren, const char *data_dir, int start_level)
     static const char *const baked[] = { "tex.pck", "snd.pck", "files.pck" };
     if (!packs_open(data_dir, baked, 3)) return false;
 #endif
+#ifdef PLAT_SATURN
+    if (!audio_init()) return false; /* a failed resident bank must not enter gameplay */
+#else
     audio_init();
+#endif
     if (!game_init(&g, ren, APP_SCREEN_W, APP_SCREEN_H, start_level)) return false;
     /* debug: SABER_SCRIPT="60:R,20:RJ,40:" drives the input for N fixed steps each (L R U D J S A P, X = power); a '*'
      * goes back to the step after the first (SABER_SCRIPT="120:,25:RS,5:RJ,*": a wait, then a loop) */
@@ -159,9 +163,9 @@ void app_perf(uint32_t upd_us, uint32_t draw_us, uint32_t frame_us, int steps, i
     unsigned reads = packs_reads();
     char a[12], b[12], c[12], d[12], e[12];
     fprintf(stderr, "perf: cam %5s enemies %2d | update %5s/%5s ms | draw %5s/%5s ms | frame max %5s ms | "
-                    "steps 0x%u 2+x%u | prims %u | pack reads %u\n",
+                    "steps 0x%u 2+x%u | prims %u | pack reads %u | locked misses %u\n",
             RS(g.in_level ? g.cam_x : R(-1), 0), g.enemies.count, ms2(a, su / 60), ms2(b, mu), ms2(c, sd / 60), ms2(d, md), ms2(e, mf),
-            skip, dbl, prims_max, reads - reads0);
+            skip, dbl, prims_max, reads - reads0, gfx_locked_reads());
     reads0 = reads; n = su = sd = mu = md = mf = prims_max = skip = dbl = 0; quiet = 2;
 }
 

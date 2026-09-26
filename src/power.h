@@ -33,6 +33,7 @@ typedef struct {
 } Power;
 
 void power_reset(Power *pw, int hero, bool bomb);      /* a new stage: two items, no cooldown */
+void power_warm_cutin(int hero);              /* Saturn: claim the drawn cut-in's textures before the heap fills (see power.c) */
 bool power_can_start(const Power *pw);
 void power_start(Power *pw, Ren *ren);         /* uses an item and opens the cut-in (the caller stops its world) */
 bool power_in_cutin(const Power *pw);

@@ -149,6 +149,18 @@ static void service_loop(void)
 }
 
 /* ---- music ---- */
+#ifdef PLAT_SATURN
+bool audio_prepare_scene(int stage, int hero)
+{
+    ndelayed = 0;
+    memset(slot, 0, sizeof slot);
+    memset(sfx_over, 0, sizeof sfx_over);
+    file_voice = loop_voice = -1;
+    loop_smp = NULL; loop_want = false; loop_gain = 0;
+    return aud_prepare_scene(stage, hero);
+}
+#endif
+
 static real music_track_vol = R(1.0f), music_fade = R(1.0f);   /* 0x7c53a8 per-track volume x FUN_00425e70 fade */
 static real music_duck = R(1.0f), music_duck_target = R(1.0f);
 

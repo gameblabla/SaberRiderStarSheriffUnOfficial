@@ -7,7 +7,7 @@
  * software interrupt (SCIPD bit 5, which the 68000 clears when it has taken the block): aud_update sends what changed
  * once a frame.
  * Samples ("ADPK" blocks of SND.PCK, tools/saturn/build_disc.py bake_audio) are copied into the sound RAM bank when first
- * needed and stay there, the least recently used ones not playing making room when it is full; the effect table at
+ * preparing a scene and stay there until the next scene. Playback never reads the disc. The effect table at
  * 0x2000 gives the driver a sample's address by id. Every sample is encoded looping at its start: the word at +2 (the
  * loop block) says whether it plays once (the block count: it then loops its silent tail) or loops (1).
  * Music: CD-DA through the DSP's CD input (cd_sat.c plays the tracks; MUSIC.TXT maps a music id to its track).
@@ -18,6 +18,7 @@
  *
  * Sound RAM: 0x00000 driver (control block at 0x80) | 0x02000 effect table | 0x02400 bank | 0x78000 movie ring(s). */
 #include "../aud.h"
+#include "../plat.h"
 #include "../../pack.h"
 #include "../../assets.h"
 #include "sat_internal.h"
@@ -60,23 +61,24 @@ struct AudSample {
     uint32_t key;
     uint32_t addr, bytes, samples;   /* in the bank (addr 0: not there) */
     uint16_t blocks;                 /* the loop word when it plays once */
-    uint32_t last_use;
+    uint32_t scene_mask;             /* SOUNDS.BIN: bit (stage * 4 + hero) */
     uint8_t id;
-    bool missing, kept, looped;      /* looped: the loop word in sound RAM says loop */
+    bool missing, looped, reported; /* looped: the loop word in sound RAM says loop */
     uint16_t users;                  /* logical voices, queued mailboxes and acknowledged hardware channels */
 };
 
 static AudSample samples[MAX_SAMPLES];
 static int nsamples;
 static uint8_t id_used[TABLE_IDS];
-static uint32_t use_clock;
+static bool bank_loading;
+static uint32_t bank_next;
 
 typedef struct {
-    bool active, loop;
+    bool active, loop, started;
     AudSample *s;
     AudSample *hw_s, *pending_s;    /* refs held until the 68000 acknowledges stop/replace commands */
     uint32_t end_us;                 /* a one-shot's end (sat_timer_us), give or take a frame */
-    uint16_t vol, gen;
+    uint16_t vol, gen, pending_gen;
     uint8_t action;                  /* to send: 0, ACT_PLAY, ACT_STOP */
     uint8_t pending_action;
     bool vol_dirty;
@@ -88,6 +90,8 @@ static int ntracks;
 static uint16_t cd_vol = 0x4000;
 static bool cd_dirty = true, driver_ok, movie, movie_music;
 static unsigned kicks_late;
+static int test_sample, test_pass;
+static uint32_t test_at;
 
 static uint32_t rd32le(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
 static uint16_t vol_of(real g) { int32_t v = (int32_t)g; return v <= 0 ? 0 : v >= FX_ONE ? 0x4000 : (uint16_t)(v >> 2); }   /* 16.16 -> 0x4000 = 1.0 */
@@ -144,10 +148,10 @@ static void driver_ack(void)
         sample_unref(v->hw_s);
         v->hw_s = v->pending_s;
         v->pending_s = NULL;       /* transfer the queued pin to the hardware-owned reference */
-        if (v->pending_action == ACT_PLAY && v->active && v->s == v->hw_s)
+        if (v->pending_action == ACT_PLAY && v->active && v->gen == v->pending_gen) {
+            v->started = true;
             v->end_us = sat_timer_us() + 17000u + (uint32_t)(((uint64_t)(v->s->samples + 16u) * 1000000u) / RATE);
-        else if (v->pending_action == ACT_STOP)
-            v->end_us = 0;
+        }
         v->pending_action = 0;
     }
 }
@@ -171,6 +175,7 @@ static void send(void)
             AudSample *next = action == ACT_PLAY ? v->s : NULL;
             sample_ref(next);
             v->pending_s = next; v->pending_action = action;
+            v->pending_gen = v->gen;
             SND16(cb) = (uint16_t)(action << 8 | (next ? next->id : 0));
             v->action = 0;
         }
@@ -180,14 +185,6 @@ static void send(void)
 }
 
 /* ---- the sample bank ---- */
-static void sample_evict(AudSample *s)
-{
-    if (!s || s->users || !s->addr) return;
-    id_used[s->id] = 0;
-    SND16(TABLE_OFF + s->id * 4u) = 0; SND16(TABLE_OFF + s->id * 4u + 2) = 0;
-    s->addr = 0;
-}
-
 static void sample_ref(AudSample *s)
 {
     if (s && s->users != UINT16_MAX) s->users++;
@@ -197,44 +194,17 @@ static void sample_unref(AudSample *s)
 {
     if (!s || !s->users) return;
     s->users--;
-    if (!s->users && !s->kept) sample_evict(s);
-}
-
-/* the lowest gap of n bytes in the bank, 0 if none */
-static uint32_t bank_gap(uint32_t n)
-{
-    uint32_t at = BANK_OFF;
-    for (;;) {
-        bool clash = false;
-        for (int i = 0; i < nsamples; i++) {
-            const AudSample *s = &samples[i];
-            if (s->addr && s->addr < at + n && s->addr + s->bytes > at) { clash = true; at = s->addr + s->bytes; }
-        }
-        if (!clash) return at + n <= BANK_END ? at : 0;
-    }
-}
-
-static bool bank_alloc(uint32_t n, uint32_t *at)
-{
-    for (int pass = 0; pass < 2; pass++)   /* evicting samples that are not kept first, then kept ones (they come back when wanted) */
-        for (;;) {
-            if ((*at = bank_gap(n))) return true;
-            AudSample *lru = NULL;
-            for (int i = 0; i < nsamples; i++) {
-                AudSample *s = &samples[i];
-                if (s->addr && !s->users && (pass || !s->kept) && (!lru || s->last_use < lru->last_use)) lru = s;
-            }
-            if (!lru) break;
-            sample_evict(lru);
-        }
-    return false;
 }
 
 static bool sample_load(AudSample *s)
 {
     if (!s || s->missing) return false;
-    s->last_use = ++use_clock;
     if (s->addr) return true;
+    if (!bank_loading) {
+        if (!s->reported) printf("snd: NONRESIDENT %08lX (disc read forbidden)\n", (unsigned long)s->key);
+        s->reported = true;
+        return false;
+    }
     const PackEntry *e = packs_find_type(s->key, RES_SAMPLE);
     if (!e || e->size < 16 || memcmp(e->data, "ADPK", 4)) {
         printf("snd: sample %08lX missing/bad\n", (unsigned long)s->key);
@@ -244,8 +214,8 @@ static bool sample_load(AudSample *s)
     const uint8_t *adp = e->data + 8;
     uint32_t n = (e->size - 8 + 1) & ~1u;
     int id = 0; while (id < TABLE_IDS && id_used[id]) id++;
-    uint32_t at;
-    if (id == TABLE_IDS || !bank_alloc(n, &at)) {
+    uint32_t at = bank_next;
+    if (n != s->bytes || id == TABLE_IDS || n > BANK_END - at) {
         printf("snd: no room for %08lX (%lu bytes)\n", (unsigned long)s->key, (unsigned long)n);
         packs_release_type(s->key, RES_SAMPLE);
         return false;
@@ -259,6 +229,7 @@ static bool sample_load(AudSample *s)
     SND16(at + 2) = s->blocks; s->looped = false;   /* plays once until asked to loop */
     packs_release_type(s->key, RES_SAMPLE);
     s->addr = at; s->id = (uint8_t)id; id_used[id] = 1;
+    bank_next += n;
     SND16(TABLE_OFF + id * 4u) = (uint16_t)(at >> 16); SND16(TABLE_OFF + id * 4u + 2) = (uint16_t)at;
     return true;
 }
@@ -266,21 +237,15 @@ static bool sample_load(AudSample *s)
 static AudSample *sample_find(uint32_t key)
 {
     for (int i = 0; i < nsamples; i++) if (samples[i].key == key) return samples[i].missing ? NULL : &samples[i];
-    if (nsamples >= MAX_SAMPLES) return NULL;
-    AudSample *s = &samples[nsamples++]; memset(s, 0, sizeof *s); s->key = key;
-    return s;
+    printf("snd: unknown sample %08lX\n", (unsigned long)key);
+    return NULL;
 }
 
 AudSample *aud_sample_pack(uint32_t id) { return sample_find(id); }
 AudSample *aud_sample_file(const char *path) { return path ? sample_find(asset_key(path)) : NULL; }
 void aud_prefetch(AudSample *s) { (void)sample_load(s); }
-void aud_keep(AudSample *s, bool loop) { (void)loop; if (s && sample_load(s)) s->kept = true; }
-void aud_unkeep(AudSample *s)
-{
-    if (!s || !s->kept) return;
-    s->kept = false;
-    if (!s->users) sample_evict(s);
-}
+void aud_keep(AudSample *s, bool loop) { (void)loop; (void)sample_load(s); }
+void aud_unkeep(AudSample *s) { (void)s; } /* scene ownership outlives hero override handles */
 
 /* ---- voices ---- */
 static void voice_release(Voice *v)
@@ -295,7 +260,7 @@ static struct { AudSample *s; real gain; uint32_t us; } pend;   /* a one-shot as
 int aud_play(AudSample *s, real gain, bool loop)
 {
     if (movie) { if (!loop) { pend.s = s; pend.gain = gain; pend.us = sat_timer_us(); } return -1; }
-    if (!sample_load(s)) return -1;
+    if (!driver_ok || !sample_load(s)) return -1;
     int best = -1;
     for (int i = 0; i < CHANNELS && best < 0; i++) if (!voices[i].active) best = i;
     for (int pass = 0; pass < 2 && best < 0; pass++)   /* all busy: the one-shot nearest its end, then any loop */
@@ -304,7 +269,7 @@ int aud_play(AudSample *s, real gain, bool loop)
     Voice *v = &voices[best];
     voice_release(v);
     if (s->looped != loop) { SND16(s->addr + 2) = loop ? 1 : s->blocks; s->looped = loop; }
-    v->active = true; v->loop = loop; v->s = s; sample_ref(s);
+    v->active = true; v->loop = loop; v->started = false; v->s = s; sample_ref(s);
     v->end_us = 0;                  /* duration starts only after the driver acknowledges ACT_PLAY */
     uint16_t vol = vol_of(gain); if (vol != v->vol) { v->vol = vol; v->vol_dirty = true; }
     v->action = ACT_PLAY;
@@ -316,6 +281,50 @@ static Voice *voice_handle(int h) { int i = h & 0xff; return h >= 0 && i < CHANN
 void aud_set_gain(int h, real gain) { Voice *v = voice_handle(h); if (!v) return; uint16_t vol = vol_of(gain); if (vol != v->vol) { v->vol = vol; v->vol_dirty = true; } }
 void aud_stop(int h) { Voice *v = voice_handle(h); if (!v) return; voice_release(v); v->action = ACT_STOP; }
 bool aud_playing(int h) { return voice_handle(h) != NULL; }
+
+/* Called only at a loading boundary. Stop and acknowledge EVERY hardware channel before
+ * reusing the bank, including one-shots which already released their logical handles. */
+bool aud_prepare_scene(int stage, int hero)
+{
+    if (movie || !driver_ok || stage < 0 || stage > 7 || hero < 0 || hero > 3) return false;
+    uint32_t mask = 1u << (stage * 4 + hero), total = 0;
+    for (int i = 0; i < nsamples; i++) if (samples[i].scene_mask & mask) {
+        const PackEntry *e = packs_peek_type(samples[i].key, RES_SAMPLE);
+        if (!e || e->declen < 16 || ((e->declen - 8 + 1) & ~1u) != samples[i].bytes) {
+            printf("snd: sound manifest/pack mismatch %08lX\n", (unsigned long)samples[i].key);
+            return false;
+        }
+        if (samples[i].bytes > BANK_END - BANK_OFF - total) return false;
+        total += samples[i].bytes;
+    }
+    if (!total) return false;
+    aud_music_stop();
+    pend.s = NULL;
+    for (int i = 0; i < CHANNELS; i++) { voice_release(&voices[i]); voices[i].action = ACT_STOP; }
+    uint32_t t0 = sat_timer_us();
+    for (;;) {
+        send();
+        bool busy = false;
+        for (int i = 0; i < CHANNELS; i++) busy |= voices[i].action || voices[i].pending_action;
+        if (!busy) break;
+        if (sat_timer_us() - t0 > 100000u) { printf("snd: bank stop acknowledgement timed out\n"); return false; }
+    }
+    for (int i = 0; i < nsamples; i++) {
+        if (samples[i].users) return false;
+        samples[i].addr = 0; samples[i].reported = false;
+    }
+    memset(id_used, 0, sizeof id_used);
+    for (uint32_t i = TABLE_OFF; i < BANK_OFF; i += 2) SND16(i) = 0;
+    bank_next = BANK_OFF; bank_loading = true;
+    bool ok = true;
+    for (int i = 0; i < nsamples; i++)
+        if ((samples[i].scene_mask & mask) && !sample_load(&samples[i])) { ok = false; break; }
+    bank_loading = false;
+    test_sample = test_pass = 0; test_at = 0;
+    printf("snd: scene %d hero %d %s: %lu/%lu bytes resident, %lu free\n", stage, hero, ok ? "READY" : "FAILED",
+           (unsigned long)(bank_next - BANK_OFF), (unsigned long)(BANK_END - BANK_OFF), (unsigned long)(BANK_END - bank_next));
+    return ok;
+}
 
 /* ---- music: CD-DA ---- */
 static void movie_cd_level(void);
@@ -416,15 +425,39 @@ void film_pcm_stop(int ch)
 }
 
 /* ---- once a frame ---- */
+/* Opt-in emulator/hardware diagnostic: exercise every resident sound twice while music
+ * runs, then eight simultaneous voices. Logs permit checking that no play caused a read. */
+static void sound_test(uint32_t now)
+{
+    static int enabled = -1;
+    if (enabled < 0) enabled = plat_getenv("SABER_SNDTEST") != NULL;
+    if (!enabled || test_pass >= 3) return;
+    if (!test_at) { test_at = now + 4000000u; return; }
+    if ((int32_t)(now - test_at) < 0) return;
+    while (test_sample < nsamples && !samples[test_sample].addr) test_sample++;
+    if (test_sample == nsamples) {
+        test_sample = 0; test_pass++;
+        if (test_pass == 3) { printf("sndtest: DONE\n"); return; }
+        while (test_sample < nsamples && !samples[test_sample].addr) test_sample++;
+    }
+    AudSample *s = &samples[test_sample++];
+    int h = -1;
+    for (int i = 0; i < (test_pass == 2 ? CHANNELS : 1); i++) h = aud_play(s, R(0.15f), false);
+    printf("sndtest: pass %d sample %08lX handle %d at %lu ms\n", test_pass, (unsigned long)s->key, h, (unsigned long)(now / 1000u));
+    test_at = now + 500000u;
+}
+
 void aud_update(void)
 {
     if (movie && !movie_music) return;   /* the clip reads the disc: the music comes back after it */
     cd_sat_cdda_update();
     if (movie) return;
+    driver_ack();
     uint32_t now = sat_timer_us();
+    sound_test(now);
     for (int i = 0; i < CHANNELS; i++) {
         Voice *v = &voices[i];
-        if (v->active && !v->loop && (int32_t)(now - v->end_us) >= 0) {
+        if (v->active && v->started && !v->loop && (int32_t)(now - v->end_us) >= 0) {
             voice_release(v);
             v->action = ACT_STOP;
         }
@@ -434,6 +467,19 @@ void aud_update(void)
 
 bool aud_init(void)
 {
+    FILE *list = fopen("SOUNDS.BIN", "rb");
+    uint8_t header[8];
+    if (!list) { printf("snd: missing SOUNDS.BIN; rebuild the Saturn disc\n"); return false; }
+    bool valid = fread(header, 1, sizeof header, list) == sizeof header && !memcmp(header, "SBN1", 4);
+    uint32_t count = valid ? rd32le(header + 4) : 0;
+    if (!count || count > MAX_SAMPLES) { fclose(list); return false; }
+    for (uint32_t i = 0; i < count; i++) {
+        uint8_t row[12];
+        if (fread(row, 1, sizeof row, list) != sizeof row) { fclose(list); return false; }
+        samples[i].key = rd32le(row); samples[i].bytes = rd32le(row + 4); samples[i].scene_mask = rd32le(row + 8);
+    }
+    nsamples = (int)count;
+    fclose(list);
     FILE *f = fopen("MUSIC.TXT", "r");
     if (f) {
         char line[96];
@@ -448,11 +494,12 @@ bool aud_init(void)
         fclose(f);
     }
     cd_sat_stream_stop();
+    scsp_quiet(); /* discard BIOS slot/DSP state before starting the game's driver */
     for (uint32_t i = TABLE_OFF; i < BANK_OFF; i += 2) SND16(i) = 0;
     driver_ok = driver_start();
     printf("snd: adp68k (8 ADPCM channels on the SCSP DSP), %lu KB bank, %d CD-DA tracks%s\n",
            (unsigned long)((BANK_END - BANK_OFF) / 1024), ntracks, driver_ok ? "" : ", NO DRIVER");
-    return driver_ok;
+    return driver_ok && aud_prepare_scene(0, 0);
 }
 
 void aud_shutdown(void)
