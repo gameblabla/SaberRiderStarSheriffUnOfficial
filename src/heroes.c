@@ -93,9 +93,9 @@ static void april_sfx(void)
     static const struct { int id; const char *files[4]; } G[] = {
         { 2,  { "voice/april_jump.wav" } },
 #ifdef PLAT_SATURN
-        /* The Saturn image keeps two hurt takes and one death take. The omitted files are only alternate performances;
+        /* The Saturn image keeps one hurt take and one death take. The omitted files are only alternate performances;
          * April still has a sound for each event, and the source recordings remain available to other builds. */
-        { 3,  { "voice/april_hurt1.wav", "voice/april_hurt3.wav" } },
+        { 3,  { "voice/april_hurt1.wav" } },
         { 4,  { "voice/april_death1.wav" } },
 #else
         { 3,  { "voice/april_hurt1.wav", "voice/april_hurt2.wav", "voice/april_hurt3.wav", "voice/april_huh_anime_hurt.wav" } },

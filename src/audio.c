@@ -104,8 +104,7 @@ void sfx_clear_overrides(void)
 {
 #ifdef PLAT_SATURN
     for (int i = 0; i < 24; i++) for (int k = 0; k < sfx_over[i].n; k++)
-        if (strstr(sfx_over[i].file[k], "voice/april_"))
-            aud_unkeep(aud_sample_file(sfx_over[i].file[k]));
+        aud_unkeep(aud_sample_file(sfx_over[i].file[k]));
 #endif
     memset(sfx_over, 0, sizeof sfx_over);
 }

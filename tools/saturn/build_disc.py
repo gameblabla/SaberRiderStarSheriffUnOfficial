@@ -63,10 +63,11 @@ READ_TOGETHER = (0x0EAE8AEB, 0x2DEF1664,
 FRAME_ROW_W = 2048   # the frames side by side, rows of at most this many pixels
 
 # April's Saturn voice takes are a little larger than the complete Stage 5 sound bank can hold.
-# Keep two hurt takes and one death take: every event still has its own sound, while these alternate
+# Keep one hurt take and one death take: every event still has its own sound, while these alternate
 # takes can be left out of the Saturn image. The WAV sources and every other platform's build remain intact.
 SATURN_OMITTED_VOICES = {
     'voice/april_hurt2.wav',
+    'voice/april_hurt3.wav',
     'voice/april_huh_anime_hurt.wav',
     'voice/april_death2.wav',
 }
@@ -77,7 +78,8 @@ SATURN_SFX_TABLE = (
     0x8AEB8147, 0xF11FCC31, 0x0AFC505A, 0x15A00BA1, 0x82EFBA26, 0x47D886A1, 0xE105C92A, 0xABC6A6E8,
 )
 SATURN_SOUND_BANK_BYTES = 0x78000 - 0x2400
-SATURN_SOUND_BANK_RESERVE = 16 * 1024
+# With one hurt take, Stage 5 leaves 13,512 bytes free; all required scene sounds are preloaded before music starts.
+SATURN_SOUND_BANK_RESERVE = 12 * 1024
 _spec = importlib.util.spec_from_file_location('dc_build_disc', ROOT / 'tools/dc/build_disc.py')
 dc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(dc)   # the Dreamcast builder: its asset tables and helpers
@@ -341,7 +343,7 @@ def bake_audio(data: Path, work: Path, stage: Path, out: Path, snd: pckwrite.Pac
         encode(namehash(rel.as_posix()), source, 0, 'asset-sfx')   # 4-bit: voices/custom effects
 
     april_required = (
-        'voice/april_jump.wav', 'voice/april_hurt1.wav', 'voice/april_hurt3.wav',
+        'voice/april_jump.wav', 'voice/april_hurt1.wav',
         'voice/april_death1.wav', 'voice/april_fall.wav',
     )
     stage5_required = [*SATURN_SFX_TABLE, *(namehash(p) for p in april_required),
