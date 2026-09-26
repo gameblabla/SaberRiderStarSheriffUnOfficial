@@ -57,12 +57,20 @@ void readStereoPcmBytesFromRingBuff(binary_stream_t *stream,
 
      cpu_dmac_channel_config_set(&pcm_cfg);
      cpu_dmac_channel_start(0);
+     /* Channel 0 is reused for the right channel below; drain the left copy
+        before reconfiguring it or config_set will stop it mid-transfer. */
+     cpu_dmac_channel_wait(0);
 
      pcm_cfg.src = srcR;
      pcm_cfg.dst = CPU_CACHE_THROUGH | (uint32_t) destPtrR;
      pcm_cfg.len = len;
      cpu_dmac_channel_config_set(&pcm_cfg);
      cpu_dmac_channel_start(0);
+     /* The SH-2 DMAC is asynchronous.  The caller modifies this sound-RAM
+        range and accounts it as ready immediately after this function; wait
+        here so neither operation can race the copy (or truncate it when the
+        next PCM chunk reconfigures channel 0). */
+     cpu_dmac_channel_wait(0);
      cpu_cache_purge();
 
   } else {
@@ -86,6 +94,9 @@ void readPcmBytesFromRingBuff(
 
      cpu_dmac_channel_config_set(&pcm_cfg);
      cpu_dmac_channel_start(0);
+     /* See readStereoPcmBytesFromRingBuff: don't let the decoder process or
+        announce this range until it has reached sound RAM. */
+     cpu_dmac_channel_wait(0);
      cpu_cache_purge();
   } else {
     pcm_MemcpyDword(destPtr, stream->sampleCache.readPos, len >> 2);
@@ -244,6 +255,9 @@ void film_audio_hw_begin(void) {
 void film_audio_prepare_to_play() {}
 
 void film_audio_reset() {
+  /* Drain any final PCM copy before the movie buffer is freed or the game
+     sound driver takes the SCSP back. */
+  cpu_dmac_channel_wait(0);
   SndCpuInterruptEnable->timerC = 0;
   for (uint8_t i = 0; i < filmAudioChannels; i++) film_pcm_stop(i);
   filmAudioChannels = 0;
