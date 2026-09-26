@@ -70,9 +70,8 @@ PLANS = {
             dict(nbg=2, prio=4, bands=[dict(rows=(0, 32), rate=0.875, layers=['MidBG', ('Cars MidBG', 'anchored')])]),
             dict(nbg=3, prio=5, bands=[dict(rows=(0, 32), rate=1.0, layers=['Playfield', 'Platforms', 'Cars'])]),
         ],
-        # the sky rows 72-95 behind the mountain band: the planet's lower edge stays where it is (from 72: the band
-        # scrolls up by 0.3 x the camera's 16-19 px on the Saturn's 224 lines, its lines then start above row 80)
-        backdrops=[dict(layer='SkyBG', rows=(72, 96), prio=1)],
+        # the sky rows 80-95 behind the mountain band: the planet's lower edge stays where it is
+        backdrops=[dict(layer='SkyBG', rows=(80, 96), prio=1)],
     ),
     # Stages 3-5 reuse level 1's block with tile layers of their own (night_level.c's route, forest.lvl, lab.lvl): baked
     # from the layers as the game builds them (dump: SABER_DUMPLAYERS on the headless build, build_disc.py), under their
