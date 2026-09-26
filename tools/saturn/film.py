@@ -15,7 +15,7 @@ import shutil
 import struct
 import subprocess
 
-FPS = 15
+FPS = 12
 RATE = 22050
 MAX_STRIPS = 2       # libyaul_cinepak has two strip codebooks
 CACHE_VERSION = 4    # CPK/FILM + ADX, continuous audio timestamps

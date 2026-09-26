@@ -719,8 +719,8 @@ master (for comparisons). Level 1: the master's draw 5-7 ms (was 12-14), 1.00-1.
 1.1-1.6 with 7-8 enemies (the update, 3-5 ms, is the rest). The planes' palettes went from 96 to 64 (35.9 dB): VDP1's
 8bpp sprites needed more than 8 colour banks in a level (April's power attack art found none).
 
-**224 lines**: the platform stages keep the bottom of their 240-line view (`game.c`: the camera's y is 240 - sh on
-a shorter screen, 0 on PC); the planes scroll vertically by the camera times their rate (NBG0: x and y per line).
+**224 lines**: the platform stages show the top 224 lines of their 240-line view (camera y 0, as on PC). Keeping
+the bottom instead (7dbc4cb: camera y 16, per-line vertical scroll on NBG0) looked worse and was reverted.
 
 **Sprites between planes** (`r_set_depth`, new in `render.h`; a no-op elsewhere): `game_draw` says which level layer
 the sprites it draws belong to; the planes' block carries each layer's priority (a layer under a plane takes the
