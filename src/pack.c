@@ -44,6 +44,7 @@ static ResType type_of(const char *s, size_t n)
 /* block buffers are 32-byte aligned (DMA to video / sound memory) */
 static bool (*evict_hook)(void);
 void packs_set_evict_hook(bool (*hook)(void)) { evict_hook = hook; }
+bool packs_evict(void) { return evict_hook && evict_hook(); }
 
 static void *block_alloc_once(size_t n)
 {

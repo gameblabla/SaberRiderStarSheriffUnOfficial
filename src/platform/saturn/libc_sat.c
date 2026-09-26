@@ -44,14 +44,26 @@ static void *pool_alloc(tlsf_t h, size_t align, size_t n)
     return p;
 }
 
+static bool (*oom_hook)(void);
+void sat_set_oom_hook(bool (*hook)(void)) { oom_hook = hook; }
+
+/* out of memory: the hook frees something (main_sat.c: the texture drawn longest ago, as for pack blocks) and it's
+ * tried again, until the hook has nothing left */
 static void *any_alloc(size_t align, size_t n)
 {
     heaps_init();
     if (n == 0) n = 1;
     void *p;
-    if (n >= BIG_BLOCK) { if (!(p = pool_alloc(lw_heap, align, n))) p = pool_alloc(hw_heap, align, n); }
-    else if (!(p = pool_alloc(hw_heap, align, n))) p = pool_alloc(lw_heap, align, n);
-    return p;
+    for (;;) {
+        if (n >= BIG_BLOCK) { if (!(p = pool_alloc(lw_heap, align, n))) p = pool_alloc(hw_heap, align, n); }
+        else if (!(p = pool_alloc(hw_heap, align, n))) p = pool_alloc(lw_heap, align, n);
+        if (p || !oom_hook) return p;
+        bool (*h)(void) = oom_hook;
+        oom_hook = NULL;   /* no recursion: what the hook frees may allocate */
+        bool freed = h();
+        oom_hook = h;
+        if (!freed) return NULL;
+    }
 }
 
 void *malloc(size_t n) { return any_alloc(4, n); }
@@ -99,6 +111,23 @@ void sat_heap_stats(size_t *hw_free, size_t *lw_free, size_t *hwu, size_t *lwu)
     if (lw_free) *lw_free = LWRAM_END - LWRAM_BASE - lw_used;
     if (hwu) *hwu = hw_used;
     if (lwu) *lwu = lw_used;
+}
+
+/* the largest free block of each heap (fragmentation), and with dump set every block in low RAM of at least dump bytes */
+typedef struct { size_t largest, dump; } HeapWalk;
+static void heap_walker(void *ptr, size_t size, int used, void *user)
+{
+    HeapWalk *w = user;
+    if (!used && size > w->largest) w->largest = size;
+    if (w->dump && size >= w->dump) printf("  %s %p %u KB\n", used ? "used" : "free", ptr, (unsigned)(size / 1024));
+}
+void sat_heap_largest(size_t *hw, size_t *lw, size_t dump)
+{
+    heaps_init();
+    HeapWalk a = { 0, 0 }, b = { 0, dump };
+    tlsf_pool_walk(tlsf_pool_get(hw_heap), heap_walker, &a);
+    tlsf_pool_walk(tlsf_pool_get(lw_heap), heap_walker, &b);
+    *hw = a.largest; *lw = b.largest;
 }
 
 /* ---------------------------------------------------------------- stdlib */

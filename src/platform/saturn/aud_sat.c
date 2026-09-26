@@ -290,6 +290,15 @@ void aud_movie_end(void)
     driver_ok = driver_start();
 }
 
+void aud_clock_change(bool begin)
+{
+    if (movie) return;
+    if (begin) {   /* what plays is cut (the SCSP is reset): nothing is left counted as playing */
+        for (int i = 0; i < CHANNELS; i++) { voice_release(&voices[i]); voices[i].action = 0; }
+        driver_ok = false;
+    } else driver_ok = driver_start();
+}
+
 /* the film player's slots (third_party/libyaul_cinepak/film_snd.c): slot ch loops over bytes of 8/16-bit PCM at off */
 static uint16_t pitch(uint32_t rate)   /* OCT / FNS: rate = 44100 x 2^oct x (1024 + fns) / 1024 */
 {

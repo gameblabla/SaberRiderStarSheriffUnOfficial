@@ -44,14 +44,38 @@ void sat_timer_init(void)
     cpu_frt_count_set(0);
 }
 
+/* counts * 1000 / COUNT_1MS as a multiply by a 16.16 constant (a 64-bit division is a libgcc call of hundreds of
+ * cycles); counts stays under 2^40 for days. The 352 modes run the clock at 28.64 MHz (sat_timer_clock). */
+static uint64_t us_per_count = (1000ull << 16) / CPU_FRT_NTSC_320_32_COUNT_1MS;
+static uint32_t us_base;   /* the time when the counter last restarted (a clock change) */
+
 uint32_t sat_timer_us(void)
 {
     uint32_t hi, lo;
     do { hi = frt_high; lo = cpu_frt_count_get(); } while (hi != frt_high);
-    /* counts * 1000 / COUNT_1MS as a multiply by a 16.16 constant (a 64-bit division is a libgcc call of hundreds of
-     * cycles); counts stays under 2^40 for days */
-    const uint64_t us_per_count = (1000ull << 16) / CPU_FRT_NTSC_320_32_COUNT_1MS;
-    return (uint32_t)(((((uint64_t)hi << 16) | lo) * us_per_count) >> 16);
+    return us_base + (uint32_t)(((((uint64_t)hi << 16) | lo) * us_per_count) >> 16);
+}
+
+/* a wait that needs no interrupt (the FRT's overflow one included): its counter's steps, added up, at the 352 or 320
+ * modes' clock */
+void sat_busy_wait_us(uint32_t us, bool mode352)
+{
+    uint32_t want = (uint32_t)(((uint64_t)us * (mode352 ? CPU_FRT_NTSC_352_32_COUNT_1MS : CPU_FRT_NTSC_320_32_COUNT_1MS)) / 1000u), got = 0;
+    uint16_t last = cpu_frt_count_get();
+    while (got < want) { uint16_t now = cpu_frt_count_get(); got += (uint16_t)(now - last); last = now; }
+}
+
+/* the system clock changed (render_sat.c rsat_set_mode): the time goes on from now_us (what it was before the change,
+ * plus the change's own time), counted at the new rate */
+void sat_timer_clock(bool mode352, uint32_t now)
+{
+    uint32_t sr = cpu_intc_mask_get(); cpu_intc_mask_set(15);
+    us_per_count = (1000ull << 16) / (mode352 ? CPU_FRT_NTSC_352_32_COUNT_1MS : CPU_FRT_NTSC_320_32_COUNT_1MS);
+    cpu_frt_init(CPU_FRT_CLOCK_DIV_32);   /* the BIOS's clock change leaves the FRT at its reset setting (clock / 8, no
+                                           * overflow interrupt) */
+    cpu_frt_ovi_set(frt_overflow);
+    frt_high = 0; cpu_frt_count_set(0); us_base = now;
+    cpu_intc_mask_set(sr);
 }
 
 void sat_vblank_tick(void) { vblanks++; }
@@ -67,12 +91,13 @@ int  plat_default_ratio(void) { return -1; }
 int  plat_screen_modes(void) { return 1; }
 bool plat_screen_43_only(int screen) { (void)screen; return false; }
 int  plat_wide_width(int screen) { (void)screen; return SAT_WIDE_W; }
-void plat_screen_label(int screen, char *buf, size_t n) { (void)screen; snprintf(buf, n, "TV %dx%d", view.sw, SAT_SCREEN_H); }
+void plat_screen_label(int screen, char *buf, size_t n) { (void)screen; snprintf(buf, n, "%dx%d", view.sw, SAT_SCREEN_H); }
 void plat_apply_screen(Ren *r, int sw, int sh, int ratio, int screen)
 {
     (void)r; (void)screen;
     view.sw = sw; view.sh = sh; view.ratio = ratio;
 #ifndef SAT_RENDER_NULL
+    rsat_set_mode(sw == SAT_WIDE_W);   /* the TV mode (and system clock) for that width */
     rsat_set_screen(sw, sh);
 #endif
 }

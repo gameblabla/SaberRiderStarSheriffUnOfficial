@@ -83,6 +83,14 @@ bool level_load(Level *L, uint32_t id)
     return true;
 }
 
+void level_release(Level *L)
+{
+    if (!L->id) return;
+    packs_release(L->id);   /* (stages 3-5's own maps belong to night_level.c / forest.c, freed by their dispose) */
+    r_layer(gfx_renderer(), 0, -1, 0, 0);   /* the backend's planes for it (render.h) */
+    memset(L, 0, sizeof *L);
+}
+
 uint8_t level_cell(const Level *L, int cx, int cy)
 {
     if (cx < 0 || cy < 0 || cx >= L->cols || cy >= L->rows) return 0;

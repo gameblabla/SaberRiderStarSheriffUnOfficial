@@ -225,6 +225,7 @@ void cblock_unload(const CBlock *cc)
 {
     CBlock *c = (CBlock *)cc;
     if (c && c->tex && (c->from_pack || c->file)) { rtex_destroy(c->tex); c->tex = NULL; }
+    if (c && c->ftex) { rtex_destroy(c->ftex); c->ftex = NULL; }
 }
 
 int cblock_ncells(const CBlock *c) { return c->frames * c->cols * c->rows; }
@@ -273,9 +274,53 @@ void cblock_batch_tile(int t, real x, real y, bool flip)
 }
 void cblock_batch_end(void) { batch_flush(); g_batch.c = NULL; g_batch.tex = NULL; }
 
+#ifdef PLAT_SATURN
+/* a cblock's frames baked as one picture each (tools/saturn/build_disc.py FRAME_BAKED, u16 frames a row as meta): a
+ * frame is then a few VDP1 parts, not a command per tile */
+#define FRM_XOR 0x46524D00u
+static RTex *cblock_frames_tex(CBlock *c)
+{
+    if (c->fstate < 0 || !c->from_pack) return NULL;
+    if (!c->ftex) {
+        int w, h; uint8_t *meta = NULL;
+        c->ftex = baked_tex(c->id ^ FRM_XOR, &w, &h, c->fstate ? NULL : &meta);
+        if (!c->fstate) {
+            c->fper_row = c->ftex && meta ? rd16(meta) : 0;
+            c->fstate = c->fper_row > 0 ? 1 : -1;
+            if (c->fstate < 0 && c->ftex) { rtex_destroy(c->ftex); c->ftex = NULL; }
+        }
+        free(meta);
+        if (!c->ftex) return NULL;   /* (no memory for it now: the tiles this time) */
+    }
+    c->last_used = g_frame;
+    return c->ftex;
+}
+#endif
+
+/* everything a cblock draws with, loaded now (a stage's load, not the moment it first shows) */
+void cblock_preload(const CBlock *c)
+{
+    if (!c) return;
+    cblock_tex(c);
+#ifdef PLAT_SATURN
+    cblock_frames_tex((CBlock *)c);
+#endif
+}
+
 void cblock_draw_frame(const CBlock *c, int frame, real x, real y, bool flip)
 {
     if (frame < 0 || frame >= c->frames) return;
+#ifdef PLAT_SATURN
+    RTex *ft = cblock_frames_tex((CBlock *)c);
+    if (ft) {   /* flipped: the whole frame mirrored, as the tiles are (columns reversed, each tile mirrored) */
+        int fw = c->cols * c->tw, fh = c->rows * c->th;
+        RFRect src = { r_int((frame % c->fper_row) * fw), r_int((frame / c->fper_row) * fh), r_int(fw), r_int(fh) };
+        RFRect dst = { x, y, r_int(fw), r_int(fh) };
+        if (flip) r_tex_rot(R, ft, &src, &dst, 0, NULL, R_FLIP_H);
+        else r_tex(R, ft, &src, &dst);
+        return;
+    }
+#endif
     const uint16_t *cells = c->cells + frame * c->cols * c->rows;
     cblock_batch_begin(c);
     for (int r = 0; r < c->rows; r++)
@@ -435,6 +480,7 @@ static bool evict_one(void)
     uint32_t best = g_frame - 1; RTex **victim = NULL;
     for (int i = 0; i < g_nspr; i++) if ((g_spr[i].from_pack || g_spr[i].file) && g_spr[i].tex && g_spr[i].last_used < best) { best = g_spr[i].last_used; victim = &g_spr[i].tex; }
     for (int i = 0; i < g_ncb; i++) if ((g_cb[i].from_pack || g_cb[i].file) && g_cb[i].tex && g_cb[i].last_used < best) { best = g_cb[i].last_used; victim = &g_cb[i].tex; }
+    for (int i = 0; i < g_ncb; i++) if (g_cb[i].ftex && g_cb[i].last_used < best) { best = g_cb[i].last_used; victim = &g_cb[i].ftex; }
     if (!victim) return false;
     rtex_destroy(*victim); *victim = NULL;
     return true;
@@ -448,9 +494,19 @@ static bool evict_any(void)
     uint32_t best = UINT32_MAX; RTex **victim = NULL;
     for (int i = 0; i < g_nspr; i++) if ((g_spr[i].from_pack || g_spr[i].file) && g_spr[i].tex && g_spr[i].last_used <= best) { best = g_spr[i].last_used; victim = &g_spr[i].tex; }
     for (int i = 0; i < g_ncb; i++) if ((g_cb[i].from_pack || g_cb[i].file) && g_cb[i].tex && g_cb[i].last_used <= best) { best = g_cb[i].last_used; victim = &g_cb[i].tex; }
+    for (int i = 0; i < g_ncb; i++) if (g_cb[i].ftex && g_cb[i].last_used <= best) { best = g_cb[i].last_used; victim = &g_cb[i].ftex; }
     if (!victim) return false;
     rtex_destroy(*victim); *victim = NULL;
     return true;
+}
+
+/* a stage change: every pack / PNG texture goes (each is made again when next drawn), so the next stage's load finds
+ * the memory the last one's graphics held (the Saturn: its sheets' blocks live in work RAM) */
+void gfx_trim(void)
+{
+    for (int i = 0; i < g_nspr; i++) if ((g_spr[i].from_pack || g_spr[i].file) && g_spr[i].tex) { rtex_destroy(g_spr[i].tex); g_spr[i].tex = NULL; }
+    for (int i = 0; i < g_ncb; i++) if ((g_cb[i].from_pack || g_cb[i].file) && g_cb[i].tex) { rtex_destroy(g_cb[i].tex); g_cb[i].tex = NULL; }
+    for (int i = 0; i < g_ncb; i++) if (g_cb[i].ftex) { rtex_destroy(g_cb[i].ftex); g_cb[i].ftex = NULL; }
 }
 
 bool gfx_init(Ren *r) { R = r; r_set_evict_hook(evict_one); packs_set_evict_hook(evict_any); return true; }
@@ -459,7 +515,7 @@ Ren *gfx_renderer(void) { return R; }
 void gfx_flush(void)
 {
     for (int i = 0; i < g_nspr; i++) { rtex_destroy(g_spr[i].tex); free((void *)g_spr[i].file); }
-    for (int i = 0; i < g_ncb; i++) { rtex_destroy(g_cb[i].tex); free((void *)g_cb[i].cells); free((void *)g_cb[i].mask); free((void *)g_cb[i].file); }
+    for (int i = 0; i < g_ncb; i++) { rtex_destroy(g_cb[i].tex); rtex_destroy(g_cb[i].ftex); free((void *)g_cb[i].cells); free((void *)g_cb[i].mask); free((void *)g_cb[i].file); }
     g_nspr = g_ncb = 0;
 }
 void gfx_frame(void) { g_frame++; }

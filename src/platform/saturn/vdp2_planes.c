@@ -51,7 +51,7 @@ typedef struct {
 static struct {
     uint32_t level;             /* the level whose planes are loaded (0 none) */
     uint32_t tried;             /* a level with no planes (don't look again) */
-    const uint8_t *spl;
+    const uint8_t *spl; uint32_t spl_id;   /* the planes' block */
     const SplHead *h;
     const SplPlane *planes;
     const uint8_t *cellpal;
@@ -141,6 +141,16 @@ static void load_palettes(void)
     P.palettes_in = true;
 }
 
+/* a level's planes let go: the backdrops, the block (its names), the display at the next frame (sat_planes_frame) */
+static void unload(void)
+{
+    if (P.shown) { rsat_set_backdrops(NULL, NULL, NULL, 0, false); P.shown = false; }
+    for (int i = 0; i < P.nbackdrops; i++) rtex_destroy(P.backdrop[i]);
+    P.nbackdrops = 0;
+    if (P.spl) packs_release_type(P.spl_id, RES_DATA);
+    P.level = 0; P.spl = NULL; P.h = NULL; P.asked = false;
+}
+
 static bool load(uint32_t level)
 {
     const PackEntry *e = packs_find_type(level ^ SPL_XOR, RES_DATA);
@@ -151,13 +161,13 @@ static bool load(uint32_t level)
         const SplBand *b = (const SplBand *)(e->data + h->bands_off) + i;
         if (b->row1 - b->row0 > MAX_ROWS) { printf("planes %08X: a band of %d rows\n", (unsigned)level, b->row1 - b->row0); return false; }
     }
-    P.spl = e->data; P.h = h;
+    P.spl = e->data; P.spl_id = level ^ SPL_XOR; P.h = h;
     P.planes = (const SplPlane *)(e->data + sizeof(SplHead));
     P.cellpal = e->data + h->cellpal_off;
     P.chunks = (const uint32_t *)(e->data + h->names_off);
     for (int i = 0; i < h->nbands; i++) P.band[i].b = (const SplBand *)(e->data + h->bands_off) + i;
     vdp2_scrn_display_set(sat_floor_visible() ? VDP2_SCRN_DISPTP_RBG0 : VDP2_SCRN_DISP_NONE);
-    if (!load_cells(level, h->ncells)) return false;
+    if (!load_cells(level, h->ncells)) { unload(); return false; }
     setup_screens();
     load_palettes();
     const SplBackdrop *bd = (const SplBackdrop *)(e->data + h->backdrops_off);
@@ -185,17 +195,37 @@ static bool load(uint32_t level)
     return true;
 }
 
+/* a plane's vertical scroll for the camera's y (the shake: cam_y 0..3 in the platform stages): level.c's cam_y x the
+ * layer's parallax, rounded up as it rounds a cell's position; a plane with a static band (the sky) stays put, as the
+ * PC's wrapping sky layer does, and so do the backdrops under it */
+static int plane_oy(const SplPlane *pl, fx cam_y)
+{
+    if (cam_y <= 0) return 0;
+    int oy = 0;
+    for (int k = 0; k < pl->nbands; k++) {
+        const SplBand *b = P.band[pl->first_band + k].b;
+        if (b->flags & 1) return 0;
+        int v = fx_ceil(fx_mul(cam_y, (fx)b->rate));
+        if (v > oy) oy = v;
+    }
+    return oy;
+}
+
 /* ---------------------------------------------------------------- the core's question */
 bool r_layer(Ren *r, uint32_t level, int layer, fx cam_x, fx cam_y)
 {
     (void)r;
-    if (level != P.level) {
-        if (level == P.tried) return false;
-        for (int i = 0; i < P.nbackdrops; i++) rtex_destroy(P.backdrop[i]);
-        P.nbackdrops = 0; P.level = 0; P.spl = NULL;
+    if (level != P.level) {   /* another level's (or level 0: a level left for good, render.h) */
+        if (P.level) unload();
+        if (!level || level == P.tried) return false;
         if (!load(level)) { P.tried = level; return false; }
     }
     if (layer < 0 || layer >= 32 || !(P.h->layers & (1u << layer))) return false;
+    if (!P.asked) {   /* the backdrops (under every plane) move with the plane that moves least */
+        int dy = 1 << 30;
+        for (int i = 0; i < P.h->nplanes; i++) { int v = plane_oy(&P.planes[i], cam_y); if (v < dy) dy = v; }
+        rsat_backdrops_dy(P.h->nplanes ? dy : 0);
+    }
     P.asked = true; P.cam_x = cam_x; P.cam_y = cam_y;
     return true;
 }
@@ -273,7 +303,7 @@ void sat_planes_frame(int sw, bool delayed)
     static bool prev_asked; static fx prev_x, prev_y;
     bool asked = P.asked; fx cx = P.cam_x, cy = P.cam_y;
     if (delayed) { P.asked = prev_asked; P.cam_x = prev_x; P.cam_y = prev_y; prev_asked = asked; prev_x = cx; prev_y = cy; }
-    if (!P.asked) {
+    if (!P.asked || !P.h) {
         vdp2_scrn_display_set(sat_floor_visible() ? VDP2_SCRN_DISPTP_RBG0 : VDP2_SCRN_DISP_NONE);
         if (P.shown) { rsat_set_backdrops(NULL, NULL, NULL, 0, false); P.shown = false; }
         if (P.palettes_in) { rsat_cram_reserve(0); P.palettes_in = false; }
@@ -282,12 +312,12 @@ void sat_planes_frame(int sw, bool delayed)
     P.asked = false;
     if (!P.palettes_in) load_palettes();
     for (int i = 0; i < P.h->nbands; i++) update_band(&P.band[i], sw);
-    int oy = P.cam_y > 0 ? fx_ceil(P.cam_y) : 0;   /* the camera shake (cam_y is 0 in the platform stages) */
     vdp2_scrn_disp_t disp = sat_floor_visible() ? VDP2_SCRN_DISPTP_RBG0 : VDP2_SCRN_DISP_NONE;
     for (int i = 0; i < P.h->nplanes; i++) {
         const SplPlane *pl = &P.planes[i];
         vdp2_scrn_t s = scrn_of(pl->nbg);
         disp |= (vdp2_scrn_disp_t)(VDP2_SCRN_DISPTP_NBG0 << pl->nbg);   /* DISPTP: colour 0 transparent (DISP_ also sets TPON) */
+        int oy = plane_oy(pl, P.cam_y);   /* the camera shake */
         vdp2_scrn_scroll_y_set(s, (fix16_t)(oy << 16));
         if (pl->nbands == 1 || !(pl->line_scroll && pl->nbg < 2)) {
             vdp2_scrn_scroll_x_set(s, (fix16_t)((P.band[pl->first_band].scroll & 511) << 16));

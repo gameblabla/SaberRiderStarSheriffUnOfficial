@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "../../app.h"
+#include "../../pack.h"
 #include "sat_internal.h"
 
 #ifdef SAT_RENDER_NULL   /* bring-up / CPU profiles: platform/null/render_null.c, nothing on screen */
@@ -52,11 +53,13 @@ static unsigned stack_used(void)
 
 static void report_memory(const char *when)
 {
-    size_t hw_free, lw_free, hw_used, lw_used;
+    size_t hw_free, lw_free, hw_used, lw_used, hw_big, lw_big;
+    static int dump = -1; if (dump < 0) dump = plat_getenv("SABER_HEAPDUMP") ? atoi(plat_getenv("SABER_HEAPDUMP")) : 0;   /* debug: KB */
     sat_heap_stats(&hw_free, &lw_free, &hw_used, &lw_used);
-    printf("[mem] %s: high RAM heap %u KB used / %u KB free, low RAM %u KB used / %u KB free, stack %u / %u KB\n", when,
-           (unsigned)(hw_used / 1024), (unsigned)(hw_free / 1024), (unsigned)(lw_used / 1024), (unsigned)(lw_free / 1024),
-           stack_used() / 1024, STACK_SIZE / 1024);
+    sat_heap_largest(&hw_big, &lw_big, (size_t)dump * 1024);
+    printf("[mem] %s: high RAM heap %u KB used / %u KB free (%u in one), low RAM %u KB used / %u KB free (%u in one), stack %u / %u KB\n", when,
+           (unsigned)(hw_used / 1024), (unsigned)(hw_free / 1024), (unsigned)(hw_big / 1024), (unsigned)(lw_used / 1024),
+           (unsigned)(lw_free / 1024), (unsigned)(lw_big / 1024), stack_used() / 1024, STACK_SIZE / 1024);
 }
 
 static void __attribute__((noreturn, noinline)) game_main(void)
@@ -76,6 +79,7 @@ static void __attribute__((noreturn, noinline)) game_main(void)
         for (;;) vdp2_sync(), vdp2_sync_wait();
     }
     report_memory("init");
+    sat_set_oom_hook(packs_evict);   /* malloc out of memory: textures not drawn lately go (gfx.c), as for pack blocks */
 
     uint32_t prev_vb = sat_vblanks(), last_report = 0, frames = 0;
     bool no_draw = plat_getenv("SABER_NODRAW") != NULL;   /* debug: profile the update alone */
@@ -106,7 +110,7 @@ static void __attribute__((noreturn, noinline)) game_main(void)
         vdp2_sync();
         vdp2_sync_wait();
         frames++;
-        if (t0 - last_report > 10000000u) {
+        if (app_perf_on() && t0 - last_report > 10000000u) {   /* SABER_PERF: the state and memory (a stack / heap walk) */
             Game *g = app_game(); unsigned long reads, bytes, seeks; cd_sat_stats(&reads, &bytes, &seeks);
             printf("[state] t=%us frame=%u level=%d stage=%d state=%d menu=%d title=%d cd reads=%lu (%lu KB, %lu seeks)\n",
                    (unsigned)(t0 / 1000000u), (unsigned)frames, g->in_level, g->stage, g->state, g->menu.state, g->title_on,

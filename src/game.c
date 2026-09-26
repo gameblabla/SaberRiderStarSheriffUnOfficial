@@ -28,7 +28,7 @@ bool game_init(Game *g, Ren *ren, int sw, int sh, int start_level)
     if (plat_getenv("SABER_RATIO")) g->menu.ratio = atoi(plat_getenv("SABER_RATIO"));   /* debug: start in a screen ratio (0 wide, -1 4:3, 1 stretch) */
     if (plat_getenv("SABER_SCREEN")) g->menu.screen = atoi(plat_getenv("SABER_SCREEN"));   /* debug: start on a SCREEN choice (Dreamcast: 320x240 only for now) */
     if (plat_screen_43_only(g->menu.screen)) g->menu.ratio = RATIO_43;
-    if (g->menu.ratio != RATIO_WIDE || g->menu.screen) {
+    if (g->menu.ratio != RATIO_WIDE || g->menu.screen || plat_wide_width(0) != sw) {   /* (the Saturn's WIDE: 352, not 426) */
         g->sw = g->menu.ratio == RATIO_WIDE ? plat_wide_width(g->menu.screen) : 320;
         plat_apply_screen(ren, g->sw, g->sh, g->menu.ratio, g->menu.screen ? g->menu.screen : -1);
     }
@@ -41,11 +41,21 @@ bool game_init(Game *g, Ren *ren, int sw, int sh, int start_level)
     return true;
 }
 
+/* debug: SABER_WIN=n clears the stage being played n steps after it starts (again for each stage) */
+static int win_steps = -2, win_left = -1;
+static bool debug_win(void) { return win_left >= 0 && win_left-- == 0; }
+static void debug_win_arm(void)
+{
+    if (win_steps == -2) win_steps = plat_getenv("SABER_WIN") ? atoi(plat_getenv("SABER_WIN")) : -1;
+    win_left = win_steps;
+}
+
 static bool level_start(Game *g)
 {
     Ren *ren = g->ren; int sw = g->sw, sh = g->sh;
     Menu menu = g->menu; int stage = g->stage ? g->stage : 1; int carry = g->carry_lives, conts = g->continues_left;
     bool mode7_phase2 = g->mode7_phase2;
+    level_release(&g->level);
     night_dispose(&g->night);
     forest_dispose(&g->forest);
     forest_dispose(&g->lab);
@@ -53,6 +63,10 @@ static bool level_start(Game *g)
     if (g->ramrod) { ramrod_destroy(g->ramrod); g->ramrod = NULL; }
     if (g->space) { space_destroy(g->space); g->space = NULL; }
     power_close(&g->power);
+#ifdef PLAT_SATURN
+    gfx_trim();   /* the menus' graphics (or the stage before's) */
+#endif
+    debug_win_arm();
     memset(g, 0, sizeof *g);
     g->ren = ren; g->sw = sw; g->sh = sh; g->menu = menu; g->in_level = true; g->stage = stage; g->carry_lives = carry; g->continues_left = conts; g->mode7_phase2 = mode7_phase2;
     if (stage == 2) {   /* the Mode-7 Grand Prix: its own world, HUD and flow */
@@ -239,6 +253,21 @@ static void title_draw(Game *g)
 }
 
 /* the last life is gone: CONTINUE? while credits remain (the option's count, per run), else GAME OVER */
+/* a platform stage is over (cleared, or the last life lost): what it loaded goes before the menus and the next stage
+ * load theirs (a console's memory holds one stage) */
+static void leave_level(Game *g)
+{
+    g->in_level = false;
+    level_release(&g->level);
+    night_dispose(&g->night);
+    forest_dispose(&g->forest);
+    forest_dispose(&g->lab);
+    power_close(&g->power);
+#ifdef PLAT_SATURN
+    gfx_trim();
+#endif
+}
+
 static void game_over(Game *g)
 {
     if (g->continues_left > 0) { g->menu.continues_left = g->continues_left; menu_enter(&g->menu, MS_CONTINUE); }
@@ -308,7 +337,7 @@ void game_update(Game *g, real dt)
     if (g->title_on) { title_update(g, dt); return; }
     if (g->mode7) {
         mode7_update(g->mode7, &g->in, dt);
-        int res = mode7_result(g->mode7);
+        int res = debug_win() ? 1 : mode7_result(g->mode7);
         if (res) {
             int lives = mode7_lives(g->mode7);
             if (res == 2) g->mode7_phase2 = mode7_phase2_reached(g->mode7);
@@ -321,7 +350,7 @@ void game_update(Game *g, real dt)
     }
     if (g->ramrod) {
         ramrod_update(g->ramrod, &g->in, dt);
-        int res = ramrod_result(g->ramrod);
+        int res = debug_win() ? 1 : ramrod_result(g->ramrod);
         if (res) {
             int lives = ramrod_lives(g->ramrod);
             ramrod_destroy(g->ramrod); g->ramrod = NULL; g->in_level = false;
@@ -333,7 +362,7 @@ void game_update(Game *g, real dt)
     }
     if (g->space) {
         space_update(g->space, &g->in, dt);
-        int res = space_result(g->space);
+        int res = debug_win() ? 1 : space_result(g->space);
         if (res) {
             int lives = space_lives(g->space);
             space_destroy(g->space); g->space = NULL; g->in_level = false;
@@ -363,13 +392,13 @@ void game_update(Game *g, real dt)
     if (p->game_over && g->state == 10) { g->state = 0xb; g->state_t = 0; p->locked = true; }
     if (g->state == 0xb) {
         g->state_t += dt; real f = 2 * r_sin(r_mul(R(3.1415927f), g->state_t) / 3);
-        if (f >= R(2.0f) || g->state_t >= R(1.5f)) { g->in_level = false; game_over(g); return; }
+        if (f >= R(2.0f) || g->state_t >= R(1.5f)) { leave_level(g); game_over(g); return; }
         music_set_volume(R(2.0f) - f);   /* the music fades with the screen (FUN_00425e70 every frame of the ramp) */
     }
     if (g->state == 0xe) {
         g->state_t += dt; real f = g->state_t > R(5.5f) ? r_mul(R(2.1f), r_sin(r_mul(g->state_t - R(5.5f), R(1.5707964f)))) : R(0.0f);
         if (f >= R(2.0f)) {
-            g->in_level = false;
+            leave_level(g);
             if (g->stage == 1) { g->menu.cleared_stage = g->stage; g->stage = 2; g->carry_lives = g->player.lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return; }   /* the Grand Prix follows */
             if (g->stage == 3) { g->menu.cleared_stage = g->stage; g->stage = 4; g->carry_lives = g->player.lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return; }   /* on into the jungle */
             if (g->stage == 4) { g->menu.cleared_stage = g->stage; g->stage = 5; g->carry_lives = g->player.lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); return; }   /* down into the cave lab */
@@ -503,6 +532,7 @@ void game_update(Game *g, real dt)
         for (int k = 0; k < g->nstops; k++) if (g->stops[k].armed && g->stops[k].cx + g->stops[k].hx > g->cam_x && g->stops[k].cx + g->stops[k].hx < g->cam_x + r_int(g->sw)) g->stops[k].armed = false;
     }
     if (g->enemies.cam_locked) g->cam_locked = true;
+    if (g->state == 10 && debug_win()) g->enemies.boss_done = true;
     if (g->enemies.boss_done && g->state == 10) {
         g->enemies.boss_done = false;
         if (g->lab_on && !plat_getenv("SABER_NODARK")) { if (g->dark.state == DA_OFF) dark_begin(&g->dark, g->cam_x, g->sw, g->menu.difficulty); }   /* stage 5: not over yet (Dark April ends it) */

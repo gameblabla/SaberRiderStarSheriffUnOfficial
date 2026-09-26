@@ -16,6 +16,8 @@ typedef struct {
     bool from_pack;      /* can be rebuilt from its pack block (so its texture may be evicted) */
     const char *file;    /* or from this PNG (cblock_from_png), likewise evictable */
     uint32_t last_used;  /* gfx frame of the last draw */
+    RTex *ftex;          /* the Saturn: its frames baked whole (tools/saturn/build_disc.py FRAME_BAKED); NULL while evicted */
+    int fstate, fper_row;   /* ftex: 0 not looked for yet, 1 baked (fper_row frames a row), -1 none */
 } CBlock;
 
 typedef struct Sprite {
@@ -33,6 +35,7 @@ Ren  *gfx_renderer(void);
 void  gfx_scanlines(int sw, int sh);
 /* forget every cached sprite and cblock (tools/dc/texprep walks all of the packs' graphics through the cache) */
 void  gfx_flush(void);
+void  gfx_trim(void);   /* drop every pack / PNG texture (made again on the next draw): a stage change */
 /* the texture of one of our images (assets/): the console's baked one, else the PNG decoded; w, h may be NULL */
 RTex *gfx_image_tex(const char *path, int *w, int *h);
 /* once per drawn frame: the clock that decides which textures are idle enough to evict under memory pressure */
@@ -40,6 +43,7 @@ void  gfx_frame(void);
 /* the texture to draw with (reloaded from the pack if it had been evicted) */
 RTex *sprite_tex(const Sprite *s);
 RTex *cblock_tex(const CBlock *c);
+void  cblock_preload(const CBlock *c);   /* its textures now (cblock_tex, and the Saturn's baked frames) */
 CBlock *cblock_get(uint32_t id);          /* cached */
 void  cblock_unload(const CBlock *c);     /* drop its texture now (it is loaded again if the cblock is drawn) */
 /* a cblock made of our own RGBA sheet: one frame of (w/tw) x (h/th) cells, cell i = tile i (recreated heroes) */

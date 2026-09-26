@@ -121,7 +121,7 @@ void    r_floor_destroy(RFloor *f);
  * A backend with hardware scroll planes (the Saturn's VDP2) may hold a level's tile layers itself, baked ahead of time
  * for that level. level_draw_layer asks it first: true means the backend shows layer `layer` of level `level` (its
  * id) for this camera position this frame, and the core draws nothing for it; false (every other backend) means the
- * core draws the tiles. */
+ * core draws the tiles. Level 0 means the level was left for good (level_release): the backend lets go of its layers. */
 bool r_layer(Ren *r, uint32_t level, int layer, real cam_x, real cam_y);
 /* whether r_layer will hold that layer of that level (a stage loading its tile sheets skips the ones it won't draw) */
 bool r_layer_held(Ren *r, uint32_t level, int layer);

@@ -44,6 +44,13 @@ pckwrite.CODEC = 'lz40s'   # every compressed block (packs, texture parts, plane
 import satbake  # noqa: E402
 
 SPL_XOR, SPC_XOR = 0x53504C00, 0x53504300   # src/platform/saturn/vdp2_planes.c
+FRM_XOR = 0x46524D00                          # src/gfx.c: a cblock's frames baked whole (cblock_draw_frame)
+# cblocks whose frames the game draws whole, many at a time, baked a second time as one picture per frame: VDP1 then
+# draws a frame as a few parts instead of a command per 16x16 tile (the slave's replay of 30-40 tiles a horse was
+# most of a stampede frame). Level 1's robot horse (8 x 5 tiles, up to 12 on screen) and the small props / Outrider
+# pieces drawn by frame; not the level-1 boss (21 frames of 13 x 7 tiles: ~200 KB for one sprite on screen)
+FRAME_BAKED = (0x8873D18C, 0x19BC8FE8, 0x66986CD1, 0x678A6FE0, 0x66956CD4)
+FRAME_ROW_W = 2048   # the frames side by side, rows of at most this many pixels
 _spec = importlib.util.spec_from_file_location('dc_build_disc', ROOT / 'tools/dc/build_disc.py')
 dc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(dc)   # the Dreamcast builder: its asset tables and helpers
@@ -121,6 +128,28 @@ def palette_pngs() -> list[str]:
     return [g for plan in layers.PLANS.values() for g in plan.get('palette_pngs', [])]
 
 
+def cblock_frames(px: np.ndarray, meta: bytes) -> tuple[np.ndarray, list[tuple[int, int, int, int]], bytes]:
+    """a cblock's frames composed from its tile sheet (gfx.c cblock_draw_frame's layout: tile (col, row) at col * tw,
+    row * th), side by side in rows of FRAME_ROW_W; the meta gfx.c reads: u16 frames a row"""
+    frames, cols, rows, tw, th, ntiles, sheet_cols, _ = struct.unpack_from('<8H', meta)
+    cells = struct.unpack_from(f'<{frames * cols * rows}H', meta, 16)
+    fw, fh = cols * tw, rows * th
+    per_row = max(1, FRAME_ROW_W // fw)
+    img = np.zeros((-(-frames // per_row) * fh, min(frames, per_row) * fw, 4), np.uint8)
+    rects = []
+    for f in range(frames):
+        ox, oy = (f % per_row) * fw, (f // per_row) * fh
+        rects.append((ox, oy, fw, fh))
+        for r in range(rows):
+            for c in range(cols):
+                t = cells[(f * rows + r) * cols + c]
+                if t == 0xFFFF or t >= ntiles:
+                    continue
+                sx, sy = (t % sheet_cols) * tw, (t // sheet_cols) * th
+                img[oy + r * th:oy + (r + 1) * th, ox + c * tw:ox + (c + 1) * tw] = px[sy:sy + th, sx:sx + tw]
+    return img, rects, struct.pack('<HH', per_row, 0)
+
+
 def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log, force8: set[int] = frozenset()) -> None:
     """every pack sprite / cblock / font through the game's own gfx.c (tools/dc/texprep.c), then our PNGs"""
     texprep = work / 'texprep'
@@ -135,6 +164,11 @@ def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log, force8: set[i
         block = satbake.bake(px, meta, stats, name=rid, kind=kind, force8=int(rid, 16) in force8)
         tex.add(int(rid, 16), 'tex', block)
         log(f'tex {rid} {px.shape[1]}x{px.shape[0]} {len(block) // 1024} KB')
+        if kind == 2 and int(rid, 16) in FRAME_BAKED:
+            img, rects, fmeta = cblock_frames(px, meta)
+            block = satbake.bake(img, fmeta, stats, name=f'{rid} frames', rects=rects, force8=int(rid, 16) in force8)
+            tex.add(int(rid, 16) ^ FRM_XOR, 'tex', block)
+            log(f'tex {rid} frames: {len(rects)} of {rects[0][2]}x{rects[0][3]}, {len(block) // 1024} KB')
     for source in sorted((ROOT / 'assets').rglob('*.png')):
         rel = source.relative_to(ROOT / 'assets')
         if unused(rel):

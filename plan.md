@@ -771,3 +771,38 @@ Level 1 on the Saturn (`bench_level1.env`, mednafen): update **0.7-1.0 ms** a st
 the master's draw 4-6 ms, 1.00 fields a frame through the run with up to 8 enemies (a 2-field frame now and then).
 The front end, the loading screens and level 1 look as before (screenshots).
 
+
+### Fixes from `../bugs_saturn.txt` (2026-09-26)
+
+- **Stage 1 -> stage 2 hung** (`mode7: no memory for the track`, then an assert): nothing a platform stage loaded was
+  let go, and the heap was too fragmented for Mode 7's ~450 KB struct (752 KB free, 281 KB in one piece). Now a stage
+  that ends (`game.c leave_level`) drops its level block (`level_release`; level 0 to `r_layer` makes the Saturn free
+  its planes' block and backdrops), stage 3-5 data, the power clip, and every cached texture (`gfx_trim`, Saturn), and
+  `level_start` does the same; Mode 7's map and material textures are allocated apart from its struct; a baked image
+  read whole is the pack block itself (`png_load_rgba`: Ramrod's floor needed 2 x 256 KB); the Saturn's `malloc` evicts
+  textures when it runs out (`sat_set_oom_hook`, as pack reads did). Checked in mednafen: 1->2->3->4->5 in one run,
+  5->6 (Ramrod had silently skipped to stage 7: "can't load floor"), 6->7->credits. `SABER_WIN=n` clears any stage n
+  steps in; `SABER_SCRIPT` loops from its second step at a `*`; `SABER_HEAPDUMP=kb` lists low RAM's blocks; the
+  `[mem]` line gives the largest free block of each heap, and the `[state]` / `[mem]` report is SABER_PERF-only.
+- **April: freezes and the music stopping** (horses, enemies): started from the title screen, the menus' textures
+  still held memory while level 1 loaded, so the level's preloaded sprites were evicted and read back from the disc
+  when first drawn: 13 reads in the level, 380-620 ms each, and a data read stops CD-DA. `gfx_trim` at the stage start
+  fixes it (0 reads in the same run); April's bigger sheets were what tipped it over.
+- **Shake: black bar under the sky**: the VDP1 backdrop strip (rows 80-95) couldn't follow the planes' vertical scroll
+  (VDP1 and VDP2 show a frame at different fields when a frame takes two). As on PC, the shake now moves each plane by
+  `ceil(shake x parallax)`; a plane with a static band (the sky) and the backdrops under it stay put (0 of 141 frames
+  with a gap, from 43).
+- **Stampede slowdown**: `build_disc.py FRAME_BAKED` bakes the robot horse (and four small frame-drawn cblocks) a
+  second time as one picture per frame (`id ^ 0x46524D00`, meta = frames a row); `cblock_draw_frame` draws that on the
+  Saturn (`cblock_preload` loads it with the level). A stampede frame: ~100 textured draws (325-390), 1.00 fields a
+  frame (1.3-2.4), the slave's wait 3 us (4-13 ms), at most 208 records (466 of 512). The level-1 boss (21 frames of
+  13 x 7 tiles, ~200 KB) stays tiled.
+- **352x224 was never 352**: the TV mode stayed NORMAL_A, so "wide" laid the screens out 352 (426 when started in it)
+  and showed 320 of them - off-centre menus, the boss camera "stopping early". `rsat_set_mode` now switches NORMAL_A /
+  NORMAL_B: libyaul's BIOS clock change resets VDP1, VDP2, the SCU and the SCSP and stops the slave; VDP1 is idle
+  first, then its environment, the SCU mask, the slave and adp68k are set up again, after a 120 ms wait with the
+  interrupts off (the SMPC takes no command, INTBACK included); the FRT is re-programmed (the BIOS leaves it at
+  clock / 8: the driver's 500 ms timeout had become ~40 ms) and counts at the new clock's rate. OPTIONS on the Saturn:
+  one row, SCREEN 320x224 / 352x224 (no SCREEN list, no STRETCH). Checked in mednafen (`ss.correct_aspect 0` for
+  native-width shots): switching back and forth in OPTIONS with the music playing through, the front end, the victory
+  art, stages 1, 2, 6 and 7, the intro and a power clip (320 wide, centred) at 352. Not checked on a console.

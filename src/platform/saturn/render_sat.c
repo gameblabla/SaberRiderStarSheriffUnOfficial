@@ -534,6 +534,7 @@ static bool uclip_active; static RRect uclip_cur;   /* the user clip rectangle s
 static bool pal_drawn;                              /* palette pixels may be in the framebuffer (drawn this frame) */
 static int fade_cmd = -1; static uint8_t fade_r, fade_g, fade_b, fade_a;   /* a full-screen translucent fill */
 static RTex *backdrop[4]; static int backdrop_x[4], backdrop_y[4], nbackdrops; static bool clear_fb;
+static int backdrop_dy[2], replay_dy;   /* per record buffer: the planes' vertical scroll of that frame (the camera shake) */
 static bool replay_floor;   /* the frame being replayed shows the floor (RBG0): its framebuffer is cleared the same way */
 static void draw_backdrops(void);
 
@@ -1523,13 +1524,18 @@ void r_floor_destroy(RFloor *f)
 bool sat_floor_visible(void) { return floor_visible; }
 
 /* ---------------------------------------------------------------- frames */
-void rsat_init(void)
+static void vdp1_setup(void)
 {
     const vdp1_env_t env = {
         .bpp = VDP1_ENV_BPP_16, .rotation = VDP1_ENV_ROTATION_0, .color_mode = VDP1_ENV_COLOR_MODE_RGB_PALETTE,
         .sprite_type = 5, .erase_color = RGB1555(0, 0, 0, 0),
         .erase_points = { { 0, 0 }, { SAT_WIDE_W - 1, SAT_SCREEN_H - 1 } } };
     vdp1_env_set(&env);
+}
+
+void rsat_init(void)
+{
+    vdp1_setup();
     vdp2_sprite_priority_set(0, 6);
     vdp2_cram_mode_set(1);
     const char *tr = plat_getenv("SABER_RTRACE");
@@ -1555,6 +1561,7 @@ static void replay(int buf)
 {
     const Rec *R = recbuf[buf]; int n = rec_n[buf];
     replay_floor = floor_state[buf].valid;
+    replay_dy = backdrop_dy[buf];
     frame_no++;
     tracing = trace_from > 0 && traced < 6 && frame_no >= (unsigned)trace_from && (frame_no - (unsigned)trace_from) % 10 == 0;
     if (tracing) { traced++; printf("render trace: frame %u\n", (unsigned)frame_no); }
@@ -1607,6 +1614,42 @@ void rsat_frame_begin(void)
     pending = false;
 }
 
+/* 352x224 or 320x224 (OPTIONS): VDP2's NORMAL_B / NORMAL_A, which need the system clock at 28.64 / 26.87 MHz. libyaul
+ * changes it through the BIOS, which resets VDP1, VDP2, the SCU and the SCSP and stops the slave SH-2 (video and sound
+ * memory, work RAM and the CD block are kept): VDP1 is idle first, and afterwards its environment, the SCU's
+ * interrupt mask, the slave and the sound driver are set up again (VDP2's registers come back from libyaul's shadow
+ * copy at the next sync). The FRT counts at the new clock (plat_sat.c). */
+static bool mode_wide;
+void rsat_set_mode(bool wide)
+{
+    if (wide == mode_wide) return;
+    slave_idle();
+    if (pending) { submit(true, (int)slave_buf); pending = false; }   /* the frame the slave replayed: shown first */
+    vdp1_sync_wait();
+    aud_clock_change(true);
+    uint32_t t0 = sat_timer_us();
+    uint8_t sr = cpu_intc_mask_get();
+    scu_ic_mask_t mask = scu_ic_mask_get();
+    cpu_intc_mask_set(15);
+    scu_ic_mask_set(SCU_IC_MASK_ALL);
+    vdp2_tvmd_display_res_set(VDP2_TVMD_INTERLACE_NONE, wide ? VDP2_TVMD_HORZ_NORMAL_B : VDP2_TVMD_HORZ_NORMAL_A, VDP2_TVMD_VERT_224);
+    sat_timer_clock(wide, t0 + 70000u);   /* the BIOS's change takes ~4 fields */
+    sat_busy_wait_us(120000u, wide);   /* the SMPC takes no command for ~100 ms after a clock change (the vblank's INTBACK
+                                        * included: interrupts stay off until then) */
+    scu_ic_mask_set(mask);
+    cpu_intc_mask_set(sr);
+    vdp1_setup();
+    vdp1_sync_interval_set(-1);
+    vdp2_tvmd_display_set();
+    if (use_slave) { cpu_dual_comm_mode_set(CPU_DUAL_ENTRY_ICI); cpu_dual_slave_set(slave_entry); }
+    aud_clock_change(false);
+    mode_wide = wide;
+    printf("screen: %dx%d\n", wide ? SAT_WIDE_W : 320, SAT_SCREEN_H);
+}
+
+/* the planes of the frame being recorded scroll up by dy (vdp2_planes.c): its backdrops move with them */
+void rsat_backdrops_dy(int dy) { backdrop_dy[rec_w] = dy; }
+
 void rsat_set_backdrops(RTex **t, const int *x, const int *y, int n, bool clear)
 {
     slave_idle();
@@ -1634,7 +1677,7 @@ static void draw_backdrops(void)
     vp_on = clip_on = false; clip_dirty = true;
     for (int i = 0; i < nbackdrops; i++) {
         cur = (TexState){ 255, 255, 255, 255, R_BLEND_BLEND, backdrop[i]->prio };
-        RFRect d = { fx_from_int(backdrop_x[i]), fx_from_int(backdrop_y[i]), fx_from_int(backdrop[i]->w), fx_from_int(backdrop[i]->h) };
+        RFRect d = { fx_from_int(backdrop_x[i]), fx_from_int(backdrop_y[i] - replay_dy), fx_from_int(backdrop[i]->w), fx_from_int(backdrop[i]->h) };
         tex_draw(backdrop[i], NULL, &d, 0, NULL, R_FLIP_NONE);
     }
     vp_on = vp; clip_on = cl; clip_dirty = true;
@@ -1699,7 +1742,7 @@ void rsat_frame_end(void)
     if (!use_slave) {   /* SABER_NOSLAVE: replay here and now */
         replay(rec_w);
         submit(false, rec_w);
-        rec_n[rec_w] = 0;
+        rec_n[rec_w] = 0; backdrop_dy[rec_w] = 0;
         rec_seq++;
         for (RTex *t = graveyard[rec_w], *nx; t; t = nx) { nx = t->next_dead; tex_free_mem(t); }
         graveyard[rec_w] = NULL;
@@ -1718,6 +1761,7 @@ void rsat_frame_end(void)
     cpu_dual_slave_notify();
     pending = true;
     rec_w = done;
+    backdrop_dy[rec_w] = 0;
 }
 
 void rsat_stats(unsigned *parts_resident, unsigned *vram_used, unsigned *uploads, unsigned *evicted)

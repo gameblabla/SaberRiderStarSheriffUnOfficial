@@ -28,6 +28,8 @@ void log_sat_write(const char *s, size_t n);
 /* plat_sat.c: timing from the master SH-2's free-running timer (FRT, clock / 32) */
 void     sat_timer_init(void);
 uint32_t sat_timer_us(void);          /* microseconds since boot (wraps after ~71 minutes) */
+void     sat_busy_wait_us(uint32_t us, bool mode352);   /* with the interrupts off (the FRT counted by polling) */
+void     sat_timer_clock(bool mode352, uint32_t now_us);   /* the system clock changed to the 352 (28.64 MHz) or 320 (26.87 MHz) modes' */
 uint32_t sat_vblanks(void);           /* vertical blanks since boot */
 void     sat_vblank_tick(void);       /* from the vblank-out handler */
 
@@ -36,6 +38,7 @@ typedef struct Ren Ren;
 Ren *rsat_renderer(void);
 void rsat_init(void);
 void rsat_set_screen(int w, int h);
+void rsat_set_mode(bool wide);   /* 352x224 (true) or 320x224: the TV mode and system clock, re-initialising what that resets */
 void rsat_frame_begin(void);
 void rsat_frame_end(void);
 int  rsat_prims(void);
@@ -46,6 +49,7 @@ void rsat_cram_reserve(int entries);
 struct RTex;
 void rsat_tex_priority(struct RTex *t, int reg);
 void rsat_set_backdrops(struct RTex **t, const int *x, const int *y, int n, bool clear_framebuffer);
+void rsat_backdrops_dy(int dy);   /* the frame being recorded: the backdrops drawn dy higher (with the planes' scroll) */
 
 void rsat_bench(void);   /* SABER_RBENCH */
 /* video_sat.c: a w x h 16bpp surface in VDP1 memory, written by hook(ud, pixels, pitch in pixels) once a frame while VDP1
@@ -55,6 +59,8 @@ void rsat_video_close(void);
 /* aud_sat.c: a clip has the SCSP from its start to its close (the game's sound driver stops, then starts again) */
 void aud_movie_begin(void);
 void aud_movie_end(void);
+/* aud_sat.c: the system clock change resets the SCSP (the driver goes around it, the sound RAM stays) */
+void aud_clock_change(bool begin);
 
 /* cd_sat.c: bytes a sequential read of f can take right now without waiting for the drive */
 #include <stdio.h>

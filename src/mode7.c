@@ -88,8 +88,8 @@ typedef float rdist2;
 struct Mode7 {
     Ren *ren; int sw, sh;
     RTex *atlas; Spr spr[S_COUNT]; bool ok;
-    uint32_t tiles[T_COUNT][MIPS][TEX * TEX];   /* level L is (TEX >> L) square */
-    uint8_t cells[MAPN * MAPN];
+    uint32_t (*tiles)[MIPS][TEX * TEX];   /* [T_COUNT]: level L is (TEX >> L) square */
+    uint8_t *cells;                       /* [MAPN * MAPN] (both apart from the struct: a console's heap has them in two holes) */
     RFloor *floor; int floor_h;   /* the ground plane (platform/render.h), made on first draw */
     RTex *sky_tex; int sky_w, sky_h; bool sky_ok;
     /* track */
@@ -492,6 +492,8 @@ static void start_race(Mode7 *m)
 Mode7 *mode7_create(Ren *ren, int sw, int sh, int difficulty, int lives, bool resume_phase2)
 {
     Mode7 *m = calloc(1, sizeof *m);
+    if (m) { m->cells = malloc(MAPN * MAPN); m->tiles = calloc(T_COUNT, sizeof *m->tiles); }
+    if (!m || !m->cells || !m->tiles) { fprintf(stderr, "mode7: no memory\n"); mode7_destroy(m); return NULL; }
     m->ren = ren; m->sw = sw; m->sh = sh; m->rng = 0xC0FFEE;
     m->floor_h = sh - HORIZON - 1;
     m->ok = load_atlas(m);
@@ -523,6 +525,7 @@ void mode7_destroy(Mode7 *m)
     if (m->atlas) rtex_destroy(m->atlas);
     if (m->floor) r_floor_destroy(m->floor);
     if (m->sky_tex) rtex_destroy(m->sky_tex);
+    free(m->cells); free(m->tiles);
     free(m);
 }
 

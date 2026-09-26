@@ -96,6 +96,10 @@ uint32_t *png_load_rgba(const char *path, int *w, int *h)
         int rx = d[8] | d[9] << 8, ry = d[10] | d[11] << 8, rw = d[12] | d[13] << 8, rh = d[14] | d[15] << 8;
         if (!rw) { rx = ry = 0; rw = *w; rh = *h; }
         bool fits = rx + rw <= *w && ry + rh <= *h && (size_t)rw * rh * 4 + 32 <= e->size;
+        if (fits && rw == *w && rh == *h) {   /* all of it: the block itself, its pixels moved to its start (no second copy) */
+            uint8_t *b = packs_take_type(asset_key(path), RES_IMAGE);
+            if (b) { memmove(b, b + 32, (size_t)rw * rh * 4); return (uint32_t *)b; }
+        }
         uint32_t *px = fits ? (rw == *w && rh == *h ? malloc((size_t)*w * *h * 4) : calloc((size_t)*w * *h, 4)) : NULL;
         if (px) for (int y = 0; y < rh; y++) memcpy(px + (size_t)(ry + y) * *w + rx, d + 32 + (size_t)y * rw * 4, (size_t)rw * 4);
         packs_release_type(asset_key(path), RES_IMAGE);

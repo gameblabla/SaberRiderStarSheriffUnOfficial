@@ -57,6 +57,9 @@ static bool opt_selectable(int opt)
 #ifdef PLAT_DREAMCAST
     if (opt == OPT_SCREEN || opt == OPT_RATIO) return false;
 #endif
+#ifdef PLAT_SATURN
+    if (opt == OPT_SCREEN) return false;   /* one choice, 320x224 or 352x224: the RATIO row (shown as SCREEN) */
+#endif
     return true;
 }
 
@@ -216,6 +219,10 @@ void menu_update(Menu *m, const Input *in, real dt, int sw, Ren *r)
             if (dir) { int n = plat_screen_modes(); m->screen = (m->screen + n + dir) % n; m->apply_screen_mode = true; if (plat_screen_43_only(m->screen)) m->ratio = RATIO_43; }
             break;
         case OPT_RATIO:   /* WIDE -> 4:3 -> STRETCH -> WIDE (held at 4:3 on a 4:3-only screen) */
+#ifdef PLAT_SATURN
+            if (dir) { m->ratio = m->ratio == RATIO_WIDE ? RATIO_43 : RATIO_WIDE; m->apply_screen_mode = true; }   /* 320x224 <-> 352x224 */
+            break;
+#endif
             if (dir && !plat_screen_43_only(m->screen)) { m->ratio = m->ratio == RATIO_WIDE ? (dir > 0 ? RATIO_43 : RATIO_STRETCH) : m->ratio == RATIO_43 ? (dir > 0 ? RATIO_STRETCH : RATIO_WIDE) : (dir > 0 ? RATIO_WIDE : RATIO_43); m->apply_screen_mode = true; }
             break;
 #else
@@ -367,6 +374,9 @@ static void draw_options(Menu *m, Ren *r, int sw, int sh)
     if (m->music_track == 0) snprintf(mus, sizeof mus, "OPTIONS"); else snprintf(mus, sizeof mus, "TEST TRACK%02d", m->music_track);
     const char *rows[7][2] = { { "LEVEL", DIFF[m->difficulty] }, { "PLAYER", lives }, { "CONTINUE", cont }, { "SCREEN", scr },
                                { "RATIO", m->ratio == RATIO_WIDE ? "WIDE" : m->ratio == RATIO_43 ? "4:3" : "STRETCH" }, { "FILTER", FILT[m->filter] }, { "MUSIC TEST", mus } };
+#ifdef PLAT_SATURN
+    rows[4][0] = "SCREEN"; rows[4][1] = m->ratio == RATIO_WIDE ? "352x224" : "320x224";
+#endif
     int dy = plat_bind_supported() ? 0x0e : 0x10;   /* an eighth row (CONTROLS) fits above BACKER CREDITS at 14 px */
     int vi = 0;
     for (int i = 0; i < 7; i++) {

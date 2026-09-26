@@ -2,6 +2,7 @@
 /* libyaul's <stdlib.h> plus what it lacks (platform/saturn/libc_sat.c) */
 #include_next <stdlib.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 #define RAND_MAX 2147483647
 
@@ -21,3 +22,5 @@ char  *getenv(const char *name);
 void  *hw_malloc(size_t n);
 void  *hw_memalign(size_t align, size_t n);
 void   sat_heap_stats(size_t *hw_free, size_t *lw_free, size_t *hw_used, size_t *lw_used);
+void   sat_set_oom_hook(bool (*hook)(void));   /* malloc out of memory: hook() frees something (false: nothing left) */
+void   sat_heap_largest(size_t *hw_largest, size_t *lw_largest, size_t dump_min);   /* dump_min: list low RAM's blocks >= it */

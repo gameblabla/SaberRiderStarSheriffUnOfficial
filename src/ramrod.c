@@ -279,7 +279,10 @@ static bool load_assets(Ramrod *r)
     r->cockpit = load_tex(r, "cockpit.png", NULL, NULL, NULL);
     const char *fp = asset_path("ramrod/floor.png");
     uint32_t *fl = fp ? png_load_rgba(fp, &w, &h) : NULL;   /* the floor is only read as pixels (r_floor_create) */
-    if (!r->atlas || !r->sky || !r->cockpit || !fl || w != TEX || h != TEX) { free(fl); return false; }
+    if (!r->atlas || !r->sky || !r->cockpit || !fl || w != TEX || h != TEX) {
+        fprintf(stderr, "ramrod: can't load%s%s%s%s\n", r->atlas ? "" : " atlas", r->sky ? "" : " sky", r->cockpit ? "" : " cockpit", fl ? "" : " floor");
+        free(fl); return false;
+    }
     for (int L = 0; L < MIPS; L++) {   /* box-filtered mips against far-row shimmer, each made over the level before it */
         int n = TEX >> L, pn = n * 2;
         if (L) for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {   /* in place: pixel k only reads from k on */
@@ -294,7 +297,7 @@ static bool load_assets(Ramrod *r)
     free(fl);
     const char *p = asset_path("ramrod/atlas.txt");
     FILE *f = asset_fopen(p);
-    if (!f) return false;
+    if (!f) { fprintf(stderr, "ramrod: no atlas.txt\n"); return false; }
     char name[64]; int fr, x, y, fw, fh, ax, ay;
     while (fscanf(f, "%63s %d %d %d %d %d %d %d", name, &fr, &x, &y, &fw, &fh, &ax, &ay) == 8)
         for (int i = 0; i < A_COUNT; i++) if (!strcmp(name, ANAMES[i]) && fr < MAX_FRAMES) {

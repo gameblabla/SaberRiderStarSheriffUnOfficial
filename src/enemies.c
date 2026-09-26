@@ -41,14 +41,14 @@ void enemies_preload(const Enemies *E)
         int t = E->tr[i].type; if (t < 0 || t >= 40 || seen[t]) continue;
         seen[t] = true;
         Character tmp;
-        if (character_init(&tmp, crhc_for_type(t), true)) { sprite_tex(tmp.spr); cblock_tex(tmp.cb); }
+        if (character_init(&tmp, crhc_for_type(t), true)) { sprite_tex(tmp.spr); cblock_preload(tmp.cb); }
     }
     if (seen[10]) { Character tmp; character_init(&tmp, 0x2A02BD4F, true); }   /* the rider a horse carries */
     /* the shots, muzzle flashes and blasts enemies and the player spawn */
     static const uint32_t FX[] = { 0xD85FB68A, 0x9C861FF3, 0x8623249C, 0x5B5EBBA3, 0xB2143E42, 0xF0FB3C78, 0x7027A26E, 0x33269F6B, 0xA2E02F5A };
     for (size_t i = 0; i < sizeof FX / sizeof *FX; i++) {
         const PackEntry *e = packs_peek(FX[i]);
-        if (e && e->type == RES_CBLOCK) cblock_tex(cblock_get(FX[i])); else if (e) sprite_tex(sprite_get(FX[i]));
+        if (e && e->type == RES_CBLOCK) cblock_preload(cblock_get(FX[i])); else if (e) sprite_tex(sprite_get(FX[i]));
     }
 }
 

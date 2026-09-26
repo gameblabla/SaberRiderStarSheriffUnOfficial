@@ -7,7 +7,7 @@
 #include <string.h>
 
 static Game g;   /* static: several hundred KB, too big for a console's main stack */
-static const char *script; static int script_n; static char script_keys[16];
+static const char *script, *script_loop; static int script_n; static char script_keys[16];
 static int shot_frames = -1; static char shot_path[256];
 #ifndef REAL_FIXED
 static double acc;
@@ -35,8 +35,10 @@ bool app_init(Ren *ren, const char *data_dir, int start_level)
 #endif
     audio_init();
     if (!game_init(&g, ren, APP_SCREEN_W, APP_SCREEN_H, start_level)) return false;
-    /* debug: SABER_SCRIPT="60:R,20:RJ,40:" drives the input for N fixed steps each (L R U D J S A P, X = power) */
+    /* debug: SABER_SCRIPT="60:R,20:RJ,40:" drives the input for N fixed steps each (L R U D J S A P, X = power); a '*'
+     * goes back to the step after the first (SABER_SCRIPT="120:,25:RS,5:RJ,*": a wait, then a loop) */
     script = plat_getenv("SABER_SCRIPT");
+    if (script) { const char *c = strchr(script, ','); script_loop = c ? c + 1 : script; }
     /* debug: SABER_SHOT=path,camx,steps -> save a screenshot after N fixed steps and quit */
     if (plat_getenv("SABER_SHOT")) {
         const char *s = plat_getenv("SABER_SHOT"), *c = strchr(s, ','), *e = NULL;
@@ -52,6 +54,7 @@ bool app_init(Ren *ren, const char *data_dir, int start_level)
 
 static void script_step(void)
 {
+    if (script_n == 0 && *script == '*') script = script_loop;
     if (script_n == 0 && *script) {
         int used = 0; sscanf(script, "%d:%15[A-Z]%n", &script_n, script_keys, &used);
         if (used == 0) { sscanf(script, "%d:%n", &script_n, &used); script_keys[0] = 0; }
