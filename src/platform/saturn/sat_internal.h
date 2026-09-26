@@ -56,8 +56,9 @@ void rsat_bench(void);   /* SABER_RBENCH */
  * is idle; drawn by rsat_video_draw (a record, like any draw) */
 bool rsat_video_open(int w, int h, void (*hook)(void *ud, volatile uint16_t *px, int pitch), void *ud);
 void rsat_video_close(void);
-/* aud_sat.c: a clip has the SCSP from its start to its close (the game's sound driver stops, then starts again) */
-void aud_movie_begin(void);
+/* aud_sat.c: a clip has the SCSP from its start to its close (the game's sound driver stops, then starts again);
+ * music: the clip doesn't read the disc (played from RAM), the CD-DA music plays on under it */
+void aud_movie_begin(bool music);
 void aud_movie_end(void);
 /* aud_sat.c: the system clock change resets the SCSP (the driver goes around it, the sound RAM stays) */
 void aud_clock_change(bool begin);
@@ -68,7 +69,8 @@ size_t   cd_sat_available(FILE *f);
 void rsat_timing(uint32_t *planes_us, uint32_t *vdp1_wait_us, uint32_t *put_us, uint32_t *frames);   /* since the last call */
 
 /* vdp2_planes.c: a level's tile layers as VDP2 planes (render.h r_layer); once a frame, before VDP1's list goes */
-void sat_planes_frame(int screen_w, bool delayed);
+void sat_planes_frame(int screen_w);
+void sat_planes_shown(void);                             /* VDP1's frame changes now (the vblank-in): its planes' scroll */
 int  sat_planes_depth_reg(uint32_t level, int layer);   /* a level layer's sprite priority register (0 the front) */
 uint32_t sat_planes_level(void);                         /* the level whose planes are loaded (0 none) */
 bool sat_floor_visible(void);

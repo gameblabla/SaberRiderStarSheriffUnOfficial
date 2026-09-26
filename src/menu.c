@@ -63,15 +63,17 @@ static bool opt_selectable(int opt)
     return true;
 }
 
+/* the music starts after the video is open: the Saturn reads the clip into RAM there, and a disc read stops CD-DA */
 static void open_briefing(Menu *m, Ren *r)
 {
     const PackEntry *e = packs_find(0x29CAD5D3);   /* briefing script: line 1 = video name, rest = text */
-    if (!e) return;
-    char buf[512]; size_t n = e->size < sizeof buf - 1 ? e->size : sizeof buf - 1; memcpy(buf, e->data, n); buf[n] = 0;
-    char *text = strchr(buf, '\n'); if (text) *text++ = 0; else text = buf;
-    (void)r;
-    dialog_open_text(&m->dlg, text, DLG_GREEN);
-    m->video = video_open(r, 0x2FE798C3);
+    if (e) {
+        char buf[512]; size_t n = e->size < sizeof buf - 1 ? e->size : sizeof buf - 1; memcpy(buf, e->data, n); buf[n] = 0;
+        char *text = strchr(buf, '\n'); if (text) *text++ = 0; else text = buf;
+        dialog_open_text(&m->dlg, text, DLG_GREEN);
+        m->video = video_open(r, 0x2FE798C3);
+    }
+    music_play(2, true);
 }
 
 /* Our own credits: our pages first, then the demo's entry 0x7E11BC19 (which still names Erik "Gronkh" Range,
@@ -133,6 +135,8 @@ static const PackEntry *credits_entry(void)
     return &e;
 }
 
+static void charsel_preload(void);
+
 void menu_enter(Menu *m, int state)
 {
     if (m->video) { video_close(m->video); m->video = NULL; }
@@ -150,8 +154,12 @@ void menu_enter(Menu *m, int state)
         if (prev != MS_CREDITS && prev != MS_CONTROLS) music_play(3, true);
         break;
     case MS_CONTROLS: m->bind_row = CR_BUTTON0; m->bind_col = 0; m->bind_wait = true; break;
-    case MS_BRIEFING: m->dlg.active = false; music_play(2, true); break;
-    case MS_CHARSEL: m->t = R(-0.25f); m->character = 1; music_play(1, true); break;
+    case MS_BRIEFING:   /* its room, the hero pieces after it and character select, off the disc before the music starts
+                           (the Saturn: one read, tools/saturn/build_disc.py READ_TOGETHER); open_briefing starts it */
+        m->dlg.active = false;
+        sprite_get(0x0EAE8AEB); cblock_preload(cblock_get(0x2DEF1664)); charsel_preload();
+        break;
+    case MS_CHARSEL: m->t = R(-0.25f); m->character = 1; charsel_preload(); music_play(1, true); break;
     case MS_GAMEOVER: m->dur = R(3.0f); music_play(4, false); break;        /* FUN_0042d690 -> state 9 + music 4 */
     case MS_CONTINUE: music_stop(); m->continue_now = false; break;      /* silence but the clock ticks */
     case MS_ACCOMPLISHED: m->dur = R(10.0f); music_play(7, false); break;   /* state 0xf + music 7 */
@@ -504,6 +512,26 @@ static void draw_briefing(Menu *m, Ren *r, int sw, int sh)
     }
 }
 
+/* character select, per panel: frame, name on/off, portrait on/off */
+static const uint32_t CS_FRAME[4]    = { 0xC2EBBACE, 0x13D53116, 0xCDC8A9CC, 0x957325FD };
+static const uint32_t CS_NAME_ON[4]  = { 0xB48828F4, 0x699DC4C3, 0xA9AB3BF0, 0xF6CBB2F4 };
+static const uint32_t CS_NAME_OFF[4] = { 0xEC2B5E94, 0x2F75D0AA, 0xE14E4D96, 0xBFFFBB29 };
+static const uint32_t CS_PORT_ON[4]  = { 0x67C9A3D9, 0x74100546, 0x72A6B0FB, 0xEEE2331F };
+static const uint32_t CS_PORT_OFF[4] = { 0x3459994C, 0xAA051172, 0x3F368A4E, 0x217B03F1 };
+
+/* every picture character select can show, loaded before its music starts: a sprite first drawn on a left / right
+ * press read the disc then, which on the Saturn stops the CD-DA music while the drive seeks */
+static void charsel_preload(void)
+{
+    static const uint32_t MISC[] = { 0x4813ED48, 0xAE16B01D, 0xE34D3083, 0x5B550481, 0x7673D08E, 0x7255866F, 0x92702CF3, 0x2178AD91 };
+    for (int i = 0; i < 8; i++) sprite_get(MISC[i]);   /* title, arrows, cursor, highlight, n/a, the spiral and its moon */
+    for (int i = 0; i < 4; i++) {
+        sprite_get(CS_FRAME[i]); sprite_get(CS_NAME_ON[i]); sprite_get(CS_NAME_OFF[i]);
+        sprite_get(CS_PORT_ON[i]); sprite_get(CS_PORT_OFF[i]);
+    }
+    font_get(0x4058897F);   /* LOADING */
+}
+
 static void draw_charsel(Menu *m, Ren *r, int sw, int sh)
 {
     /* FUN_004296d0 */
@@ -516,17 +544,11 @@ static void draw_charsel(Menu *m, Ren *r, int sw, int sh)
     bool arrows = (frame_no() & 0x20) != 0;
     if (prev && arrows) sprite_draw(prev, 0, r_int(x0), R(0x60), false);
     if (next && arrows) sprite_draw(next, 0, r_int(x0 + 0x120), R(0x60), false);
-    /* per panel: frame, name on/off, portrait on/off */
-    static const uint32_t FRAME[4]    = { 0xC2EBBACE, 0x13D53116, 0xCDC8A9CC, 0x957325FD };
-    static const uint32_t NAME_ON[4]  = { 0xB48828F4, 0x699DC4C3, 0xA9AB3BF0, 0xF6CBB2F4 };
-    static const uint32_t NAME_OFF[4] = { 0xEC2B5E94, 0x2F75D0AA, 0xE14E4D96, 0xBFFFBB29 };
-    static const uint32_t PORT_ON[4]  = { 0x67C9A3D9, 0x74100546, 0x72A6B0FB, 0xEEE2331F };
-    static const uint32_t PORT_OFF[4] = { 0x3459994C, 0xAA051172, 0x3F368A4E, 0x217B03F1 };
     static const int PX[4] = { 0x10, 0x60, 0xa0, 0xe0 }, NA_ADJ[4] = { 0, 0, 8, 4 }, HL_ADJ[4] = { 0, 0xc, 8, 4 }, CUR_ADJ[4] = { 0xe, 2, 7, 10 };
     for (int i = 0; i < 4; i++) {
         bool on = i == m->character;
         int x = x0 + PX[i];
-        Sprite *fr = sprite_get(FRAME[i]), *nm = sprite_get(on ? NAME_ON[i] : NAME_OFF[i]), *po = sprite_get(on ? PORT_ON[i] : PORT_OFF[i]);
+        Sprite *fr = sprite_get(CS_FRAME[i]), *nm = sprite_get(on ? CS_NAME_ON[i] : CS_NAME_OFF[i]), *po = sprite_get(on ? CS_PORT_ON[i] : CS_PORT_OFF[i]);
         if (fr) sprite_draw_mod(fr, 0, r_int(x), R(0x30), 255, 255, 255, on ? 255 : 128);
         if (nm) sprite_draw(nm, 0, r_int(x + ((i == 0 || i == 3) ? 0x10 : 0)), R(0xd0), false);
         if (po) sprite_draw(po, 0, r_int(x), R(0x30), false);

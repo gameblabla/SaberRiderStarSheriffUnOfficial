@@ -48,8 +48,17 @@ FRM_XOR = 0x46524D00                          # src/gfx.c: a cblock's frames bak
 # cblocks whose frames the game draws whole, many at a time, baked a second time as one picture per frame: VDP1 then
 # draws a frame as a few parts instead of a command per 16x16 tile (the slave's replay of 30-40 tiles a horse was
 # most of a stampede frame). Level 1's robot horse (8 x 5 tiles, up to 12 on screen) and the small props / Outrider
-# pieces drawn by frame; not the level-1 boss (21 frames of 13 x 7 tiles: ~200 KB for one sprite on screen)
-FRAME_BAKED = (0x8873D18C, 0x19BC8FE8, 0x66986CD1, 0x678A6FE0, 0x66956CD4)
+# pieces drawn by frame; not the level-1 boss (21 frames of 13 x 7 tiles: ~200 KB for one sprite on screen). The
+# briefing's four hero pieces (2DEF1664: 14 x 15 tiles of 32 x 16, all four on screen: 260 tiles a frame, 2.6 fields)
+FRAME_BAKED = (0x8873D18C, 0x19BC8FE8, 0x66986CD1, 0x678A6FE0, 0x66956CD4, 0x2DEF1664)
+# textures read together, first in tex.pck in the order they are read (one seek, not ~120 ms each): the briefing's
+# preload (src/menu.c MS_BRIEFING: its room, the hero pieces, then everything character select shows)
+READ_TOGETHER = (0x0EAE8AEB, 0x2DEF1664,
+                 0x4813ED48, 0xAE16B01D, 0xE34D3083, 0x5B550481, 0x7673D08E, 0x7255866F, 0x92702CF3, 0x2178AD91,
+                 0xC2EBBACE, 0xB48828F4, 0xEC2B5E94, 0x67C9A3D9, 0x3459994C,
+                 0x13D53116, 0x699DC4C3, 0x2F75D0AA, 0x74100546, 0xAA051172,
+                 0xCDC8A9CC, 0xA9AB3BF0, 0xE14E4D96, 0x72A6B0FB, 0x3F368A4E,
+                 0x957325FD, 0xF6CBB2F4, 0xBFFFBB29, 0xEEE2331F, 0x217B03F1, 0x4058897F)
 FRAME_ROW_W = 2048   # the frames side by side, rows of at most this many pixels
 _spec = importlib.util.spec_from_file_location('dc_build_disc', ROOT / 'tools/dc/build_disc.py')
 dc = importlib.util.module_from_spec(_spec)
@@ -159,7 +168,8 @@ def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log, force8: set[i
     fresh(dumps)
     ids = subprocess.run([texprep, data, dumps], check=True, capture_output=True, text=True).stdout.split()
     stats = satbake.Stats()
-    for rid in dict.fromkeys(ids):   # first appearance: a graphic in two packs is baked once
+    first = [f'{i:08X}' for i in READ_TOGETHER if f'{i:08X}' in ids]
+    for rid in dict.fromkeys(first + ids):   # first appearance: a graphic in two packs is baked once
         kind, px, meta = satbake.load_srgb(dumps / f'{rid}.srgb')
         block = satbake.bake(px, meta, stats, name=rid, kind=kind, force8=int(rid, 16) in force8)
         tex.add(int(rid, 16), 'tex', block)

@@ -1524,6 +1524,8 @@ void r_floor_destroy(RFloor *f)
 bool sat_floor_visible(void) { return floor_visible; }
 
 /* ---------------------------------------------------------------- frames */
+static void vdp1_shown(void *work) { (void)work; sat_planes_shown(); }
+
 static void vdp1_setup(void)
 {
     const vdp1_env_t env = {
@@ -1550,6 +1552,7 @@ void rsat_init(void)
         cpu_dual_comm_mode_set(CPU_DUAL_ENTRY_ICI);
         cpu_dual_slave_set(slave_entry);
     }
+    vdp1_sync_render_set(vdp1_shown, NULL);   /* libyaul calls it at the vblank-in the list is found drawn: the frame change */
     vdp1_sync_interval_set(-1);   /* variable: the framebuffers change once VDP1 has finished the frame (AUTO (0) changes
                                    * them every field and cuts off a frame VDP1 needs longer for) */
 }
@@ -1597,7 +1600,7 @@ static void slave_idle(void)
 }
 
 static bool pending;   /* a replay whose list hasn't gone to VDP1 yet */
-static void submit(bool planes_delayed, int floor_slot);
+static void submit(int floor_slot);
 
 /* The frame the slave replayed last goes to VDP1 here, at the start of the frame (the main loop has only done the
  * game's update since the vblank), so VDP1 draws it while the master records the next one: in variable mode a list is
@@ -1610,7 +1613,7 @@ void rsat_frame_begin(void)
     uint32_t tw = sat_timer_us();
     slave_idle();                   /* the replay of the frame before */
     tm_slave_wait += sat_timer_us() - tw;
-    if (pending) submit(true, (int)slave_buf);
+    if (pending) submit((int)slave_buf);
     pending = false;
 }
 
@@ -1624,7 +1627,7 @@ void rsat_set_mode(bool wide)
 {
     if (wide == mode_wide) return;
     slave_idle();
-    if (pending) { submit(true, (int)slave_buf); pending = false; }   /* the frame the slave replayed: shown first */
+    if (pending) { submit((int)slave_buf); pending = false; }   /* the frame the slave replayed: shown first */
     vdp1_sync_wait();
     aud_clock_change(true);
     uint32_t t0 = sat_timer_us();
@@ -1710,26 +1713,27 @@ void rsat_timing(uint32_t *planes, uint32_t *vdp1_wait, uint32_t *put, uint32_t 
 }
 
 /* hand the last replay's list to VDP1 (and its VDP2 side: planes, colour offset, back colour) */
-static void submit(bool planes_delayed, int floor_slot)
+static void submit(int floor_slot)
 {
     uint32_t t0 = sat_timer_us();
     floor_submit(&floor_state[floor_slot]);
     floor_state[floor_slot].valid = false;
-    sat_planes_frame(scr_w, planes_delayed);
     uint32_t t1 = sat_timer_us();
+    vdp1_sync_wait();   /* the frame before is on screen: its planes' scroll too (sat_planes_shown) */
+    uint32_t t2 = sat_timer_us();
+    sat_planes_frame(scr_w);
     vdp2_ioregs_t *regs = vdp2_regs_get();
     regs->clofen = res.clofen;
     if (res.clofen) { regs->clofsl = 0; regs->coar = res.coar; regs->coag = res.coag; regs->coab = res.coab; }
     vdp2_scrn_back_color_set(VDP2_VRAM_ADDR(3, 0x01FFFE), (rgb1555_t){ .raw = res.back_color });
-    vdp1_sync_wait();
     gouraud_upload();
     video_step();
-    uint32_t t2 = sat_timer_us();
+    uint32_t t3a = sat_timer_us();
     vdp1_sync_cmdt_put((const vdp1_cmdt_t *)cmds, (uint16_t)res.ncmd, 0);
     vdp1_sync_render();
     vdp1_sync();
     uint32_t t3 = sat_timer_us();
-    tm_planes += t1 - t0; tm_wait += t2 - t1; tm_put += t3 - t2; tm_frames++;
+    tm_planes += t1 - t0 + (t3a - t2); tm_wait += t2 - t1; tm_put += t3 - t3a; tm_frames++;
     tm_ntex += (uint32_t)res.ntex; tm_upl += res.upload_bytes;
 }
 
@@ -1741,7 +1745,7 @@ void rsat_frame_end(void)
     if (rec_n[rec_w] > rec_peak) rec_peak = rec_n[rec_w];
     if (!use_slave) {   /* SABER_NOSLAVE: replay here and now */
         replay(rec_w);
-        submit(false, rec_w);
+        submit(rec_w);
         rec_n[rec_w] = 0; backdrop_dy[rec_w] = 0;
         rec_seq++;
         for (RTex *t = graveyard[rec_w], *nx; t; t = nx) { nx = t->next_dead; tex_free_mem(t); }

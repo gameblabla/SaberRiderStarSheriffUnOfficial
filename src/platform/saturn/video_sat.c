@@ -8,6 +8,11 @@
  * SCU-DMA-visible high-RAM sample buffer used by the original direct-CD path.
  * Movie bytes come through Saber Rider's existing sequential CDFS streamer,
  * avoiding a second CD-block owner while keeping libyaul's Cinepak/ADX decode.
+ *
+ * A data read stops CD-DA, so a clip small enough (the briefing's, 357 KB) is
+ * read whole into low work RAM when it opens and plays from there, as the
+ * Dreamcast keeps what it can in memory: the menu music plays on under it
+ * (aud_movie_begin(true)). The big ones (intro, power clips) stream.
  */
 #include "../../video.h"
 #include "../render.h"
@@ -26,12 +31,15 @@ void rsat_video_draw(const RFRect *dst);   /* render_sat.c */
 const cdfs_filelist_entry_t *cd_sat_entry(const char *name); /* cd_sat.c */
 
 #define SAMPLE_BUFFER_BYTES (96 * 1024)
+#define RAM_CLIP_MAX (512 * 1024)   /* a clip up to this size plays from RAM (it must also fit in low RAM) */
 
 int film_loop_handler(void) { return 1; }
 
 struct Video {
     const cdfs_filelist_entry_t *entry;
     FILE *stream;
+    uint8_t *ram;             /* the whole file, or NULL: streamed from the disc */
+    uint32_t ram_size, ram_pos;
     int w, h;                 /* physical CPK/decode dimensions */
     int logical_w, logical_h; /* source-space dimensions exposed to game UI */
     decode_work_t *work;
@@ -87,6 +95,29 @@ static uint32_t movie_available(void *user)
     return n > UINT32_MAX ? UINT32_MAX : (uint32_t)n;
 }
 
+static uint32_t ram_read(void *user, void *dst, uint32_t len)
+{
+    Video *v = user;
+    if (len > v->ram_size - v->ram_pos) len = v->ram_size - v->ram_pos;
+    memcpy(dst, v->ram + v->ram_pos, len);
+    v->ram_pos += len;
+    return len;
+}
+
+static uint32_t ram_available(void *user) { Video *v = user; return v->ram_size - v->ram_pos; }
+
+static void io_set(Video *v)
+{
+    if (v->ram) film_buff_io_set(v, ram_read, ram_available);
+    else film_buff_io_set(v->stream, movie_read, movie_available);
+}
+
+static void video_free(Video *v)
+{
+    if (v->stream) fclose(v->stream);
+    free(v->ram); free(v->sample_mem); free(v->work); free(v);
+}
+
 static void movie_name(const char *path, char name[16])
 {
     const char *b = strrchr(path, '/'); b = b ? b + 1 : path;
@@ -99,10 +130,10 @@ static void movie_name(const char *path, char name[16])
 static bool activate_video(Video *v)
 {
     if (v->surface) return true;
-    film_buff_io_set(v->stream, movie_read, movie_available);
+    io_set(v);
     v->surface = rsat_video_open(v->w, v->h, hook, v);
     if (!v->surface) { film_buff_io_clear(); return false; }
-    aud_movie_begin();
+    aud_movie_begin(v->ram != NULL);
     film_audio_hw_begin();
     return true;
 }
@@ -130,6 +161,14 @@ static Video *open_name(const char *name, bool activate)
     memset(&v->params, 0, sizeof v->params);
     v->entry = entry;
     v->stream = stream;
+    if (entry->size <= RAM_CLIP_MAX && (v->ram = lw_malloc(entry->size)) != NULL) {
+        uint32_t t0 = sat_timer_us();
+        v->ram_size = (uint32_t)fread(v->ram, 1, entry->size, stream);
+        fclose(stream); v->stream = NULL;
+        cd_sat_stream_stop();
+        if (v->ram_size != entry->size) { printf("video: %s: short read\n", name); video_free(v); return NULL; }
+        printf("video: %s read into RAM (%u KB, %u ms)\n", name, (unsigned)(v->ram_size / 1024), (unsigned)((sat_timer_us() - t0) / 1000));
+    }
     v->params.sampleBuffAddr = (uint32_t *)v->sample_mem;
     v->params.sampleBuffSize = SAMPLE_BUFFER_BYTES;
     v->params.decodeColorDepth = COLOR_DEPTH_15;
@@ -145,7 +184,7 @@ static Video *open_name(const char *name, bool activate)
     /* Keep the game's existing CDFS streamer in charge of the drive.  The
      * libyaul decoder still owns FILM/Cinepak/ADX parsing and buffering, but
      * its byte source is the game's FILE stream. */
-    film_buff_io_set(stream, movie_read, movie_available);
+    io_set(v);
     init_film_start((cdfs_filelist_entry_t *)entry, v->work, 0, 0);
     if (v->work->play_status == ERROR || memcmp(v->work->filmHeader.film_str, "FILM", 4) ||
         memcmp(v->work->filmHeader.fdsc.fdsc_str, "FDSC", 4) ||
@@ -154,8 +193,7 @@ static Video *open_name(const char *name, bool activate)
         printf("video: %s: unsupported FILM/CPK\n", name);
         film_buff_io_clear();
         stop_sound();
-        fclose(v->stream);
-        free(v->sample_mem); free(v->work); free(v); return NULL;
+        video_free(v); return NULL;
     }
 
     v->w = v->work->filmHeader.fdsc.width;
@@ -166,8 +204,7 @@ static Video *open_name(const char *name, bool activate)
         if (!activate_video(v)) {
             printf("video: %s: no room for %dx%d surface\n", name, v->w, v->h);
             stop_sound();
-            fclose(v->stream);
-            free(v->sample_mem); free(v->work); free(v); return NULL;
+            video_free(v); return NULL;
         }
     } else {
         /* Parsing/prefill is complete; no decoder runs until the clip is
@@ -264,9 +301,6 @@ void video_close(Video *v)
     film_buff_io_clear();
     stop_sound();
     if (playing) aud_movie_end();
-    if (v->stream) fclose(v->stream);
-    cd_sat_stream_stop();
-    free(v->sample_mem);
-    free(v->work);
-    free(v);
+    if (v->stream) cd_sat_stream_stop();
+    video_free(v);
 }

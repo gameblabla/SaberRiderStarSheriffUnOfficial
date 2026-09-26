@@ -13,7 +13,8 @@
  * Music: CD-DA through the DSP's CD input (cd_sat.c plays the tracks; MUSIC.TXT maps a music id to its track).
  * Movies: video_sat.c brackets a clip with aud_movie_begin / aud_movie_end. The 68000 is stopped and the film player
  * drives slots 0-1 over its ring at MOVIE_OFF itself (film_pcm_*); the bank below it survives, so afterwards only the
- * 8 KB driver is copied in again.
+ * 8 KB driver is copied in again. A clip played from RAM (the briefing) leaves the drive to the music: the CD input then
+ * goes straight to the output (slots 16 / 17's EFSDL, the DSP is off) and the music plays on under it.
  *
  * Sound RAM: 0x00000 driver (control block at 0x80) | 0x02000 effect table | 0x02400 bank | 0x78000 movie ring(s). */
 #include "../aud.h"
@@ -83,7 +84,7 @@ static Voice voices[CHANNELS];
 static struct { uint32_t id; int track; } tracks[MAX_TRACKS];
 static int ntracks;
 static uint16_t cd_vol = 0x4000;
-static bool cd_dirty = true, driver_ok, movie;
+static bool cd_dirty = true, driver_ok, movie, movie_music;
 static unsigned kicks_late;
 
 static uint32_t rd32le(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
@@ -235,9 +236,12 @@ static void voice_release(Voice *v)
     v->active = false; v->s = NULL;
 }
 
+static struct { AudSample *s; real gain; uint32_t us; } pend;   /* a one-shot asked for during a clip */
+
 int aud_play(AudSample *s, real gain, bool loop)
 {
-    if (movie || !sample_load(s)) return -1;
+    if (movie) { if (!loop) { pend.s = s; pend.gain = gain; pend.us = sat_timer_us(); } return -1; }
+    if (!sample_load(s)) return -1;
     int best = -1;
     for (int i = 0; i < CHANNELS && best < 0; i++) if (!voices[i].active) best = i;
     for (int pass = 0; pass < 2 && best < 0; pass++)   /* all busy: the one-shot nearest its end, then any loop */
@@ -261,6 +265,7 @@ void aud_stop(int h) { Voice *v = voice_handle(h); if (!v) return; voice_release
 bool aud_playing(int h) { return voice_handle(h) != NULL; }
 
 /* ---- music: CD-DA ---- */
+static void movie_cd_level(void);
 static int track_of(uint32_t id) { for (int i = 0; i < ntracks; i++) if (tracks[i].id == id) return tracks[i].track; return 0; }
 
 bool aud_music_play(uint32_t id, bool loop)
@@ -270,24 +275,40 @@ bool aud_music_play(uint32_t id, bool loop)
     return cd_sat_cdda_play(t, loop);
 }
 void aud_music_stop(void) { cd_sat_cdda_stop(); }
-void aud_music_gain(real g) { uint16_t v = vol_of(g); if (v != cd_vol) { cd_vol = v; cd_dirty = true; } }
+void aud_music_gain(real g) { uint16_t v = vol_of(g); if (v != cd_vol) { cd_vol = v; cd_dirty = true; if (movie) movie_cd_level(); } }
 void aud_music_pause(bool pause) { cd_sat_cdda_pause(pause); }
 
 /* ---- movies (video_sat.c) ---- */
-void aud_movie_begin(void)
+/* the CD input straight to the output while the DSP is off: EFSDL of slots 16 (EXTS0, left) / 17 (EXTS1, right) in
+ * 6 dB steps, the nearest to the driver's level: 7 (0 dB) for its 0x4000 (its DSP path measured in mednafen: the same
+ * passage of the briefing track at ~0.7 of the track's RMS through the driver, ~0.2 at EFSDL 5) */
+static void movie_cd_level(void)
+{
+    int l = 0;
+    if (movie_music && cd_vol) { l = 7; for (uint32_t v = cd_vol; v * 181u / 128u < 0x4000u && l > 0; v <<= 1) l--; }
+    SLOT(16, 0x16) = (uint16_t)(l << 5 | 0x1F);
+    SLOT(17, 0x16) = (uint16_t)(l << 5 | 0x0F);
+}
+
+void aud_movie_begin(bool music)
 {
     if (movie) return;
     for (int i = 0; i < CHANNELS; i++) { voice_release(&voices[i]); voices[i].action = 0; }
     scsp_quiet();
     SCSP_MVOL = 1u << 9 | 0xF;
-    movie = true; driver_ok = false;
+    movie = true; movie_music = music; driver_ok = false;
+    movie_cd_level();
 }
 
 void aud_movie_end(void)
 {
     if (!movie) return;
-    movie = false;
+    movie = false; movie_music = false;
+    movie_cd_level();
     driver_ok = driver_start();
+    cd_dirty = true;
+    if (pend.s && sat_timer_us() - pend.us < 200000u) aud_play(pend.s, pend.gain, false);   /* the click that closed it */
+    pend.s = NULL;
 }
 
 void aud_clock_change(bool begin)
@@ -339,8 +360,9 @@ void film_pcm_stop(int ch)
 /* ---- once a frame ---- */
 void aud_update(void)
 {
-    if (movie) return;   /* the clip reads the disc: the music comes back after it */
+    if (movie && !movie_music) return;   /* the clip reads the disc: the music comes back after it */
     cd_sat_cdda_update();
+    if (movie) return;
     uint32_t now = sat_timer_us();
     for (int i = 0; i < CHANNELS; i++) {
         Voice *v = &voices[i];

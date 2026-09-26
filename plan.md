@@ -806,3 +806,34 @@ The front end, the loading screens and level 1 look as before (screenshots).
   one row, SCREEN 320x224 / 352x224 (no SCREEN list, no STRETCH). Checked in mednafen (`ss.correct_aspect 0` for
   native-width shots): switching back and forth in OPTIONS with the music playing through, the front end, the victory
   art, stages 1, 2, 6 and 7, the intro and a power clip (320 wide, centred) at 352. Not checked on a console.
+
+### Fixes from `../saturn_bugs_2.txt` (2026-09-26)
+
+- **The store's camera out of step with its wall** (level 1, in the shake): the planes were a frame behind every
+  sprite. 669b26a moved the submit of a frame to the start of the next one, but `sat_planes_frame` still took the
+  frame before's camera (`delayed`: right when the submit came at the end of the next frame's draw); the prop's own
+  wall pixels showed as a band against the plane's. Gone (`submit` has no delay); and the planes' scroll now goes on
+  screen with VDP1's frame change: `sat_planes_frame` leaves it in a latch (and the line scroll table in the one of two
+  not shown, 0x70000 / 0x70800), `sat_planes_shown` puts it in the registers from libyaul's sprite-end callback (called
+  in the vblank-in handler that changes the framebuffers), so a list that runs past its field can't split them either.
+  Camera-to-roof offset over 160 stampede frames: 4-11 px before, the camera's own 6 / 8 after.
+- **Character select: the music dropping on left / right**: each hero's name / portrait on-off pictures were read from
+  the disc the first time the cursor reached it, and a data read stops CD-DA. `charsel_preload` (menu.c) loads them all,
+  the spiral and LOADING's font too, before the music starts: no reads on the screen, 16.68 ms frames.
+- **Briefing: the hero pieces choking**: the 66 KB piece cblock (2DEF1664) was read when START was pressed, then drawn as
+  ~260 tiles of 32 x 16 a frame (399 prims, 2.65 fields a frame, the slave's replay 18 ms). It's in `FRAME_BAKED` (four
+  448 x 240 frames, 43 KB, 122 KB of VDP1 memory) and preloaded with the room and character select at the briefing's
+  start: 63 prims, 1.00 fields a frame. `build_disc.py READ_TOGETHER` puts those textures first in tex.pck in the
+  order they are read: ~1.2 s for the lot (~2.7 s scattered, 120 ms a seek); START on the main menu now takes ~2.4 s
+  to show the briefing. At character select's first frame (still black) VDP1 memory runs out for a frame (the
+  briefing's textures are kept one frame more) and the 211 KB spiral uploads (~190 ms).
+- **Briefing: the music gone under and after the video**: the FILM streamed from the disc while CD-DA played (a data
+  read stops it), and the clip's `aud_movie_begin` reset the SCSP, so the CD input was muted too; the music never came
+  back while the briefing held the clip's last frame. As on the Dreamcast, what fits stays in memory and only the rest
+  streams: a clip of at most 512 KB (the briefing's, 356 KB) is read whole into low RAM when it opens (~1.4 s, before
+  `music_play`: `open_briefing` starts the music now) and plays from there (`video_sat.c` ram_read). The intro and the
+  power clips stream as before. While a RAM clip has the SCSP (`aud_movie_begin(true)`) the CD input goes straight to
+  the output (slots 16 / 17 EFSDL, the DSP is off), 7 = the driver's 0x4000 in 6 dB steps (the same passage measured in
+  mednafen through both paths), and `cd_sat_cdda_update` keeps running. A one-shot asked for during a clip (the START
+  click that closes the box) plays when the driver is back, within 200 ms. START on the main menu now takes ~4 s to
+  show the briefing (was ~2.6 s).

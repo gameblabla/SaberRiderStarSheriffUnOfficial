@@ -9,9 +9,9 @@
  * rate. A frame without any plane (menus) turns them off and gives the colour RAM back.
  *
  * Video memory: the cells from 0 (banks A0, A1, B0), a 16 KB name page per NBG in B1 at 0x60000 + nbg * 0x4000,
- * the line scroll tables at 0x70000 (NBG0) and 0x70400 (NBG1). The access cycle patterns follow the layout: the
- * name reads in B1 (NBGn at Tn), each plane's character reads at the same slot in every bank its cells are in, the
- * other slots CPU. mednafen only checks that a bank has a slot for what it reads; real hardware has placement rules
+ * the line scroll tables at 0x70000 (NBG0) and 0x70400 (NBG1), twice (0x70800 on: one shown, one written). The access
+ * cycle patterns follow the layout: the name reads in B1 (NBGn at Tn), each plane's character reads at the same slot in
+ * every bank its cells are in, the other slots CPU. mednafen only checks that a bank has a slot for what it reads; real hardware has placement rules
  * too (plan 11: check on a console). */
 #include "../render.h"
 #include "../../pack.h"
@@ -32,7 +32,7 @@
 #define MAX_ROWS     32
 #define CELLS_END    0x5c400u
 #define PAGE(nbg)    (0x60000u + (uint32_t)(nbg) * 0x4000u)
-#define LS_TABLE(n)  (0x70000u + (uint32_t)(n) * 0x400u)
+#define LS_TABLE(n, k) (0x70000u + (uint32_t)(k) * 0x800u + (uint32_t)(n) * 0x400u)
 #define VRAM(off)    ((volatile uint32_t *)(0x25E00000u + (off)))
 
 typedef struct { char magic[4]; uint16_t nplanes, nbands, npal, nbackdrops; uint32_t ncells, bands_off, names_off, cellpal_off, backdrops_off, layers; uint8_t depth[32]; } SplHead;
@@ -62,6 +62,15 @@ static struct {
     bool asked, shown, palettes_in;
     fx cam_x, cam_y;
 } P;
+
+/* The scroll of a frame's planes goes on screen with that frame's sprites (the store's camera prop on its wall, in the
+ * shake). VDP1 changes framebuffers at the first vblank after it has drawn the list (variable mode), a field after
+ * VDP2's registers would take a value set with the list when the list runs past its field. sat_planes_frame leaves
+ * the scroll here and the line scroll table in the one not shown; sat_planes_shown puts them in the registers at the
+ * vblank VDP1's frame changes. */
+static struct { fix16_t x[4], y[4]; bool ls[4]; } latch;
+static volatile bool latch_ready;
+static int ls_shown;            /* the line scroll tables on screen (0, 1) */
 
 static uint32_t be32(const void *p) { const uint8_t *b = p; return (uint32_t)b[0] << 24 | (uint32_t)b[1] << 16 | (uint32_t)b[2] << 8 | b[3]; }
 
@@ -122,7 +131,7 @@ static void setup_screens(void)
         vdp2_scrn_cell_format_set(&f, &map);
         vdp2_scrn_priority_set(scrn_of(pl->nbg), pl->prio);
         if (pl->line_scroll && pl->nbg < 2) {
-            const vdp2_scrn_ls_format_t ls = { .scroll_screen = scrn_of(pl->nbg), .table_base = VDP2_VRAM_ADDR(0, LS_TABLE(pl->nbg)),
+            const vdp2_scrn_ls_format_t ls = { .scroll_screen = scrn_of(pl->nbg), .table_base = VDP2_VRAM_ADDR(0, LS_TABLE(pl->nbg, ls_shown)),
                                                .interval = 0, .type = VDP2_SCRN_LS_TYPE_HORZ };
             vdp2_scrn_ls_set(&ls);
         }
@@ -297,12 +306,11 @@ static void update_band(BandRt *br, int sw)
     br->lo = c0; br->hi = c1;
 }
 
-void sat_planes_frame(int sw, bool delayed)
+/* the planes of the frame whose list goes to VDP1 now: the last one drawn (render_sat.c submits it at the start of the
+ * next, before the core asks for the next frame's layers) */
+void sat_planes_frame(int sw)
 {
-    /* delayed: the list going to VDP1 is the frame before's (the slave replayed it): so are the planes */
-    static bool prev_asked; static fx prev_x, prev_y;
-    bool asked = P.asked; fx cx = P.cam_x, cy = P.cam_y;
-    if (delayed) { P.asked = prev_asked; P.cam_x = prev_x; P.cam_y = prev_y; prev_asked = asked; prev_x = cx; prev_y = cy; }
+    latch_ready = false;
     if (!P.asked || !P.h) {
         vdp2_scrn_display_set(sat_floor_visible() ? VDP2_SCRN_DISPTP_RBG0 : VDP2_SCRN_DISP_NONE);
         if (P.shown) { rsat_set_backdrops(NULL, NULL, NULL, 0, false); P.shown = false; }
@@ -315,16 +323,17 @@ void sat_planes_frame(int sw, bool delayed)
     vdp2_scrn_disp_t disp = sat_floor_visible() ? VDP2_SCRN_DISPTP_RBG0 : VDP2_SCRN_DISP_NONE;
     for (int i = 0; i < P.h->nplanes; i++) {
         const SplPlane *pl = &P.planes[i];
-        vdp2_scrn_t s = scrn_of(pl->nbg);
         disp |= (vdp2_scrn_disp_t)(VDP2_SCRN_DISPTP_NBG0 << pl->nbg);   /* DISPTP: colour 0 transparent (DISP_ also sets TPON) */
         int oy = plane_oy(pl, P.cam_y);   /* the camera shake */
-        vdp2_scrn_scroll_y_set(s, (fix16_t)(oy << 16));
+        latch.y[pl->nbg] = (fix16_t)(oy << 16);
+        latch.ls[pl->nbg] = false;
         if (pl->nbands == 1 || !(pl->line_scroll && pl->nbg < 2)) {
-            vdp2_scrn_scroll_x_set(s, (fix16_t)((P.band[pl->first_band].scroll & 511) << 16));
+            latch.x[pl->nbg] = (fix16_t)((P.band[pl->first_band].scroll & 511) << 16);
             continue;
         }
-        vdp2_scrn_scroll_x_set(s, 0);
-        volatile uint32_t *t = VRAM(LS_TABLE(pl->nbg));   /* per screen line: the scroll of the band at that plane row */
+        latch.x[pl->nbg] = 0;
+        latch.ls[pl->nbg] = true;
+        volatile uint32_t *t = VRAM(LS_TABLE(pl->nbg, ls_shown ^ 1));   /* per screen line: the scroll of the band at that plane row */
         for (int y = 0; y < SAT_SCREEN_H; y++) {
             int row = (y + oy) >> 3, sc = 0;
             for (int k = 0; k < pl->nbands; k++) {
@@ -334,6 +343,7 @@ void sat_planes_frame(int sw, bool delayed)
             t[y] = (uint32_t)(sc & 511) << 16;
         }
     }
+    latch_ready = true;
     if (!P.shown) {
         vdp2_scrn_display_set(disp);
         int x[4], y[4];
@@ -342,4 +352,31 @@ void sat_planes_frame(int sw, bool delayed)
         rsat_set_backdrops(P.backdrop, x, y, P.nbackdrops, true);
         P.shown = true;
     }
+}
+
+/* VDP1's frame changes at this vblank (vdp1_sync_render_set: libyaul calls it from the vblank-in handler, once the
+ * list is drawn): the planes' scroll of that frame, in the registers (and in libyaul's copy, which it commits after) */
+void sat_planes_shown(void)
+{
+    if (!latch_ready || !P.h) return;
+    latch_ready = false;
+    vdp2_ioregs_t *sh = vdp2_regs_get();
+    volatile vdp2_ioregs_t *hw = (volatile vdp2_ioregs_t *)VDP2_IOREG_BASE;
+    bool flip = false;
+    for (int i = 0; i < P.h->nplanes; i++) {
+        int n = P.planes[i].nbg;
+        vdp2_scrn_scroll_x_set(scrn_of(n), latch.x[n]);
+        vdp2_scrn_scroll_y_set(scrn_of(n), latch.y[n]);
+        if (latch.ls[n]) {
+            flip = true;
+            uint32_t a = VDP2_VRAM_ADDR(0, LS_TABLE(n, ls_shown ^ 1));
+            uint16_t u = (uint16_t)VDP2_VRAM_BANK(a), l = (uint16_t)((a >> 1) & 0xFFFF);
+            if (n == 0) { sh->lsta0u = u; sh->lsta0l = l; hw->lsta0u = u; hw->lsta0l = l; }
+            else        { sh->lsta1u = u; sh->lsta1l = l; hw->lsta1u = u; hw->lsta1l = l; }
+        }
+    }
+    const volatile uint16_t *from = (const uint16_t *)&sh->sc0;   /* SCXIN0 .. SCYN3: 16-bit registers */
+    volatile uint16_t *to = (volatile uint16_t *)&hw->sc0;
+    for (unsigned k = 0; k < (unsigned)((const uint8_t *)&sh->scn3 + sizeof sh->scn3 - (const uint8_t *)&sh->sc0) / 2; k++) to[k] = from[k];
+    if (flip) ls_shown ^= 1;
 }
