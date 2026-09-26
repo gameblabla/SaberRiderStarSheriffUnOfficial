@@ -325,9 +325,6 @@ static int dcfmv_load_frame_tables(dcfmv_t *fmv) {
 
     if (!fmv || fmv->video_fd < 0) return -1;
 
-    fmv->compressed_buffer = memalign(32, fmv->max_compressed_size);
-    if (!fmv->compressed_buffer) return -1;
-
     fmv->frame_offsets = malloc((fmv->num_unique_frames + 1) * sizeof(uint32_t));
     fmv->frame_durations = malloc(fmv->num_unique_frames * sizeof(uint16_t));
     fmv->GTotalToUnique = malloc(fmv->num_total_frames * sizeof(int));
@@ -341,6 +338,18 @@ static int dcfmv_load_frame_tables(dcfmv_t *fmv) {
     if (fs_read(fmv->video_fd, fmv->frame_durations,
                 fmv->num_unique_frames * sizeof(uint16_t)) < 0)
         return -1;
+
+    /* Frames are stored 32-byte aligned, so the gap between two frame offsets (the span
+     * dcfmv_frames_decode_frame reads and decodes) is the frame rounded up to 32, which
+     * can exceed the header's max_compressed_size (the largest frame, unpadded). Sizing
+     * the staging buffer with that value overflowed it by the pad on the worst frame. */
+    uint32_t max_gap = fmv->max_compressed_size;
+    for (int u = 0; u < fmv->num_unique_frames; u++) {
+        uint32_t gap = fmv->frame_offsets[u + 1] - fmv->frame_offsets[u];
+        if (gap > max_gap) max_gap = gap;
+    }
+    fmv->compressed_buffer = memalign(32, max_gap);
+    if (!fmv->compressed_buffer) return -1;
 
     for (int u = 0; u < fmv->num_unique_frames; u++) {
         for (int i = 0; i < fmv->frame_durations[u] && t < fmv->num_total_frames; i++) {
@@ -914,12 +923,15 @@ static int dcfmv_frames_decode_frame(dcfmv_t *fmv, int total_frame, int buf_inde
                  decode_elapsed_ms);
     } else {
         double decode_start_ms = dcfmv_decode_timer_ms();
+        /* want = video_frame_size, like LZ4_decompress_fast: frames are stored 32-byte
+         * padded, so the span we read ends in pad bytes. With want < 0 the decoder would
+         * keep parsing that pad as tokens, overrun the output and fail every frame. */
         int res = lz4_mini_decode(
             fmv->compressed_buffer,
             (int)compressed_size,
             fmv->frame_buffer[buf_index],
             fmv->video_frame_size,
-            -1);
+            fmv->video_frame_size);
         double decode_elapsed_ms = dcfmv_decode_timer_ms() - decode_start_ms;
         if (res != fmv->video_frame_size) {
             DCMV_Error("lz4_mini_decode failed for frame %d (buf %d): out=%d expected=%d",
@@ -1098,12 +1110,14 @@ static int dcfmv_chunks_decode_frame(dcfmv_t *fmv, int total_frame, int buf_inde
                  total_frame, unique_frame, buf_index, (unsigned long)sz, fmv->video_frame_size, decode_elapsed_ms);
     } else {
         double decode_start_ms = dcfmv_decode_timer_ms();
+        /* want = video_frame_size (see dcfmv_frames_decode_frame): stop at the frame's
+         * own length so the 32-byte pad after it is never parsed as tokens. */
         int res = lz4_mini_decode(
             slot->video_section + off,
             (int)sz,
             fmv->frame_buffer[buf_index],
             fmv->video_frame_size,
-            -1);
+            fmv->video_frame_size);
         double decode_elapsed_ms = dcfmv_decode_timer_ms() - decode_start_ms;
         if (res != fmv->video_frame_size) {
             DCMV_Error("lz4_mini_decode failed for total frame %d unique %d (buf %d): out=%d expected=%d",
