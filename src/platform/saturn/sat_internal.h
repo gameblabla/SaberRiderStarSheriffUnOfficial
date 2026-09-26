@@ -18,6 +18,7 @@ void cd_sat_stream_stop(void);   /* the data stream gives the drive up (CD-DA ta
 /* CD-DA music on the same drive: a disc track (2..), looped or once; update once a frame (it resumes the music after
  * data reads took the drive) */
 bool cd_sat_cdda_play(int track, bool loop);
+void cd_sat_cdda_track_length(int track, uint32_t sectors);  /* playable sectors after INDEX 01 */
 void cd_sat_cdda_stop(void);
 void cd_sat_cdda_pause(bool pause);
 void cd_sat_cdda_update(void);

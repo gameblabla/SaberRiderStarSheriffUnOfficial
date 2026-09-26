@@ -8,7 +8,7 @@ Everything sits in the ISO root under an 8.3 upper-case name (src/platform/satur
   TEX.PCK     every graphic as a "SAT1" block (tools/saturn/satbake.py): pack sprites, cblocks and fonts under their
               own id, our PNGs under namehash(path)
   SND.PCK     adp68k ADPCM samples, "ADPK" blocks (core SFX 2/1-bit, asset/voice SFX 4-bit; bake_audio)
-  MUSIC.TXT   music id -> CD-DA track (the tracks: build/saturn/tracks, in the CUE)
+  MUSIC.TXT   music id -> CD-DA track and playable sector count (the tracks: build/saturn/tracks, in the CUE)
   FILES.PCK   our other files (text, level blobs) and the RGBA of the few images the game reads as pixels, stored as
               host-order (big-endian) 0xAABBGGRR integers, the way the core reads pixels
   STAGE.PCK   blocks that replace the demo's, opened before the other packs (tools/saturn/layers.py): a level without
@@ -21,6 +21,7 @@ The source packs and assets are never modified.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import importlib.util
 import re
@@ -60,6 +61,23 @@ READ_TOGETHER = (0x0EAE8AEB, 0x2DEF1664,
                  0xCDC8A9CC, 0xA9AB3BF0, 0xE14E4D96, 0x72A6B0FB, 0x3F368A4E,
                  0x957325FD, 0xF6CBB2F4, 0xBFFFBB29, 0xEEE2331F, 0x217B03F1, 0x4058897F)
 FRAME_ROW_W = 2048   # the frames side by side, rows of at most this many pixels
+
+# April's Saturn voice takes are a little larger than the complete Stage 5 sound bank can hold.
+# Keep two hurt takes and one death take: every event still has its own sound, while these alternate
+# takes can be left out of the Saturn image. The WAV sources and every other platform's build remain intact.
+SATURN_OMITTED_VOICES = {
+    'voice/april_hurt2.wav',
+    'voice/april_huh_anime_hurt.wav',
+    'voice/april_death2.wav',
+}
+SATURN_SFX_TABLE = (
+    0xE418A101, 0xEB3309DC, 0xEB450AED, 0x8ADE82B6, 0x8ACB81A0, 0x8AB88092, 0x9C7B3FD9, 0xC66E1894,
+    0xC6801BB9, 0xBF4917FF, 0xBF5B14EA, 0xBF6D1599, 0x89389611, 0x8923950D, 0xFE10EB78, 0xFDFFE848,
+    0xA8382083, 0x162864B4, 0x8BE8F136, 0xF8B5C0E8, 0x208C64D9, 0xE73A3850, 0x87265BA0, 0x1DBF470E,
+    0x8AEB8147, 0xF11FCC31, 0x0AFC505A, 0x15A00BA1, 0x82EFBA26, 0x47D886A1, 0xE105C92A, 0xABC6A6E8,
+)
+SATURN_SOUND_BANK_BYTES = 0x78000 - 0x2400
+SATURN_SOUND_BANK_RESERVE = 16 * 1024
 _spec = importlib.util.spec_from_file_location('dc_build_disc', ROOT / 'tools/dc/build_disc.py')
 dc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(dc)   # the Dreamcast builder: its asset tables and helpers
@@ -251,7 +269,7 @@ def bake_audio(data: Path, work: Path, stage: Path, out: Path, snd: pckwrite.Pac
     "ADPK" block: magic, u32le sample count, the .adp bytes. A slot's 16-bit loop registers cap a sample at 8190
     blocks of data bytes: ~2.97 s at 4 bits, 5.9 s at 2, 11.9 s at 1; a longer one drops to fewer bits.
     Music is CD-DA (tracks/Tnn.BIN, 44.1 kHz stereo, a 2 s pregap each), mixed in through the driver's DSP CD input;
-    MUSIC.TXT in the ISO root maps a music id to its track.
+    MUSIC.TXT in the ISO root maps a music id to its track and playable sector count.
     """
     aw = work / 'audio'; sfx_dir = aw / 'sfx'; music_dir = aw / 'music'
     aw.mkdir(parents=True, exist_ok=True); sfx_dir.mkdir(exist_ok=True); music_dir.mkdir(exist_ok=True)
@@ -268,6 +286,8 @@ def bake_audio(data: Path, work: Path, stage: Path, out: Path, snd: pckwrite.Pac
     src = ROOT / 'third_party/scspadpcm/adpencode.cpp'
     if not enc.exists() or enc.stat().st_mtime < src.stat().st_mtime:
         subprocess.run(['c++', '-O2', '-std=gnu++11', '-fwrapv', '-D_GNU_SOURCE=1', str(src), '-o', str(enc), '-lsndfile'], check=True)
+
+    encoded: dict[int, dict[str, object]] = {}
 
     def encode(key: int, source: Path, fmt: int, tag: str) -> None:
         for f in range(fmt, 3):   # fewer bits when it is too long for the slots' loop registers
@@ -289,7 +309,11 @@ def bake_audio(data: Path, work: Path, stage: Path, out: Path, snd: pckwrite.Pac
                 adp.with_suffix('.n').write_text(str(samples))
                 wav.unlink(missing_ok=True)
             samples = int(adp.with_suffix('.n').read_text())
-            snd.add(key, 'sample', b'ADPK' + struct.pack('<I', samples) + adp.read_bytes())
+            block = b'ADPK' + struct.pack('<I', samples) + adp.read_bytes()
+            snd.add(key, 'sample', block)
+            stored_bytes = (len(block) + 31) & ~31
+            encoded[key] = {'id': f'{key:08X}', 'path': source.name if tag == 'pack-sfx' else source.relative_to(ROOT / 'assets').as_posix(),
+                            'tag': tag, 'adp_bytes': len(block) - 8, 'bank_bytes': (stored_bytes - 8 + 1) & ~1}
             log(f'audio {tag}: {source.name} -> {adp.name} ({adp.stat().st_size} bytes, {samples / 44100:.2f} s)')
             return
         log(f'audio {tag}: {source.name} too long for the driver even at 1 bit, left out')
@@ -309,9 +333,41 @@ def bake_audio(data: Path, work: Path, stage: Path, out: Path, snd: pckwrite.Pac
 
     for source in sorted((ROOT / 'assets').rglob('*.wav')):
         rel = source.relative_to(ROOT / 'assets')
+        if rel.as_posix() in SATURN_OMITTED_VOICES:
+            log(f'audio asset-sfx: {rel} omitted from Saturn build (redundant April voice variation)')
+            continue
         if unused(rel) or rel.parts[0] == 'power' and (source.with_suffix('.m4v')).exists():
             continue   # a power clip's voice is in its .CPK
         encode(namehash(rel.as_posix()), source, 0, 'asset-sfx')   # 4-bit: voices/custom effects
+
+    april_required = (
+        'voice/april_jump.wav', 'voice/april_hurt1.wav', 'voice/april_hurt3.wav',
+        'voice/april_death1.wav', 'voice/april_fall.wav',
+    )
+    stage5_required = [*SATURN_SFX_TABLE, *(namehash(p) for p in april_required),
+                       *(namehash(p) for p in ('power/saber_intermission.wav', 'space/charge.wav',
+                                                'sfx/turbo_start.wav', 'voice/april_ok.wav')),
+                       *(namehash(p) for p in ('voice/dark_hurt1.wav', 'voice/dark_hurt2.wav', 'voice/dark_hurt3.wav',
+                                               'voice/dark_death1.wav', 'voice/april_huh.wav'))]
+    stage5_ids = list(dict.fromkeys(stage5_required))
+    missing = [f'{key:08X}' for key in stage5_ids if key not in encoded]
+    if missing:
+        raise ValueError('Stage 5 April sound budget is missing samples: ' + ', '.join(missing))
+    stage5_bytes = sum(int(encoded[key]['bank_bytes']) for key in stage5_ids)
+    stage5_headroom = SATURN_SOUND_BANK_BYTES - stage5_bytes
+    if stage5_headroom < SATURN_SOUND_BANK_RESERVE:
+        raise ValueError(f'Stage 5 April sound set needs {stage5_bytes} bytes; '
+                         f'bank has {SATURN_SOUND_BANK_BYTES}, reserve is {SATURN_SOUND_BANK_RESERVE}')
+    manifest = {
+        'bank_bytes': SATURN_SOUND_BANK_BYTES,
+        'reserve_bytes': SATURN_SOUND_BANK_RESERVE,
+        'samples': sorted(encoded.values(), key=lambda sample: str(sample['id'])),
+        'profiles': {'stage5_april': {'sample_ids': [f'{key:08X}' for key in stage5_ids],
+                                      'resident_bytes': stage5_bytes, 'headroom_bytes': stage5_headroom}},
+    }
+    (out / 'audio_budget.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    log(f'audio budget: Stage 5 April {stage5_bytes} / {SATURN_SOUND_BANK_BYTES} bytes '
+        f'({stage5_headroom} bytes free, {len(stage5_ids)} unique samples)')
 
     tracks = out / 'tracks'
     for old in tracks.glob('*'):
@@ -329,7 +385,10 @@ def bake_audio(data: Path, work: Path, stage: Path, out: Path, snd: pckwrite.Pac
             with open(pcm, 'ab') as f:
                 f.write(bytes(-pcm.stat().st_size % 2352))
         shutil.copy2(pcm, tracks / f'T{track:02d}.BIN')
-        lines.append(f'{mid:08X} {track}')
+        sectors = pcm.stat().st_size // 2352 - 150   # skip this track file's 2 s INDEX 00 pregap
+        if sectors <= 0:
+            raise ValueError(f'music track {source.name} has no playable sectors')
+        lines.append(f'{mid:08X} {track} {sectors}')
         log(f'music: {source.name} -> track {track} ({pcm.stat().st_size / 176400:.1f} s)')
     (stage / 'MUSIC.TXT').write_text('\n'.join(lines) + '\n')
 

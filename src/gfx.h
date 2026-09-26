@@ -14,6 +14,7 @@ typedef struct {
     RTex *tex;           /* tile sheet, TILES_PER_ROW tiles wide; NULL while evicted (cblock_tex brings it back) */
     int sheet_cols;
     bool from_pack;      /* can be rebuilt from its pack block (so its texture may be evicted) */
+    bool retained;       /* active scene dependency: eviction would cause an unplanned data read */
     const char *file;    /* or from this PNG (cblock_from_png), likewise evictable */
     uint32_t last_used;  /* gfx frame of the last draw */
     RTex *ftex;          /* the Saturn: its frames baked whole (tools/saturn/build_disc.py FRAME_BAKED); NULL while evicted */
@@ -25,6 +26,7 @@ typedef struct Sprite {
     int w, h, frames;
     RTex *tex;           /* frames laid out horizontally, each POT-padded frame cropped to w×h; NULL while evicted */
     bool from_pack;
+    bool retained;
     const char *file;    /* the PNG it can be rebuilt from (sprite_from_png), so it may be evicted like a pack one */
     uint32_t last_used;
 } Sprite;
@@ -36,6 +38,9 @@ void  gfx_scanlines(int sw, int sh);
 /* forget every cached sprite and cblock (tools/dc/texprep walks all of the packs' graphics through the cache) */
 void  gfx_flush(void);
 void  gfx_trim(void);   /* drop every pack / PNG texture (made again on the next draw): a stage change */
+bool  gfx_keep_sprite(const Sprite *s);   /* keep a prepared scene texture out of both eviction paths */
+bool  gfx_keep_cblock(const CBlock *c);
+void  gfx_keep_loaded(void);              /* retain the warmed scene set at the music ownership boundary */
 /* the texture of one of our images (assets/): the console's baked one, else the PNG decoded; w, h may be NULL */
 RTex *gfx_image_tex(const char *path, int *w, int *h);
 /* once per drawn frame: the clock that decides which textures are idle enough to evict under memory pressure */

@@ -63,7 +63,7 @@ struct AudSample {
     uint32_t last_use;
     uint8_t id;
     bool missing, kept, looped;      /* looped: the loop word in sound RAM says loop */
-    uint16_t users;                  /* channels playing it */
+    uint16_t users;                  /* logical voices, queued mailboxes and acknowledged hardware channels */
 };
 
 static AudSample samples[MAX_SAMPLES];
@@ -74,14 +74,16 @@ static uint32_t use_clock;
 typedef struct {
     bool active, loop;
     AudSample *s;
+    AudSample *hw_s, *pending_s;    /* refs held until the 68000 acknowledges stop/replace commands */
     uint32_t end_us;                 /* a one-shot's end (sat_timer_us), give or take a frame */
     uint16_t vol, gen;
     uint8_t action;                  /* to send: 0, ACT_PLAY, ACT_STOP */
+    uint8_t pending_action;
     bool vol_dirty;
 } Voice;
 static Voice voices[CHANNELS];
 
-static struct { uint32_t id; int track; } tracks[MAX_TRACKS];
+static struct { uint32_t id; int track; uint32_t sectors; } tracks[MAX_TRACKS];
 static int ntracks;
 static uint16_t cd_vol = 0x4000;
 static bool cd_dirty = true, driver_ok, movie, movie_music;
@@ -89,6 +91,8 @@ static unsigned kicks_late;
 
 static uint32_t rd32le(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
 static uint16_t vol_of(real g) { int32_t v = (int32_t)g; return v <= 0 ? 0 : v >= FX_ONE ? 0x4000 : (uint16_t)(v >> 2); }   /* 16.16 -> 0x4000 = 1.0 */
+static void sample_ref(AudSample *s);
+static void sample_unref(AudSample *s);
 
 /* ---- the driver ---- */
 static void wait_samples(int n) { while (n--) { SCSP_SCIRE = IRQ_SAMPLE; for (int k = 0; k < 20000 && !(SCSP_SCIPD & IRQ_SAMPLE); k++) { } } }
@@ -120,25 +124,56 @@ static bool driver_start(void)
     while (!(SCSP_MCIPD & IRQ_DRIVER))   /* the driver says it is up (it has set the SCSP up: ~20 ms) */
         if (sat_timer_us() - t0 > 500000u) { printf("snd: adp68k did not start\n"); return false; }
     SCSP_MCIRE = IRQ_DRIVER;
-    for (int i = 0; i < CHANNELS; i++) { voices[i].active = false; voices[i].action = 0; voices[i].vol_dirty = true; }
+    for (int i = 0; i < CHANNELS; i++) {
+        voices[i].active = false; voices[i].s = voices[i].hw_s = voices[i].pending_s = NULL;
+        voices[i].action = voices[i].pending_action = 0; voices[i].vol_dirty = true;
+    }
     for (int i = 0; i < nsamples; i++) samples[i].users = 0;
     cd_dirty = true;
     return true;
 }
 
+/* The driver's mailbox bit goes low only after the 68000 has consumed the previous channel commands. Both samples in a
+ * replacement stay pinned until then, so bank allocation cannot overwrite memory still read by the DSP or mailbox. */
+static void driver_ack(void)
+{
+    if (SCSP_SCIPD & IRQ_DRIVER) return;
+    for (int i = 0; i < CHANNELS; i++) {
+        Voice *v = &voices[i];
+        if (!v->pending_action) continue;
+        sample_unref(v->hw_s);
+        v->hw_s = v->pending_s;
+        v->pending_s = NULL;       /* transfer the queued pin to the hardware-owned reference */
+        if (v->pending_action == ACT_PLAY && v->active && v->s == v->hw_s)
+            v->end_us = sat_timer_us() + 17000u + (uint32_t)(((uint64_t)(v->s->samples + 16u) * 1000000u) / RATE);
+        else if (v->pending_action == ACT_STOP)
+            v->end_us = 0;
+        v->pending_action = 0;
+    }
+}
+
 /* what changed, to the driver, once it has taken the last one (its update takes ~14 samples, 0.32 ms) */
 static void send(void)
 {
+    driver_ack();
     bool any = cd_dirty;
     for (int i = 0; i < CHANNELS; i++) any |= voices[i].action || voices[i].vol_dirty;
     if (!any || !driver_ok) return;
     uint32_t t0 = sat_timer_us();
     while (SCSP_SCIPD & IRQ_DRIVER)
         if (sat_timer_us() - t0 > 500u) { kicks_late++; return; }   /* the next step / frame sends it */
+    driver_ack();
     for (int i = 0; i < CHANNELS; i++) {
         Voice *v = &voices[i]; uint32_t cb = CB_OFF + (uint32_t)i * 6u;
         if (v->vol_dirty) { SND16(cb + 2) = v->vol; SND16(cb + 4) = v->vol; v->vol_dirty = false; }
-        if (v->action) { SND16(cb) = (uint16_t)(v->action << 8 | (v->action == ACT_PLAY && v->s ? v->s->id : 0)); v->action = 0; }
+        if (v->action) {
+            uint8_t action = v->action;
+            AudSample *next = action == ACT_PLAY ? v->s : NULL;
+            sample_ref(next);
+            v->pending_s = next; v->pending_action = action;
+            SND16(cb) = (uint16_t)(action << 8 | (next ? next->id : 0));
+            v->action = 0;
+        }
     }
     if (cd_dirty) { SND16(CD_VOL_OFF) = cd_vol; SND16(CD_VOL_OFF + 2) = 0; SND16(CD_VOL_OFF + 4) = 0; SND16(CD_VOL_OFF + 6) = cd_vol; cd_dirty = false; }
     SCSP_SCIPD = IRQ_DRIVER;
@@ -147,9 +182,22 @@ static void send(void)
 /* ---- the sample bank ---- */
 static void sample_evict(AudSample *s)
 {
+    if (!s || s->users || !s->addr) return;
     id_used[s->id] = 0;
     SND16(TABLE_OFF + s->id * 4u) = 0; SND16(TABLE_OFF + s->id * 4u + 2) = 0;
     s->addr = 0;
+}
+
+static void sample_ref(AudSample *s)
+{
+    if (s && s->users != UINT16_MAX) s->users++;
+}
+
+static void sample_unref(AudSample *s)
+{
+    if (!s || !s->users) return;
+    s->users--;
+    if (!s->users && !s->kept) sample_evict(s);
 }
 
 /* the lowest gap of n bytes in the bank, 0 if none */
@@ -227,12 +275,18 @@ AudSample *aud_sample_pack(uint32_t id) { return sample_find(id); }
 AudSample *aud_sample_file(const char *path) { return path ? sample_find(asset_key(path)) : NULL; }
 void aud_prefetch(AudSample *s) { (void)sample_load(s); }
 void aud_keep(AudSample *s, bool loop) { (void)loop; if (s && sample_load(s)) s->kept = true; }
+void aud_unkeep(AudSample *s)
+{
+    if (!s || !s->kept) return;
+    s->kept = false;
+    if (!s->users) sample_evict(s);
+}
 
 /* ---- voices ---- */
 static void voice_release(Voice *v)
 {
     if (!v->active) return;
-    if (v->s && v->s->users) v->s->users--;
+    sample_unref(v->s);
     v->active = false; v->s = NULL;
 }
 
@@ -250,9 +304,8 @@ int aud_play(AudSample *s, real gain, bool loop)
     Voice *v = &voices[best];
     voice_release(v);
     if (s->looped != loop) { SND16(s->addr + 2) = loop ? 1 : s->blocks; s->looped = loop; }
-    v->active = true; v->loop = loop; v->s = s; s->users++;
-    /* it starts at the next send (this frame), after the driver's one block of lead-in */
-    v->end_us = sat_timer_us() + 17000u + (uint32_t)(((uint64_t)(s->samples + 16u) * 1000000u) / RATE);
+    v->active = true; v->loop = loop; v->s = s; sample_ref(s);
+    v->end_us = 0;                  /* duration starts only after the driver acknowledges ACT_PLAY */
     uint16_t vol = vol_of(gain); if (vol != v->vol) { v->vol = vol; v->vol_dirty = true; }
     v->action = ACT_PLAY;
     v->gen++; if (!v->gen) v->gen = 1;
@@ -295,6 +348,11 @@ void aud_movie_begin(bool music)
     if (movie) return;
     for (int i = 0; i < CHANNELS; i++) { voice_release(&voices[i]); voices[i].action = 0; }
     scsp_quiet();
+    for (int i = 0; i < CHANNELS; i++) {
+        voices[i].hw_s = voices[i].pending_s = NULL;
+        voices[i].pending_action = 0;
+    }
+    for (int i = 0; i < nsamples; i++) samples[i].users = 0;
     SCSP_MVOL = 1u << 9 | 0xF;
     movie = true; movie_music = music; driver_ok = false;
     movie_cd_level();
@@ -366,7 +424,10 @@ void aud_update(void)
     uint32_t now = sat_timer_us();
     for (int i = 0; i < CHANNELS; i++) {
         Voice *v = &voices[i];
-        if (v->active && !v->loop && (int32_t)(now - v->end_us) >= 0) voice_release(v);   /* the channel plays its silent tail */
+        if (v->active && !v->loop && (int32_t)(now - v->end_us) >= 0) {
+            voice_release(v);
+            v->action = ACT_STOP;
+        }
     }
     send();
 }
@@ -375,8 +436,15 @@ bool aud_init(void)
 {
     FILE *f = fopen("MUSIC.TXT", "r");
     if (f) {
-        unsigned id; int t;
-        while (ntracks < MAX_TRACKS && fscanf(f, "%x %d", &id, &t) == 2) { tracks[ntracks].id = id; tracks[ntracks].track = t; ntracks++; }
+        char line[96];
+        while (ntracks < MAX_TRACKS && fgets(line, sizeof line, f)) {
+            unsigned id, sectors = 0; int t;
+            int fields = sscanf(line, "%x %d %u", &id, &t, &sectors);
+            if (fields < 2) continue;
+            tracks[ntracks].id = id; tracks[ntracks].track = t; tracks[ntracks].sectors = fields == 3 ? sectors : 0;
+            if (tracks[ntracks].sectors) cd_sat_cdda_track_length(t, tracks[ntracks].sectors);
+            ntracks++;
+        }
         fclose(f);
     }
     cd_sat_stream_stop();

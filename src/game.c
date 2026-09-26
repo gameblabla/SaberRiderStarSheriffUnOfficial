@@ -5,6 +5,7 @@
 #include "font.h"
 #include "heroes.h"
 #include "assets.h"
+#include "gfx.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,17 +73,32 @@ static bool level_start(Game *g)
     if (stage == 2) {   /* the Mode-7 Grand Prix: its own world, HUD and flow */
         music_stop();   /* finish the previous stage's jingle before the title card */
         g->mode7 = mode7_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives, mode7_phase2);
-        if (g->mode7) title_start(g);
+        if (g->mode7) {
+#ifdef PLAT_SATURN
+            gfx_keep_loaded();
+#endif
+            title_start(g);
+        }
         return g->mode7 != NULL;
     }
     if (stage == 6) {   /* Ramrod in robot mode: first person from the cockpit */
         g->ramrod = ramrod_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives);
-        if (g->ramrod) title_start(g);
+        if (g->ramrod) {
+#ifdef PLAT_SATURN
+            gfx_keep_loaded();
+#endif
+            title_start(g);
+        }
         return g->ramrod != NULL;
     }
     if (stage == 7) {   /* straight on from the mechs: Ramrod in cruiser mode after the battle cruiser */
         g->space = space_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives, g->menu.character);
-        if (g->space) title_start(g);
+        if (g->space) {
+#ifdef PLAT_SATURN
+            gfx_keep_loaded();
+#endif
+            title_start(g);
+        }
         return g->space != NULL;
     }
     const PackEntry *t = packs_find(0x119090BF);
@@ -168,6 +184,16 @@ static bool level_start(Game *g)
     g->state = 10;
     if (plat_getenv("SABER_DEBUG")) g->debug_collision = true;   /* debug: collision overlay from the start */
     level_prepare(&g->level);   /* everything read before the music takes the drive */
+    if (g->lab_on) dark_preload();   /* stage 5's second boss first appears much later */
+    dialog_preload(0);   /* stage and scripts may have pressured the heap; warm shared UI textures last, before CD-DA */
+#ifdef PLAT_SATURN
+    if ((g->player.ch.spr && !gfx_keep_sprite(g->player.ch.spr)) ||
+        (g->player.ch.cb && !gfx_keep_cblock(g->player.ch.cb)) || (!g->player.ch.spr && !g->player.ch.cb)) {
+        fprintf(stderr, "game: could not prepare the player's final graphics before music\n");
+        return false;
+    }
+    gfx_keep_loaded();
+#endif
     music_play(g->night_on ? 13 : g->forest_on ? 15 : g->lab_on ? 14 : 5, true);
     g->cam_x = px - r_int(sw / 2); if (g->cam_x < 0) g->cam_x = 0;
     if (g->walk_in) g->cam_x = g->night_on ? NIGHT_INTRO_CAM : FOREST_INTRO_CAM;

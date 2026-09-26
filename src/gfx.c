@@ -224,6 +224,7 @@ RTex *cblock_tex(const CBlock *cc)
 void cblock_unload(const CBlock *cc)
 {
     CBlock *c = (CBlock *)cc;
+    if (c && c->retained) return;
     if (c && c->tex && (c->from_pack || c->file)) { rtex_destroy(c->tex); c->tex = NULL; }
     if (c && c->ftex) { rtex_destroy(c->ftex); c->ftex = NULL; }
 }
@@ -474,13 +475,37 @@ RTex *sprite_tex(const Sprite *cs)
     return s->tex;
 }
 
+bool gfx_keep_sprite(const Sprite *cs)
+{
+    Sprite *s = (Sprite *)cs;
+    if (!s || !sprite_tex(s)) return false;
+    s->retained = true;
+    return true;
+}
+
+bool gfx_keep_cblock(const CBlock *cc)
+{
+    CBlock *c = (CBlock *)cc;
+    if (!c) return false;
+    cblock_preload(c);
+    if (!c->tex) return false;
+    c->retained = true;
+    return true;
+}
+
+void gfx_keep_loaded(void)
+{
+    for (int i = 0; i < g_nspr; i++) if (g_spr[i].tex) g_spr[i].retained = true;
+    for (int i = 0; i < g_ncb; i++) if (g_cb[i].tex || g_cb[i].ftex) g_cb[i].retained = true;
+}
+
 /* ---- memory pressure: drop the pack (or PNG) texture drawn longest ago (not in this frame or the one being rendered) ---- */
 static bool evict_one(void)
 {
     uint32_t best = g_frame - 1; RTex **victim = NULL;
-    for (int i = 0; i < g_nspr; i++) if ((g_spr[i].from_pack || g_spr[i].file) && g_spr[i].tex && g_spr[i].last_used < best) { best = g_spr[i].last_used; victim = &g_spr[i].tex; }
-    for (int i = 0; i < g_ncb; i++) if ((g_cb[i].from_pack || g_cb[i].file) && g_cb[i].tex && g_cb[i].last_used < best) { best = g_cb[i].last_used; victim = &g_cb[i].tex; }
-    for (int i = 0; i < g_ncb; i++) if (g_cb[i].ftex && g_cb[i].last_used < best) { best = g_cb[i].last_used; victim = &g_cb[i].ftex; }
+    for (int i = 0; i < g_nspr; i++) if (!g_spr[i].retained && (g_spr[i].from_pack || g_spr[i].file) && g_spr[i].tex && g_spr[i].last_used < best) { best = g_spr[i].last_used; victim = &g_spr[i].tex; }
+    for (int i = 0; i < g_ncb; i++) if (!g_cb[i].retained && (g_cb[i].from_pack || g_cb[i].file) && g_cb[i].tex && g_cb[i].last_used < best) { best = g_cb[i].last_used; victim = &g_cb[i].tex; }
+    for (int i = 0; i < g_ncb; i++) if (!g_cb[i].retained && g_cb[i].ftex && g_cb[i].last_used < best) { best = g_cb[i].last_used; victim = &g_cb[i].ftex; }
     if (!victim) return false;
     rtex_destroy(*victim); *victim = NULL;
     return true;
@@ -492,9 +517,9 @@ static bool evict_any(void)
 {
     if (evict_one()) return true;
     uint32_t best = UINT32_MAX; RTex **victim = NULL;
-    for (int i = 0; i < g_nspr; i++) if ((g_spr[i].from_pack || g_spr[i].file) && g_spr[i].tex && g_spr[i].last_used <= best) { best = g_spr[i].last_used; victim = &g_spr[i].tex; }
-    for (int i = 0; i < g_ncb; i++) if ((g_cb[i].from_pack || g_cb[i].file) && g_cb[i].tex && g_cb[i].last_used <= best) { best = g_cb[i].last_used; victim = &g_cb[i].tex; }
-    for (int i = 0; i < g_ncb; i++) if (g_cb[i].ftex && g_cb[i].last_used <= best) { best = g_cb[i].last_used; victim = &g_cb[i].ftex; }
+    for (int i = 0; i < g_nspr; i++) if (!g_spr[i].retained && (g_spr[i].from_pack || g_spr[i].file) && g_spr[i].tex && g_spr[i].last_used <= best) { best = g_spr[i].last_used; victim = &g_spr[i].tex; }
+    for (int i = 0; i < g_ncb; i++) if (!g_cb[i].retained && (g_cb[i].from_pack || g_cb[i].file) && g_cb[i].tex && g_cb[i].last_used <= best) { best = g_cb[i].last_used; victim = &g_cb[i].tex; }
+    for (int i = 0; i < g_ncb; i++) if (!g_cb[i].retained && g_cb[i].ftex && g_cb[i].last_used <= best) { best = g_cb[i].last_used; victim = &g_cb[i].ftex; }
     if (!victim) return false;
     rtex_destroy(*victim); *victim = NULL;
     return true;
@@ -504,8 +529,14 @@ static bool evict_any(void)
  * the memory the last one's graphics held (the Saturn: its sheets' blocks live in work RAM) */
 void gfx_trim(void)
 {
-    for (int i = 0; i < g_nspr; i++) if ((g_spr[i].from_pack || g_spr[i].file) && g_spr[i].tex) { rtex_destroy(g_spr[i].tex); g_spr[i].tex = NULL; }
-    for (int i = 0; i < g_ncb; i++) if ((g_cb[i].from_pack || g_cb[i].file) && g_cb[i].tex) { rtex_destroy(g_cb[i].tex); g_cb[i].tex = NULL; }
+    for (int i = 0; i < g_nspr; i++) {
+        g_spr[i].retained = false;
+        if ((g_spr[i].from_pack || g_spr[i].file) && g_spr[i].tex) { rtex_destroy(g_spr[i].tex); g_spr[i].tex = NULL; }
+    }
+    for (int i = 0; i < g_ncb; i++) {
+        g_cb[i].retained = false;
+        if ((g_cb[i].from_pack || g_cb[i].file) && g_cb[i].tex) { rtex_destroy(g_cb[i].tex); g_cb[i].tex = NULL; }
+    }
     for (int i = 0; i < g_ncb; i++) if (g_cb[i].ftex) { rtex_destroy(g_cb[i].ftex); g_cb[i].ftex = NULL; }
 }
 

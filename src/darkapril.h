@@ -41,6 +41,7 @@ typedef struct {
 } DarkApril;
 
 /* level 1's boss just burnt out: the arena is the locked screen at arena_x */
+void dark_preload(void);   /* stage 5's extra April graphics and voices, before the level music starts */
 void dark_begin(DarkApril *d, real arena_x, int sw, int difficulty);
 /* every live step of stage 5 (live: no dialogue is open). pb = the hero's shots, eb = enemy shots (hers go there). */
 void dark_update(DarkApril *d, Player *pl, const Input *pin, const Level *L, const PhysicsWorld *W, Bullets *pb,

@@ -3,6 +3,7 @@
 #include "audio.h"
 #include "assets.h"
 #include "font.h"
+#include "gfx.h"
 #include "namehash.h"
 #include "enemies.h"   /* player_damage */
 #include <stdio.h>
@@ -91,9 +92,30 @@ static void voice(const char *name)
 static void avatar_load(void)
 {
     static bool done;
-    if (done) return;
-    done = true;
-    if (!sprite_from_png(namehash("dialog_avatar_darkapril"), asset_path("dark_april_avatar.png"), 0)) fprintf(stderr, "assets/dark_april_avatar.png not found\n");
+    if (!done) {
+        done = true;
+        if (!sprite_from_png(namehash("dialog_avatar_darkapril"), asset_path("dark_april_avatar.png"), 0)) fprintf(stderr, "assets/dark_april_avatar.png not found\n");
+    }
+}
+
+void dark_preload(void)
+{
+    /* Dark April only appears after the laboratory boss falls; her avatar and April's separately reconstructed sheet
+     * would otherwise be loaded from TEX.PCK when the arena scene opens, cutting off the stage music. */
+    uint32_t avatar_id = namehash("dialog_avatar_darkapril");
+    avatar_load();
+    Sprite *av = sprite_get(avatar_id); if (av) sprite_tex(av);
+
+    hero_quiet(true);
+    Character april;
+    if (character_init(&april, CRHC_APRIL, true)) { sprite_tex(april.spr); cblock_preload(april.cb); }
+    hero_quiet(false);
+
+    static const char *const VOICES[] = {
+        "voice/dark_hurt1.wav", "voice/dark_hurt2.wav", "voice/dark_hurt3.wav",
+        "voice/dark_death1.wav", "voice/april_huh.wav"
+    };
+    for (size_t i = 0; i < sizeof VOICES / sizeof *VOICES; i++) sfx_preload_file(asset_path(VOICES[i]));
 }
 
 static void mote(DarkApril *d, real x, real y, real vx, real vy, real life)

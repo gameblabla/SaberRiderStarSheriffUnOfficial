@@ -20,6 +20,7 @@ AudSample *aud_sample_file(const char *path);    /* one of our wav files (PCM16 
 /* have it ready from now on (no load when it first plays), however long; loop: also for playing it as a loop */
 void aud_keep(AudSample *s, bool loop);
 void aud_prefetch(AudSample *s);                 /* load it now, but a long one may be dropped again for others */
+void aud_unkeep(AudSample *s);                    /* Saturn: let a sample be evicted once active voices release it */
 
 /* voices: a handle >= 0 or -1 when nothing could play */
 int  aud_play(AudSample *s, real gain, bool loop);

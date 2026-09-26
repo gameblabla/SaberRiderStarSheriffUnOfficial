@@ -98,6 +98,7 @@ void aud_keep(AudSample *s, bool loop)
     if (!s || (s->sfx && !loop) || s->kept) return;   /* short one-shots are in sound RAM already; loops stream from main RAM */
     if (s->adpcm || load_long(s)) { s->kept = true; long_bytes -= s->bytes; }   /* outside the LRU budget */
 }
+void aud_unkeep(AudSample *s) { (void)s; }   /* scene release is currently Saturn-specific */
 AudSample *aud_sample_file(const char *path) { return path ? find(asset_key(path)) : NULL; }
 
 /* ---- streams for long samples and loops ---- */

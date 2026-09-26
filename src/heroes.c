@@ -9,6 +9,7 @@
 #include <string.h>
 
 #define CRHC_APRIL 0x79260A58
+#define CRHC_FIREBALL 0x9C8F9A9E
 #define CRHC_SABER_TAG 0x53414245   /* 'SABE': arbitrary cblock cache id, unrelated to CRHC_DEFAULT below */
 #define CRHC_COLT_TAG  0x434F4C54   /* 'COLT': likewise (Colt's CRHC points at A332AB60, a copy of Fireball's cblock) */
 
@@ -91,8 +92,15 @@ static void april_sfx(void)
 {
     static const struct { int id; const char *files[4]; } G[] = {
         { 2,  { "voice/april_jump.wav" } },
+#ifdef PLAT_SATURN
+        /* The Saturn image keeps two hurt takes and one death take. The omitted files are only alternate performances;
+         * April still has a sound for each event, and the source recordings remain available to other builds. */
+        { 3,  { "voice/april_hurt1.wav", "voice/april_hurt3.wav" } },
+        { 4,  { "voice/april_death1.wav" } },
+#else
         { 3,  { "voice/april_hurt1.wav", "voice/april_hurt2.wav", "voice/april_hurt3.wav", "voice/april_huh_anime_hurt.wav" } },
         { 4,  { "voice/april_death1.wav", "voice/april_death2.wav" } },
+#endif
         { 15, { "voice/april_fall.wav" } },
     };
     for (size_t i = 0; i < sizeof G / sizeof *G; i++) {
@@ -145,7 +153,6 @@ void hero_select_sfx(int character)
     sfx_play(8, 0);
 }
 
-#define CRHC_FIREBALL 0x9C8F9A9E
 #define CRHC_COLT     0x26818B85
 #define CRHC_DEFAULT  0x8403195A
 

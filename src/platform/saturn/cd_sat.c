@@ -58,10 +58,10 @@ typedef struct {
 static fad_t st_next, st_end;
 static bool st_on;
 
-void cd_sat_stream_stop(void) { st_on = false; }   /* before anything else uses the drive (CD-DA) */
+void cd_sat_stream_stop(void) { st_on = false; }   /* the decoder no longer needs the buffered data sectors */
 
 static void cdda_interrupt(void);
-static uint32_t data_last_us;   /* when the drive last read data (the music waits for it to settle) */
+static bool data_busy;          /* a synchronous disc read owns the drive while sectors are copied */
 
 static bool stream_start(fad_t fad, uint32_t count)
 {
@@ -81,20 +81,26 @@ static bool read_sectors(fad_t fad, void *dst, uint32_t n, fad_t file_end)
 {
     if (music_on()) printf("cd: a read under the music (it stops): %s, sector %u, %u\n", read_name ? read_name : "?", (unsigned)fad, (unsigned)n);
     reads_total++; bytes_total += n * 2048u;
-    data_last_us = sat_timer_us();
+    data_busy = true;
+    bool ok = false;
     if (!st_on || fad != st_next || fad + n > st_end)
-        if (!stream_start(fad, file_end > fad + n ? file_end - fad : n)) return false;
+        if (!stream_start(fad, file_end > fad + n ? file_end - fad : n)) goto done;
     uint8_t *p = dst;
     while (n) {
-        uint32_t ready, spins = 0;
-        while ((ready = (uint32_t)cd_block_cmd_sector_number_get(0)) == 0)
-            if (++spins > 2000000u) { st_on = false; return false; }   /* a stalled drive: seek again next time */
+        int32_t available;
+        uint32_t spins = 0;
+        while ((available = cd_block_cmd_sector_number_get(0)) <= 0) {
+            if (available < 0 || ++spins > 2000000u) { st_on = false; goto done; }   /* error or stalled drive */
+        }
+        uint32_t ready = (uint32_t)available;
         if (ready > n) ready = n;
-        if (cd_block_transfer_data(0, 0, p, ready * 2048u)) { st_on = false; return false; }
+        if (cd_block_transfer_data(0, 0, p, ready * 2048u)) { st_on = false; goto done; }
         p += ready * 2048u; n -= ready; st_next += ready;
     }
-    data_last_us = sat_timer_us();
-    return true;
+    ok = true;
+done:
+    data_busy = false;
+    return ok;
 }
 
 static size_t cd_read(FILE *f, unsigned char *dst, size_t n)
@@ -168,15 +174,16 @@ size_t cd_sat_available(FILE *f)
     fad_t next = c->fad + sec;
     if (next >= c->fad_end) return avail;
     if (!st_on || next != st_next) { if (!avail) stream_start(next, c->fad_end - next); return avail; }
-    avail += (size_t)cd_block_cmd_sector_number_get(0) * 2048u;
+    int32_t ready = cd_block_cmd_sector_number_get(0);
+    if (ready < 0) st_on = false;
+    else if (ready > 0) avail += (size_t)(uint32_t)ready * 2048u;
     return avail > c->size - c->pos ? c->size - c->pos : avail;
 }
 
 /* ---- CD-DA music ----
  * The CD block plays an audio track into the SCSP's CD input (the sound driver mixes it: aud_sat.c). Tracks come from
  * the TOC; a track loops with the drive's own repeat (0xF: for ever). A data read (stream_start) takes the drive: the
- * position is kept, and cd_sat_cdda_update plays on from there once the reads have been quiet for CDDA_SETTLE_US,
- * to the track's end, then loops the whole track again. */
+ * position is kept, and cd_sat_cdda_update resumes once the synchronous sector read releases the drive. */
 typedef struct { uint16_t dtr, hirq, hirq_mask, cr1, cr2, cr3, cr4; } CdRegs;   /* libyaul's internal cd_block_regs */
 extern int cd_block_cmd_execute(CdRegs *regs, CdRegs *status);
 #define CD_HIRQ     (*(volatile uint16_t *)0x25890008u)
@@ -184,19 +191,20 @@ extern int cd_block_cmd_execute(CdRegs *regs, CdRegs *status);
 #define HIRQ_DRDY   0x0002u
 #define HIRQ_CSCT   0x0004u
 #define HIRQ_PEND   0x0010u
-#define CDDA_SETTLE_US 400000u
-
 static uint32_t toc[102];       /* per track (1..99 at 0..98): control/address << 24 | FAD; [101] the lead-out */
+static uint32_t playable_sectors[100];
 static bool toc_ok;
 static struct {
     int track;                  /* 0: none */
-    bool loop, paused;
-    bool owned;                 /* the drive is playing (or holding) the music, not reading data */
+    bool loop, paused, pending, hold_pending, stop_pending;
+    bool owned;                 /* the last music command succeeded and data has not taken the drive */
     bool partial;               /* playing on from where a read stopped it: the rest of the track, then a loop */
     fad_t at;                   /* where the music was when a read took the drive */
+    uint32_t retry_at, status_at, start_at;
+    uint8_t failures;
 } cdda;
 
-static bool music_on(void) { return cdda.track && !cdda.paused; }
+static bool music_on(void) { return cdda.track && cdda.owned && !cdda.pending && !cdda.paused; }
 
 static bool toc_read(void)
 {
@@ -211,8 +219,14 @@ static bool toc_read(void)
 static fad_t track_fad(int t) { return toc[t - 1] & 0xFFFFFFu; }
 static fad_t track_end(int t)
 {
+    if (t > 0 && t < 100 && playable_sectors[t]) return track_fad(t) + playable_sectors[t];
     for (int k = t; k < 99; k++) if (toc[k] != 0xFFFFFFFFu) return track_fad(k + 1);
     return toc[101] & 0xFFFFFFu;
+}
+
+void cd_sat_cdda_track_length(int track, uint32_t sectors)
+{
+    if (track > 1 && track < 100) playable_sectors[track] = sectors;
 }
 
 static int play_cmd(uint16_t cr1, uint16_t cr2, uint16_t cr3, uint16_t cr4)
@@ -221,29 +235,69 @@ static int play_cmd(uint16_t cr1, uint16_t cr2, uint16_t cr3, uint16_t cr4)
     return cd_block_cmd_execute(&r, &st);
 }
 
-static void cdda_start(void)
+static bool cdda_start(void)
 {
+    if (!cdda.track || cdda.paused || !toc_ok) return false;
+    cdda.owned = cdda.pending = false;
     st_on = false;
-    cd_block_cmd_cd_dev_connection_set(0xFF);   /* audio sectors go to the SCSP, not into the CD block's buffer */
+    if (cd_block_cmd_cd_dev_connection_set(0xFF)) {
+        cdda.owned = false; cdda.retry_at = sat_timer_us() + 250000u;
+        if (cdda.failures < 3) cdda.failures++;
+        printf("cd: CD-DA connection failed for track %d\n", cdda.track);
+        return false;
+    }
+    int result;
     if (cdda.partial) {
         fad_t end = track_end(cdda.track);
-        play_cmd(0x1080 | (cdda.at >> 16), (uint16_t)cdda.at, 0x0080 | ((end - cdda.at) >> 16), (uint16_t)(end - cdda.at));
+        if (cdda.at < track_fad(cdda.track) || cdda.at >= end) {
+            cdda.partial = false;
+            if (!cdda.loop) { cdda.track = 0; cdda.owned = false; return false; }
+        }
+        if (cdda.partial) {
+            uint32_t count = end - cdda.at;
+            if (!count) { cdda.owned = false; return false; }
+            result = play_cmd(0x1080 | (cdda.at >> 16), (uint16_t)cdda.at,
+                              (uint16_t)(0x0080 | ((count >> 16) & 0xFFFFu)), (uint16_t)count);
+        } else {
+            result = play_cmd(0x1000, (uint16_t)(cdda.track << 8 | 1),
+                              (uint16_t)((cdda.loop ? 0x0F : 0x00) << 8), (uint16_t)(cdda.track << 8 | 99));
+        }
     } else {   /* track mode: the track's index 1 to its last index, repeated (0xF: for ever) or once */
-        play_cmd(0x1000, (uint16_t)(cdda.track << 8 | 1), (uint16_t)((cdda.loop ? 0x0F : 0x00) << 8), (uint16_t)(cdda.track << 8 | 99));
+        result = play_cmd(0x1000, (uint16_t)(cdda.track << 8 | 1),
+                          (uint16_t)((cdda.loop ? 0x0F : 0x00) << 8), (uint16_t)(cdda.track << 8 | 99));
     }
-    cdda.owned = true;
+    if (result) {
+        cdda.owned = false;
+        cdda.retry_at = sat_timer_us() + (cdda.failures < 3 ? 250000u << cdda.failures : 1000000u);
+        if (cdda.failures < 3) cdda.failures++;
+        printf("cd: CD-DA play failed for track %d (status %d)\n", cdda.track, result);
+        return false;
+    }
+    cdda.owned = true; cdda.pending = true; cdda.failures = 0;
+    cdda.start_at = sat_timer_us(); cdda.status_at = cdda.start_at + 100000u;
+    return true;
 }
 
-static void cdda_hold(void) { play_cmd(0x11FF, 0xFFFF, 0xFFFF, 0xFFFF); }   /* seek to "no change": the drive pauses there */
+static bool cdda_hold(void)
+{
+    return play_cmd(0x11FF, 0xFFFF, 0xFFFF, 0xFFFF) == 0;   /* seek to "no change": the drive pauses there */
+}
 
 static void cdda_interrupt(void)
 {
     if (!cdda.owned) return;
     cd_block_status_t s;
-    if (!cdda.paused && !cd_block_cmd_status_get(&s) && s.fad >= track_fad(cdda.track) && s.fad < track_end(cdda.track)) {
-        cdda.at = s.fad; cdda.partial = true;
+    if (!cdda.paused && !cd_block_cmd_status_get(&s)) {
+        fad_t end = track_end(cdda.track);
+        if (s.fad >= track_fad(cdda.track) && s.fad < end) {
+            cdda.at = s.fad; cdda.partial = true;
+        } else if (s.fad >= end && !cdda.loop) {
+            cdda.track = 0; cdda.partial = false;   /* a completed one-shot must not be revived by a later data read */
+        }
     }
     cdda.owned = false;
+    cdda.pending = false;
+    cdda.retry_at = 0;
 }
 
 bool cd_sat_cdda_play(int track, bool loop)
@@ -251,39 +305,94 @@ bool cd_sat_cdda_play(int track, bool loop)
     if (!toc_ok) toc_ok = toc_read();
     if (!toc_ok || track < 2 || track > 99 || toc[track - 1] == 0xFFFFFFFFu) return false;
     cdda.track = track; cdda.loop = loop; cdda.paused = false; cdda.partial = false;
-    cdda_start();
-    return true;
+    cdda.pending = cdda.hold_pending = cdda.stop_pending = false;
+    cdda.at = 0; cdda.failures = 0; cdda.retry_at = 0;
+    return cdda_start();
 }
 
 void cd_sat_cdda_stop(void)
 {
-    if (cdda.owned) cdda_hold();
-    cdda.track = 0; cdda.owned = cdda.partial = false;
+    bool need_hold = cdda.owned || cdda.hold_pending || cdda.stop_pending;
+    bool stopped = !need_hold || cdda_hold();
+    cdda.track = 0; cdda.owned = cdda.pending = cdda.partial = cdda.hold_pending = false;
+    cdda.stop_pending = !stopped; cdda.retry_at = stopped ? 0 : sat_timer_us() + 250000u;
+    if (!stopped) printf("cd: CD-DA stop/hold failed; retry pending\n");
 }
 
 void cd_sat_cdda_pause(bool pause)
 {
     if (!cdda.track || pause == cdda.paused) return;
     cdda.paused = pause;
+    if (!pause) cdda.hold_pending = false;
     if (!cdda.owned) return;   /* a read has the drive: cd_sat_cdda_update brings the music back */
     if (pause) {
+        cdda.pending = false;
         cd_block_status_t s;
         if (!cd_block_cmd_status_get(&s) && s.fad >= track_fad(cdda.track) && s.fad < track_end(cdda.track)) { cdda.at = s.fad; cdda.partial = true; }
-        cdda_hold();
+        if (!cdda_hold()) {
+            cdda.owned = false; cdda.hold_pending = true; cdda.retry_at = sat_timer_us() + 250000u;
+            printf("cd: CD-DA pause failed; retry pending\n");
+        }
     } else {
-        cdda_start();
+        cdda.owned = false; cdda_start();
     }
 }
 
 void cd_sat_cdda_update(void)
 {
-    if (!cdda.track || cdda.paused) return;
-    if (!cdda.owned) {
-        if (sat_timer_us() - data_last_us >= CDDA_SETTLE_US) cdda_start();
+    if (data_busy) return;
+    if (cdda.stop_pending) {
+        uint32_t now = sat_timer_us();
+        if ((int32_t)(now - cdda.retry_at) >= 0) {
+            if (cdda_hold()) { cdda.stop_pending = false; cdda.owned = false; }
+            else cdda.retry_at = now + 1000000u;
+        }
         return;
     }
-    if (cdda.partial && (CD_HIRQ & HIRQ_PEND)) {   /* the rest of the track is done */
-        cdda.partial = false;
-        if (cdda.loop) cdda_start(); else cdda.track = 0;
+    if (cdda.hold_pending) {
+        uint32_t now = sat_timer_us();
+        if ((int32_t)(now - cdda.retry_at) >= 0) {
+            if (cdda_hold()) { cdda.hold_pending = false; cdda.owned = true; }
+            else cdda.retry_at = now + 1000000u;
+        }
+        return;
+    }
+    if (!cdda.track || cdda.paused) return;
+    if (!cdda.owned) {
+        uint32_t now = sat_timer_us();
+        if ((int32_t)(now - cdda.retry_at) >= 0) cdda_start();
+        return;
+    }
+    uint32_t now = sat_timer_us();
+    if ((int32_t)(now - cdda.status_at) < 0) return;
+    cdda.status_at = now + 100000u;
+    cd_block_status_t s;
+    if (cdda.pending) {
+        fad_t start = track_fad(cdda.track), end = track_end(cdda.track);
+        if (!cd_block_cmd_status_get(&s) && s.fad >= start && s.fad < end) {
+            cdda.pending = false;
+            return;
+        }
+        if (now - cdda.start_at >= 5000000u) {
+            cdda.owned = cdda.pending = false;
+            cdda.retry_at = now + (cdda.failures < 3 ? 250000u << cdda.failures : 1000000u);
+            if (cdda.failures < 3) cdda.failures++;
+            printf("cd: CD-DA status did not confirm track %d\n", cdda.track);
+        }
+        return;
+    }
+    bool ended = cdda.partial && (CD_HIRQ & HIRQ_PEND);
+    if (!ended) {
+        if (cd_block_cmd_status_get(&s)) return;
+        ended = s.fad >= track_end(cdda.track);
+    }
+    if (ended) {
+        cdda.owned = false;
+        if (cdda.partial) {
+            cdda.partial = false;
+            if (cdda.loop) cdda_start(); else cdda.track = 0;
+        } else if (!cdda.loop) {
+            cdda.track = 0;
+        }
     }
 }

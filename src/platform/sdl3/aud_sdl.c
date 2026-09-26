@@ -54,6 +54,7 @@ AudSample *aud_sample_pack(uint32_t id)
 
 void aud_keep(AudSample *s, bool loop) { (void)s; (void)loop; }
 void aud_prefetch(AudSample *s) { (void)s; }   /* samples are decoded whole when first looked up */
+void aud_unkeep(AudSample *s) { (void)s; }
 AudSample *aud_sample_file(const char *path)
 {
     if (!path) return NULL;

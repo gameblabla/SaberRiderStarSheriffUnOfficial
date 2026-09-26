@@ -95,9 +95,20 @@ void sfx_set_override(int game_id, const char *const *paths, int n)
 {
     if (game_id < 0 || game_id >= 24) return;
     sfx_over[game_id].n = 0;
-    for (int i = 0; i < n && i < 4; i++) if (paths[i]) { snprintf(sfx_over[game_id].file[sfx_over[game_id].n++], 256, "%s", paths[i]); aud_keep(aud_sample_file(paths[i]), false); }   /* loaded now */
+    for (int i = 0; i < n && i < 4; i++) if (paths[i]) {
+        snprintf(sfx_over[game_id].file[sfx_over[game_id].n++], 256, "%s", paths[i]);
+        aud_keep(aud_sample_file(paths[i]), false);   /* loaded before gameplay */
+    }
 }
-void sfx_clear_overrides(void) { memset(sfx_over, 0, sizeof sfx_over); }
+void sfx_clear_overrides(void)
+{
+#ifdef PLAT_SATURN
+    for (int i = 0; i < 24; i++) for (int k = 0; k < sfx_over[i].n; k++)
+        if (strstr(sfx_over[i].file[k], "voice/april_"))
+            aud_unkeep(aud_sample_file(sfx_over[i].file[k]));
+#endif
+    memset(sfx_over, 0, sizeof sfx_over);
+}
 
 /* ---- our own samples ---- */
 static int file_voice = -1;
@@ -125,7 +136,13 @@ void sfx_loop(const char *path)
 }
 static void service_loop(void)
 {
-    if (loop_voice < 0) return;
+    if (loop_voice >= 0 && !aud_playing(loop_voice)) loop_voice = -1;
+    if (loop_voice < 0) {
+        if (!loop_want || !loop_smp) return;
+        loop_gain = 0;
+        loop_voice = aud_play(loop_smp, R(0.0f), true);
+        if (loop_voice < 0) return;
+    }
     real target = loop_want ? R(1.0f) : R(0.0f);
     loop_gain += r_mul(target - loop_gain, loop_want ? R(0.35f) : R(0.2f));
     if (!loop_want && loop_gain < R(0.02f)) { loop_gain = 0; aud_stop(loop_voice); loop_voice = -1; return; }
