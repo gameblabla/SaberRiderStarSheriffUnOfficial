@@ -605,7 +605,7 @@ static void draw_continue(Menu *m, Ren *r, int sw, int sh)
     Font *f = font_get(0x4058897F), *small = font_get(0x12072E60);
     if (!f || !small) return;
     real t = m->t - R(0.5f); if (t < 0) t = 0;
-    int count = CONTINUE_FROM - (int)t; if (count < 0) count = 0;
+    int count = CONTINUE_FROM - r_trunc(t); if (count < 0) count = 0;
     real frac = t - r_floorr(t);   /* the digit lands big and shrinks a touch over its second */
     const char *title = "CONTINUE ?";
     font_draw(f, title, r_floorr(r_int(sw - font_text_width(f, title)) / 2), R(48), 255, 255, 255);

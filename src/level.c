@@ -83,6 +83,8 @@ bool level_load(Level *L, uint32_t id)
     return true;
 }
 
+void level_prepare(const Level *L) { if (L->planes_id) r_layer(gfx_renderer(), L->planes_id, -1, 0, 0); }
+
 void level_release(Level *L)
 {
     if (!L->id) return;

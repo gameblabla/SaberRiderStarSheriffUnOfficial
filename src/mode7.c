@@ -1206,8 +1206,13 @@ static void render_finish(Mode7 *m, Font *f, Font *small)
         RFRect q = { bx + r_int(col * CS), y0 + r_int(row * CS), r_int(CS), r_int(CS) }; r_fill_rect(m->ren, &q);
         RFRect q2 = { bx + r_int(col * CS), y0 + R(52) + r_int(row * CS), r_int(CS), r_int(CS) }; r_fill_rect(m->ren, &q2);
     }
+#if defined(PLAT_SATURN)   /* VDP1's half-transparency over the RBG0 floor is a mesh: a solid band reads better */
+    r_set_draw_color(m->ren, 12, 10, 14, 255);
+#else
     r_set_draw_blend(m->ren, R_BLEND_BLEND); r_set_draw_color(m->ren, 0, 0, 0, 170);
+#endif
     RFRect mid = { bx, y0 + R(20), r_int(sw), R(32) }; r_fill_rect(m->ren, &mid);
+    r_set_draw_blend(m->ren, R_BLEND_BLEND);
     const char *fin = "FINISH!"; real fw = r_int(font_text_width(f, fin));
     font_draw(f, fin, bx + r_int(sw) / 2 - fw / 2 + R(1), y0 + R(25), 40, 30, 0);   /* / 2: * 0.5f */
     font_draw(f, fin, bx + r_int(sw) / 2 - fw / 2, y0 + R(24), 255, 210, 40);

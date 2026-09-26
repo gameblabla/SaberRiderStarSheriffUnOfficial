@@ -167,6 +167,7 @@ static bool level_start(Game *g)
     for (int k = 0; k < 4; k++) if (g->dialogs[k].text) dialog_preload(g->dialogs[k].text);
     g->state = 10;
     if (plat_getenv("SABER_DEBUG")) g->debug_collision = true;   /* debug: collision overlay from the start */
+    level_prepare(&g->level);   /* everything read before the music takes the drive */
     music_play(g->night_on ? 13 : g->forest_on ? 15 : g->lab_on ? 14 : 5, true);
     g->cam_x = px - r_int(sw / 2); if (g->cam_x < 0) g->cam_x = 0;
     if (g->walk_in) g->cam_x = g->night_on ? NIGHT_INTRO_CAM : FOREST_INTRO_CAM;

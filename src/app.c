@@ -148,6 +148,7 @@ void app_perf(uint32_t upd_us, uint32_t draw_us, uint32_t frame_us, int steps, i
 {
     static uint32_t n, su, sd, mu, md, mf, prims_max, skip, dbl, quiet; static unsigned reads0;
     if (quiet) { quiet--; return; }   /* the frames the report itself held up (a serial console line takes ~17 ms) */
+    if (upd_us + draw_us > 100000) fprintf(stderr, "perf: a %u ms frame (update %u, draw %u us)\n", (unsigned)((upd_us + draw_us) / 1000), (unsigned)upd_us, (unsigned)draw_us);   /* a stall, as it happens */
     su += upd_us; sd += draw_us;
     if (upd_us > mu) mu = upd_us;
     if (draw_us > md) md = draw_us;

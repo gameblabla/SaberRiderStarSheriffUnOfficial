@@ -64,6 +64,7 @@ typedef struct {
 bool level_load(Level *L, uint32_t id);
 /* a level left for good (the next stage, the menus): its block is dropped (read again by the next level_load) */
 void level_release(Level *L);
+void level_prepare(const Level *L);   /* the backend takes the tile layers it holds now (before the music: Saturn reads them from the disc) */
 void level_draw_layer(const Level *L, int layer, real cam_x, real cam_y, int screen_w, int screen_h);
 /* debug (SABER_DUMPLAYERS, tools/saturn/layers.py): the tile layers as the stage built them, as text */
 void level_dump_layers(const Level *L, const char *path);

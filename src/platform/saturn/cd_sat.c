@@ -47,6 +47,7 @@ typedef struct {
     fad_t fad, fad_end;       /* the file's first sector and the one after its last */
     uint32_t size, pos;
     int32_t cached;           /* the sector in cache (relative to the file), -1 none */
+    const char *name;
     uint8_t cache[2048] __attribute__((aligned(4)));
 } CdFile;
 
@@ -74,8 +75,11 @@ static bool stream_start(fad_t fad, uint32_t count)
 }
 
 /* n whole sectors from fad into dst (2-byte aligned); file_end: the sector after the file's last */
+static const char *read_name;
+static bool music_on(void);
 static bool read_sectors(fad_t fad, void *dst, uint32_t n, fad_t file_end)
 {
+    if (music_on()) printf("cd: a read under the music (it stops): %s, sector %u, %u\n", read_name ? read_name : "?", (unsigned)fad, (unsigned)n);
     reads_total++; bytes_total += n * 2048u;
     data_last_us = sat_timer_us();
     if (!st_on || fad != st_next || fad + n > st_end)
@@ -96,6 +100,7 @@ static bool read_sectors(fad_t fad, void *dst, uint32_t n, fad_t file_end)
 static size_t cd_read(FILE *f, unsigned char *dst, size_t n)
 {
     CdFile *c = f->cookie;
+    read_name = c->name;
     if (c->pos >= c->size) { f->flags |= F_EOF; return 0; }
     if (n > c->size - c->pos) n = c->size - c->pos;
     size_t done = 0;
@@ -142,7 +147,7 @@ FILE *fopen(const char *restrict path, const char *restrict mode)
     CdFile *c = lw_malloc(sizeof *c);
     if (!f || !c) { free(f); free(c); return NULL; }
     memset(f, 0, sizeof *f);
-    c->fad = e->starting_fad; c->size = (uint32_t)e->size; c->pos = 0; c->cached = -1;
+    c->fad = e->starting_fad; c->size = (uint32_t)e->size; c->pos = 0; c->cached = -1; c->name = e->name;
     c->fad_end = c->fad + (c->size + 2047u) / 2048u;
     f->fd = -1; f->cookie = c;
     f->read = cd_read; f->write = cd_write; f->seek = cd_seek; f->close = cd_close;
@@ -190,6 +195,8 @@ static struct {
     bool partial;               /* playing on from where a read stopped it: the rest of the track, then a loop */
     fad_t at;                   /* where the music was when a read took the drive */
 } cdda;
+
+static bool music_on(void) { return cdda.track && !cdda.paused; }
 
 static bool toc_read(void)
 {

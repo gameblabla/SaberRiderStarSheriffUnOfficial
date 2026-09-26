@@ -36,7 +36,12 @@ static int hero_of(const Power *pw) { return pw->hero & 3; }
 static void preload_clip(const Power *pw)
 {
     const char *clip = pw->bomb ? NULL : CLIP[hero_of(pw)];
-    if (!clip) { video_preload_file(NULL, 0); return; }
+    if (!clip) {   /* the drawn cut-in: the briefing's face and the portrait, read now and not under the music */
+        video_preload_file(NULL, 0);
+        cblock_preload(cblock_get(0x2DEF1664));
+        Sprite *po = sprite_get(PORTRAIT[hero_of(pw)]); if (po) sprite_tex(po);
+        return;
+    }
     char buf[64]; snprintf(buf, sizeof buf, "%s.m4v", clip);
     video_preload_file(asset_path(buf), R(24.0f));
 }

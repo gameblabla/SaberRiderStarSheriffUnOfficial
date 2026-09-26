@@ -1341,6 +1341,14 @@ static void floor_follow(RFloor *f, int p, real cam_x, real cam_y)
     int oy = m->fixed ? 0 : (r_floor(cam_y) >> m->shift) - FL_MAP_SIDE / 2;
     if (m->valid && ox == m->ox && oy == m->oy) return;
     int dx = ox - m->ox, dy = oy - m->oy;
+    if (m->valid && !m->fixed) {   /* the camera wrapped round the world (mode7.c's torus): the same cells, a world away,
+                                    * sit in the same torus slots (the world is a multiple of it), so only the step counts
+                                    * (a whole rewrite took half a second) */
+        int wc = (f->desc.mapn << f->desc.cell_shift) >> m->shift;
+        int ux = ((dx % wc) + wc + wc / 2) % wc - wc / 2, uy = ((dy % wc) + wc + wc / 2) % wc - wc / 2;
+        m->ox += dx - ux; m->oy += dy - uy; dx = ux; dy = uy;
+        if (!dx && !dy) return;
+    }
     if (!m->valid || dx <= -FL_MAP_SIDE || dx >= FL_MAP_SIDE || dy <= -FL_MAP_SIDE || dy >= FL_MAP_SIDE) {
         m->ox = ox; m->oy = oy;
         floor_put_rows(f, p, oy, oy + FL_MAP_SIDE);
