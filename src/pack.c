@@ -10,8 +10,8 @@
 #ifdef PLAT_DREAMCAST
 #include "platform/dreamcast/dcfmv/lz40.h"      /* Dreamcast packs/FMV: LZ40 SH-4 (VincentNLOBJ/CUE) */
 #include "platform/dreamcast/dcfmv/lz4_mini.h"  /* old +lz4 blocks (pre-LZ40 discs) still decode */
-#elif defined(PLAT_BAKED_ASSETS)
-#include "platform/dreamcast/dcfmv/lz4_mini.h"   /* Saturn keeps the mini decoder for now */
+#elif defined(PLAT_SATURN)
+#include "platform/saturn/lz40s.h"               /* Saturn packs: LZ40S, the SH-2 variant (lz40s.sx) */
 #endif
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
@@ -146,8 +146,8 @@ static bool entry_load(const Pack *p, PackEntry *pe)
 #if defined(PLAT_DREAMCAST)
           : pe->lz40 ? (lz40_decode(raw, (int)pe->stored, buf, (int)pe->declen) == (int)pe->declen ? (int)pe->declen : -1)   /* stops at declen: padding follows */
           : pe->lz4 ? (lz4_mini_decode(raw, (int)pe->stored, buf, (int)pe->declen, (int)pe->declen) == (int)pe->declen ? (int)pe->declen : -1)   /* old discs */
-#elif defined(PLAT_BAKED_ASSETS)
-          : pe->lz4 ? (lz4_mini_decode(raw, (int)pe->stored, buf, (int)pe->declen, (int)pe->declen) == (int)pe->declen ? (int)pe->declen : -1)   /* stops at declen: padding follows */
+#elif defined(PLAT_SATURN)
+          : pe->lz40 ? lz40s_decode(raw, (int)pe->stored, buf, (int)pe->declen)   /* "+lz40" blocks hold LZ40S here */
 #endif
           : lzo1z_decompress(raw, pe->stored, buf, pe->declen + 16);
     free(raw);

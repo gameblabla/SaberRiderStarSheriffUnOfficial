@@ -78,16 +78,39 @@ fx fx_parse(const char *s, const char **end)
     return neg ? -(fx)v : (fx)v;
 }
 
-uint32_t fx_isqrt64(uint64_t n)
+static uint32_t isqrt32(uint32_t n)
 {
-    uint64_t res = 0, bit = (uint64_t)1 << 62;
+    uint32_t res = 0, bit = 1u << 30;
     while (bit > n) bit >>= 2;
     while (bit) {
         if (n >= res + bit) { n -= res + bit; res = (res >> 1) + bit; }
         else res >>= 1;
         bit >>= 2;
     }
-    return (uint32_t)res;
+    return res;
+}
+
+/* floor(sqrt(n)), exactly. The bit-by-bit loop in 64 bits costs ~800 SH-2 instructions (r_hypot is everywhere in the
+ * game loops), so: 32 bits when n fits, else the square root of n's top 32 bits as the estimate, one Newton step on
+ * the hardware 64/32 divider (the estimate is within 2^-15 of the root, the step within one) and the last unit fixed. */
+uint32_t fx_isqrt64(uint64_t n)
+{
+    if (!(n >> 32)) return isqrt32((uint32_t)n);
+    if (n >> 60) {   /* a root past 2^30 (16384.0 as fx): the quotient could overflow the signed divider */
+        uint64_t res = 0, bit = (uint64_t)1 << 62;
+        while (bit) {
+            if (n >= res + bit) { n -= res + bit; res = (res >> 1) + bit; }
+            else res >>= 1;
+            bit >>= 2;
+        }
+        return (uint32_t)res;
+    }
+    int s = 2 * ((33 - __builtin_clz((uint32_t)(n >> 32))) / 2);   /* even, n >> s fits 32 bits */
+    uint32_t r = isqrt32((uint32_t)(n >> s)) << (s / 2);
+    r = (uint32_t)(((uint64_t)r + (uint32_t)div64_32((int64_t)n, (int32_t)r)) >> 1);
+    while ((uint64_t)r * r > n) r--;
+    while ((uint64_t)(r + 1) * (r + 1) <= n) r++;
+    return r;
 }
 
 fx fx_sqrt(fx a) { return a <= 0 ? 0 : (fx)fx_isqrt64((uint64_t)a << FX_SHIFT); }

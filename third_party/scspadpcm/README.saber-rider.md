@@ -1,6 +1,9 @@
-This directory vendors the source portions of celeriyacon/scspadpcm supplied for the Saturn port.
-Saber Rider uses its predictor/quantizer and 4-bit block format for SFX. The original proof-of-concept SCSP driver uses
-four SCSP slots per voice and 16-bit SCSP playback lengths, so it conflicts with the simultaneous movie/music streams
-and caps long samples. The Saturn port therefore decodes the same block codec on the SH-2 into a shared PCM output ring.
-Its SADP wrapper interleaves each block and uses 32-bit sample/block counts, so long voice/effect samples are continuous
-and are not capped at the original driver's 16-bit address/length range. Original license notices are retained in source.
+This directory vendors the source portions of celeriyacon/scspadpcm supplied for the Saturn port (scsp.h and types.h
+from the same repository).
+
+Saber Rider's game audio runs on this driver as it is: `make -f Makefile.saturn adp68k` builds adp68k.c with a 68000
+gcc into src/platform/saturn/adp68k_bin.h (bit-identical to the upstream adp68k.bin), and src/platform/saturn/aud_sat.c
+drives it (8 ADPCM channels decoded by the SCSP DSP, samples in a sound RAM bank, CD-DA music through its CD input).
+tools/saturn/build_disc.py encodes the samples with the unmodified adpencode.cpp (looped at their start, so one copy
+plays once or looped). The driver's 16-bit loop registers cap a sample at ~2.97 s at 4 bits; longer ones are encoded
+at 2 or 1 bit. Original license notices are retained in source.

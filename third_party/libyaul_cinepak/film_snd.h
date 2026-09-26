@@ -18,6 +18,13 @@ extern void film_audio_setup(decode_work_t *work,
 
 extern void film_audio_prepare_to_play();
 
+/* Saber Rider: the SCSP side once the clip starts (the slots, timer C) */
+extern void film_audio_hw_begin(void);
+/* the platform's slots (src/platform/saturn/aud_sat.c): channel ch loops over bytes of PCM at sound RAM offset off */
+extern void film_pcm_configure(int ch, uint32_t off, uint32_t bytes, uint16_t rate, uint8_t bits, uint8_t pan);
+extern void film_pcm_start(int ch, uint8_t volume);
+extern void film_pcm_stop(int ch);
+
 extern void film_audio_reset();
 
 extern void film_audio_fill_silence(decode_work_t *work);

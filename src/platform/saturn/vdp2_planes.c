@@ -1,5 +1,5 @@
 /* A level's tile layers as VDP2 scroll planes (plan 4.2 / 4.3), from the blocks tools/saturn/layers.py bakes into
- * stage.pck: "SPL1" (planes, bands, palettes, the names in LZ4 column chunks) and the cells (32 KB blocks).
+ * stage.pck: "SPL1" (planes, bands, palettes, the names in LZ40S column chunks) and the cells (32 KB blocks).
  *
  * The core asks for every tile layer through r_layer (level.c); a layer a plane holds is shown by that plane and the
  * core draws nothing for it. The first such call for a level loads its planes: every cell into video memory (they
@@ -15,7 +15,7 @@
  * too (plan 11: check on a console). */
 #include "../render.h"
 #include "../../pack.h"
-#include "../dreamcast/dcfmv/lz4_mini.h"
+#include "lz40s.h"
 #include "sat_internal.h"
 #include <yaul.h>
 #include <stdio.h>
@@ -55,7 +55,7 @@ static struct {
     const SplHead *h;
     const SplPlane *planes;
     const uint8_t *cellpal;
-    const uint32_t *chunks;     /* per chunk: offset, stored length | 0x80000000 LZ4 */
+    const uint32_t *chunks;     /* per chunk: offset, stored length | 0x80000000 LZ40S */
     BandRt band[MAX_BANDS];
     RTex *backdrop[4]; int nbackdrops;
     uint8_t depth_reg[32];      /* per level layer: the sprite priority register its palette sprites take (0 the front) */
@@ -225,7 +225,7 @@ static const uint16_t *column(BandRt *br, int col)
         uint32_t off = be32(&P.chunks[(b->chunk_first + (uint32_t)k) * 2]), len = be32(&P.chunks[(b->chunk_first + (uint32_t)k) * 2 + 1]);
         int want = (b->cols - (uint32_t)k * CHUNK_COLS < CHUNK_COLS ? (int)(b->cols - (uint32_t)k * CHUNK_COLS) : CHUNK_COLS) * rows * 2;
         if (len & 0x80000000u) {
-            if (lz4_mini_decode(P.spl + off, (int)(len & 0x7FFFFFFF), (uint8_t *)br->names, (int)sizeof br->names, want) != want) memset(br->names, 0, sizeof br->names);
+            if (lz40s_decode(P.spl + off, (int)(len & 0x7FFFFFFF), (uint8_t *)br->names, want) != want) memset(br->names, 0, sizeof br->names);
         } else memcpy(br->names, P.spl + off, (size_t)want);
         br->chunk = k;
     }

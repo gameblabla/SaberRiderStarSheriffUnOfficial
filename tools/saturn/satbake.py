@@ -2,23 +2,24 @@
 
 A texture is cut into the rectangles the game draws out of it ("units": a sprite's frames, a cblock's tiles, a font's
 glyphs, an atlas' entries, else the whole image). VDP1 can only draw a whole stored sprite, so each unit is stored as
-its own "parts": the unit's opaque bounding box, cut into columns of at most MAX_W pixels and horizontal bands of at
-most MAX_H rows (VDP1's sprite size limits) and MAX_RAW bytes (the renderer decodes a part into a staging buffer of that
-size), each band either
+its own "parts": the unit's opaque bounding box, cut into columns of at most MAX_W pixels (WIDE_COL for a unit wider
+than the screen) and horizontal bands of at most MAX_H rows (VDP1's sprite size limits) and MAX_RAW bytes (the renderer
+decodes a part into a staging buffer of that size), each band trimmed to its opaque pixels or cut finer around empty
+spans (split_band: VDP1's time goes with the texels a part walks), each band either
   * 4bpp with a 16-entry colour lookup table (VDP1 "LUT" mode: entry 0 transparent, 1..15 RGB555) when it has at
     most 15 colours (exact: the demo's art is 15-bit), or
   * 8bpp indices into the texture's palette (VDP1 colour-bank mode through VDP2 colour RAM: index 0 transparent) when
     the whole texture has at most 255 colours, or can be quantised to 255 with a PSNR of at least QUANT_DB against
     its 15-bit colours (weighted k-means from a median-cut start; plan 4.5), or
   * 16bpp RGB555 (bit 15 set on opaque pixels, 0 transparent) otherwise,
-stored LZ4-compressed where that is smaller. Widths are padded to multiples of 8 (VDP1's unit) with transparent
+stored LZ40S-compressed (pckwrite, the SH-2 variant of LZ40) where that is smaller. Widths are padded to multiples of 8 (VDP1's unit) with transparent
 pixels.
 
 Block layout (the 32-byte header little-endian, its first 24 bytes laid out as the Dreamcast's "PVT1": src/gfx.c
 reads the size and the layout data from them; everything after the header is big-endian, the SH-2's order):
   0 "SAT1"   4 u16 w, h   8 u16 nunits, nparts   12 u16 flags, npal   16 u32 meta_off, meta_len   24 u32 units_off, parts_off
   units (12 bytes each, sorted by y then x): u16 x, y, w, h, first_part, nparts
-  parts (20 bytes each): u16 x, y (in the texture), w (true), h, wpad; u8 fmt (0 4bpp+LUT, 1 16bpp; bit 7: LZ4),
+  parts (20 bytes each): u16 x, y (in the texture), w (true), h, wpad; u8 fmt (0 4bpp+LUT, 1 16bpp; bit 7: LZ40S),
          u8 0; u32 data_off (from the block's start), data_len (stored bytes); raw size = 32 + wpad*h/2 (4bpp: the
          LUT first), wpad*h (8bpp) or wpad*h*2 (16bpp)
   palette (right after the parts, npal entries, 0 when no part is 8bpp): u16 RGB555 of indices 1..npal
@@ -36,8 +37,13 @@ import pckwrite
 load_srgb = texbake.load_srgb
 MAX_RAW = 32 * 1024
 MAX_W, MAX_H = 504, 255
+# VDP1 walks every texel of a part it draws, transparent or off the screen: a unit wider than the screen is cut into
+# columns of at most WIDE_COL (a panorama walks the columns near the view, not 448-pixel slabs), and a band whose
+# opaque pixels leave wide empty spans is cut finer (split_band) when that saves a quarter of its texels
+SCREEN_W, WIDE_COL = 352, 128
+GAP, SUB_H = 16, 32
 QUANT_DB = 40.0
-FMT_4BPP, FMT_16BPP, FMT_8BPP, FMT_LZ4 = 0, 1, 2, 0x80
+FMT_4BPP, FMT_16BPP, FMT_8BPP, FMT_LZ = 0, 1, 2, 0x80
 BYTES = {FMT_4BPP: 0.5, FMT_8BPP: 1, FMT_16BPP: 2}
 
 
@@ -162,6 +168,36 @@ def cut_bands(v: np.ndarray, wide: int, allow4: bool = True) -> list[tuple[int, 
     return merged
 
 
+def _runs(mask: np.ndarray, gap: int) -> list[tuple[int, int]]:
+    """[x0, x1) runs of set entries, joined across holes shorter than gap"""
+    xs = np.nonzero(mask)[0]
+    out: list[list[int]] = []
+    for x in xs:
+        if out and x - out[-1][1] < gap:
+            out[-1][1] = x + 1
+        else:
+            out.append([x, x + 1])
+    return [(a, b) for a, b in out]
+
+
+def split_band(v: np.ndarray) -> list[tuple[int, int, int, int]]:
+    """a band's pieces (x, y, w, h), each trimmed to its opaque pixels: the whole band's box, or, when that saves a
+    quarter of its texels (VDP1 walks the transparent ones too), SUB_H-row slices cut at GAP-wide empty spans"""
+    area = lambda r: ((r[2] + 7) & ~7) * r[3]
+    ys, xs = np.nonzero(v)
+    if not len(xs):
+        return []
+    whole = (int(xs.min()), int(ys.min()), int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1))
+    fine = []
+    for sy in range(0, v.shape[0], SUB_H):
+        s = v[sy:sy + SUB_H]
+        for a, b in _runs(s.any(0), GAP):
+            rows = np.nonzero(s[:, a:b].any(1))[0]
+            fine.append((a, sy + int(rows[0]), b - a, int(rows[-1] - rows[0] + 1)))
+    saved = area(whole) - sum(map(area, fine))
+    return fine if saved * 4 >= area(whole) and saved >= 2048 else [whole]
+
+
 def part_data(v: np.ndarray, fmt: int, palette: np.ndarray | None = None) -> bytes:
     h, w = v.shape
     wpad = (w + 7) & ~7
@@ -223,16 +259,18 @@ def bake(px: np.ndarray, meta: bytes, stats: Stats, name: str = '', kind: int = 
         ys, xs = np.nonzero(sub)
         if len(xs):
             x0, x1, y0, y1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
-            ncol = -(-(x1 - x0) // MAX_W)
+            ncol = -(-(x1 - x0) // (MAX_W if x1 - x0 <= SCREEN_W else WIDE_COL))
             step = ((-(-(x1 - x0) // ncol)) + 7) & ~7   # equal columns, multiples of 8
             for cx0 in range(x0, x1, step):
                 cx1 = min(x1, cx0 + step)
                 box = sub[y0:y1, cx0:cx1]
                 for b0, b1, fmt in cut_bands(box, wide, not force8):
-                    data = part_data(box[b0:b1], fmt, palette)
-                    parts.append((ux + cx0, uy + y0 + b0, cx1 - cx0, b1 - b0, ((cx1 - cx0) + 7) & ~7, fmt, data))
-                    stats.parts[fmt] += 1
-                    stats.raw[fmt] += len(data)
+                    band = box[b0:b1]
+                    for px, py, pw, ph in split_band(band):
+                        data = part_data(band[py:py + ph, px:px + pw], fmt, palette)
+                        parts.append((ux + cx0 + px, uy + y0 + b0 + py, pw, ph, (pw + 7) & ~7, fmt, data))
+                        stats.parts[fmt] += 1
+                        stats.raw[fmt] += len(data)
         unit_rows.append((ux, uy, uw, uh, first, len(parts) - first))
     head_len = 32
     units_off = head_len
@@ -251,7 +289,7 @@ def bake(px: np.ndarray, meta: bytes, stats: Stats, name: str = '', kind: int = 
             packed = pckwrite.lz4_compress(data) if len(data) >= 64 else data
             f = fmt
             if len(packed) < len(data):
-                f |= FMT_LZ4
+                f |= FMT_LZ
             else:
                 packed = data
             off, n = data_off + len(blob), len(packed)

@@ -3,7 +3,9 @@
 Every block starts on a 32-byte boundary and is a multiple of 32 bytes long, so the game reads one straight into a
 32-byte aligned buffer in a single read and can DMA it on to video or sound memory. Blocks are stored raw (no LZO), or
 LZ40-compressed where asked (directory type "<type>+lz40"; the Dreamcast decodes those with
-src/platform/dreamcast/dcfmv/lz40.h, the C port of VincentNLOBJ's SH-4 LZ40 decoder). The packer lays
+src/platform/dreamcast/dcfmv/lz40.h, the C port of VincentNLOBJ's SH-4 LZ40 decoder; with CODEC = 'lz40s' (the
+Saturn's disc builder sets it) the same directory type holds LZ40S, the SH-2 variant: src/platform/saturn/lz40s.sx,
+its magic 0x41 tells them apart). The packer lays
 blocks out in the order they are added: put the ones a stage loads together next to each other.
 
 Layout: "HEADLIST", directory offset, directory length (unpacked); 16-byte entries from 0x10 (8 hex digits of id,
@@ -13,7 +15,9 @@ from __future__ import annotations
 
 import struct
 
-from lz40 import lz40_compress
+from lz40 import lz40_compress, lz40s_compress
+
+CODEC = 'lz40'   # or 'lz40s': the Saturn's variant (tools/saturn/build_disc.py)
 
 
 def pad32(data: bytes) -> bytes:
@@ -40,8 +44,8 @@ def lzo_literals(data: bytes) -> bytes:
 
 
 def lz4_compress(data: bytes) -> bytes:
-    """Historical name: now an LZ40 stream (src/platform/dreamcast/dcfmv/lz40.h decodes it)."""
-    return lz40_compress(data)
+    """Historical name: an LZ40 stream (src/platform/dreamcast/dcfmv/lz40.h decodes it), or LZ40S (CODEC)."""
+    return lz40s_compress(data) if CODEC == 'lz40s' else lz40_compress(data)
 
 
 class Pack:
@@ -58,7 +62,7 @@ class Pack:
             raise ValueError(f'{rtype} {rid:08X} added twice')
         self.ids.add(key)
         data = pad32(data)
-        packed = pad32(lz40_compress(data)) if want else data
+        packed = pad32(lz4_compress(data)) if want else data
         if len(packed) < len(data):
             self.blocks.append((rid & 0xFFFFFFFF, rtype + '+lz40', packed, len(data)))
         else:

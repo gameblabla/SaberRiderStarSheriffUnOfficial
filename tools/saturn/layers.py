@@ -33,7 +33,7 @@ Output ("SPL1" block, big-endian but the magic; the runtime reads it in place):
   cell palettes (cellpal_off): u8 per cell (all planes' cells in order), padded to 4
   backdrops (backdrops_off, 12 bytes each): u32 texture id (a SAT1 texture in the same pack, 8bpp only), i16 x, y,
          u8 priority, 0, 0, 0
-  chunk table (u32 offset from the block, u32 stored length | 0x80000000 when LZ4) at names_off, then the chunks:
+  chunk table (u32 offset from the block, u32 stored length | 0x80000000 when LZ40S) at names_off, then the chunks:
          CHUNK_COLS columns each, a column = (row1 - row0) u16 names, top to bottom: VF << 15 | HF << 14 | cell (the
          plane's own numbering, 0 = the plane's empty cell); its palette is the cell's
 The cells go in blocks of their own, CELL_CHUNK cells (32 KB) each, read one at a time into video memory and released

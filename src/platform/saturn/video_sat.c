@@ -40,48 +40,10 @@ struct Video {
     bool done, surface;
 };
 
-static bool driver_ok;
-static bool driver_tried;
 static Video *prepared_video;
 static char prepared_name[16];
-/* One persistent 68000 sound driver is shared by the game mixer and movie
- * audio. Load it during boot so neither gameplay SFX/music nor an in-game
- * cut-in pays the SCSP clear/driver-start cost. */
-bool rsat_sound_driver_init(void)
-{
-    if (driver_ok) return true;
-    if (driver_tried) return false;
-    driver_tried = true;
 
-    FILE *f = fopen("SNDDRV.BIN", "rb");
-    if (!f) { printf("video: SNDDRV.BIN missing\n"); return false; }
-    uint8_t *buf = malloc(32 * 1024);
-    size_t n = buf ? fread(buf, 1, 32 * 1024, f) : 0;
-    fclose(f);
-    cd_sat_stream_stop();
-    if (!buf || !n) { free(buf); printf("video: could not read SNDDRV.BIN\n"); return false; }
-
-    pcmsys_load_driver(buf, (uint32_t)n);
-    pcmStreamInitialize();
-    free(buf);
-    driver_ok = true;
-    return true;
-}
-
-/* Pay the one-time SCSP movie-driver setup cost during boot instead of on the
- * first in-game cut-in.  On real Saturn timing this includes clearing sound
- * RAM and starting the 68000 driver, which is far too expensive for a power
- * button press. */
-void rsat_video_preload(void)
-{
-    (void)rsat_sound_driver_init();
-}
-
-static void stop_sound(void)
-{
-    if (!driver_ok) return;
-    film_audio_reset();
-}
+static void stop_sound(void) { film_audio_reset(); }
 
 /* Called by render_sat.c after VDP1 has finished the previous list and before
  * it submits the next one.  Never decode more than the frame that is due: once
@@ -133,18 +95,20 @@ static void movie_name(const char *path, char name[16])
     strcpy(name + n, ".CPK");
 }
 
+/* the clip starts: the game's sound driver stops (aud_sat.c) and the film player has the SCSP until video_close */
 static bool activate_video(Video *v)
 {
     if (v->surface) return true;
     film_buff_io_set(v->stream, movie_read, movie_available);
     v->surface = rsat_video_open(v->w, v->h, hook, v);
-    if (!v->surface) film_buff_io_clear();
-    return v->surface;
+    if (!v->surface) { film_buff_io_clear(); return false; }
+    aud_movie_begin();
+    film_audio_hw_begin();
+    return true;
 }
 
 static Video *open_name(const char *name, bool activate)
 {
-    if (!rsat_sound_driver_init()) return NULL;
     const cdfs_filelist_entry_t *entry = cd_sat_entry(name);
     if (!entry) { printf("video: %s missing\n", name); return NULL; }
     FILE *stream = fopen(name, "rb");
@@ -174,7 +138,7 @@ static Video *open_name(const char *name, bool activate)
     v->params.pcmChannels = 1;
     v->params.pcmPan = 0;
     v->params.pcmTransferMode = PCM_XFER_SH2_DMA;
-    v->params.audioBufferAddr = (int32_t)(uintptr_t)(SNDRAM + 0x18000);
+    v->params.audioBufferAddr = (int32_t)(uintptr_t)(SNDRAM + 0x78000);   /* aud_sat.c MOVIE_OFF: above the sample bank */
     v->params.audioBufferSize = 16384;
     v->work->decodeParams = &v->params;
 
@@ -295,9 +259,11 @@ void video_size(const Video *v, int *w, int *h)
 void video_close(Video *v)
 {
     if (!v) return;
+    bool playing = v->surface;
     if (v->surface) rsat_video_close();
     film_buff_io_clear();
     stop_sound();
+    if (playing) aud_movie_end();
     if (v->stream) fclose(v->stream);
     cd_sat_stream_stop();
     free(v->sample_mem);

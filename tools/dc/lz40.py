@@ -60,20 +60,10 @@ def _match_len_py(data: bytes, i: int, j: int, maxlen: int) -> int:
     return k
 
 
-def lz40_compress(data: bytes) -> bytes:
+def _parse(data: bytes, max_off: int, max_match: int):
+    """the greedy parse both variants share: ('lit', byte) or ('match', offset, length) in order"""
     n = len(data)
-    if n > 0xFFFFFF:
-        raise ValueError('LZ40 declen is 24-bit')
-    out = bytearray()
-    out += bytes((0x40, n & 0xFF, (n >> 8) & 0xFF, (n >> 16) & 0xFF))
-    if n == 0:
-        # CUE emits one flag byte (terminator bit) + 2 zero bytes.
-        out += bytes(((-0x80) & 0xFF, 0, 0))
-        return bytes(out)
-
-    arr = _np.frombuffer(data, dtype=_np.uint8) if _np is not None else None
-    match_fn = (_match_len_np if _np is not None else _match_len_py)
-
+    arr = _np.frombuffer(data, dtype=_np.uint8) if _np is not None and n else None
     table: dict[bytes, list[int]] = {}
 
     def table_add(pos: int) -> None:
@@ -89,36 +79,55 @@ def lz40_compress(data: bytes) -> bytes:
                 del lst[0:len(lst) - HASH_KEEP]
 
     def best_at(i: int):
-        """longest match at i within the 4 KB window (offset 1..0xFFF)."""
+        """longest match at i within the window (offset 1..max_off)"""
         if i + 2 >= n:
             return 0, 0
-        key = data[i:i + 3]
-        cands = table.get(key)
+        cands = table.get(data[i:i + 3])
         if not cands:
             return 0, 0
-        maxlen = n - i
-        if maxlen > MAX_MATCH:
-            maxlen = MAX_MATCH
+        maxlen = min(n - i, max_match)
         best_len, best_pos = 0, 0
         checked = 0
         for c in range(len(cands) - 1, -1, -1):
             j = cands[c]
             off = i - j
-            if off <= 0 or off >= N:
+            if off <= 0 or off > max_off:
                 continue
             # first 3 bytes match by construction (same key)
-            if arr is not None:
-                ln = _match_len_np(arr, i, j, maxlen)
-            else:
-                ln = _match_len_py(data, i, j, maxlen)
+            ln = _match_len_np(arr, i, j, maxlen) if arr is not None else _match_len_py(data, i, j, maxlen)
             if ln > best_len:
                 best_len, best_pos = ln, off
-                if ln == maxlen or ln >= MAX_MATCH:
+                if ln >= maxlen:
                     break
             checked += 1
             if checked >= HASH_DEPTH:
                 break
         return best_len, best_pos
+
+    i = 0
+    while i < n:
+        ln, off = best_at(i)
+        if ln >= THRESHOLD:
+            yield ('match', off, ln)
+            for k in range(ln):
+                table_add(i + k)
+            i += ln
+        else:
+            yield ('lit', data[i])
+            table_add(i)
+            i += 1
+
+
+def lz40_compress(data: bytes) -> bytes:
+    n = len(data)
+    if n > 0xFFFFFF:
+        raise ValueError('LZ40 declen is 24-bit')
+    out = bytearray()
+    out += bytes((0x40, n & 0xFF, (n >> 8) & 0xFF, (n >> 16) & 0xFF))
+    if n == 0:
+        # CUE emits one flag byte (terminator bit) + 2 zero bytes.
+        out += bytes(((-0x80) & 0xFF, 0, 0))
+        return bytes(out)
 
     flg_idx: int | None = None
     mask = 0
@@ -133,19 +142,12 @@ def lz40_compress(data: bytes) -> bytes:
         mask = 0x80
         logical = 0
 
-    i = 0
-    # prime: no positions yet; table fills as we go (matches only look back)
-    while i < n:
+    for tok in _parse(data, N - 1, MAX_MATCH):
         mask >>= 1
         if mask == 0:
             flag_new()
-        else:
-            # mask already holds this symbol's bit (shifted at top)
-            pass
-        ln, off = best_at(i)
-        if ln >= THRESHOLD:
-            if ln > MAX_MATCH:
-                ln = MAX_MATCH
+        if tok[0] == 'match':
+            _, off, ln = tok
             logical |= mask
             if ln <= 0xF:
                 out += bytes((((off & 0xF) << 4) | ln, (off >> 4) & 0xFF))
@@ -154,13 +156,8 @@ def lz40_compress(data: bytes) -> bytes:
             else:
                 v = ln - 0x110
                 out += bytes((((off & 0xF) << 4) | 1, (off >> 4) & 0xFF, v & 0xFF, (v >> 8) & 0xFF))
-            for k in range(ln):
-                table_add(i + k)
-            i += ln
         else:
-            out.append(data[i])
-            table_add(i)
-            i += 1
+            out.append(tok[1])
 
     # terminator: one dummy match bit + 2 zero bytes (never decoded: the
     # decoder stops at declen). Mirrors CUE's `mask>>=1 / new-flag-if-empty`.
@@ -171,6 +168,93 @@ def lz40_compress(data: bytes) -> bytes:
     assert flg_idx is not None
     out[flg_idx] = (-logical) & 0xFF
     out += bytes((0, 0))
+    return bytes(out)
+
+
+# ---- the Saturn variant ("LZ40S": big-endian, laid out for the SH-2 decoder, src/platform/saturn/lz40s.sx) ----
+# The same LZSS scheme; only the byte layout differs, so that the SH-2 needs no negation, no zero-extension of the
+# offset, no per-symbol end test and no length bias for long matches:
+#   [0x41][declen hi][declen mid][declen lo], then flag bytes (1 = match, LSB first, stored as is) and symbols:
+#   literal: 1 byte
+#   match:   b0 = L << 4 | hi, b1 = lo, where (hi << 8) + (int8_t)lo == offset - 1 (so hi = (offset - 1 + 0x80) >> 8:
+#            offsets 1..3968 keep hi in 4 bits); L 2..15: the length; L 0: + 1 byte, length - 16 (16..271);
+#            L 1: + 2 bytes big-endian, the length itself (272..65535)
+#   end:     a match with offset - 1 == -1 (b0 = 0x00, b1 = 0xFF): the decoder stops there, not at declen
+S_MAX_OFF = 3968        # (3967 + 0x80) >> 8 == 15: hi fits the nibble
+S_MAX_MATCH = 0xFFFF
+
+
+def lz40s_compress(data: bytes) -> bytes:
+    n = len(data)
+    if n > 0xFFFFFF:
+        raise ValueError('LZ40S declen is 24-bit')
+    out = bytearray((0x41, (n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF))
+    flg_idx = -1
+    bit = 0x100
+
+    def flag(v: int) -> None:
+        nonlocal flg_idx, bit
+        if bit == 0x100:
+            flg_idx = len(out)
+            out.append(0)
+            bit = 1
+        if v:
+            out[flg_idx] |= bit
+        bit <<= 1
+
+    def match(off: int, ln: int) -> None:
+        m = off - 1
+        hi, lo = (m + 0x80) >> 8, m & 0xFF
+        if ln <= 0xF:
+            out.extend((ln << 4 | hi, lo))
+        elif ln <= 0x10F:
+            out.extend((hi, lo, ln - 0x10))
+        else:
+            out.extend((0x10 | hi, lo, ln >> 8, ln & 0xFF))
+
+    for tok in _parse(data, S_MAX_OFF, S_MAX_MATCH):
+        if tok[0] == 'match':
+            flag(1)
+            match(tok[1], tok[2])
+        else:
+            flag(0)
+            out.append(tok[1])
+    flag(1)
+    out += bytes((0x00, 0xFF))   # the end: offset - 1 == -1
+    return bytes(out)
+
+
+def lz40s_decompress(data: bytes) -> bytes:
+    """Python mirror of the SH-2 decoder (for roundtrip tests)."""
+    if len(data) < 4 or data[0] != 0x41:
+        raise ValueError('not LZ40S')
+    declen = data[1] << 16 | data[2] << 8 | data[3]
+    ip, out, flags = 4, bytearray(), 0
+    while True:
+        if flags <= 1:
+            flags = data[ip] | 0x100
+            ip += 1
+        f, flags = flags & 1, flags >> 1
+        if not f:
+            out.append(data[ip])
+            ip += 1
+            continue
+        b0, lo = data[ip], data[ip + 1]
+        ip += 2
+        m = ((b0 & 15) << 8) + (lo - 256 if lo & 0x80 else lo)
+        if m < 0:
+            break
+        ln = b0 >> 4
+        if ln == 0:
+            ln = data[ip] + 16
+            ip += 1
+        elif ln == 1:
+            ln = data[ip] << 8 | data[ip + 1]
+            ip += 2
+        for _ in range(ln):
+            out.append(out[-(m + 1)])
+    if len(out) != declen:
+        raise ValueError(f'decoded {len(out)} bytes, header says {declen}')
     return bytes(out)
 
 

@@ -154,7 +154,9 @@ static real dmg_mul(const Ramrod *r) { return r->difficulty == 0 ? R(0.6f) : r->
 /* camera space: f = distance ahead, l = to the right */
 static void to_cam(const Ramrod *r, real x, real y, real *f, real *l)
 {
-    real dx = x - r->px, dy = y - r->py, c = r_cos(r->heading), s = r_sin(r->heading);
+    static real h, c, s; static bool set;   /* the heading's cosine and sine, for every object placed this frame */
+    if (!set || r->heading != h) { h = r->heading; c = r_cos(h); s = r_sin(h); set = true; }
+    real dx = x - r->px, dy = y - r->py;
     *f = r_mul(dx, c) + r_mul(dy, s); *l = r_mul(-dx, s) + r_mul(dy, c);
 }
 static real horizon(const Ramrod *r) { return HZ + r->bob; }
@@ -469,7 +471,9 @@ static void spawn_mech(Ramrod *r, const Spawn *sp)
 
 static void push_apart(real *ax, real *ay, real bx, real by, real minr)
 {
-    real dx = *ax - bx, dy = *ay - by, d = r_hypot(dx, dy);
+    real dx = *ax - bx, dy = *ay - by;
+    if (!r_within2(dx, dy, minr)) return;   /* the common case: apart already (no square root) */
+    real d = r_hypot(dx, dy);
     if (d < minr && d > R(0.01f)) { *ax = bx + r_mul(r_div(dx, d), minr); *ay = by + r_mul(r_div(dy, d), minr); }
 }
 
@@ -675,7 +679,7 @@ static void update_shots(Ramrod *r, real dt)
         if (!s->enemy) {
             for (int j = 0; j < MAX_MECH && s->on; j++) {
                 Mech *m = &r->mech[j]; if (m->st == M_OFF || m->st == M_DYING) continue;
-                if (r_hypot(s->x - m->x, s->y - m->y) < r_mul(MECH_R, m->scale) + R(6) && s->z < r_mul(MECH_H, m->scale)) {
+                if (s->z < r_mul(MECH_H, m->scale) && r_within2(s->x - m->x, s->y - m->y, r_mul(MECH_R, m->scale) + R(6))) {
                     s->on = false; mech_damage(r, m, R(1), false); sfx_play(14, 0);
                     spawn_flash(r, s->x, s->y, s->z, R(0.9f), false);
                 }
@@ -687,7 +691,7 @@ static void update_shots(Ramrod *r, real dt)
             }
             for (int j = 0; j < r->nprop && s->on; j++) {
                 Prop *p = &r->prop[j];
-                if (r_hypot(s->x - p->x, s->y - p->y) < p->r && s->z < 40 * p->scale) { s->on = false; spawn_flash(r, s->x, s->y, s->z, R(0.7f), false); }
+                if (s->z < 40 * p->scale && r_within2(s->x - p->x, s->y - p->y, p->r)) { s->on = false; spawn_flash(r, s->x, s->y, s->z, R(0.7f), false); }
             }
         } else {
             real dx = s->x - r->px, dy = s->y - r->py;
@@ -1189,7 +1193,6 @@ void ramrod_draw(Ramrod *r, bool scanlines)
     r_tex(ren, r->cockpit, NULL, &cp);
     render_monitors(r);
     r_set_draw_blend(ren, R_BLEND_BLEND);
-    if (r->red > 0) { r_set_draw_color(ren, 200, 20, 10, (uint8_t)r_trunc(110 * clampf(r->red, 0, R(1)))); RFRect q = { 0, 0, r_int(r->sw), r_int(r->sh) }; r_fill_rect(ren, &q); }
     if (f && small) {
         if (r->phase == PH_STRIDE) {
             real t = r->phase_t;
@@ -1208,6 +1211,9 @@ void ramrod_draw(Ramrod *r, bool scanlines)
     }
     if (r->dlg.active) dialog_draw(&r->dlg, ren, r->sw, r->sh);
     if (r->phase == PH_INSTR) render_instructions(r, f, small);
+    /* the flashes last: a full-screen tint that ends the frame is the Saturn's colour offset, not a VDP1 blend */
+    r_set_draw_blend(ren, R_BLEND_BLEND);
+    if (r->red > 0) { r_set_draw_color(ren, 200, 20, 10, (uint8_t)r_trunc(110 * clampf(r->red, 0, R(1)))); RFRect q = { 0, 0, r_int(r->sw), r_int(r->sh) }; r_fill_rect(ren, &q); }
     if (r->white > 0) { r_set_draw_color(ren, 255, 255, 255, (uint8_t)r_trunc(255 * clampf(r->white, 0, R(1)))); RFRect q = { 0, 0, r_int(r->sw), r_int(r->sh) }; r_fill_rect(ren, &q); }
     if (scanlines) gfx_scanlines(r->sw, r->sh);
     real fade = r->phase == PH_CLEARED ? clampf(r_div(r->phase_t, R(1.2f)), 0, R(1)) : r->black;

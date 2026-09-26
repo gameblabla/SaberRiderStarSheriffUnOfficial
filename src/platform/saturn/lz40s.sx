@@ -1,0 +1,89 @@
+! LZ40S: the Saturn's LZ40 (tools/dc/lz40.py lz40s_compress has the format), decoded on the SH-2.
+!
+! uint8_t *lz40s_run(uint8_t *dst, const uint8_t *stream)
+!   r4 dst, r5 the stream after the 4-byte header; returns the end of the output (lz40s.h checks it against the
+!   header's length). Like the Dreamcast's LZ40 core it trusts the stream: lz40s.h checks the header and the room.
+!
+! The layout is chosen for this loop (after CUE's LZ40 and VincentNL's SH-4 decoder):
+!   - the flags are shifted out LSB first with a sentinel bit above them, so a symbol's flag costs one shlr and
+!     the "flags used up" test is only made on the match path (the sentinel comes out as a 1);
+!   - there is no end-of-output test per symbol: the stream ends with a match of offset - 1 == -1;
+!   - a match's two bytes give offset - 1 with no zero-extension ((hi << 8) + (int8_t)lo), which is also the index
+!     of the copy's store: mov.b Rm,@(r0,Rn) writes offset bytes ahead of the source pointer, so the copy loop moves
+!     one pointer and one counter, two bytes a turn (the pair loop from GLdc's memcpy, MoopTheHedgehog).
+! Every delay slot does work, and no load's result is used by the next instruction except where noted.
+! Registers: r0 offset - 1 / temp, r1 source / temp, r2 length, r3 = 1, r4 output, r5 input, r6 byte, r7 flags.
+
+	.text
+	.align	2
+	.global	_lz40s_run
+	.type	_lz40s_run, @function
+_lz40s_run:
+	mov	#1,r3
+.Lrefill:
+	mov.b	@r5+,r7			! 8 flags
+	mov	#1,r1
+	shll8	r1			! r1 = 0x100: the sentinel
+	extu.b	r7,r7
+	or	r1,r7
+	shlr	r7			! T = the first symbol's flag
+	bt	.Lmatch
+.Llit:					! a literal (T = 0)
+	mov.b	@r5+,r1
+.Llit_loaded:
+	shlr	r7			! T = the next symbol's flag
+	mov.b	r1,@r4
+	bf/s	.Llit
+	add	#1,r4			! (delay, both ways)
+.Lmatch:				! T was 1: a match, or the sentinel
+	tst	r7,r7
+	bt	.Lrefill		! the sentinel: 8 symbols done
+	mov.b	@r5+,r0			! b0 = L << 4 | hi
+	mov.b	@r5+,r1			! lo, sign-extended
+	extu.b	r0,r2
+	and	#15,r0
+	shll8	r0
+	add	r1,r0			! r0 = offset - 1
+	cmp/pz	r0
+	bf	.Lend			! -1: the end of the stream
+	shlr2	r2
+	shlr2	r2			! r2 = L
+	cmp/hi	r3,r2
+	bt	.Lcopy			! L 2..15: the length
+	mov.b	@r5+,r1
+	tst	r2,r2
+	bt/s	.Lmedium		! L 0: 16 + the next byte
+	extu.b	r1,r1			! (delay, both ways)
+	mov.b	@r5+,r2			! L 1: the next two bytes, big-endian
+	shll8	r1
+	extu.b	r2,r2
+	bra	.Lcopy
+	or	r1,r2			! (delay)
+.Lmedium:
+	mov	r1,r2
+	add	#16,r2
+.Lcopy:					! r2 (>= 2) bytes from offset back; overlapping copies repeat the pattern
+	mov	r4,r1
+	sub	r0,r1
+	add	#-1,r1			! r1 = the source (the store goes to r1 + r0 after the post-increment)
+	add	r2,r4			! the output's end after the copy
+	shlr	r2			! r2 = pairs (>= 1), T = an odd byte first
+	bf/s	.Lpair_in		! even: its first byte is loaded in the delay slot
+	mov.b	@r1+,r6			! (delay, both ways)
+	mov.b	r6,@(r0,r1)		! odd: that byte alone (the one load-use stall)
+.Lpair:
+	mov.b	@r1+,r6
+.Lpair_in:
+	dt	r2
+	mov.b	r6,@(r0,r1)
+	mov.b	@r1+,r6
+	bf/s	.Lpair
+	mov.b	r6,@(r0,r1)		! (delay, both ways)
+	shlr	r7			! T = the next symbol's flag
+	bt	.Lmatch
+	bra	.Llit_loaded
+	mov.b	@r5+,r1			! (delay) the literal
+.Lend:
+	rts
+	mov	r4,r0			! (delay)
+	.size	_lz40s_run, .-_lz40s_run

@@ -23,7 +23,8 @@ uint8_t *soundMemory = NULL;
 uint8_t *soundMemoryLimit = NULL;
 int32_t soundBufferSize = 0;
 static uint8_t filmAudioChannels = 0;
-#define FILM_PCM_CONTROL_BASE 2
+static uint16_t filmAudioRate = 0;
+static uint8_t filmAudioBits = 0;
 
 /* The SH-2 sound RAM window is word addressable.  libc memset may issue byte
  * stores, which do not reliably clear SCSP sample data on Saturn hardware. */
@@ -148,8 +149,7 @@ void film_audio_notify_read_buffer_bytes(int32_t length) {
 
 void film_audio_play(uint8_t volume) {
   for (uint8_t i = 0; i < filmAudioChannels; i++)
-    pcmsys_pcm_start(FILM_PCM_CONTROL_BASE + i, volume);
-  sound_notify_driver();
+    film_pcm_start(i, volume);
 }
 
 void film_audio_fill_silence(decode_work_t *work) {
@@ -195,38 +195,44 @@ void removeReturnNoise(uint8_t *writeLocation,
 
 void film_audio_setup(decode_work_t *work, int16_t frequency,
   int32_t channels, int32_t numBits) {
-  cpu_divu_32_32_set((int32_t) AUDIO_CONFIRM_SAMPLES_PER_TICK * frequency,
-    AUDIO_CONFIRM_MASTER_RATE);
-
-  /* ADX is decoded to 16-bit PCM by snd_adx.c.  Using the ordinary pcmsys
-     stream avoids the experimental SCSP-DSP predictor path and is cheap at
-     22.05 kHz (two integer MACs per output sample). */
-  clearDspRam();
-  if (work->filmHeader.fdsc.sound_codec == FDSC_CODEC_ADX) numBits = 16;
+  /* Saber Rider: only the bookkeeping and the ring here (a clip is set up while the game still plays: video_sat.c
+     preloads). The SCSP is the game's sound driver's until the clip starts: film_audio_hw_begin. */
+  if (work->filmHeader.fdsc.sound_codec == FDSC_CODEC_ADX) numBits = 16;   /* snd_adx.c decodes ADX to 16-bit PCM */
   filmAudioChannels = channels == 2 ? 2 : 1;
+  filmAudioRate = (uint16_t)frequency;
+  filmAudioBits = (uint8_t)numBits;
   soundBufferSize = work->decodeParams->audioBufferSize;
   if (soundBufferSize <= 0) soundBufferSize = 32768;
   baseSoundMemory = (uint8_t *)(uintptr_t)work->decodeParams->audioBufferAddr;
   soundMemory = baseSoundMemory;
   soundMemoryLimit = baseSoundMemory + soundBufferSize;
+  for (uint8_t i = 0; i < filmAudioChannels; i++)
+    sound_ram_clear(baseSoundMemory + i * soundBufferSize, (uint32_t)soundBufferSize);
+
+  audioConfirmedConsumedBytes = 0;
+  audioTotalWrittenBytes = 0;
+}
+
+/* The clip starts: its slots (the platform's film_pcm_*, the 68000 stopped) and SCSP timer C, which counts what the
+   slots have played. */
+void film_audio_hw_begin(void) {
+  if (!filmAudioChannels) return;
+  cpu_divu_32_32_set((int32_t) AUDIO_CONFIRM_SAMPLES_PER_TICK * filmAudioRate,
+    AUDIO_CONFIRM_MASTER_RATE);
   for (uint8_t i = 0; i < filmAudioChannels; i++) {
-    /* DIPAN 0 is the driver's neutral/default setting and is what the old
-       one-channel pcmStream path used.  Keep mono movie audio at that setting;
-       stereo uses the explicit left/right assignments below. */
+    /* mono: pan centre; stereo: left / right */
     uint8_t pan = filmAudioChannels == 2 ? (i ? PCM_PAN_RIGHT : PCM_PAN_LEFT) : 0;
     uint32_t off = (uint32_t)((uintptr_t)(baseSoundMemory + i * soundBufferSize) - (uintptr_t)SNDRAM);
-    pcmsys_pcm_configure(FILM_PCM_CONTROL_BASE + i, off, (uint32_t)soundBufferSize,
-      (uint16_t)frequency, (uint8_t)numBits, PCM_FWD_LOOP, pan);
-    sound_ram_clear(baseSoundMemory + i * soundBufferSize, (uint32_t)soundBufferSize);
+    film_pcm_configure(i, off, (uint32_t)soundBufferSize, filmAudioRate, filmAudioBits, pan);
   }
 
   audioConfirmedConsumedBytes = 0;
   audioTotalWrittenBytes = 0;
 
-  const int32_t bytesPerSample = numBits >> 3;
+  const int32_t bytesPerSample = filmAudioBits >> 3;
   audioBytesPerTimerTick = cpu_divu_quotient_get() * bytesPerSample;
 
-  cpu_divu_32_32_set((int32_t) frequency * bytesPerSample, 1000);
+  cpu_divu_32_32_set((int32_t) filmAudioRate * bytesPerSample, 1000);
   audioExpectedBytesPerMs = cpu_divu_quotient_get();
 
   setIncrement(SndTimerRegisterC, AUDIO_CONFIRM_TIMER_CYCLE);
@@ -239,8 +245,7 @@ void film_audio_prepare_to_play() {}
 
 void film_audio_reset() {
   SndCpuInterruptEnable->timerC = 0;
-  for (uint8_t i = 0; i < filmAudioChannels; i++) pcmsys_pcm_stop(FILM_PCM_CONTROL_BASE + i);
-  if (filmAudioChannels) sound_notify_driver();
+  for (uint8_t i = 0; i < filmAudioChannels; i++) film_pcm_stop(i);
   filmAudioChannels = 0;
   baseSoundMemory = NULL;
   soundMemory = NULL;

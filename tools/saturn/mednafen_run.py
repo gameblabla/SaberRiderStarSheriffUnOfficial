@@ -247,7 +247,9 @@ def main() -> int:
 FLOAT_ENTRY = ('__addsf3', '__subsf3', '__mulsf3', '__divsf3', '__ltsf2', '__lesf2', '__gtsf2', '__gesf2', '__eqsf2',
                '__nesf2', '__fixsfsi', '__fixunssfsi', '__floatsisf', '__floatunsisf', '__extendsfdf2', '__truncdfsf2',
                'floorf', 'ceilf', 'truncf', 'roundf', 'fabsf', 'fminf', 'fmaxf', 'fmodf', 'sqrtf', 'sinf', 'cosf',
-               'atan2f', 'hypotf', 'powf', 'expf', 'logf')
+               'atan2f', 'hypotf', 'powf', 'expf', 'logf',
+               # the integer helpers a fixed point core leans on (divides, variable shifts, square roots)
+               '__sdivsi3', '__udivsi3', '__ashrsi3', '__ashlsi3', '__lshrsi3', 'fx_isqrt64', 'fx_hypot') + tuple(f'__ashiftrt_r4_{n}' for n in range(33))
 
 
 def float_calls(edges: Path, args, addrs: list[int], names: list[str], by_name: dict[str, int], frames: int) -> None:

@@ -3,7 +3,7 @@
  * Textures are "SAT1" blocks (tools/saturn/satbake.py): the rectangles the game draws out of a texture ("units": a
  * sprite frame, a tile, a glyph) are stored as VDP1-ready "parts" (4bpp with a colour lookup table, 8bpp indices into
  * the texture's palette, or 16bpp RGB),
- * LZ4-compressed. A texture keeps its block in work RAM (low RAM for big ones); a part is decoded into video memory the
+ * LZ40S-compressed (lz40s.h). A texture keeps its block in work RAM (low RAM for big ones); a part is decoded into video memory the
  * first time it is drawn and stays there until the space is needed (least recently used first; never a part drawn in
  * this frame or the one VDP1 may still be drawing). Runtime RGBA textures (rtex_create) are turned into such a block.
  *
@@ -22,7 +22,7 @@
 #include "../render.h"
 #include "../plat.h"
 #include "sat_internal.h"
-#include "../dreamcast/dcfmv/lz4_mini.h"
+#include "lz40s.h"
 #include <yaul.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -338,8 +338,8 @@ static uint16_t part_resident(RTex *t, int i)
     }
     const uint8_t *src = t->block + p->off;
     if (p->fmt & 0x80) {
-        if (lz4_mini_decode(src, (int)p->len, staging, STAGING_SIZE, (int)raw) != (int)raw) {
-            printf("render: texture %08X part %d: bad LZ4\n", (unsigned)t->tag, i);
+        if (lz40s_decode(src, (int)p->len, staging, (int)raw) != (int)raw) {
+            printf("render: texture %08X part %d: bad LZ40S\n", (unsigned)t->tag, i);
             memset(staging, 0, raw);
         }
         src = staging;
@@ -578,7 +578,7 @@ static bool draw_clip(RRect *out)
 static uint16_t clip_bits(const RRect *c, int x0, int y0, int x1, int y1)
 {
     if (c->x <= x0 && c->y <= y0 && c->x + c->w > x1 && c->y + c->h > y1) return 0;   /* inside anyway */
-    if (!uclip_active || memcmp(&uclip_cur, c, sizeof *c)) {
+    if (!uclip_active || c->x != uclip_cur.x || c->y != uclip_cur.y || c->w != uclip_cur.w || c->h != uclip_cur.h) {
         Cmd *k = cmd_new(); if (!k) return 0;
         k->ctrl = C_USER_CLIP; k->xa = (int16_t)c->x; k->ya = (int16_t)c->y; k->xc = (int16_t)(c->x + c->w - 1); k->yc = (int16_t)(c->y + c->h - 1);
         uclip_cur = *c; uclip_active = true;
@@ -676,14 +676,20 @@ static void exec_fill(const RFRect *q)
     if (w <= 0 || h <= 0) return;
     int32_t x1 = x + w - (1 << 16), y1 = y + h - (1 << 16);
     int32_t xy[8] = { x, y, x1, y, x1, y1, x, y1 };
+    RRect c;
+    int vx = vp_on ? viewport.x : 0, vy = vp_on ? viewport.y : 0;
+    bool whole = draw_clip(&c) && c.x == 0 && c.y == 0 && c.w == scr_w && c.h == scr_h && (x >> 16) + vx <= 0 &&
+                 (y >> 16) + vy <= 0 && ((x + w) >> 16) + vx >= scr_w && ((y + h) >> 16) + vy >= scr_h;
+    bool opaque = draw_blend == R_BLEND_NONE || (draw_blend == R_BLEND_BLEND && draw_a == 255);
+    if (whole && opaque) {   /* it covers everything drawn so far (VDP1 would still walk all of it): as r_clear */
+        ncmd = 3;
+        uclip_active = false; pal_drawn = false; fade_cmd = -1;
+        draw_backdrops();
+    }
     int before = ncmd;
     polygon(xy, draw_r, draw_g, draw_b, draw_a, draw_blend);
     /* a translucent fill of the whole screen: if nothing is drawn after it, rsat_frame_end makes it a colour offset */
-    RRect c;
-    int vx = vp_on ? viewport.x : 0, vy = vp_on ? viewport.y : 0;
-    if (ncmd == before + 1 && draw_blend == R_BLEND_BLEND && draw_a < 255 && draw_clip(&c) && c.x == 0 && c.y == 0 &&
-        c.w == scr_w && c.h == scr_h && (x >> 16) + vx <= 0 && (y >> 16) + vy <= 0 &&
-        ((x + w) >> 16) + vx >= scr_w && ((y + h) >> 16) + vy >= scr_h) {
+    if (ncmd == before + 1 && whole && draw_blend == R_BLEND_BLEND && draw_a < 255) {
         fade_cmd = before; fade_r = draw_r; fade_g = draw_g; fade_b = draw_b; fade_a = draw_a;
     }
 }
@@ -1583,9 +1589,22 @@ static void slave_idle(void)
     cpu_cache_purge();   /* the slave wrote the renderer's state */
 }
 
+static bool pending;   /* a replay whose list hasn't gone to VDP1 yet */
+static void submit(bool planes_delayed, int floor_slot);
+
+/* The frame the slave replayed last goes to VDP1 here, at the start of the frame (the main loop has only done the
+ * game's update since the vblank), so VDP1 draws it while the master records the next one: in variable mode a list is
+ * shown from the vblank after VDP1 has finished it, and put at the end of the master's work it had only what was left
+ * of the field (a busy frame then took two). */
 void rsat_frame_begin(void)
 {
     floor_state[rec_w].valid = false;
+    if (!use_slave) return;
+    uint32_t tw = sat_timer_us();
+    slave_idle();                   /* the replay of the frame before */
+    tm_slave_wait += sat_timer_us() - tw;
+    if (pending) submit(true, (int)slave_buf);
+    pending = false;
 }
 
 void rsat_set_backdrops(RTex **t, const int *x, const int *y, int n, bool clear)
@@ -1671,7 +1690,6 @@ static void submit(bool planes_delayed, int floor_slot)
     tm_ntex += (uint32_t)res.ntex; tm_upl += res.upload_bytes;
 }
 
-static bool pending;   /* a replay whose list hasn't gone to VDP1 yet */
 int rsat_prims(void) { return res.prims; }
 
 void rsat_frame_end(void)
@@ -1687,10 +1705,7 @@ void rsat_frame_end(void)
         graveyard[rec_w] = NULL;
         return;
     }
-    uint32_t tw = sat_timer_us();
-    slave_idle();                   /* the replay of the frame before */
-    tm_slave_wait += sat_timer_us() - tw;
-    if (pending) submit(true, (int)slave_buf);
+    slave_idle();                   /* (idle already: rsat_frame_begin waited) */
     /* textures destroyed while the frame the slave just replayed was recorded: nothing can draw them any more */
     int done = rec_w ^ 1;
     for (RTex *t = graveyard[done], *nx; t; t = nx) { nx = t->next_dead; tex_free_mem(t); }

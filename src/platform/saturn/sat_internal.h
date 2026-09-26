@@ -15,6 +15,12 @@ void *lw_memalign(size_t align, size_t n);
 void cd_sat_init(void);
 void cd_sat_stats(unsigned long *reads, unsigned long *bytes, unsigned long *seeks);
 void cd_sat_stream_stop(void);   /* the data stream gives the drive up (CD-DA takes it) */
+/* CD-DA music on the same drive: a disc track (2..), looped or once; update once a frame (it resumes the music after
+ * data reads took the drive) */
+bool cd_sat_cdda_play(int track, bool loop);
+void cd_sat_cdda_stop(void);
+void cd_sat_cdda_pause(bool pause);
+void cd_sat_cdda_update(void);
 
 /* log_sat.c: stdout / stderr -> the RAM log ring the harness reads */
 void log_sat_write(const char *s, size_t n);
@@ -46,18 +52,9 @@ void rsat_bench(void);   /* SABER_RBENCH */
  * is idle; drawn by rsat_video_draw (a record, like any draw) */
 bool rsat_video_open(int w, int h, void (*hook)(void *ud, volatile uint16_t *px, int pitch), void *ud);
 void rsat_video_close(void);
-void rsat_video_preload(void);             /* load movie SCSP driver during boot */
-bool rsat_sound_driver_init(void);          /* shared PoneSound driver for game + movie audio */
-
-/* pcm_sat.c: one PCM stream on the SCSP (a slot looping over a ring in sound RAM, fed by the SH-2; no 68000 driver) */
-void     pcm_sat_init(void);
-bool     pcm_sat_start(int rate, const int16_t *lead, int lead_samples);   /* 16-bit mono, big-endian (the SH-2's own) */
-int      pcm_sat_space(void);                  /* samples that can be written now without overtaking the playback */
-void     pcm_sat_write(const int16_t *s, int n);   /* the next n samples */
-uint32_t pcm_sat_played(void);                 /* samples played since the start (the video's clock) */
-void     pcm_sat_finish(const int16_t *tail, int n);   /* the rest of the stream: plays out, then the slot stops */
-void     pcm_sat_stop(void);
-void     pcm_sat_poll(void);                   /* once a frame: feeds a finishing stream, stops it at its end */
+/* aud_sat.c: a clip has the SCSP from its start to its close (the game's sound driver stops, then starts again) */
+void aud_movie_begin(void);
+void aud_movie_end(void);
 
 /* cd_sat.c: bytes a sequential read of f can take right now without waiting for the drive */
 #include <stdio.h>

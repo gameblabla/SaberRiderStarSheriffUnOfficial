@@ -64,7 +64,6 @@ static void __attribute__((noreturn, noinline)) game_main(void)
     sat_timer_init();
     printf("saber rider: saturn build " __DATE__ " " __TIME__ "\n");
     cd_sat_init();
-    rsat_video_preload();
     rsat_init();
 #ifndef SAT_RENDER_NULL
     if (plat_getenv("SABER_RBENCH")) rsat_bench();

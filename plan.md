@@ -347,7 +347,20 @@ If it's too slow, the clip plays as 15bpp in half of VRAM and only the stage's o
   stage's assets at stage start, so the rule is to load, then start the track. A music change (boss, jingle)
   is a seek, with up to ~0.5-1 s of silence on hardware; the core's fade-out covers most of it.
 
+**As built (2026-09-26):** tracks `T02.BIN`.. in `build/saturn/tracks` (44.1 kHz stereo, 2 s pregap each), `MUSIC.TXT`
+maps a music id to its track; `cd_sat.c` plays them (track mode, repeat 0xF) and owns the drive, so a data read that
+happens anyway keeps the position and the music plays on from it 0.4 s after the reads stop. The CD input is mixed
+by adp68k's DSP program (its `cd_volume` coefficients: fades and duck). An earlier WIP (4142281) had replaced all of
+7.1/7.2 with ADX music + ADPCM SFX decoded and mixed on the master SH-2: ~80% of its time in stage 6.
+
 ### 7.2 SFX and voices: a new 68k driver
+
+**As built (2026-09-26):** celeriyacon's adp68k itself (`third_party/scspadpcm`, `make -f Makefile.saturn adp68k`
+-> `src/platform/saturn/adp68k_bin.h`): 8 channels decoded by the SCSP DSP, samples in a 469 KB LRU bank in sound
+RAM (`aud_sat.c`), each encoded looping at its start so one copy plays once or looped (the loop word is patched).
+The 64 KB cap stands (2.97 s at 4 bits): longer samples drop to 2 or 1 bit at bake time; the power clips' voices are
+in their FILM files. Movies stop the 68000 and drive two slots over a ring at 0x78000 (`film_pcm_*`), then the 8 KB
+driver is copied in again, the bank intact. The design below (ring voices, pcmsys source) was not needed.
 
 The VN game's `adp68k` driver (celeriyacon, shipped here only as a binary `adp68k.bin.inc`) decodes ADPCM on the
 68000, but it caps a sample at **64 KB** and has 8 channels. The SCSP's own looping is also limited: a slot's
