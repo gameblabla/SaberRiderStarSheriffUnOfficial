@@ -7,11 +7,13 @@
 !   Reference: https://www.romhacking.net/utilities/826/
 ! ------------------------------------------------------
 ! GAS port of the vendored LZ40_dec.asm for sh-elf-gcc / kos-cc.
-! Logic is verbatim; only the syntax was adapted:
-!   - `;' comments -> `!' (GAS uses `;' as a statement separator)
-!   - immediates take `#': mov #0,r3 / add #1,r4 / and #0xF,r0
-!   - global symbol carries the ELF underscore prefix: _LZ40_decompress
-!   - local labels (.L...) so nothing leaks into the symbol table
+! Syntax adapted (`!' comments, `#' immediates, _LZ40_decompress symbol,
+! local labels) AND the SH-4 delay slots fixed: the upstream original puts
+! loads and even branches in branch delay slots (a load in bf's delay slot
+! consumes a stream byte on the taken path; a branch in a delay slot is
+! illegal/undefined on SH-4), which desyncs the stream and decodes garbage.
+! Every branch delay slot here is either an intentional independent op or a
+! nop, so the executed logic matches CUE's lzx -ewl format exactly.
 ! ------------------------------------------------------
 ! Purpose:
 ! Decompress LZ40 compressed data.
@@ -61,10 +63,12 @@ _LZ40_decompress:
 .Llz40_main_loop:
 	cmp/hs	r6,r4			! Check if decompression is complete (r4 >= r6?)
 	bt	.Llz40_end		! Exit if r4 >= r6 (end of file)
+	nop				! delay slot: nothing to do on either path
 
 	! Refill mask if empty
 	tst	r3,r3			! Test if mask is 0
-	bf	.Llz40_check_flag
+	bf	.Llz40_check_flag	! Mask nonzero: keep current flags byte
+	nop				! delay slot (upstream wrongly loaded a byte here)
 	mov.b	@r5+,r7			! Load new flags byte
 	extu.b	r7,r7			! Zero-extend flags byte
 	neg	r7,r7			! Negate flags for bit-checking (-stored)
@@ -76,6 +80,7 @@ _LZ40_decompress:
 	and	r7,r0			! Check the current flag (flags & mask)
 	tst	r0,r0
 	bf	.Llz40_back_refs	! Branch if flag != 0 (data reference)
+	nop				! delay slot (upstream wrongly consumed a byte here)
 
 	! Literal byte copy
 	mov.b	@r5+,r1			! Load literal byte
@@ -100,6 +105,7 @@ _LZ40_decompress:
 	mov	#2,r0			! THRESHOLD: Minimum copy length
 	cmp/hs	r0,r2			! Compare copy length with threshold (r2 >= 2?)
 	bt	.Llz40_copy_data	! If copy_len >= 2, short copy
+	nop				! delay slot (upstream wrongly loaded a byte here)
 
 ! Extended copy length
 	mov.b	@r5+,r2			! Load extended copy length
@@ -107,7 +113,8 @@ _LZ40_decompress:
 	mov	r1,r0			! Reload position into r0
 	and	#0xF,r0			! Extract low nibble
 	tst	r0,r0			! Check if nibble is 0
-	bf	.Llz40_long_copy
+	bf	.Llz40_long_copy	! Nibble 1: long copy
+	nop				! delay slot (upstream had a branch here: illegal)
 
 .Llz40_short_copy:
 ! Copy length nibble was 0
@@ -127,7 +134,8 @@ _LZ40_decompress:
 .Llz40_copy_data:
 	! Copy data from reference
 	tst	r2,r2			! Check if copy length is 0
-	bt	.Llz40_next_flag
+	bt	.Llz40_next_flag	! Zero length: next symbol
+	nop				! delay slot
 
 	shlr2	r1			! Shift right by 2 bits (first step)
 	shlr2	r1			! Shift right by another 2 bits (total 4 bits)
@@ -140,6 +148,7 @@ _LZ40_decompress:
 	add	#1,r4			! Increment output pointer
 	dt	r2			! Decrement copy length (T=1 when 0)
 	bf	.Llz40_copy_loop	! Repeat until copy length is 0
+	nop				! delay slot (upstream had a branch here: illegal)
 
 
 .Llz40_next_flag:

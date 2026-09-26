@@ -174,8 +174,9 @@ def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log) -> None:
 
 
 def convert_video(source: Path, soundtrack: Path | None, target: Path,
-                  fps: int, work: Path) -> None:
-    """Use the project's DCMV v6 packer, with 512x256 VQ YUV textures."""
+                  fps: int, work: Path, compression: str = 'lz40') -> None:
+    """Use the project's DCMV v6 packer, with 512x256 VQ YUV textures.
+    compression: 'lz40' (Dreamcast SH-4, the default), 'lz4' or 'zstd' (host/upstream)."""
     fresh(work)
     target.parent.mkdir(parents=True, exist_ok=True)
     # The raw XviD elementary streams can be misdetected as GSM by ffmpeg.
@@ -200,7 +201,7 @@ def convert_video(source: Path, soundtrack: Path | None, target: Path,
         'AUDIO_RATE': '32000' if soundtrack else '0',
         'CHANNELS': '1' if soundtrack else '0',
         'DCMV_CONTAINER': 'frames',
-        'COMPRESSION_BACKEND': 'lz40',
+        'COMPRESSION_BACKEND': compression,
         'USE_DEDUP': 'false',
         'SKIP_IF_EXISTS': 'false',
         'CLEANUP_TEMP': 'true',
