@@ -94,7 +94,14 @@ typedef struct {
     int mapn, cell_shift; const uint8_t *cells;
     int tex, mips, nmat;
     const uint32_t *const *mat;      /* mat[m * mips + L] */
+    const uint8_t *const *mat4;      /* or, mat NULL: the levels in 4bpp (two texels a byte, the even one in the low */
+    const uint32_t *const *pal4;     /* nibble), each with its own 16 colour palette; both [m * mips + L] */
 } RFloorDesc;
+/* texel i of material level k (= m * mips + L), RGBA, in either form */
+static inline uint32_t r_floor_texel(const RFloorDesc *d, int k, int i)
+{
+    return d->mat ? d->mat[k][i] : d->pal4[k][(d->mat4[k][i >> 1] >> ((i & 1) << 2)) & 15];
+}
 typedef struct {
     real cam_x, cam_y, fx, fy;       /* eye position on the ground plane, unit forward vector */
     real cam_h, focal, horizon;      /* eye height (world units), focal length (px), horizon (screen row, may be fractional) */

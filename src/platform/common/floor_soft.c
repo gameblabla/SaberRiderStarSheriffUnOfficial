@@ -54,7 +54,7 @@ void floor_soft_draw(Ren *r, RFloor *f, const RFloorView *v)
         for (int x = 0; x < sw; x++) {
             int ix = (int)floorf(wx), iy = (int)floorf(wy);
             uint8_t t = d->cells[(((uint32_t)iy >> cs) & mapmask) * d->mapn + (((uint32_t)ix >> cs) & mapmask)];
-            uint32_t c = d->mat[t * d->mips + mip][(((iy >> mip) & mmask) << msh) + ((ix >> mip) & mmask)];
+            uint32_t c = r_floor_texel(d, t * d->mips + mip, (((iy >> mip) & mmask) << msh) + ((ix >> mip) & mmask));
             if (fa) {
                 uint32_t R = ((c & 0xff) * (256 - fa) + (haze & 0xff) * fa) >> 8;
                 uint32_t G = (((c >> 8) & 0xff) * (256 - fa) + ((haze >> 8) & 0xff) * fa) >> 8;

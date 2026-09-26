@@ -119,7 +119,7 @@ enum { PH_INTRO, PH_STRIDE, PH_INSTR, PH_WAVE_IN, PH_FIGHT, PH_WAVE_CLEAR, PH_RA
 struct Ramrod {
     Ren *ren; int sw, sh; bool ok;
     RTex *atlas, *sky, *cockpit; RFloor *floor; Anim anim[A_COUNT];
-    uint32_t tex[MIPS][TEX * TEX]; int floor_h;
+    uint8_t tex4[(TEX * TEX / 2) * 4 / 3 + 8]; uint32_t pal4[MIPS][16]; int floor_h;   /* the floor: 4bpp levels (floor4) */
     int difficulty, lives, result;
     /* Ramrod */
     real px, py, heading, turn_v, speed, strafe_v, armor, armor_max, heat, fire_cd, gun_idle; bool overheated; int gun_side;
@@ -198,6 +198,75 @@ static RTex *load_tex(Ramrod *r, const char *name, int *w, int *h, uint32_t **ke
     return t;
 }
 
+/* the floor's level L in tex4: 4bpp, the levels one after another */
+static uint8_t *floor_level(Ramrod *r, int L)
+{
+    size_t off = 0;
+    for (int k = 0; k < L; k++) off += (size_t)(TEX >> k) * (TEX >> k) / 2;
+    return r->tex4 + off;
+}
+
+/* n RGBA pixels as 4bpp (two a byte, the even one in the low nibble) with a 16 colour palette: the pixels' colours,
+ * the two nearest groups merged while there are more than 16 (the floor has 7 colours; its mips' averages a few dozen,
+ * which fold into 16 with no visible difference). The floor stays ~43 KB instead of 1 MB of RGBA mips. */
+static void floor4(const uint32_t *px, int n, uint8_t *out, uint32_t *pal)
+{
+    enum { MAXC = 256 };
+    static uint32_t col[MAXC], cnt[MAXC], sum[MAXC][3], w[MAXC]; static uint8_t grp[MAXC], idx[MAXC];
+    int nc = 0, last = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < n; i++) {
+            uint32_t c = px[i] | 0xff000000u;
+            int j = last;
+            if (j >= nc || col[j] != c) {
+                for (j = 0; j < nc && col[j] != c; j++) { }
+                if (j == nc) {
+                    if (pass == 0 && nc < MAXC) { col[nc] = c; cnt[nc] = 0; nc++; }
+                    else {   /* past MAXC colours: the nearest one */
+                        int bd = 1 << 30; j = 0;
+                        for (int k = 0; k < nc; k++) {
+                            int dr = (int)(c & 0xff) - (int)(col[k] & 0xff), dg = (int)((c >> 8) & 0xff) - (int)((col[k] >> 8) & 0xff), db = (int)((c >> 16) & 0xff) - (int)((col[k] >> 16) & 0xff);
+                            int d = dr * dr + dg * dg + db * db;
+                            if (d < bd) { bd = d; j = k; }
+                        }
+                    }
+                }
+            }
+            last = j;
+            if (pass == 0) cnt[j]++;
+            else {
+                uint8_t v = idx[grp[j]];
+                if (i & 1) out[i >> 1] = (uint8_t)((out[i >> 1] & 0x0f) | v << 4); else out[i >> 1] = v;
+            }
+        }
+        if (pass) break;
+        /* groups: one a colour, then merged pairwise by the distance of their means */
+        int ng = nc;
+        for (int j = 0; j < nc; j++) {
+            grp[j] = (uint8_t)j; w[j] = cnt[j];
+            sum[j][0] = (col[j] & 0xff) * cnt[j]; sum[j][1] = ((col[j] >> 8) & 0xff) * cnt[j]; sum[j][2] = ((col[j] >> 16) & 0xff) * cnt[j];
+        }
+        while (ng > 16) {
+            int ba = -1, bb = -1; uint32_t bd = 0xffffffffu;
+            for (int a = 0; a < nc; a++) if (w[a]) for (int b = a + 1; b < nc; b++) if (w[b]) {
+                uint32_t d = 0;
+                for (int ch = 0; ch < 3; ch++) { int e = (int)(sum[a][ch] / w[a]) - (int)(sum[b][ch] / w[b]); d += (uint32_t)(e * e); }
+                if (d < bd) { bd = d; ba = a; bb = b; }
+            }
+            for (int ch = 0; ch < 3; ch++) sum[ba][ch] += sum[bb][ch];
+            w[ba] += w[bb]; w[bb] = 0;
+            for (int j = 0; j < nc; j++) if (grp[j] == bb) grp[j] = (uint8_t)ba;
+            ng--;
+        }
+        int k = 0;
+        for (int g = 0; g < 16; g++) pal[g] = 0xff000000u;
+        for (int g = 0; g < nc; g++) if (w[g]) {
+            idx[g] = (uint8_t)k;
+            pal[k++] = 0xff000000u | ((sum[g][2] + w[g] / 2) / w[g]) << 16 | ((sum[g][1] + w[g] / 2) / w[g]) << 8 | ((sum[g][0] + w[g] / 2) / w[g]);
+        }
+    }
+}
+
 static bool load_assets(Ramrod *r)
 {
     static const char *const SFX[] = { "alarm.wav", "charge.wav", "clang.wav", "laser.wav", "stomp.wav", "whoosh.wav" };   /* its sounds, loaded before they play */
@@ -209,16 +278,18 @@ static bool load_assets(Ramrod *r)
     const char *fp = asset_path("ramrod/floor.png");
     uint32_t *fl = fp ? png_load_rgba(fp, &w, &h) : NULL;   /* the floor is only read as pixels (r_floor_create) */
     if (!r->atlas || !r->sky || !r->cockpit || !fl || w != TEX || h != TEX) { free(fl); return false; }
-    memcpy(r->tex[0], fl, sizeof r->tex[0]); free(fl);
-    for (int L = 1; L < MIPS; L++) {   /* box-filtered mips against far-row shimmer */
-        int n = TEX >> L, pn = TEX >> (L - 1); const uint32_t *src = r->tex[L - 1]; uint32_t *dst = r->tex[L];
-        for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
-            uint32_t c[4] = { src[(2 * y) * pn + 2 * x], src[(2 * y) * pn + 2 * x + 1], src[(2 * y + 1) * pn + 2 * x], src[(2 * y + 1) * pn + 2 * x + 1] };
+    for (int L = 0; L < MIPS; L++) {   /* box-filtered mips against far-row shimmer, each made over the level before it */
+        int n = TEX >> L, pn = n * 2;
+        if (L) for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {   /* in place: pixel k only reads from k on */
+            const uint32_t *src = fl + (2 * y) * pn + 2 * x;
+            uint32_t c[4] = { src[0], src[1], src[pn], src[pn + 1] };
             uint32_t R = 0, G = 0, B = 0;
             for (int k = 0; k < 4; k++) { R += c[k] & 0xff; G += (c[k] >> 8) & 0xff; B += (c[k] >> 16) & 0xff; }
-            dst[y * n + x] = 0xff000000u | ((B + 2) / 4) << 16 | ((G + 2) / 4) << 8 | ((R + 2) / 4);
+            fl[y * n + x] = 0xff000000u | ((B + 2) / 4) << 16 | ((G + 2) / 4) << 8 | ((R + 2) / 4);
         }
+        floor4(fl, n * n, floor_level(r, L), r->pal4[L]);
     }
+    free(fl);
     const char *p = asset_path("ramrod/atlas.txt");
     FILE *f = asset_fopen(p);
     if (!f) return false;
@@ -268,6 +339,7 @@ static void begin_wave(Ramrod *r, int w)
 Ramrod *ramrod_create(Ren *ren, int sw, int sh, int difficulty, int lives)
 {
     Ramrod *r = calloc(1, sizeof *r);
+    if (!r) return NULL;
     r->ren = ren; r->sw = sw; r->sh = sh; r->rng = 0x5AB3E7u; r->music_now = -1;
     r->floor_h = sh - r_trunc(HZ) + 8;
     r->ok = load_assets(r);
@@ -807,9 +879,9 @@ static void render_floor(Ramrod *r)
 {
     if (!r->floor) {
         static uint8_t cell;   /* one material everywhere */
-        static const uint32_t *mats[MIPS];
-        for (int L = 0; L < MIPS; L++) mats[L] = r->tex[L];
-        RFloorDesc d = { 1, 8, &cell, TEX, MIPS, 1, mats };
+        static const uint8_t *mats[MIPS]; static const uint32_t *pals[MIPS];
+        for (int L = 0; L < MIPS; L++) { mats[L] = floor_level(r, L); pals[L] = r->pal4[L]; }
+        RFloorDesc d = { 1, 8, &cell, TEX, MIPS, 1, NULL, mats, pals };
         r->floor = r_floor_create(r->ren, &d);
         if (!r->floor) return;
     }

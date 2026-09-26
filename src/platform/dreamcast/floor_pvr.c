@@ -116,8 +116,7 @@ static bool create_single(RFloor *f)
         lv->mem = rdc_vram_alloc(lv->bytes);
         if (!lv->mem) return false;
         uint16_t *tmp = malloc(lv->bytes); if (!tmp) return false;
-        const uint32_t *src = d->mat[L];
-        for (int i = 0; i < n * n; i++) tmp[i] = rgb565(src[i]);
+        for (int i = 0; i < n * n; i++) tmp[i] = rgb565(r_floor_texel(d, L, i));
         pvr_txr_load_ex(tmp, lv->mem, n, n, PVR_TXRLOAD_16BPP);   /* twiddles */
         free(tmp);
         rdc_compile(&lv->hdr, lv->mem, PVR_TXRFMT_RGB565 | PVR_TXRFMT_TWIDDLED, n, n, R_BLEND_NONE, false, true, true);
@@ -134,7 +133,10 @@ static bool create_clipmap(RFloor *f)
     int nm = d->nmat < 16 ? d->nmat : 16;
     for (int m = 0; m < nm; m++) for (int L = 0; L < levels; L++) {
         int n = d->tex >> L;
-        if (L < d->mips) { rgba[m * MAX_LEV + L] = malloc((size_t)n * n * 4); memcpy(rgba[m * MAX_LEV + L], d->mat[m * d->mips + L], (size_t)n * n * 4); }
+        if (L < d->mips) {
+            uint32_t *px = rgba[m * MAX_LEV + L] = malloc((size_t)n * n * 4);
+            for (int i = 0; i < n * n; i++) px[i] = r_floor_texel(d, m * d->mips + L, i);
+        }
         else rgba[m * MAX_LEV + L] = box(rgba[m * MAX_LEV + L - 1], n * 2);
     }
     for (int L = 0; L < MAX_LEV; L++) { int n = d->tex >> (L < levels ? L : levels - 1); f->msz[L] = n < 1 ? 1 : n; }

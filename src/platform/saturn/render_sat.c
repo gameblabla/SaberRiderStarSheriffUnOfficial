@@ -67,40 +67,50 @@ struct RTex {
     uint32_t rec_seq;           /* the recording (frame) that last drew it */
     RTex *next_dead;
 };
-/* The rotary map is a 4x4 grid of 512x512 pixel pages of 32x32 cells of 2x2 characters (16x16
- * pixels) with 16 bit name table entries.  One map pixel per world unit matches the materials,
- * whose textures are one texel per world unit, so a cell is exactly one 16x16 character of the
- * material in it: the map is a 2048 pixel window of the world for level 0 and (one map pixel per
- * two world units) twice as far for level 1.  It is put out a page row at a time as the camera
- * moves, so no frame pays for a whole move. */
-#define RFLOOR_MATS 16
-#define RFLOOR_PAGE_CELLS 32
-#define RFLOOR_MAP_SIDE 128
-#define RFLOOR_MAP_ENTRIES (RFLOOR_MAP_SIDE * RFLOOR_MAP_SIDE)
-#define RFLOOR_MAP_STEPS 8                    /* map rows put out a frame */
-#define RFLOOR_MAP_ROWS (RFLOOR_MAP_SIDE / RFLOOR_MAP_STEPS)
-#define RFLOOR_MAP_STEP 256                   /* world units between map moves */
-#define RFLOOR_PATTERN_BYTES 128
-#define RFLOOR_MAX_LEVELS 2
-#define RFLOOR_CPD_BYTES 0x1e00u
-/* bank 1 holds the name tables (RDBS: name), bank 2 the floor's character patterns (RDBS: char) */
-#define RFLOOR_PND_A_ADDR VDP2_VRAM_ADDR(1, 0x00000u)
-#define RFLOOR_PND_B_ADDR VDP2_VRAM_ADDR(1, 0x08000u)
-#define RFLOOR_COEF_A_ADDR VDP2_VRAM_ADDR(1, 0x10000u)
-#define RFLOOR_COEF_B_ADDR VDP2_VRAM_ADDR(1, 0x10400u)
-#define RFLOOR_RP_ADDR VDP2_VRAM_ADDR(1, 0x10800u)
-#define RFLOOR_CPD_ADDR VDP2_VRAM_ADDR(2, 0x00000u)
+/* The floor (render.h's r_floor_*) is VDP2's RBG0, 8bpp 8x8 characters on one exact 256 colour palette (the floors use
+ * a few dozen colours), 1 word name table entries (12 bit character numbers, no flips), rotation parameters A and B
+ * picked per line by the coefficient table (RPMD 2: A unless its line's coefficient has the MSB set):
+ *   A  the near rows: 1 map pixel = 1 world unit (the materials' level 0), a 2048 pixel torus around the camera,
+ *      streamed a character row / column at a time as the camera moves (or written once when the world repeats in it);
+ *   B  the far rows: 1 map pixel = 4 world units (level 2, where the software floor starts sampling mip 2), which is the
+ *      whole of an 8192 unit world; a character there spans 2x2 16 unit cells, so the ones mixing materials are made
+ *      as the map needs them.
+ * Each map is 16 planes of one 64x64 page (8 KB). Video memory, one kind of data per 128 KB bank (RAMCTL: both halves
+ * split, the RDBS fields per bank):
+ *   A0  char   the characters (2048 of 64 bytes: the whole reach of a 12 bit character number)
+ *   A1  name   parameter A's map          B0  name   parameter B's map
+ *   B1  coeff  the parameter tables and the per line coefficient tables, two of each (written while the other pair is
+ *              on screen, swapped by RPTA at the vblank that commits the registers); the back screen word at its end */
+#define FL_MAP_SIDE   256                        /* name table entries (characters) a side: 4x4 planes of 64 */
+#define FL_CHARS      2048
+#define FL_MATS       16                         /* materials a mixed B character can hold (4 bits each) */
+#define FL_B_LEVEL    2
+#define FL_HASH       2048                       /* mixed B characters: open addressing, keys + 1 (0 empty) */
+#define FL_CHR_ADDR   VDP2_VRAM_ADDR(0, 0)
+#define FL_MAP_ADDR(p) VDP2_VRAM_ADDR(1 + (p), 0)
+#define FL_TAB_OFF    0x60000u                   /* B1, as an offset into video memory */
+#define FL_RP_OFF(b)  (FL_TAB_OFF + (uint32_t)(b) * 0x100u)
+#define FL_KT_OFF(b, p) (FL_TAB_OFF + 0x1000u + (uint32_t)(b) * 0x800u + (uint32_t)(p) * 0x400u)
+#define FL_LC_OFF     (FL_TAB_OFF + 0x3000u)     /* the line colour table (one word: the fog's haze) */
+#define FL_RAMCTL_RDBS 0x6Bu                     /* A0 char (3), A1 name (2), B0 name (2), B1 coefficients (1) */
 
-typedef struct { int size, chunks, base; } RFloorMip;
+typedef struct {
+    int level, shift;                            /* map pixel = 1 << level world units; shift: character = 1 << shift */
+    int span;                                    /* texture characters a side at this level (>= 1) */
+    int first;                                   /* its single material characters: first + (mat * span + sy) * span + sx */
+    int ox, oy;                                  /* the torus holds characters [ox, ox + 256) x [oy, oy + 256) */
+    bool fixed;                                  /* the world repeats within the torus: written once, never moved */
+    bool valid;
+} FlMap;
 
 struct RFloor {
     RFloorDesc desc;
-    int levels, pattern_count;
-    RFloorMip mip[RFLOOR_MAX_LEVELS];
-    uint16_t palette[RFLOOR_MATS][16];
-    uint16_t *map_a, *map_b;
-    int map_ax, map_ay, map_bx, map_by, map_half;
-    bool map_valid, cells_dirty, hw_ready;
+    int nmat;
+    uint16_t pal[256]; int npal;                 /* RGB555, index 0 transparent */
+    FlMap map[2];
+    uint32_t *hkey; uint16_t *hchar;             /* parameter B's mixed characters */
+    int next_char, cells_per_b;
+    bool cells_dirty, hw_ready;
 };
 
 typedef struct { bool valid; RFloor *f; RFloorView view; } RFloorState;
@@ -524,6 +534,7 @@ static bool uclip_active; static RRect uclip_cur;   /* the user clip rectangle s
 static bool pal_drawn;                              /* palette pixels may be in the framebuffer (drawn this frame) */
 static int fade_cmd = -1; static uint8_t fade_r, fade_g, fade_b, fade_a;   /* a full-screen translucent fill */
 static RTex *backdrop[4]; static int backdrop_x[4], backdrop_y[4], nbackdrops; static bool clear_fb;
+static bool replay_floor;   /* the frame being replayed shows the floor (RBG0): its framebuffer is cleared the same way */
 static void draw_backdrops(void);
 
 /* the texture state of the draw being built (its colour mod, alpha, blend at the time the core drew it: recorded with
@@ -770,7 +781,7 @@ static void part_emit(RTex *t, int pi, int ix0, int iy0, int ix1, int iy1, RFlip
 
 /* Unrotated draws (sprites, glyphs, tiles: nearly all of them), in integers: the source rectangle in texels, the
  * destination's corner and scale in 16.16 */
-typedef struct { int sx, sy, sw, sh; int32_t dx, dy, kx, ky; RFlip flip; RRect dclip; bool partial; } AMap;
+typedef struct { int sx, sy, sw, sh; int32_t dx, dy, kx, ky, dw, dh; RFlip flip; RRect dclip; bool partial; } AMap;
 
 static void draw_part_axis(RTex *t, int pi, const AMap *m, const RRect *c)
 {
@@ -780,6 +791,10 @@ static void draw_part_axis(RTex *t, int pi, const AMap *m, const RRect *c)
     if (m->flip & R_FLIP_V) { int a = m->sh - v1; v1 = m->sh - v0; v0 = a; }
     int32_t x0 = m->dx + (int32_t)((int64_t)u0 * m->kx), x1 = m->dx + (int32_t)((int64_t)u1 * m->kx);
     int32_t y0 = m->dy + (int32_t)((int64_t)v0 * m->ky), y1 = m->dy + (int32_t)((int64_t)v1 * m->ky);
+    /* the truncated scale falls short of the destination by up to a texel's rounding times its size: the far edges are
+     * the destination's own (a sky scaled to 113 rows lost its last one) */
+    if (u1 == m->sw) x1 = m->dx + m->dw;
+    if (v1 == m->sh) y1 = m->dy + m->dh;
     part_emit(t, pi, fl16(x0), fl16(y0), fl16(x1) - 1, fl16(y1) - 1, m->flip, NULL, c, m->partial ? &m->dclip : NULL);
 }
 
@@ -828,7 +843,7 @@ static void tex_draw(RTex *t, const RFRect *src, const RFRect *dst, fx angle, co
     RRect dclip = { fl16(dx), fl16(dy), ce16(dw), ce16(dh) };
     fx kx = dw == sw << 16 ? 1 << 16 : dw / sw, ky = dh == sh << 16 ? 1 << 16 : dh / sh;
     if (!angle) {
-        AMap m = { sx, sy, sw, sh, dx, dy, kx, ky, flip, dclip, !whole };
+        AMap m = { sx, sy, sw, sh, dx, dy, kx, ky, dw, dh, flip, dclip, !whole };
         if (whole) { for (int i = 0; i < u->n; i++) draw_part_axis(t, u->first + i, &m, &c); return; }
         for (int i = 0; i < t->nparts; i++) {   /* any other rectangle: every part that overlaps it, clipped to the destination */
             const Part *p = &t->parts[i];
@@ -1042,31 +1057,85 @@ static void video_step(void)
 static RFloor *floor_hw_floor;
 static bool floor_hw_active;
 static bool floor_cram_reserved;
+static int floor_buf;                            /* the parameter / coefficient table pair written next */
 
-static int floor_div_i(int a, int b)
+/* The distance fog: the software floor fades a row towards `haze` by fog_max/256 of its (dd - fog0) / (fog1 - fog0).
+ * VDP2 blends RBG0 with the line colour screen (one colour, the haze in the floor palette's entry 0, which no
+ * character shows) by RBG0's colour calculation ratio, which is one register for the whole screen: SCU timer 1 sets
+ * it line by line over the fog rows. It fires once a frame at the timer 0 compare (the hblank before the band's first
+ * line), then every line until the band is over, where the blending goes off again (the vblank's register commit
+ * also starts each frame without it). The handler takes the line from VCNT (latched by reading EXTEN), not from a
+ * count: T1S puts it past the hsync, where VCNT is already the line about to be drawn, so an interrupt more or less
+ * (switching timer 1's mode can raise one) changes nothing. fog_ratio[y]: 0 no fog on line y, else n / 32 of haze. */
+static volatile uint8_t fog_ratio[512];
+static volatile int fog_end;
+static volatile bool fog_every, fog_on;
+static volatile uint16_t fog_ccctl;              /* CCCTL with RBG0's colour calculation off */
+#define FOG_T1S 40                               /* dots after the hblank starts: past the hsync in both widths */
+
+static void fog_irq(void)
 {
-    int q = a / b;
-    if (a % b < 0) --q;
-    return q;
-}
-
-static int floor_mod_i(int a, int b)
-{
-    int r = a % b;
-    return r < 0 ? r + b : r;
-}
-
-static uint32_t floor_bits(real v) { return (uint32_t)(int32_t)v; }
-
-static void floor_vram_copy(uint32_t addr, const void *src, size_t bytes)
-{
-    const uint8_t *s = (const uint8_t *)src;
-    volatile uint32_t *d = (volatile uint32_t *)addr;
-    for (size_t i = 0; i < bytes; i += 4) {
-        uint32_t w;
-        memcpy(&w, s + i, sizeof w);
-        d[i / 4] = w;
+    (void)MEMORY_READ(16, VDP2(EXTEN));          /* latches HCNT / VCNT */
+    int y = MEMORY_READ(16, VDP2(VCNT)) & 0x1FF;
+    if (y < fog_end) {
+        unsigned n = fog_ratio[y];
+        if (n) MEMORY_WRITE(16, VDP2(CCRR), n - 1u);
+        MEMORY_WRITE(16, VDP2(CCCTL), n ? fog_ccctl | 0x0010u : fog_ccctl);
+        if (!fog_every) { fog_every = true; MEMORY_WRITE(32, SCU(T1MD), 0x001); }
+    } else {
+        MEMORY_WRITE(16, VDP2(CCCTL), fog_ccctl);
+        if (fog_every) { fog_every = false; MEMORY_WRITE(32, SCU(T1MD), 0x101); }   /* once a frame again */
     }
+}
+
+static void fog_off(void)
+{
+    if (!fog_on) return;
+    fog_on = false;
+    MEMORY_WRITE(32, SCU(T1MD), 0);
+    scu_timer_t1_set(NULL);
+    vdp2_ioregs_t *regs = vdp2_regs_get();
+    regs->lnclen &= (uint16_t)~0x0010u;
+    regs->ccctl &= (uint16_t)~0x0010u;
+    MEMORY_WRITE(16, VDP2(CCCTL), regs->ccctl);
+}
+
+/* the rows' fog, as the software floor computes it, and the timer set to the band */
+static void fog_update(const RFloorView *v)
+{
+    int first = -1, end = -1;
+    real span = v->fog1 - v->fog0, hk = r_mul(v->cam_h, v->focal);
+    for (int y = 0; y < SAT_SCREEN_H; y++) {
+        real den = r_int(y) + v->row_off - v->horizon;
+        int n = 0;
+        if (y >= v->y0 && y < v->y1 && den > 0 && span > 0 && v->fog_max > 0) {
+            real f = r_div(r_div(hk, den) - v->fog0, span);
+            f = f < 0 ? 0 : f > R(1) ? R(1) : f;
+            int fa = r_trunc(f * v->fog_max);    /* of 256, as the software floor's */
+            n = (fa * 32 + 128) >> 8;
+        }
+        fog_ratio[y] = (uint8_t)n;
+        if (n) { if (first < 0) first = y; end = y + 1; }
+    }
+    if (first < 0) { fog_off(); return; }
+    uint32_t haze = v->haze;
+    *(volatile uint16_t *)VDP2_CRAM_ADDR(0) = (uint16_t)(((haze >> 19) & 31u) << 10 | ((haze >> 11) & 31u) << 5 | ((haze >> 3) & 31u));
+    fog_end = end;
+    MEMORY_WRITE(32, SCU(T0C), (uint32_t)first);   /* timer 0 counts the hblanks since the vblank: N matches in the
+                                                     * hblank before line N (checked in mednafen) */
+    if (fog_on) return;
+    vdp2_ioregs_t *regs = vdp2_regs_get();
+    *(volatile uint16_t *)VDP2_VRAM_ADDR(0, FL_LC_OFF) = 0;   /* the line colour: CRAM 0 */
+    regs->lctau = (uint16_t)((FL_LC_OFF >> 1 >> 16) & 7u);    /* one colour for every line */
+    regs->lctal = (uint16_t)((FL_LC_OFF >> 1) & 0xFFFFu);
+    regs->lnclen |= 0x0010u;                     /* RBG0 over the line colour screen */
+    regs->ccctl &= (uint16_t)~0x0710u;           /* blend by the top's ratio, off until the band */
+    fog_ccctl = regs->ccctl;
+    fog_every = false;
+    fog_on = true;
+    scu_timer_t1_value_set(FOG_T1S);
+    scu_timer_t1_set(fog_irq);
+    MEMORY_WRITE(32, SCU(T1MD), 0x101);          /* timer 1 at the timer 0 compare's line only */
 }
 
 static uint16_t floor_color(uint32_t c)
@@ -1074,375 +1143,310 @@ static uint16_t floor_color(uint32_t c)
     return (uint16_t)(((c >> 19) & 31u) << 10 | ((c >> 11) & 31u) << 5 | ((c >> 3) & 31u));
 }
 
-static int floor_palette_index(const RFloor *f, int mat, uint32_t c)
+/* the palette index of a texel: its exact colour, or the nearest one if the palette overflowed */
+static int floor_index(const RFloor *f, uint32_t c)
 {
-    int r = (c >> 3) & 31, g = (c >> 11) & 31, b = (c >> 19) & 31;
-    int best = 1, bd = 1 << 30;
-    for (int i = 1; i < 16; i++) {
-        uint16_t p = f->palette[mat][i];
-        int dr = r - (p & 31), dg = g - ((p >> 5) & 31), db = b - ((p >> 10) & 31);
+    if (c < 0x80000000u) return 0;
+    uint16_t q = floor_color(c);
+    for (int i = 1; i < f->npal; i++) if (f->pal[i] == q) return i;
+    int best = 1, bd = 1 << 30, r = q & 31, g = (q >> 5) & 31, b = (q >> 10) & 31;
+    for (int i = 1; i < f->npal; i++) {
+        int dr = r - (f->pal[i] & 31), dg = g - ((f->pal[i] >> 5) & 31), db = b - ((f->pal[i] >> 10) & 31);
         int d = dr * dr * 3 + dg * dg * 6 + db * db * 2;
         if (d < bd) { bd = d; best = i; }
     }
     return best;
 }
 
-static void floor_make_palette(RFloor *f, int mat)
+static void floor_add_colors(RFloor *f, int k, int n)
 {
-    const RFloorDesc *d = &f->desc;
-    uint16_t colors[256];
-    unsigned counts[256];
-    int ncolors = 0;
-    int size = f->mip[0].size;
-    const uint32_t *src = d->mat[mat * d->mips];
-    for (int i = 0; i < size * size; i++) {
-        uint32_t c = src[i];
+    uint16_t last = 0xFFFFu;
+    for (int i = 0; i < n; i++) {
+        uint32_t c = r_floor_texel(&f->desc, k, i);
         if (c < 0x80000000u) continue;
         uint16_t q = floor_color(c);
-        int j;
-        for (j = 0; j < ncolors; j++) if (colors[j] == q) break;
-        if (j == ncolors) {
-            if (ncolors == 256) continue;
-            colors[ncolors] = q;
-            counts[ncolors] = 0;
-            ncolors++;
-        }
-        counts[j]++;
-    }
-    f->palette[mat][0] = 0;
-    bool used[256] = { false };
-    for (int k = 1; k < 16; k++) {
-        int best = -1;
-        for (int i = 0; i < ncolors; i++) if (!used[i] && (best < 0 || counts[i] > counts[best])) best = i;
-        if (best < 0) f->palette[mat][k] = f->palette[mat][1];
-        else { f->palette[mat][k] = colors[best]; used[best] = true; }
+        if (q == last) continue;
+        last = q;
+        int j = 1;
+        while (j < f->npal && f->pal[j] != q) j++;
+        if (j == f->npal && f->npal < 256) f->pal[f->npal++] = q;
     }
 }
 
-static bool floor_prepare_meta(RFloor *f)
+static int floor_level_size(const RFloor *f, int level) { int s = f->desc.tex >> level; return s < 1 ? 1 : s; }
+/* texel (x, y) of material mat's level (the last one the material has past its mips), repeating */
+static uint32_t floor_texel(const RFloor *f, int mat, int level, int x, int y)
 {
     const RFloorDesc *d = &f->desc;
-    f->levels = d->mips < RFLOOR_MAX_LEVELS ? d->mips : RFLOOR_MAX_LEVELS;
-    if (f->levels < 1) return false;
-    f->pattern_count = 0;
-    for (int l = 0; l < f->levels; l++) {
-        int size = d->tex >> l;
-        if (size < 1) return false;
-        int chunks = (size + 15) / 16;
-        f->mip[l].size = size;
-        f->mip[l].chunks = chunks;
-        f->mip[l].base = f->pattern_count;
-        f->pattern_count += chunks * chunks;
-    }
-    int mats = d->nmat < RFLOOR_MATS ? d->nmat : RFLOOR_MATS;
-    if (mats < 1 || (uint32_t)mats * f->pattern_count * RFLOOR_PATTERN_BYTES > RFLOOR_CPD_BYTES) return false;
-    for (int m = 0; m < mats; m++) {
-        if (!d->mat[m * d->mips]) return false;
-        floor_make_palette(f, m);
-    }
-    return true;
+    if (level >= d->mips) level = d->mips - 1;
+    int size = floor_level_size(f, level);
+    return r_floor_texel(d, mat * d->mips + level, (y & (size - 1)) * size + (x & (size - 1)));
 }
 
-static void floor_write_pattern(RFloor *f, int mat, int level, int chunk_x, int chunk_y, uint32_t addr)
+/* one 8bpp character of a level: pixel (x, y) is world units (wx + x << level, wy + y << level), each sampled from the
+ * material of its cell at that level's texture (1 texel = 1 << level units, repeating like the texture) */
+static void floor_put_char(const RFloor *f, int ch, int level, int wx, int wy)
 {
     const RFloorDesc *d = &f->desc;
-    const uint32_t *src = d->mat[mat * d->mips + level];
-    int size = f->mip[level].size;
-    int chunks = f->mip[level].chunks;
-    uint8_t bytes[RFLOOR_PATTERN_BYTES];
-    memset(bytes, 0, sizeof bytes);
-    for (int cy = 0; cy < 2; cy++) for (int cx = 0; cx < 2; cx++) {
-        uint8_t *cell = bytes + (cy * 2 + cx) * 32;
-        for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) {
-            int tx = floor_mod_i(chunk_x * 16 + cx * 8 + x, size);
-            int ty = floor_mod_i(chunk_y * 16 + cy * 8 + y, size);
-            uint32_t c = src[ty * size + tx];
-            int pix = c < 0x80000000u ? 0 : floor_palette_index(f, mat, c);
-            cell[y * 4 + (x >> 1)] |= (uint8_t)(pix << ((x & 1) ? 0 : 4));
+    int cs = d->cell_shift;
+    uint32_t cmask = (uint32_t)d->mapn - 1;
+    uint32_t w[16];
+    uint8_t *b = (uint8_t *)w;
+    for (int y = 0; y < 8; y++) {
+        int uy = wy + (y << level);
+        const uint8_t *crow = d->cells + (((uint32_t)uy >> cs) & cmask) * d->mapn;
+        for (int x = 0; x < 8; x++) {
+            int ux = wx + (x << level);
+            int m = crow[((uint32_t)ux >> cs) & cmask];
+            if (m >= f->nmat) m = 0;
+            b[y * 8 + x] = (uint8_t)floor_index(f, floor_texel(f, m, level, ux >> level, uy >> level));
         }
     }
-    (void)chunks;
-    floor_vram_copy(addr, bytes, sizeof bytes);
+    volatile uint32_t *dst = (volatile uint32_t *)(FL_CHR_ADDR + (uint32_t)ch * 64u);
+    for (int i = 0; i < 16; i++) dst[i] = w[i];
 }
 
-static void floor_upload_patterns(RFloor *f)
+/* a level's characters of one material each: every material's texture cut into characters (at least one) */
+static void floor_put_single_chars(RFloor *f, FlMap *m)
 {
-    int mats = f->desc.nmat < RFLOOR_MATS ? f->desc.nmat : RFLOOR_MATS;
-    for (int m = 0; m < mats; m++) for (int l = 0; l < f->levels; l++) {
-        int chunks = f->mip[l].chunks;
-        for (int y = 0; y < chunks; y++) for (int x = 0; x < chunks; x++) {
-            int pattern = m * f->pattern_count + f->mip[l].base + y * chunks + x;
-            floor_write_pattern(f, m, l, x, y, RFLOOR_CPD_ADDR + (uint32_t)pattern * RFLOOR_PATTERN_BYTES);
-        }
+    for (int mat = 0; mat < f->nmat; mat++) for (int sy = 0; sy < m->span; sy++) for (int sx = 0; sx < m->span; sx++) {
+        int ch = m->first + (mat * m->span + sy) * m->span + sx;
+        uint32_t w[16];
+        uint8_t *b = (uint8_t *)w;
+        for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++)
+            b[y * 8 + x] = (uint8_t)floor_index(f, floor_texel(f, mat, m->level, sx * 8 + x, sy * 8 + y));
+        volatile uint32_t *dst = (volatile uint32_t *)(FL_CHR_ADDR + (uint32_t)ch * 64u);
+        for (int i = 0; i < 16; i++) dst[i] = w[i];
     }
 }
 
-static void floor_upload_palettes(RFloor *f)
-{
-    int mats = f->desc.nmat < RFLOOR_MATS ? f->desc.nmat : RFLOOR_MATS;
-    for (int m = 0; m < mats; m++) {
-        volatile uint16_t *p = (volatile uint16_t *)VDP2_CRAM_MODE_1_OFFSET(0, m, 0);
-        for (int i = 0; i < 16; i++) p[i] = f->palette[m][i];
-    }
-}
-
-/* A name table page is 32x32 cells of one 16 bit entry each, and the rotary map addresses
- * plane p = (px | py * 4) as px, py in 0..3, so the rows are put out in page order, two cells to
- * a word; a map move is done in steps of rows, so no frame pays for all of it. */
-static void floor_write_pages(const uint16_t *map, uint32_t addr, int y0, int y1)
-{
-    int pages = RFLOOR_MAP_SIDE / RFLOOR_PAGE_CELLS;
-    volatile uint32_t *d = (volatile uint32_t *)addr;
-    for (int y = y0; y < y1; y++) {
-        int py = y / RFLOOR_PAGE_CELLS, ly = y % RFLOOR_PAGE_CELLS;
-        for (int px = 0; px < pages; px++) {
-            volatile uint32_t *page = d + (px + py * pages) * (RFLOOR_PAGE_CELLS * RFLOOR_PAGE_CELLS / 2);
-            const uint16_t *src = map + y * RFLOOR_MAP_SIDE + px * RFLOOR_PAGE_CELLS;
-            for (int x = 0; x < RFLOOR_PAGE_CELLS; x += 2)
-                page[(ly * RFLOOR_PAGE_CELLS + x) / 2] = (uint32_t)src[x] << 16 | src[x + 1];
-        }
-    }
-}
-
-/* One map cell is one 16x16 character of the material the cell holds, taken from the texture at
- * one texel per world unit (so the cell is a 16x16 texel crop of it, wrapping like the texture
- * does), at the level's scale: a cell covers 16 << level world units.  The world step, the cell
- * size and the texture size are all powers of two, so the whole map is shifts and masks. */
-static void floor_make_map(RFloor *f, int level, int base_x, int base_y, uint16_t *map, int y0, int y1)
+/* the name table entry (the character number counts 32 byte units) of the character at (cx, cy) of level map m */
+static uint16_t floor_char_at(RFloor *f, FlMap *m, int cx, int cy)
 {
     const RFloorDesc *d = &f->desc;
-    int mats = d->nmat < RFLOOR_MATS ? d->nmat : RFLOOR_MATS;
-    const uint8_t *cells = d->cells;
-    int mapn = d->mapn, shift = d->cell_shift;
-    int cmask = mapn - 1;
-    int world_step = 16 << level;
-    int size = f->mip[level].size;
-    int smask = size - 1;
-    int chunks = f->mip[level].chunks;
-    int cmask_tex = chunks - 1;
-    uint16_t pnd[RFLOOR_MATS * RFLOOR_MAX_LEVELS * 4];
-    for (int m = 0; m < RFLOOR_MATS; m++) {
-        uint32_t pal = VDP2_CRAM_MODE_1_OFFSET(0, m < mats ? m : 0, 0);
-        for (int l = 0; l < f->levels; l++) {
-            int c = f->mip[l].chunks;
-            for (int cy = 0; cy < c; cy++) for (int cx = 0; cx < c; cx++) {
-                int mm = m < mats ? m : 0;
-                int pattern = mm * f->pattern_count + f->mip[l].base + cy * c + cx;
-                uint32_t cpd = RFLOOR_CPD_ADDR + (uint32_t)pattern * RFLOOR_PATTERN_BYTES;
-                pnd[(l * RFLOOR_MATS + m) * 4 + cy * c + cx] = (uint16_t)VDP2_SCRN_PND_CONFIG_2(1, cpd, pal, 0, 0);
+    int cs = d->cell_shift, sub = m->shift - cs;   /* character = 2^sub cells a side when sub > 0 */
+    uint32_t cmask = (uint32_t)d->mapn - 1;
+    int wx = cx << m->shift, wy = cy << m->shift;
+    int sx = cx & (m->span - 1), sy = cy & (m->span - 1);
+    int m0 = d->cells[(((uint32_t)wy >> cs) & cmask) * d->mapn + (((uint32_t)wx >> cs) & cmask)];
+    if (m0 >= f->nmat) m0 = 0;
+    if (sub > 0) {
+        /* 2x2 cells (the corners' ones if the character spans more): a mixed character from the cache */
+        int h = 1 << (sub - 1) << cs;
+        uint32_t key = (uint32_t)m0;
+        for (int k = 1; k < 4; k++) {
+            int ux = wx + (k & 1) * h, uy = wy + (k >> 1) * h;
+            int mk = d->cells[(((uint32_t)uy >> cs) & cmask) * d->mapn + (((uint32_t)ux >> cs) & cmask)];
+            key |= (uint32_t)(mk < f->nmat ? mk : 0) << (k * 4);
+        }
+        if (key != (uint32_t)m0 * 0x1111u && f->hkey) {
+            key = (key | (uint32_t)(sy * m->span + sx) << 16) + 1;
+            uint32_t i = (key * 2654435761u) >> 21;   /* 11 bits: FL_HASH */
+            for (int probe = 0; probe < FL_HASH; probe++, i = (i + 1) & (FL_HASH - 1)) {
+                if (f->hkey[i] == key) return (uint16_t)(f->hchar[i] * 2);
+                if (f->hkey[i]) continue;
+                if (f->next_char >= FL_CHARS) break;   /* full: the top left cell's material alone */
+                f->hkey[i] = key; f->hchar[i] = (uint16_t)f->next_char;
+                floor_put_char(f, f->next_char, m->level, wx, wy);   /* (beyond 2x2 cells: the key's corners share it) */
+                return (uint16_t)(f->next_char++ * 2);
             }
         }
     }
-    int per_col = world_step >> shift;          /* material cells a map cell spans */
-    int step = 1;                               /* columns per four cell load */
-    if (per_col == 1) step = 4;
-    else if (per_col == 2) step = 2;
-    for (int sy = y0; sy < y1; sy++) {
-        int wy = base_y + sy * world_step;
-        int chunk_y = (((wy >> level) & smask) >> 4) & cmask_tex;
-        uint16_t *row = map + sy * RFLOOR_MAP_SIDE;
-        const uint8_t *crow = cells + ((wy >> shift) & cmask) * mapn;
-        const uint16_t *rbase = pnd + (level * RFLOOR_MATS) * 4 + chunk_y * chunks;
-        int c0 = (base_x >> shift) & cmask;
-        for (int g = 0; g < RFLOOR_MAP_SIDE; g += step) {
-            for (int c = 0; c < step; c++) {
-                int wx = base_x + (g + c) * world_step;
-                int mat = crow[(c0 + (g + c) * per_col) & cmask];
-                int chunk_x = (((wx >> level) & smask) >> 4) & cmask_tex;
-                row[g + c] = rbase[mat * 4 + chunk_x];
-            }
-        }
-    }
+    return (uint16_t)((m->first + (m0 * m->span + sy) * m->span + sx) * 2);
 }
 
-/* The rotation parameter's coefficient address is a 32 bit register holding the table's word
- * address inside video memory; the rotation parameter table itself is addressed by RPTAU (bank)
- * and RPTAL (word address), so both are derived from the addresses written below. */
-static uint32_t floor_vram_word(uint32_t addr) { return ((((addr >> 17) & 3u) << 16) | ((addr & 0x1FFFFu) >> 1)) & 0x3FFFFu; }
-static uint32_t floor_kast(uint32_t addr) { return (floor_vram_word(addr) >> 1) << 16; }
+static volatile uint16_t *floor_entry(int p, int ex, int ey)
+{
+    ex &= FL_MAP_SIDE - 1; ey &= FL_MAP_SIDE - 1;
+    return (volatile uint16_t *)FL_MAP_ADDR(p) + ((ey >> 6) * 4 + (ex >> 6)) * 4096 + (ey & 63) * 64 + (ex & 63);
+}
+
+static void floor_put_rows(RFloor *f, int p, int y0, int y1)
+{
+    FlMap *m = &f->map[p];
+    for (int cy = y0; cy < y1; cy++)
+        for (int cx = m->ox; cx < m->ox + FL_MAP_SIDE; cx++) *floor_entry(p, cx, cy) = floor_char_at(f, m, cx, cy);
+}
+
+static void floor_put_cols(RFloor *f, int p, int x0, int x1)
+{
+    FlMap *m = &f->map[p];
+    for (int cy = m->oy; cy < m->oy + FL_MAP_SIDE; cy++)
+        for (int cx = x0; cx < x1; cx++) *floor_entry(p, cx, cy) = floor_char_at(f, m, cx, cy);
+}
+
+/* keep map p's torus centred on the camera: the character rows / columns that came into it are written */
+static void floor_follow(RFloor *f, int p, real cam_x, real cam_y)
+{
+    FlMap *m = &f->map[p];
+    int ox = m->fixed ? 0 : (r_floor(cam_x) >> m->shift) - FL_MAP_SIDE / 2;
+    int oy = m->fixed ? 0 : (r_floor(cam_y) >> m->shift) - FL_MAP_SIDE / 2;
+    if (m->valid && ox == m->ox && oy == m->oy) return;
+    int dx = ox - m->ox, dy = oy - m->oy;
+    if (!m->valid || dx <= -FL_MAP_SIDE || dx >= FL_MAP_SIDE || dy <= -FL_MAP_SIDE || dy >= FL_MAP_SIDE) {
+        m->ox = ox; m->oy = oy;
+        floor_put_rows(f, p, oy, oy + FL_MAP_SIDE);
+        m->valid = true;
+        return;
+    }
+    /* columns first (in the old rows), then the new rows (in the new columns) */
+    if (dx > 0) { int x0 = m->ox + FL_MAP_SIDE; m->ox = ox; floor_put_cols(f, p, x0, ox + FL_MAP_SIDE); }
+    else if (dx < 0) { int x1 = m->ox; m->ox = ox; floor_put_cols(f, p, ox, x1); }
+    if (dy > 0) { int y0 = m->oy + FL_MAP_SIDE; m->oy = oy; floor_put_rows(f, p, y0, oy + FL_MAP_SIDE); }
+    else if (dy < 0) { int y1 = m->oy; m->oy = oy; floor_put_rows(f, p, oy, y1); }
+}
+
+/* the maps' layouts and every character that doesn't depend on the cells (all of A's, B's single material ones) */
+static bool floor_prepare(RFloor *f)
+{
+    const RFloorDesc *d = &f->desc;
+    int world = d->mapn << d->cell_shift, next = 0;
+    for (int p = 0; p < 2; p++) {
+        FlMap *m = &f->map[p];
+        m->level = p ? (d->mips > FL_B_LEVEL ? FL_B_LEVEL : d->mips - 1) : 0;
+        if (p && m->level < 1) m->level = FL_B_LEVEL;   /* no mips: B is A's texture seen from further off */
+        m->shift = m->level + 3;
+        int size = floor_level_size(f, m->level);
+        m->span = size >= 8 ? size / 8 : 1;
+        m->first = next;
+        next += f->nmat * m->span * m->span;
+        m->fixed = world <= (FL_MAP_SIDE << m->shift);   /* powers of two: the world repeats within the torus */
+        m->valid = false;
+    }
+    f->cells_per_b = f->map[1].shift > d->cell_shift ? 1 << (f->map[1].shift - d->cell_shift) : 1;
+    f->next_char = next;
+    return next <= FL_CHARS;
+}
+
+static void floor_reset_cells(RFloor *f)
+{
+    if (f->hkey) memset(f->hkey, 0, FL_HASH * sizeof *f->hkey);
+    f->next_char = f->map[1].first + f->nmat * f->map[1].span * f->map[1].span;
+    f->map[0].valid = f->map[1].valid = false;
+    f->cells_dirty = false;
+}
+
+/* The rotation parameter table (32 words: vdp2_scrn_rp_table_t's layout). The coordinates are 16.16 words of which
+ * the hardware drops the low six bits (22.10: Xst 13.10, DX 3.10, Mx 14.10), so a `real` goes in as it is; kx / ky
+ * are 8.16 as they stand. The coefficient table address (KAst, 16.10) counts two word entries: entry e is at video
+ * memory byte 4e, its bits above 16 in KTAOF. */
+static void floor_put_params(uint32_t off, real xst, real yst, real dx, real dy, real mx, real my, uint32_t kt_off)
+{
+    uint32_t e = kt_off >> 2;
+    uint32_t t[32];
+    memset(t, 0, sizeof t);
+    t[0] = (uint32_t)xst; t[1] = (uint32_t)yst;
+    t[5] = (uint32_t)dx; t[6] = (uint32_t)dy;
+    t[7] = 0x10000u; t[11] = 0x10000u;           /* the matrix: A = E = 1 */
+    t[17] = (uint32_t)mx; t[18] = (uint32_t)my;
+    t[19] = 0x10000u; t[20] = 0x10000u;          /* kx, ky (the coefficient table's replace them) */
+    t[21] = (e & 0xFFFFu) << 16;                 /* KAst */
+    t[22] = 1u << 16;                            /* DKAst: the next entry every line */
+    volatile uint32_t *dst = (volatile uint32_t *)VDP2_VRAM_ADDR(0, off);
+    for (int i = 0; i < 32; i++) dst[i] = t[i];
+}
+
+static void floor_hw_off(void)
+{
+    fog_off();
+    vdp2_ioregs_t *regs = vdp2_regs_get();
+    regs->ramctl &= (uint16_t)~0x00FFu;
+    if (floor_cram_reserved) rsat_cram_release_floor();
+    floor_cram_reserved = false;
+    if (floor_hw_floor) floor_hw_floor->hw_ready = false;
+    floor_hw_active = false;
+    floor_hw_floor = NULL;
+}
 
 static bool floor_hw_setup(RFloor *f)
 {
     if (f->hw_ready && floor_hw_active && floor_hw_floor == f) return true;
-    if (!floor_prepare_meta(f)) return false;
-    if (floor_hw_active) {
-        RFloor *old = floor_hw_floor;
-        vdp2_ioregs_t *regs = vdp2_regs_get();
-        regs->ramctl &= (uint16_t)~0x00FFu;
-        if (floor_cram_reserved) rsat_cram_release_floor();
-        floor_cram_reserved = false;
-        floor_hw_active = false;
-        floor_hw_floor = NULL;
-        if (old) old->hw_ready = false;
-    }
-    rsat_cram_reserve_floor((f->desc.nmat < RFLOOR_MATS ? f->desc.nmat : RFLOOR_MATS) * 16);
+    if (floor_hw_active) floor_hw_off();
+    if (!floor_prepare(f)) return false;
+    rsat_cram_reserve_floor(256);
     floor_cram_reserved = true;
-    floor_upload_patterns(f);
-    floor_upload_palettes(f);
-    vdp2_scrn_rotation_map_t map_a;
-    vdp2_scrn_rotation_map_t map_b;
-    memset(&map_a, 0, sizeof map_a);
-    memset(&map_b, 0, sizeof map_b);
-    map_a.single = false;
-    map_b.single = false;
-    for (int i = 0; i < 16; i++) {
-        /* plane p is page (p & 3, p >> 2) of the 4x4 grid, one page per 512x512 pixel block */
-        map_a.base_addr[i] = RFLOOR_PND_A_ADDR + (uint32_t)i * 0x800u;
-        map_b.base_addr[i] = RFLOOR_PND_B_ADDR + (uint32_t)i * 0x800u;
-    }
-    vdp2_scrn_cell_format_t format = {
-        .scroll_screen = VDP2_SCRN_RBG0_PA,
-        .ccc = VDP2_SCRN_CCC_PALETTE_16,
-        .char_size = VDP2_SCRN_CHAR_SIZE_2X2,
-        .pnd_size = 1,
-        .aux_mode = VDP2_SCRN_AUX_MODE_0,
-        .plane_size = VDP2_SCRN_PLANE_SIZE_1X1,
-        .cpd_base = RFLOOR_CPD_ADDR,
-        .palette_base = VDP2_CRAM_MODE_1_OFFSET(0, 0, 0)
-    };
-    vdp2_scrn_rotation_cell_format_set(&format, &map_a);
-    format.scroll_screen = VDP2_SCRN_RBG0_PB;
-    vdp2_scrn_rotation_cell_format_set(&format, &map_b);
-    vdp2_regs_get()->pncr = 0x8008u;
-    vdp2_cram_offset_set(VDP2_SCRN_RBG0, VDP2_CRAM_MODE_1_OFFSET(0, 0, 0));
-    vdp2_scrn_rp_table_t table;
-    memset(&table, 0, sizeof table);
-    vdp2_scrn_rotation_params_t params = {
-        .rp_mode = f->levels > 1 ? VDP2_SCRN_RP_MODE_2 : VDP2_SCRN_RP_MODE_0,
-        .rsop_type = VDP2_SCRN_RSOP_TYPE_REPEAT,
-        .coeff_params = {
-            .usage = VDP2_SCRN_COEFF_USAGE_KX_KY,
-            .word_size = VDP2_SCRN_COEFF_WORD_SIZE_2,
-            .enable = 1
-        },
-        .rp_table = &table,
-        .rp_table_base = RFLOOR_RP_ADDR
-    };
-    vdp2_scrn_rotation_rp_mode_set(&params);
-    vdp2_scrn_rotation_rp_table_set(&params);
+    volatile uint16_t *cram = (volatile uint16_t *)VDP2_CRAM_ADDR(0);
+    for (int i = 0; i < 256; i++) cram[i] = i < f->npal ? f->pal[i] : 0;
+    for (int p = 0; p < 2; p++) floor_put_single_chars(f, &f->map[p]);
+    floor_reset_cells(f);
+
     vdp2_ioregs_t *regs = vdp2_regs_get();
-    regs->rpmd = (regs->rpmd & (uint16_t)~0x0003u) | (f->levels > 1 ? 0x0002u : 0u);
-    regs->rptau = (uint16_t)((RFLOOR_RP_ADDR >> 17) & 3u);
-    regs->rptal = (uint16_t)((RFLOOR_RP_ADDR & 0x1FFFFu) >> 1);
-    vdp2_scrn_rotation_coeff_params_set(&params);
-    vdp2_scrn_rotation_coeff_table_set(&params);
-    vdp2_scrn_rotation_sop_set(&params);
-    /* the coefficient table is addressed by the rotation parameter's own address, so the
-     * parameter control's offset mode stays off */
+    regs->ramctl = (uint16_t)((regs->ramctl & (uint16_t)~0x03FFu) | 0x0300u | FL_RAMCTL_RDBS);
+    regs->chctlb = (uint16_t)((regs->chctlb & 0x00FFu) | 0x1000u);   /* RBG0: 256 colours, 1x1 characters, cells */
+    regs->pncr = 0xC000u;                        /* 1 word entries, 12 bit character numbers (no flips), no extra bits */
+    regs->plsz &= 0x00FFu;                       /* A and B: 1x1 page planes, repeating */
+    regs->mpofr = 0;
+    uint16_t *mp = &regs->mpabra;                /* mpabra .. mpopra, then mpabrb .. mpoprb */
+    for (int p = 0; p < 2; p++) for (int i = 0; i < 16; i += 2) {
+        uint32_t page = (FL_MAP_ADDR(p) - VDP2_VRAM_ADDR(0, 0)) / 0x2000u + (uint32_t)i;
+        mp[p * 8 + i / 2] = (uint16_t)((page & 0x3Fu) | ((page + 1) & 0x3Fu) << 8);
+    }
+    regs->craofb = (uint16_t)(regs->craofb & ~0x0007u);   /* RBG0's colours from CRAM 0 */
+    regs->rpmd = 2;                              /* per dot: A, or B where A's coefficient has its MSB set */
     regs->rprctl = 0;
-    regs->ktctl &= (uint16_t)~0xFFFFu;
-    regs->ktctl |= f->levels > 1 ? 0x0101u : 0x0001u;
-    regs->ktaof = 0;
-    regs->plsz &= (uint16_t)~0x3F00u;
-    /* RDBS: banks 0/1 name tables (the floor's are in bank 1), banks 2/3 character patterns */
-    regs->ramctl = (uint16_t)((regs->ramctl & 0xFF00u) | 0x003Au);
+    regs->ktctl = 0x0101u;                       /* A and B: coefficient table on, two words, kx = ky = coefficient */
+    uint32_t e = FL_KT_OFF(0, 0) >> 2 >> 16;
+    regs->ktaof = (uint16_t)(e | e << 8);
     vdp2_scrn_priority_set(VDP2_SCRN_RBG0, 1);
-    f->map_valid = false;
-    f->map_half = RFLOOR_MAP_STEPS;
     f->hw_ready = true;
     floor_hw_floor = f;
     floor_hw_active = true;
     return true;
 }
 
-static bool floor_update_hw(RFloor *f, const RFloorView *v)
+static void floor_update_hw(RFloor *f, const RFloorView *v)
 {
-    /* the maps are 2048 pixel windows, moved in coarse steps: the projection needs less than a
-     * whole window, so a step of a few hundred units keeps the sampling inside it */
-    int level_b = f->levels > 1 ? 1 : 0;
-    int half_a = (RFLOOR_MAP_SIDE / 2) * 16;
-    int half_b = (RFLOOR_MAP_SIDE / 2) * (16 << level_b);
-    int base_a = floor_div_i(r_floor(v->cam_x), RFLOOR_MAP_STEP) * RFLOOR_MAP_STEP - half_a;
-    int base_y_a = floor_div_i(r_floor(v->cam_y), RFLOOR_MAP_STEP) * RFLOOR_MAP_STEP - half_a;
-    int base_b = floor_div_i(r_floor(v->cam_x), RFLOOR_MAP_STEP * 2) * (RFLOOR_MAP_STEP * 2) - half_b;
-    int base_y_b = floor_div_i(r_floor(v->cam_y), RFLOOR_MAP_STEP * 2) * (RFLOOR_MAP_STEP * 2) - half_b;
-    /* a move is put out a page row at a time, so no frame pays for all of it */
-    if (f->map_half >= RFLOOR_MAP_STEPS && (!f->map_valid || f->cells_dirty || base_a != f->map_ax ||
-                             base_y_a != f->map_ay || base_b != f->map_bx || base_y_b != f->map_by)) {
-        f->map_ax = base_a; f->map_ay = base_y_a; f->map_bx = base_b; f->map_by = base_y_b;
-        f->map_half = 0;
+    if (f->cells_dirty) floor_reset_cells(f);
+    for (int p = 0; p < 2; p++) floor_follow(f, p, v->cam_x, v->cam_y);
+
+    /* world = cam + step * (f * focal + r * (x - sw / 2)), step = cam_h / (y + row_off - horizon) world units per
+     * pixel: the screen side of it doubled into the parameters (DX = 2r keeps a bit more of r's direction in 3.10), the
+     * per line step halved into the coefficient, which also takes the map's scale (1 map pixel = 2^level units) */
+    real rx = -v->fy, ry = v->fx, half = r_int(v->sw) / 2;
+    real xst = 2 * (r_mul(v->fx, v->focal) - r_mul(rx, half)), yst = 2 * (r_mul(v->fy, v->focal) - r_mul(ry, half));
+    int b = floor_buf;
+    for (int p = 0; p < 2; p++) {
+        const FlMap *m = &f->map[p];
+        uint32_t wrap = ((uint32_t)FL_MAP_SIDE << 3 << 16) - 1u;   /* the torus is 2048 map pixels a side */
+        real mx = (real)(((uint32_t)(v->cam_x >> m->level)) & wrap), my = (real)(((uint32_t)(v->cam_y >> m->level)) & wrap);
+        floor_put_params(FL_RP_OFF(b) + (uint32_t)p * 0x80u, xst, yst, 2 * rx, 2 * ry, mx, my, FL_KT_OFF(b, p));
     }
-    if (f->map_half < RFLOOR_MAP_STEPS) {
-        int y0 = f->map_half * RFLOOR_MAP_ROWS, y1 = y0 + RFLOOR_MAP_ROWS;
-        floor_make_map(f, 0, f->map_ax, f->map_ay, f->map_a, y0, y1);
-        floor_make_map(f, level_b, f->map_bx, f->map_by, f->map_b, y0, y1);
-        floor_write_pages(f->map_a, RFLOOR_PND_A_ADDR, y0, y1);
-        floor_write_pages(f->map_b, RFLOOR_PND_B_ADDR, y0, y1);
-        if (++f->map_half >= RFLOOR_MAP_STEPS) { f->map_valid = true; f->cells_dirty = false; }
+    /* A covers the rows up to where the software floor switches to mip 2, and no further than its torus reaches
+     * (1000 units, the streaming step short of 1024) */
+    real a_max = 2 * v->mip_step;
+    if (!f->map[0].fixed) {
+        real reach = r_sqrt(r_mul(v->focal, v->focal) + r_mul(half, half));
+        real lim = reach > 0 ? r_div(R(1000), reach) : a_max;
+        if (lim < a_max) a_max = lim;
     }
-    /* one map pixel per world unit (level 0) or per two (level 1): the view point, the ray and the
-     * per line scale are the whole projection, the per line coefficient is its perspective */
-    real rx = -v->fy, ry = v->fx;
-    real xst = r_mul(v->fx, v->focal) - r_mul(rx, r_int(v->sw / 2));
-    real yst = r_mul(v->fy, v->focal) - r_mul(ry, r_int(v->sw / 2));
-    vdp2_scrn_rp_table_t a;
-    vdp2_scrn_rp_table_t b;
-    memset(&a, 0, sizeof a);
-    memset(&b, 0, sizeof b);
-    a.xst = floor_bits(xst); a.yst = floor_bits(yst);
-    a.delta_x = floor_bits(rx); a.delta_y = floor_bits(ry);
-    a.matrix.param.a = 0x10000u; a.matrix.param.e = 0x10000u;
-    a.mx = floor_bits(v->cam_x - r_int(base_a)); a.my = floor_bits(v->cam_y - r_int(base_y_a));
-    a.kx = 0x10000u; a.ky = 0x10000u; a.kast = floor_kast(RFLOOR_COEF_A_ADDR); a.delta_kast = 0x10000u;
-    b.xst = floor_bits(xst / 2); b.yst = floor_bits(yst / 2);
-    b.delta_x = floor_bits(rx / 2); b.delta_y = floor_bits(ry / 2);
-    b.matrix.param.a = 0x10000u; b.matrix.param.e = 0x10000u;
-    b.mx = floor_bits((v->cam_x - r_int(base_b)) / 2); b.my = floor_bits((v->cam_y - r_int(base_y_b)) / 2);
-    b.kx = 0x10000u; b.ky = 0x10000u; b.kast = floor_kast(RFLOOR_COEF_B_ADDR); b.delta_kast = 0x10000u;
-    floor_vram_copy(RFLOOR_RP_ADDR, &a, sizeof a);
-    floor_vram_copy(RFLOOR_RP_ADDR + 0x80, &b, sizeof b);
-    int focal_px = (int)(v->focal >> 16);
+    volatile uint32_t *ka = (volatile uint32_t *)VDP2_VRAM_ADDR(0, FL_KT_OFF(b, 0));
+    volatile uint32_t *kb = (volatile uint32_t *)VDP2_VRAM_ADDR(0, FL_KT_OFF(b, 1));
+    int lb = f->map[1].level;
     for (int y = 0; y < SAT_SCREEN_H; y++) {
-        int32_t den = (int32_t)((r_int(y) + v->row_off - v->horizon) >> 16);
-        uint32_t ka = 0x10000u, kb = 0x10000u;
-        int use_b = 0;
-        if (y >= v->y0 && y < v->y1 && den > 0) {
-            /* the per line scale (world units per pixel, 16.16 like the table) from one 32 bit
-             * divide: a fixed point divide would go through the DVD unit */
-            int32_t scale = (int32_t)v->cam_h / den;
-            if (scale < 0) scale = 0;
-            if (scale > 0x007FFFFF) scale = 0x007FFFFF;
-            ka = (uint32_t)scale;
-            kb = (uint32_t)(scale >> 1);
-            use_b = f->levels > 1 && (real)scale >= v->mip_step;
-            /* the far rows reach past the map window: leave them to the sky rather than repeat it.
-             * The reach is the row's lateral half and its depth (the scale times the focal
-             * length, so no division), halved for level 1's map. */
-            int32_t reach = ((scale >> 8) * (v->sw / 2 + focal_px) + 128) >> 8;
-            if (use_b) reach >>= 1;
-            if (reach > (RFLOOR_MAP_SIDE * 16) / 2 - RFLOOR_MAP_STEP)
-                ka = 0x80000000u, kb = 0x80000000u;
-        }
-        volatile uint32_t *ca = (volatile uint32_t *)(RFLOOR_COEF_A_ADDR + (uint32_t)y * 4);
-        volatile uint32_t *cb = (volatile uint32_t *)(RFLOOR_COEF_B_ADDR + (uint32_t)y * 4);
-        if (y < v->y0 || y >= v->y1 || den <= 0) {
-            *ca = 0x80000000u;
-            *cb = 0x80000000u;
-        } else {
-            *ca = (use_b ? 0x80000000u : 0u) | ka;
-            *cb = kb;
-        }
+        real den = r_int(y) + v->row_off - v->horizon;
+        if (y < v->y0 || y >= v->y1 || den <= 0) { ka[y] = kb[y] = 0x80000000u; continue; }
+        real step = r_div(v->cam_h, den);
+        uint32_t k_a = (uint32_t)(step >> 1), k_b = (uint32_t)(step >> (lb + 1));
+        if (k_a > 0x7FFFFFu) k_a = 0x7FFFFFu;
+        if (k_b > 0x7FFFFFu) k_b = 0x7FFFFFu;
+        ka[y] = step < a_max ? k_a : 0x80000000u;
+        kb[y] = k_b;
     }
-    return true;
+    vdp2_ioregs_t *regs = vdp2_regs_get();
+    uint32_t word = FL_RP_OFF(b) >> 1;           /* RPTA: the table's word address */
+    regs->rptau = (uint16_t)((word >> 16) & 7u);
+    regs->rptal = (uint16_t)(word & 0xFFFEu);
+    floor_buf = b ^ 1;
+    fog_update(v);
 }
 
 static void floor_disable_hw(void)
 {
-    RFloor *old = floor_hw_floor;
     floor_visible = false;
-    if (!floor_hw_active) {
-        if (floor_cram_reserved) rsat_cram_release_floor();
-        floor_cram_reserved = false;
-        floor_hw_floor = NULL;
-        return;
-    }
-    vdp2_ioregs_t *regs = vdp2_regs_get();
-    regs->ramctl &= (uint16_t)~0x00FFu;
+    if (floor_hw_active) { floor_hw_off(); return; }
     if (floor_cram_reserved) rsat_cram_release_floor();
     floor_cram_reserved = false;
-    floor_hw_active = false;
     floor_hw_floor = NULL;
-    if (old) old->hw_ready = false;
 }
 
 static void floor_submit(const RFloorState *state)
@@ -1454,10 +1458,11 @@ static void floor_submit(const RFloorState *state)
     }
     RFloor *f = state->f;
     if (floor_hw_floor && floor_hw_floor != f) floor_disable_hw();
-    if (!floor_hw_setup(f) || !floor_update_hw(f, &state->view)) {
+    if (!floor_hw_setup(f)) {
         floor_disable_hw();
         return;
     }
+    floor_update_hw(f, &state->view);
     floor_visible = true;
     vdp2_scrn_display_set(vdp2_scrn_display_get() | VDP2_SCRN_DISPTP_RBG0);
 }
@@ -1465,13 +1470,25 @@ static void floor_submit(const RFloorState *state)
 RFloor *r_floor_create(Ren *r, const RFloorDesc *d)
 {
     (void)r;
-    if (!d || d->mapn < 1 || (d->mapn & (d->mapn - 1)) || d->cell_shift < 0 || d->cell_shift > 15 || d->tex < 1 || d->mips < 1 || d->nmat < 1 || !d->cells || !d->mat) return NULL;
+    if (!d || d->mapn < 1 || (d->mapn & (d->mapn - 1)) || d->cell_shift < 0 || d->cell_shift > 15 || d->tex < 1 ||
+        (d->tex & (d->tex - 1)) || d->mips < 1 || d->nmat < 1 || !d->cells ||
+        (!d->mat && (!d->mat4 || !d->pal4))) return NULL;
     RFloor *f = calloc(1, sizeof *f);
     if (!f) return NULL;
     f->desc = *d;
-    f->map_a = calloc(RFLOOR_MAP_ENTRIES, sizeof *f->map_a);
-    f->map_b = calloc(RFLOOR_MAP_ENTRIES, sizeof *f->map_b);
-    if (!f->map_a || !f->map_b) { free(f->map_a); free(f->map_b); free(f); return NULL; }
+    f->nmat = d->nmat < FL_MATS ? d->nmat : FL_MATS;
+    f->npal = 1;
+    int lb = d->mips > FL_B_LEVEL ? FL_B_LEVEL : d->mips - 1;
+    for (int m = 0; m < f->nmat; m++) {
+        int s0 = floor_level_size(f, 0), sb = floor_level_size(f, lb);
+        floor_add_colors(f, m * d->mips, s0 * s0);
+        floor_add_colors(f, m * d->mips + lb, sb * sb);
+    }
+    if ((1 << (FL_B_LEVEL + 3)) > (1 << d->cell_shift)) {   /* B's characters span several cells */
+        f->hkey = calloc(FL_HASH, sizeof *f->hkey);
+        f->hchar = calloc(FL_HASH, sizeof *f->hchar);
+        if (!f->hkey || !f->hchar) { free(f->hkey); free(f->hchar); f->hkey = NULL; f->hchar = NULL; }
+    }
     f->cells_dirty = true;
     return f;
 }
@@ -1492,8 +1509,8 @@ void r_floor_destroy(RFloor *f)
     if (!f) return;
     for (int i = 0; i < 2; i++) if (floor_state[i].f == f) floor_state[i].valid = false;
     if (floor_hw_floor == f) floor_disable_hw();
-    free(f->map_a);
-    free(f->map_b);
+    free(f->hkey);
+    free(f->hchar);
     free(f);
 }
 
@@ -1528,8 +1545,10 @@ void rsat_init(void)
 /* the replay's frame: the preamble (clips, the backdrops), the recorded ops, the end */
 static void colour_offset(void);
 
-static void replay(const Rec *R, int n)
+static void replay(int buf)
 {
+    const Rec *R = recbuf[buf]; int n = rec_n[buf];
+    replay_floor = floor_state[buf].valid;
     frame_no++;
     tracing = trace_from > 0 && traced < 6 && frame_no >= (unsigned)trace_from && (frame_no - (unsigned)trace_from) % 10 == 0;
     if (tracing) { traced++; printf("render trace: frame %u\n", (unsigned)frame_no); }
@@ -1552,7 +1571,7 @@ static volatile uint32_t slave_buf __uncached;    /* the record buffer it replay
 static void slave_entry(void)
 {
     cpu_cache_purge();   /* the master wrote the records and textures: no stale lines here */
-    replay(recbuf[slave_buf], rec_n[slave_buf]);
+    replay((int)slave_buf);
     slave_busy = 0;
 }
 
@@ -1578,11 +1597,13 @@ void rsat_set_backdrops(RTex **t, const int *x, const int *y, int n, bool clear)
 }
 
 /* the VDP2 planes' backdrops (vdp2_planes.c): palette sprites under the planes, first in the list so every other
- * sprite covers them. With the planes on, the framebuffer is cleared to transparent first: the vblank erase of the
- * variable frame change doesn't get through a whole 16bpp screen (the bottom ~40 lines keep the last frame's sprites) */
+ * sprite covers them. With the planes or the floor on, the framebuffer is cleared to transparent first: the vblank
+ * erase of the variable frame change doesn't get through a whole 16bpp screen (the bottom ~40 lines keep the last
+ * frame's sprites, or the black of a screen before: the floor stopped 40 lines short of the bottom) */
 static void draw_backdrops(void)
 {
-    if (clear_fb) {
+    bool clear = clear_fb || replay_floor;
+    if (clear) {
         Cmd *k = cmd_new();
         if (k) {
             k->ctrl = C_POLYGON; k->pmod = PM_ECD | PM_SPD; k->colr = 0;
@@ -1601,7 +1622,7 @@ static void draw_backdrops(void)
     /* With the planes on, the framebuffer starts out transparent (the clear above) or palette pixels (the backdrops):
      * VDP1 half-transparency over either draws the pixel opaque - a translucent fill would cover the planes (the power
      * attack's flash went solid, or left the backdrop strip opaque). Everything translucent is meshed instead. */
-    pal_drawn = clear_fb;
+    pal_drawn = clear;
 }
 
 /* the colour offset (VDP2, every layer): the fade fill ending the frame, lerp towards its colour approximated as an add */
@@ -1658,7 +1679,7 @@ void rsat_frame_end(void)
     if (rec_overflow) { printf("render: %u draws over the %d a frame recorded\n", rec_overflow, REC_MAX); rec_overflow = 0; }
     if (rec_n[rec_w] > rec_peak) rec_peak = rec_n[rec_w];
     if (!use_slave) {   /* SABER_NOSLAVE: replay here and now */
-        replay(recbuf[rec_w], rec_n[rec_w]);
+        replay(rec_w);
         submit(false, rec_w);
         rec_n[rec_w] = 0;
         rec_seq++;

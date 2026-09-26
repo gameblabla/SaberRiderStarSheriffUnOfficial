@@ -335,30 +335,43 @@ static void build_track(Mode7 *m)
         bx0 = ccx < bx0 ? ccx : bx0; bx1 = ccx > bx1 ? ccx : bx1; by0 = ccy < by0 ? ccy : by0; by1 = ccy > by1 ? ccy : by1;
     }
     bx0 -= RR; by0 -= RR; bx1 += RR; by1 += RR;
-    int bw = bx1 - bx0 + 1, bh = by1 - by0 + 1;
-    real *dist = malloc(sizeof(real) * bw * bh); int16_t *near = malloc(sizeof(int16_t) * bw * bh);
-    for (int i = 0; i < bw * bh; i++) { dist[i] = R_MAX; near[i] = -1; }   /* squared distances stay under 32768 (the search box) */
-    for (int i = 0; i < TRACK_N; i++) {
-        int ccx = r_floor(m->tx[i]) >> MAPSH, ccy = r_floor(m->ty[i]) >> MAPSH;
-        for (int cy = ccy - RR; cy <= ccy + RR; cy++) {
-            real dy = r_int(cy << MAPSH) + r_int(1 << MAPSH) / 2 - m->ty[i], dy2 = r_mul(dy, dy);
-            real *drow = dist + (cy - by0) * bw - bx0; int16_t *nrow = near + (cy - by0) * bw - bx0;
-            for (int cx = ccx - RR; cx <= ccx + RR; cx++) {
-                real dx = r_int(cx << MAPSH) + r_int(1 << MAPSH) / 2 - m->tx[i], d2 = r_mul(dx, dx) + dy2;
-                if (d2 < drow[cx]) { drow[cx] = d2; nrow[cx] = (int16_t)i; }
+    /* in strips of rows: the whole box's arrays (about 400 KB at 16 unit cells) don't fit the Saturn's free memory. A
+     * cell is only taken for a sample within KERB of it (the rest is sand either way), which also keeps the squared
+     * distances in range for 16.16 (the search box's corners are ~144 units off: 41472 overflows). */
+    enum { STRIP = 32 };
+    const real KERB2 = r_mul(KERB, KERB);
+    int bw = bx1 - bx0 + 1;
+    real *dist = malloc(sizeof(real) * bw * STRIP); int16_t *near = malloc(sizeof(int16_t) * bw * STRIP);
+    if (!dist || !near) { free(dist); free(near); fprintf(stderr, "mode7: no memory for the track\n"); return; }
+    for (int sy0 = by0; sy0 <= by1; sy0 += STRIP) {
+        int sy1 = sy0 + STRIP - 1 < by1 ? sy0 + STRIP - 1 : by1, sh = sy1 - sy0 + 1;
+        for (int i = 0; i < bw * sh; i++) { dist[i] = R_MAX; near[i] = -1; }
+        for (int i = 0; i < TRACK_N; i++) {
+            int ccx = r_floor(m->tx[i]) >> MAPSH, ccy = r_floor(m->ty[i]) >> MAPSH;
+            int cy0 = ccy - RR > sy0 ? ccy - RR : sy0, cy1 = ccy + RR < sy1 ? ccy + RR : sy1;
+            for (int cy = cy0; cy <= cy1; cy++) {
+                real dy = r_int(cy << MAPSH) + r_int(1 << MAPSH) / 2 - m->ty[i], dy2 = r_mul(dy, dy);
+                if (dy2 >= KERB2) continue;
+                real *drow = dist + (cy - sy0) * bw - bx0; int16_t *nrow = near + (cy - sy0) * bw - bx0;
+                for (int cx = ccx - RR; cx <= ccx + RR; cx++) {
+                    real dx = r_int(cx << MAPSH) + r_int(1 << MAPSH) / 2 - m->tx[i], dx2 = r_mul(dx, dx);
+                    if (dx2 >= KERB2 - dy2) continue;
+                    real d2 = dx2 + dy2;
+                    if (d2 < drow[cx]) { drow[cx] = d2; nrow[cx] = (int16_t)i; }
+                }
             }
         }
-    }
-    for (int y = 0; y < bh; y++) for (int x = 0; x < bw; x++) {
-        int k = y * bw + x; real d2 = dist[k]; if (d2 >= r_mul(KERB, KERB)) continue;
-        real along = m->tlen[near[k]];
-        uint8_t t;
-        if (along < R(28)) t = d2 < r_mul(HALF, HALF) ? T_CHECKER : T_SAND;                            /* start / finish line */
-        else if (d2 < R(3 * 3)) t = (r_trunc(along / 48) & 1) ? T_DASH : T_ASPHALT;                 /* centre dashes */
-        else if (d2 < r_mul(HALF - LINE_W, HALF - LINE_W)) t = T_ASPHALT;
-        else if (d2 < r_mul(HALF, HALF)) t = T_LINE;
-        else t = (r_trunc(along / 40) & 1) ? T_KERB_RED : T_KERB_WHITE;
-        cell_set(m, bx0 + x, by0 + y, t);
+        for (int y = 0; y < sh; y++) for (int x = 0; x < bw; x++) {
+            int k = y * bw + x; real d2 = dist[k]; if (d2 >= KERB2) continue;
+            real along = m->tlen[near[k]];
+            uint8_t t;
+            if (along < R(28)) t = d2 < r_mul(HALF, HALF) ? T_CHECKER : T_SAND;                            /* start / finish line */
+            else if (d2 < R(3 * 3)) t = (r_trunc(along / 48) & 1) ? T_DASH : T_ASPHALT;                 /* centre dashes */
+            else if (d2 < r_mul(HALF - LINE_W, HALF - LINE_W)) t = T_ASPHALT;
+            else if (d2 < r_mul(HALF, HALF)) t = T_LINE;
+            else t = (r_trunc(along / 40) & 1) ? T_KERB_RED : T_KERB_WHITE;
+            cell_set(m, bx0 + x, sy0 + y, t);
+        }
     }
     free(dist); free(near);
     if (plat_getenv("SABER_M7MAP")) {   /* debug: dump the material map */
@@ -1058,7 +1071,7 @@ static void render_floor(Mode7 *m)
     if (!m->floor) {
         static const uint32_t *mats[T_COUNT * MIPS];
         for (int t = 0; t < T_COUNT; t++) for (int L = 0; L < MIPS; L++) mats[t * MIPS + L] = m->tiles[t][L];
-        RFloorDesc d = { MAPN, MAPSH, m->cells, TEX, MIPS, T_COUNT, mats };
+        RFloorDesc d = { MAPN, MAPSH, m->cells, TEX, MIPS, T_COUNT, mats, NULL, NULL };
         m->floor = r_floor_create(m->ren, &d);
         if (!m->floor) return;
     }
