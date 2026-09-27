@@ -1,114 +1,115 @@
-/* video.h on the Dreamcast: the videos converted to DCMV (VQ-compressed YUV422 textures, LZ40-packed, with an
- * ADPCM soundtrack; Dreamcast/dreamcast-fmv) played by the vendored dcfmv module in client-present mode: its
- * worker thread reads and unpacks frames ahead, video_draw DMAs the current one into its texture and draws a
- * quad through the PVR renderer like any other texture, so the game can put a video in a window (the briefing
- * room screen) or under its own overlays. Pack videos are /cd/video/<ID>.dcmv, our clips the same path as the
- * clip with a .dcmv extension. */
+/* video.h on the Dreamcast: videos converted to ZAMV5 (third_party/zamv, from KOS's zamv5-sh4zam-r8 example) by
+ * tools/dc/build_disc.py, decoded with SH4ZAM acceleration straight into the PVR's hardware YUV converter
+ * (PVR_TA_YUV_CONV) - no VQ texture, no runtime LZ unpack, one Store Queue gather per macroblock row. The decoder
+ * itself has no notion of audio: a video's soundtrack is a separate .vsnd sidecar (mono AICA ADPCM, the same shape
+ * as a snd.pck sample block) streamed by aud_dc.c's own dedicated channel, and playback paces its frames against
+ * that stream's played-byte count, falling back to a wall-clock accumulator for silent clips (the power-attack
+ * animations). Pack videos are /cd/video/<ID>.zamv(+.vsnd), our clips the same path as the clip with those
+ * extensions. */
 #include "../../video.h"
 #include "pvr_internal.h"
-#include "dcfmv/dcfmv.h"
+#include <zamv.h>
+#include <zamv_dc_helpers.h>
+#include <kos.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-void aud_music_settle(void);   /* aud_dc.c: the music worker has carried out every request */
+/* aud_dc.c: the video's own dedicated AICA ADPCM channel (see its top-of-file comment) */
+bool     aud_video_audio_open(const char *path);
+void     aud_video_audio_close(void);
+uint64_t aud_video_audio_played_bytes(void);
+uint32_t aud_video_audio_rate(void);
+void     aud_music_settle(void);   /* the music worker has carried out every request (a stream about to take its own) */
 
 struct Video {
-    dcfmv_t *fmv;
+    file_t fd;
+    zamv_chunk_reader_t *chunk;
+    zamv_decoder_t *dec;
+    zamv_file_header_t hdr;
+    zamv_dc_row_uploader_t up;
     pvr_ptr_t tex; size_t tex_bytes; int tw, th;
-    pvr_poly_hdr_t hdr __attribute__((aligned(32)));
+    pvr_poly_hdr_t phdr __attribute__((aligned(32)));
     float u0, v0, u1, v1;
-    int w, h;                  /* source display size (may differ from the converted texture) */
-    kthread_t *worker; volatile bool quit;
-    bool finished, started, audio_ready;
+    int w, h;                 /* display size (may differ from the encoded/padded frame size) */
+    int frame_index;
+    bool finished, has_audio, started;
+    float clock_ms;           /* the wall-clock fallback for videos with no soundtrack */
 };
-
-static void *worker(void *p)
-{
-    Video *v = p;
-    while (!v->quit) dcfmv_worker_step(v->fmv);   /* sleeps a tick per step */
-    return NULL;
-}
 
 static int pot(int n) { int p = 8; while (p < n) p <<= 1; return p; }
 
-static Video *open_path(const char *path)
+static int fs_read_cb(void *user, void *dst, size_t want, size_t *got)
 {
-    file_t probe = fs_open(path, O_RDONLY);
-    if (probe < 0) { printf("video: %s missing\n", path); return NULL; }
-    fs_close(probe);
-    Video *v = memalign(32, sizeof *v);
-    if (!v) return NULL;
-    memset(v, 0, sizeof *v);
-    v->fmv = dcfmv_create(DCFMV_PRESENT_CLIENT);
-    if (!v->fmv) { free(v); return NULL; }
-    dcfmv_current = v->fmv;
-    dcfmv_control_reset();
-    if (dcfmv_open(v->fmv, path) < 0) { dcfmv_destroy(v->fmv); free(v); return NULL; }
-    const dcfmv_media_info_t *info = dcfmv_media_info(v->fmv);
-    v->w = info->content_width; v->h = info->content_height;
-    v->tw = pot(info->tex_width); v->th = pot(info->tex_height);
-    bool strided = v->tw != info->tex_width || v->th != info->tex_height;
-    v->tex_bytes = (size_t)v->tw * v->th * 2;
-    v->tex = rdc_vram_alloc(v->tex_bytes);
-    if (!v->tex) { dcfmv_close(v->fmv); dcfmv_destroy(v->fmv); free(v); return NULL; }
-    rdc_forget_header();
-    uint32_t fmt = (info->frame_type == 1 ? PVR_TXRFMT_YUV422 : PVR_TXRFMT_RGB565) | PVR_TXRFMT_VQ_ENABLE;
-    if (strided) {
-        /* the packer's strided layout: one global stride register; only videos use it */
-        fmt |= PVR_TXRFMT_X32_STRIDE | PVR_TXRFMT_NONTWIDDLED;
-        PVR_SET(PVR_TEXTURE_MODULO, info->tex_width / 32);
-        v->u0 = 0.5f / v->tw; v->v0 = 0.5f / v->th;
-        v->u1 = ((float)info->content_width - 0.5f) / v->tw;
-        v->v1 = ((float)info->content_height - 0.5f) / v->th;
-    } else {
-        fmt |= PVR_TXRFMT_TWIDDLED;
-        v->u0 = ((float)(info->tex_width - info->content_width) * 0.5f + 0.5f) / info->tex_width;
-        v->v0 = ((float)(info->tex_height - info->content_height) * 0.5f + 0.5f) / info->tex_height;
-        v->u1 = 1.0f - v->u0; v->v1 = 1.0f - v->v0;
-    }
-    rdc_compile(&v->hdr, v->tex, fmt, v->tw, v->th, R_BLEND_NONE, true, false, false);
-    dcfmv_set_render_resources(v->fmv, v->tex, &v->hdr, &v->hdr, NULL, NULL);
-    dcfmv_reset_render_tracking(v->fmv);
-
-    /* sound: the movie's clock follows its soundtrack when it has one */
-    dcfmv_set_audio_clock_mode(v->fmv, dcfmv_audio_channels(v->fmv) > 0);
-    if (dcfmv_audio_channels(v->fmv) > 0) {
-        aud_music_settle();   /* a music stop still under way must let go of its stream first */
-        if (dcfmv_audio_init(v->fmv) < 0) dcfmv_set_audio_clock_mode(v->fmv, 0);
-        else {
-            v->audio_ready = true;
-            dcfmv_set_audio_volume(v->fmv, 204);   /* the core's voice bus level (0.8) */
-            /* the menu stops its music before the intro; the briefing's voice-only video plays over it, as on the PC */
-        }
-    }
-    /* the first frames synchronously, the rest by the worker */
-    int nf = v->fmv->num_total_frames;
-    for (int f = 0; f < 4 && f < nf; f++) {
-        int buf = dcfmv_total_to_unique(v->fmv, f) % DCFMV_NUM_BUFFERS;
-        atomic_store(&v->fmv->buf_state[buf], DCFMV_BUF_LOADING);
-        if (dcfmv_load_frame(v->fmv, f, buf) != 0) atomic_store(&v->fmv->buf_state[buf], DCFMV_BUF_EMPTY);
-    }
-    for (int f = 0; f < DCFMV_NUM_BUFFERS && f < nf; f++) dcfmv_schedule_frame_preload(v->fmv, f);
-    v->worker = thd_create(0, worker, v);
-    return v;
+    file_t fd = (file_t)(intptr_t)user;
+    ssize_t n = fs_read(fd, dst, want);
+    if (n < 0) return -1;
+    if (got) *got = (size_t)n;
+    return 0;
 }
 
-static void start(Video *v)
+static bool setup_texture(Video *v)
 {
-    if (v->started) return;
-    v->started = true;
-    dcfmv_reanchor_clock_to_current_frame(v->fmv);
-    if (v->audio_ready) { dcfmv_audio_start_stream(v->fmv); dcfmv_set_audio_muted(v->fmv, 0); }
+    v->tw = pot(v->hdr.width); v->th = pot(v->hdr.height);
+    v->tex_bytes = (size_t)v->hdr.width * v->hdr.height * 2;
+    v->tex = rdc_vram_alloc(v->tex_bytes);
+    if (!v->tex) return false;
+    rdc_forget_header();
+    uint32_t fmt = PVR_TXRFMT_YUV422 | PVR_TXRFMT_NONTWIDDLED | PVR_TXRFMT_X32_STRIDE;
+    PVR_SET(PVR_TEXTURE_MODULO, v->hdr.width / 32);
+    v->u0 = 0.5f / v->tw; v->v0 = 0.5f / v->th;
+    v->u1 = ((float)v->w - 0.5f) / v->tw;
+    v->v1 = ((float)v->h - 0.5f) / v->th;
+    rdc_compile(&v->phdr, v->tex, fmt, v->tw, v->th, R_BLEND_NONE, true, false, false);
+    return true;
+}
+
+static Video *open_zamv(const char *path, const char *audio_path)
+{
+    file_t fd = fs_open(path, O_RDONLY);
+    if (fd < 0) { printf("video: %s missing\n", path); return NULL; }
+    Video *v = memalign(32, sizeof *v);
+    if (!v) { fs_close(fd); return NULL; }
+    memset(v, 0, sizeof *v);
+    v->fd = fd;
+    v->chunk = zamv_chunk_reader_create(fs_read_cb, (void *)(intptr_t)fd, 64 * 1024);
+    v->dec = zamv_decoder_create();
+    if (!v->chunk || !v->dec || zamv_decoder_read_header_cb(v->dec, zamv_chunk_reader_read, v->chunk, &v->hdr) < 0) {
+        printf("video: %s: bad ZAMV stream\n", path);
+        goto fail;
+    }
+    if ((v->hdr.width & 31u) || (v->hdr.height & 15u)) {
+        printf("video: %s: %ux%u not a multiple of 32x16\n", path, v->hdr.width, v->hdr.height);
+        goto fail;
+    }
+    v->w = v->hdr.width; v->h = v->hdr.height;
+    if (!setup_texture(v)) goto fail;
+    zamv_decoder_set_row_callback(v->dec, zamv_dc_upload_row_direct_cb, &v->up);
+
+    if (audio_path) {
+        aud_music_settle();   /* a music stop still under way must let go of its stream first */
+        v->has_audio = aud_video_audio_open(audio_path);
+    }
+    return v;
+fail:
+    if (v->dec) zamv_decoder_destroy(v->dec);
+    if (v->chunk) zamv_chunk_reader_destroy(v->chunk);
+    fs_close(fd);
+    free(v);
+    return NULL;
 }
 
 Video *video_open(Ren *r, uint32_t id)
 {
     (void)r;
-    char path[64]; snprintf(path, sizeof path, "/cd/video/%08lX.dcmv", (unsigned long)id);
-    Video *v = open_path(path);
-    /* The briefing source is 768x312. Conversion reduces every movie to a
-     * 320x240 texture, but the room screen is sized from the source video. */
+    char path[64], audio[64];
+    snprintf(path, sizeof path, "/cd/video/%08lX.zamv", (unsigned long)id);
+    snprintf(audio, sizeof audio, "/cd/video/%08lX.vsnd", (unsigned long)id);
+    file_t probe = fs_open(audio, O_RDONLY);
+    bool has_audio = probe >= 0; if (has_audio) fs_close(probe);
+    Video *v = open_zamv(path, has_audio ? audio : NULL);
+    /* The briefing source is 768x312: the encoder still bakes every pack video down to 320x240, and the room
+     * screen is sized from the source video (video_draw scales v->w/v->h to fit, same as the old DCMV path). */
     if (v && id == 0x2FE798C3u) { v->w = 768; v->h = 312; }
     return v;
 }
@@ -117,35 +118,51 @@ void video_preload_file(const char *path, real fps) { (void)path; (void)fps; }
 
 Video *video_open_file(Ren *r, const char *path, float fps)
 {
-    (void)r; (void)fps;   /* the rate is in the DCMV header */
+    (void)r; (void)fps;   /* the rate is in the ZAMV header */
     if (!path) return NULL;
     char p[256]; snprintf(p, sizeof p, "%s", path);
     char *dot = strrchr(p, '.'); if (dot) *dot = 0;
-    strncat(p, ".dcmv", sizeof p - strlen(p) - 1);
-    return open_path(p);
+    strncat(p, ".zamv", sizeof p - strlen(p) - 1);
+    return open_zamv(p, NULL);   /* our own clips (power attacks) carry no soundtrack */
+}
+
+static bool decode_one(Video *v)
+{
+    if (zamv_dc_configure_yuv420(v->tex, v->hdr.width, v->hdr.height) < 0) return false;
+    if (zamv_dc_row_uploader_begin(&v->up) < 0) return false;
+    int dr = zamv_decoder_decode_cb(v->dec, zamv_chunk_reader_read, v->chunk, NULL);
+    zamv_dc_row_uploader_end(&v->up);
+    if (dr <= 0) { v->finished = true; return false; }
+    v->frame_index++;
+    return true;
 }
 
 bool video_update(Video *v, float dt)
 {
-    (void)dt;   /* the movie runs on its own clock (its soundtrack's, or the timer) */
     if (!v || v->finished) return false;
-    start(v);
-    dcfmv_tick(v->fmv);
-    if (dcfmv_frame_index(v->fmv) >= v->fmv->num_total_frames - 1) { v->finished = true; return false; }
-    return true;
+    if (!v->started) { v->started = true; v->clock_ms = 0; }
+    float frame_ms = 1000.0f * (float)v->hdr.fps_den / (float)(v->hdr.fps_num ? v->hdr.fps_num : 1);
+    float target_ms;
+    if (v->has_audio) {
+        uint64_t rate = aud_video_audio_rate();
+        target_ms = rate ? (float)(aud_video_audio_played_bytes() * 2000ull / rate) : 0;   /* 2 samples/ADPCM byte */
+    } else {
+        v->clock_ms += dt * 1000.0f;
+        target_ms = v->clock_ms;
+    }
+    if (target_ms >= (float)(v->frame_index + 1) * frame_ms) decode_one(v);
+    return !v->finished;
 }
 
 static void draw(Video *v, float x, float y, float w, float h)
 {
-    if (!v || !rdc_in_frame()) return;
-    dcfmv_upload_current_video(v->fmv);
-    if (v->fmv->last_unique_frame_drawn < 0) return;   /* nothing decoded yet */
+    if (!v || !rdc_in_frame() || !v->frame_index) return;
     float X0, Y0, X1, Y1;
     extern void rdc_xform(float x, float y, float *X, float *Y);
     rdc_xform(x, y, &X0, &Y0); rdc_xform(x + w, y + h, &X1, &Y1);
     RdcVert q[4] = { { X0, Y0, 1, v->u0, v->v0, 0xffffffffu, 0 }, { X1, Y0, 1, v->u1, v->v0, 0xffffffffu, 0 },
                      { X1, Y1, 1, v->u1, v->v1, 0xffffffffu, 0 }, { X0, Y1, 1, v->u0, v->v1, 0xffffffffu, 0 } };
-    rdc_header(&v->hdr);
+    rdc_header(&v->phdr);
     rdc_poly(q, 4);
 }
 
@@ -162,11 +179,10 @@ void video_size(const Video *v, int *w, int *h) { *w = v ? v->w : 0; *h = v ? v-
 void video_close(Video *v)
 {
     if (!v) return;
-    v->quit = true;
-    if (v->worker) thd_join(v->worker, NULL);
-    dcfmv_set_audio_muted(v->fmv, 1);
-    dcfmv_close(v->fmv);
-    dcfmv_destroy(v->fmv);
+    if (v->has_audio) aud_video_audio_close();
+    if (v->dec) zamv_decoder_destroy(v->dec);
+    if (v->chunk) zamv_chunk_reader_destroy(v->chunk);
+    fs_close(v->fd);
     rdc_forget_header();
     rdc_vram_free(v->tex, v->tex_bytes);
     free(v);

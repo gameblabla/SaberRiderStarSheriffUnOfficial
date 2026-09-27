@@ -50,15 +50,10 @@ static void lives_caps(int difficulty, int *max_lives, int *max_cont)
     *max_lives = difficulty == 0 ? 7 : difficulty == 1 ? 5 : 3;
     *max_cont  = difficulty == 0 ? 5 : difficulty == 1 ? 4 : 3;
 }
-/* an option the cursor may stop on (and that gets a row). Dreamcast hides SCREEN / RATIO for now
- * (Temporary WIP: 320x240 + original 4:3 forced until the 640x480 performance issues are fixed);
- * CONTROLS hides where the platform has no remapping. */
+/* an option the cursor may stop on (and that gets a row). CONTROLS hides where the platform has no remapping. */
 static bool opt_selectable(int opt)
 {
     if (opt == OPT_CONTROLS && !plat_bind_supported()) return false;
-#ifdef PLAT_DREAMCAST
-    if (opt == OPT_SCREEN || opt == OPT_RATIO) return false;
-#endif
 #ifdef PLAT_SATURN
     if (opt == OPT_SCREEN) return false;   /* one choice, 320x224 or 352x224: the RATIO row (shown as SCREEN) */
 #endif

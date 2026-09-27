@@ -328,6 +328,60 @@ void aud_music_stop(void) { music_post(want_track, 0, false); }
 void aud_music_gain(float g) { music_gain = g; }
 void aud_music_pause(bool pause) { music_post(want_pause, 0, pause); }
 
+/* ---- video soundtrack: progressive ADPCM read straight off the disc (a .vsnd sidecar next to the .zamv, the same
+ * "SMPL" + rate/samples/bytes header + KOS wav2adpcm body as a snd.pck sample block), no RAM cache. ZAMV5 carries no
+ * audio of its own (unlike the old DCMV files), so video_dcmv.c drives this stream instead, and paces its decode
+ * against aud_video_audio_played_bytes() the way the old code paced against dcfmv's own audio clock. */
+static file_t vaud_fd = -1;
+static uint32_t vaud_rate;
+static size_t vaud_bytes_left;
+static uint64_t vaud_bytes_played;
+static snd_stream_hnd_t vaud_h = SND_STREAM_INVALID;
+static uint8_t vaud_buf[4096] __attribute__((aligned(32)));
+
+void aud_video_audio_close(void);
+
+static void *vaud_cb(snd_stream_hnd_t hnd, int req, int *got)
+{
+    if (hnd != vaud_h || vaud_fd < 0) { *got = req; return silence; }
+    size_t want = (size_t)req < sizeof vaud_buf ? (size_t)req : sizeof vaud_buf;
+    size_t n = 0;
+    if (vaud_bytes_left) {
+        size_t r = want < vaud_bytes_left ? want : vaud_bytes_left;
+        ssize_t rd = fs_read(vaud_fd, vaud_buf, r);
+        if (rd > 0) { n = (size_t)rd; vaud_bytes_left -= n; }
+    }
+    if (n < want) memset(vaud_buf + n, 0x80, want - n);   /* ADPCM has no zero code: +step/8, -step/8 holds the level */
+    vaud_bytes_played += want;
+    *got = (int)want;
+    return vaud_buf;
+}
+
+bool aud_video_audio_open(const char *path)
+{
+    aud_video_audio_close();
+    file_t fd = fs_open(path, O_RDONLY);
+    if (fd < 0) return false;
+    uint8_t hdr[32];
+    if (fs_read(fd, hdr, sizeof hdr) != (ssize_t)sizeof hdr || memcmp(hdr, "SMPL", 4)) { fs_close(fd); return false; }
+    vaud_rate = rd32(hdr + 4);
+    vaud_bytes_left = rd32(hdr + 12);
+    vaud_bytes_played = 0;
+    vaud_fd = fd;
+    if (vaud_h == SND_STREAM_INVALID) vaud_h = snd_stream_alloc(vaud_cb, STREAM_BUF);
+    if (vaud_h == SND_STREAM_INVALID) { fs_close(fd); vaud_fd = -1; return false; }
+    snd_stream_start_adpcm(vaud_h, vaud_rate, 0);
+    snd_stream_volume(vaud_h, 204);   /* the core's voice bus level (0.8), same as the old dcfmv path used */
+    return true;
+}
+void aud_video_audio_close(void)
+{
+    if (vaud_h != SND_STREAM_INVALID) snd_stream_stop(vaud_h);
+    if (vaud_fd >= 0) { fs_close(vaud_fd); vaud_fd = -1; }
+}
+uint64_t aud_video_audio_played_bytes(void) { return vaud_bytes_played; }
+uint32_t aud_video_audio_rate(void) { return vaud_rate; }
+
 /* ---- lifetime ---- */
 void aud_update(void)
 {
@@ -337,6 +391,7 @@ void aud_update(void)
         if (strm[i].draining && now >= strm[i].end_ms) { snd_stream_stop(strm[i].h); strm[i].active = false; strm[i].smp = NULL; continue; }
         snd_stream_poll(strm[i].h);
     }
+    if (vaud_fd >= 0) snd_stream_poll(vaud_h);
     apply_music_vol();
 }
 
@@ -358,6 +413,8 @@ void aud_shutdown(void)
     aud_music_stop(); aud_music_settle();
     music_quit = true; sem_signal(&music_sem); thd_join(music_thd, NULL);
     for (int i = 0; i < NSTREAM; i++) if (strm[i].h != SND_STREAM_INVALID) { snd_stream_stop(strm[i].h); snd_stream_destroy(strm[i].h); }
+    aud_video_audio_close();
+    if (vaud_h != SND_STREAM_INVALID) { snd_stream_destroy(vaud_h); vaud_h = SND_STREAM_INVALID; }
     snd_sfx_unload_all();
     __real_snd_stream_shutdown();
 }

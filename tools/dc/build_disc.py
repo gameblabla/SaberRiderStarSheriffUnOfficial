@@ -11,7 +11,7 @@ data/snd.pck as AICA ADPCM, and our other files (text, level blobs, the RGBA of
 the few images the game reads pixels from) into data/files.pck. Each block is
 32-byte aligned and padded, read in one go and DMA'd on; a few big ones are
 stored LZ40-compressed instead (the disc reads slowly, the SH-4 decode is quick). Music (ADX) and video
-(DCMV) stay files: they stream.
+(ZAMV5) stay files: they stream.
 
 A CD-R on the Dreamcast is read at constant linear velocity from the inside
 out; the image is padded (a dummy file sorted first) so the game's data sits at
@@ -36,7 +36,7 @@ import texbake  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 KOS = Path('/opt/toolchains/dc/kos')
-FMV = ROOT / 'third_party/dreamcast-fmv'
+ZAMV = ROOT / 'third_party/zamv'
 PACKS = ('pack.pck', 'common.pck', 'levels.pck', 'menu.pck', 'level1.pck')
 # assets/ that the game never loads (sources of the ones it does, retired versions)
 UNUSED = ('old_april.png', 'stage2_victory.png', 'stage2_victory_og.png', 'mode7_alt.png', 'april_victory_stage1.png',
@@ -173,52 +173,53 @@ def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log) -> None:
     log(f'textures: {total // 1024} KB of VRAM if all were loaded at once')
 
 
+def build_zamvenc(work: Path) -> Path:
+    """Host-side ZAMV5 encoder (third_party/zamv), built once per invocation."""
+    exe = work / 'zamvenc'
+    if not exe.is_file():
+        work.mkdir(parents=True, exist_ok=True)
+        run('cc', '-O3', '-std=c99', '-Wall', '-I', ZAMV,
+            ZAMV / 'zamvenc.c', ZAMV / 'bitstream.c', ZAMV / 'common.c',
+            ZAMV / 'codec.c', ZAMV / 'transform.c', ZAMV / 'input.c',
+            '-lm', '-o', exe)
+    return exe
+
+
+def video_audio_sidecar(soundtrack: Path, target: Path, work: Path) -> None:
+    """A video's own soundtrack, in the same self-describing mono ADPCM shape as sample_block()
+    (SMPL + rate/bytes header + KOS wav2adpcm data), but written straight to its own /cd file instead of
+    into snd.pck: video_dcmv.c streams it progressively rather than loading a whole sample into RAM."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    work.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(sample_block(soundtrack, work))
+
+
 def convert_video(source: Path, soundtrack: Path | None, target: Path,
-                  fps: int, work: Path, compression: str = 'lz40') -> None:
-    """Use the project's DCMV v6 packer, with 512x256 VQ YUV textures.
-    compression: 'lz40' (Dreamcast SH-4, the default), 'lz4' or 'zstd' (host/upstream)."""
+                  fps: int, work: Path, zamvenc: Path,
+                  width: int = 320, height: int = 240,
+                  target_kbps: int = 3400, q: int = 9) -> None:
+    """Re-encode a clip (the demo's XviD elementary streams, or our own MPEG-4 ones) to ZAMV5: SH4ZAM-decoded
+    straight into the PVR's hardware YUV converter (video_dcmv.c). height is padded up to a multiple of 16 for
+    the codec (the macroblock grid); video_dcmv.c crops the UV rectangle back down for display, the same way it
+    already does for the briefing room's non-4:3 source size."""
     fresh(work)
     target.parent.mkdir(parents=True, exist_ok=True)
-    # The raw XviD elementary streams can be misdetected as GSM by ffmpeg.
-    # Put them in an MP4 container without re-encoding and assign the known
-    # source frame rate before the converter extracts individual frames.
+    enc_h = (height + 15) & ~15
     container = work / 'input.mp4'
+    # The raw XviD elementary streams can be misdetected as GSM by ffmpeg; wrap them in an MP4 container
+    # without re-encoding and assign the known source frame rate first.
     run('ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
         '-r', str(fps), '-f', 'm4v', '-i', source, '-c:v', 'copy', container)
-    env = os.environ.copy()
-    env.update({
-        'INPUT': str(container),
-        'AUDIOINPUT': str(soundtrack or source),
-        'FINAL_OUTPUT': str(target),
-        'OUTPUT_DIR': str(work / 'output'),
-        'UNIQUE_FRAMES': str(work / 'unique'),
-        'TEMP_DIR': str(work / 'frames'),
-        'FPS': str(fps),
-        'FORMAT': 'yuv422',
-        'USE_STRIDED': 'false',
-        'SCALE_WIDTH': '320',
-        'SCALE_HEIGHT': '240',
-        'AUDIO_RATE': '32000' if soundtrack else '0',
-        'CHANNELS': '1' if soundtrack else '0',
-        'DCMV_CONTAINER': 'frames',
-        'COMPRESSION_BACKEND': compression,
-        'USE_DEDUP': 'false',
-        'SKIP_IF_EXISTS': 'false',
-        'CLEANUP_TEMP': 'true',
-        'THREADS': str(min(os.cpu_count() or 2, 8)),
-        'FFMPEG_LOGLEVEL': 'error',
-        'INTERMEDIATE_FORMAT': 'tga',
-        # This pvrtex build requires an amount after --dither; the converter
-        # script supplies the flag without one, so disable that script option.
-        'PVRTX_DITHER': '0',
-        # The upstream script expands this as words, not shell redirection.
-        'PVRTX_QUIET': ' ',
-    })
-    for packer in ('pack_dcmv', 'pack_dcmv_chunk'):   # the vendored converter ships sources only
-        if not (FMV / packer).is_file():
-            run('gcc', '-O2', FMV / f'{packer}.c', '-o', FMV / packer, '-llz4', '-lzstd', '-lm')
-    run(need(FMV / 'convert_to_pvr_fmv.sh'), cwd=FMV, env=env)
+    raw = work / 'raw.yuv'
+    run('ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
+        '-i', container, '-vf', f'scale={width}:{height}:flags=lanczos,pad={width}:{enc_h}:0:0,format=yuv420p',
+        '-f', 'rawvideo', raw)
+    run(zamvenc, raw, target, width, enc_h, fps, 1,
+        '--target-kbps', target_kbps, '--audio-kbps', '0', '--cd-kbps', target_kbps + 1400,
+        '--vbv-ms', '500', '--q', q)
     need(target)
+    if soundtrack:
+        video_audio_sidecar(soundtrack, target.with_suffix('.vsnd'), work / 'audio')
 
 
 def boot_image(elf: Path, out: Path, stage: Path, pad_to: int = PAD_TO_MIB) -> None:
@@ -283,7 +284,7 @@ def build(args: argparse.Namespace) -> None:
         shutil.rmtree(stage / 'data', ignore_errors=True)
         shutil.rmtree(stage / 'sfx', ignore_errors=True)   # what older discs had instead of snd.pck / tex.pck
         for f in (stage / 'assets').rglob('*') if (stage / 'assets').is_dir() else ():
-            if f.is_file() and f.suffix != '.dcmv':
+            if f.is_file() and f.suffix not in ('.zamv', '.vsnd'):
                 f.unlink()
         for d in sorted((stage / 'assets').rglob('*'), reverse=True) if (stage / 'assets').is_dir() else ():
             if d.is_dir() and not any(d.iterdir()):
@@ -293,7 +294,7 @@ def build(args: argparse.Namespace) -> None:
     work.mkdir(exist_ok=True)
 
     # The runtime reads the five gameplay packs and the three baked ones; video.pck is 96 MB and is replaced by
-    # independently seekable DCMV files in /video.
+    # independently seekable ZAMV5 files in /video.
     (stage / 'data').mkdir()
     for name in PACKS:
         shutil.copy2(data / name, stage / 'data' / name)
@@ -319,7 +320,7 @@ def build(args: argparse.Namespace) -> None:
         snd.add(int(source.stem, 16), 'sample', sample_block(source, work))
 
     # Our files: WAVs to snd.pck, the rest to files.pck (a clip's .m4v name stays as an empty entry so asset_path finds
-    # it; the video itself is the .dcmv file next to where it would be).
+    # it; the video itself is the .zamv file, plus a .vsnd sidecar for its soundtrack, next to where it would be).
     for source in sorted((ROOT / 'assets').rglob('*')):
         if not source.is_file():
             continue
@@ -356,13 +357,14 @@ def build(args: argparse.Namespace) -> None:
             '-i', pcm, '-c:a', 'adpcm_adx', target)
 
     if not args.skip_fmv:
+        zamvenc = build_zamvenc(work / 'zamvenc_host')
         for source in sorted((extracted / 'video').glob('*.m4v')):
             audio = next((p for p in (source.with_suffix('.ogg'), source.with_suffix('.wav')) if p.exists()), None)
-            convert_video(source, audio, stage / 'video' / (source.stem + '.dcmv'),
-                          25, work / 'fmv')
+            convert_video(source, audio, stage / 'video' / (source.stem + '.zamv'),
+                          25, work / 'fmv', zamvenc)
         for source in sorted((ROOT / 'assets/power').glob('*.m4v')):
-            convert_video(source, None, stage / 'assets/power' / (source.stem + '.dcmv'),
-                          24, work / 'fmv')
+            convert_video(source, None, stage / 'assets/power' / (source.stem + '.zamv'),
+                          24, work / 'fmv', zamvenc)
 
     boot_image(elf, out, stage, args.pad_to)
 
