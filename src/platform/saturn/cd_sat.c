@@ -69,6 +69,9 @@ extern int cd_block_cmd_execute(CdRegs *regs, CdRegs *status);
 #define HIRQ_PEND   0x0010u
 static void cdda_interrupt(void);
 static int cd_cmd(uint16_t hirq_mask, uint16_t cr1, uint16_t cr2, uint16_t cr3, uint16_t cr4);
+static int32_t sectors_ready(void);
+static int32_t sector_fad(uint16_t pos);
+static bool sectors_drop(uint16_t sectors);
 static bool sectors_take(void *dst, uint32_t sectors);
 static bool data_busy;          /* a synchronous disc read owns the drive while sectors are copied */
 
@@ -104,14 +107,26 @@ static bool read_sectors(fad_t fad, void *dst, uint32_t n, fad_t file_end)
     if (!st_on || fad != st_next || fad + n > st_end)
         if (!stream_start(fad, file_end > fad + n ? file_end - fad : n)) goto done;
     uint8_t *p = dst;
+    uint32_t stale = 0;
     while (n) {
         int32_t available;
         uint32_t spins = 0;
-        while ((available = cd_block_cmd_sector_number_get(0)) <= 0) {
+        while ((available = sectors_ready()) <= 0) {
             if (available < 0 || ++spins > 2000000u) { st_on = false; goto done; }   /* error or stalled drive */
         }
         uint32_t ready = (uint32_t)available;
         if (ready > n) ready = n;
+        /* only the sector asked for: the filter's range is the rest of the file, and sectors the drive was still
+         * reading from its previous position in the same file pass it - SND.PCK's sector 203 taken for sector 80, a
+         * sound sample read as garbage and stage 5 refused after stage 4. Stale ones come first; drop them. */
+        int32_t got = sector_fad(0);
+        if (got < 0) { st_on = false; goto done; }
+        if ((fad_t)got != st_next) {
+            if (!stale) printf("cd: stale sector %u dropped reading %s, sector %u\n", (unsigned)got, read_name ? read_name : "?", (unsigned)st_next);
+            if (++stale > 4096u || !sectors_drop(1)) { st_on = false; goto done; }
+            continue;
+        }
+        if (ready > 1 && sector_fad((uint16_t)(ready - 1)) != (int32_t)(st_next + ready - 1)) ready = 1;
         if (!sectors_take(p, ready)) { st_on = false; goto done; }
         p += ready * 2048u; n -= ready; st_next += ready;
     }
@@ -192,7 +207,7 @@ size_t cd_sat_available(FILE *f)
     fad_t next = c->fad + sec;
     if (next >= c->fad_end) return avail;
     if (!st_on || next != st_next) { if (!avail) stream_start(next, c->fad_end - next); return avail; }
-    int32_t ready = cd_block_cmd_sector_number_get(0);
+    int32_t ready = sectors_ready();
     if (ready < 0) st_on = false;
     else if (ready > 0) avail += (size_t)(uint32_t)ready * 2048u;
     return avail > c->size - c->pos ? c->size - c->pos : avail;
@@ -244,13 +259,32 @@ void cd_sat_cdda_track_length(int track, uint32_t sectors)
  * CD-DA repeat count) against the status codes, so once a looping track has repeated an odd number of times (1 & ERROR)
  * every one of them "fails" - the next track's connection never set (the boss music never starting) and no data read
  * possible (the victory screen blank) until something else restarts the play. The status code is the high byte. */
+static int cd_cmd_st(uint16_t hirq_mask, uint16_t cr1, uint16_t cr2, uint16_t cr3, uint16_t cr4, CdRegs *st)
+{
+    CdRegs r = { .hirq_mask = hirq_mask, .cr1 = cr1, .cr2 = cr2, .cr3 = cr3, .cr4 = cr4 };
+    int err = cd_block_cmd_execute(&r, st);
+    if (err) return err;
+    uint8_t code = (uint8_t)(st->cr1 >> 8) & 0x0F;
+    return code == 0x06 || code == 0x07 || code == 0x09 || code == 0x0A ? -code : 0;   /* open, no disc, error, fatal */
+}
 static int cd_cmd(uint16_t hirq_mask, uint16_t cr1, uint16_t cr2, uint16_t cr3, uint16_t cr4)
 {
-    CdRegs r = { .hirq_mask = hirq_mask, .cr1 = cr1, .cr2 = cr2, .cr3 = cr3, .cr4 = cr4 }, st;
-    int err = cd_block_cmd_execute(&r, &st);
-    if (err) return err;
-    uint8_t code = (uint8_t)(st.cr1 >> 8) & 0x0F;
-    return code == 0x06 || code == 0x07 || code == 0x09 || code == 0x0A ? -code : 0;   /* open, no disc, error, fatal */
+    CdRegs st;
+    return cd_cmd_st(hirq_mask, cr1, cr2, cr3, cr4, &st);
+}
+
+/* partition 0's sector count (libyaul's cd_block_cmd_sector_number_get has the same status misread) */
+static int32_t sectors_ready(void)
+{
+    CdRegs st;
+    return cd_cmd_st(0, 0x5100, 0, 0x0000, 0, &st) ? -1 : (int32_t)st.cr4;
+}
+
+/* the FAD of partition 0's sector at pos (get sector info), -1 on an error */
+static int32_t sector_fad(uint16_t pos)
+{
+    CdRegs st;
+    return cd_cmd_st(0, 0x5400, pos, 0x0000, 0, &st) ? -1 : (int32_t)((uint32_t)(st.cr1 & 0xFF) << 16 | st.cr2);
 }
 
 /* partition 0's first `sectors` sectors into dst (2-byte aligned) and out of the partition. libyaul's
@@ -258,7 +292,13 @@ static int cd_cmd(uint16_t hirq_mask, uint16_t cr1, uint16_t cr2, uint16_t cr3, 
  * started the transfer when it "fails", and it returns without reading the data or ending the transfer - the CD
  * block then refuses every command after it (a white screen after MISSION ACCOMPLISHED, once the stage music had
  * looped). The transfer is always ended here. */
-#define HIRQ_EHST 0x0400u
+#define HIRQ_EHST 0x0080u   /* 0x0400 is SCDQ, set on every subcode update while the drive plays: the DRDY wait ended early */
+static bool sectors_drop(uint16_t sectors)   /* partition 0's first sectors, unread */
+{
+    if (cd_cmd(HIRQ_EHST, 0x6200, 0, 0x0000, sectors)) return false;
+    for (uint32_t spins = 0; !(CD_HIRQ & HIRQ_EHST); ) if (++spins > 0x240000u) return false;
+    return true;
+}
 static bool sectors_take(void *dst, uint32_t sectors)
 {
     bool ok = !cd_cmd(HIRQ_EHST, 0x6300, 0, 0x0000, (uint16_t)sectors);
