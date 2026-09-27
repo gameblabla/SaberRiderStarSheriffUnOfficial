@@ -60,7 +60,16 @@ static bool st_on;
 
 void cd_sat_stream_stop(void) { st_on = false; }   /* the decoder no longer needs the buffered data sectors */
 
+typedef struct { uint16_t dtr, hirq, hirq_mask, cr1, cr2, cr3, cr4; } CdRegs;   /* libyaul's internal cd_block_regs */
+extern int cd_block_cmd_execute(CdRegs *regs, CdRegs *status);
+#define CD_HIRQ     (*(volatile uint16_t *)0x25890008u)
+#define CD_DTR      (*(volatile uint16_t *)0x25890000u)
+#define HIRQ_DRDY   0x0002u
+#define HIRQ_CSCT   0x0004u
+#define HIRQ_PEND   0x0010u
 static void cdda_interrupt(void);
+static int cd_cmd(uint16_t hirq_mask, uint16_t cr1, uint16_t cr2, uint16_t cr3, uint16_t cr4);
+static bool sectors_take(void *dst, uint32_t sectors);
 static bool data_busy;          /* a synchronous disc read owns the drive while sectors are copied */
 
 /* Filter 0 passes only the sectors of this stream (FAD range) to partition 0 and drops the rest: without the range a
@@ -71,9 +80,12 @@ static bool stream_start(fad_t fad, uint32_t count)
 {
     cdda_interrupt();
     st_on = false;
-    if (cd_block_cmd_filter_range_set(0, fad, count) || cd_block_cmd_filter_mode_set(0x40, 0) ||
-        cd_block_cmd_filter_connection_set(3, 0, 0xFF, 0) ||
-        cd_block_cmd_selector_reset(0, 0) || cd_block_cmd_cd_dev_connection_set(0) || cd_block_cmd_disk_play(0, fad, (int32_t)count))
+    if (cd_cmd(0, 0x4000 | (fad >> 16), (uint16_t)fad, (uint16_t)((count >> 16) & 0xFF), (uint16_t)count) ||   /* filter 0: FAD range */
+        cd_cmd(0, 0x4440, 0, 0, 0) ||                                  /* filter 0: range mode */
+        cd_cmd(0, 0x4603, 0x00FF, 0, 0) ||                             /* filter 0: true -> partition 0, false -> none */
+        cd_cmd(0x0200, 0x4800, 0, 0, 0) ||                             /* reset selector 0 (EFLS) */
+        cd_cmd(0x0040, 0x3000, 0, 0x0000, 0) ||                        /* the drive into filter 0 (ESEL) */
+        cd_cmd(HIRQ_PEND | HIRQ_CSCT, 0x1080 | (fad >> 16), (uint16_t)fad, (uint16_t)(0x0080 | ((count >> 16) & 0xFF)), (uint16_t)count))
         return false;
     st_next = fad; st_end = fad + count; st_on = true;
     seeks_total++;
@@ -100,7 +112,7 @@ static bool read_sectors(fad_t fad, void *dst, uint32_t n, fad_t file_end)
         }
         uint32_t ready = (uint32_t)available;
         if (ready > n) ready = n;
-        if (cd_block_transfer_data(0, 0, p, ready * 2048u)) { st_on = false; goto done; }
+        if (!sectors_take(p, ready)) { st_on = false; goto done; }
         p += ready * 2048u; n -= ready; st_next += ready;
     }
     ok = true;
@@ -190,13 +202,6 @@ size_t cd_sat_available(FILE *f)
  * The CD block plays an audio track into the SCSP's CD input (the sound driver mixes it: aud_sat.c). Tracks come from
  * the TOC; a track loops with the drive's own repeat (0xF: for ever). A data read (stream_start) takes the drive: the
  * position is kept, and cd_sat_cdda_update resumes once the synchronous sector read releases the drive. */
-typedef struct { uint16_t dtr, hirq, hirq_mask, cr1, cr2, cr3, cr4; } CdRegs;   /* libyaul's internal cd_block_regs */
-extern int cd_block_cmd_execute(CdRegs *regs, CdRegs *status);
-#define CD_HIRQ     (*(volatile uint16_t *)0x25890008u)
-#define CD_DTR      (*(volatile uint16_t *)0x25890000u)
-#define HIRQ_DRDY   0x0002u
-#define HIRQ_CSCT   0x0004u
-#define HIRQ_PEND   0x0010u
 static uint32_t toc[102];       /* per track (1..99 at 0..98): control/address << 24 | FAD; [101] the lead-out */
 static uint32_t playable_sectors[100];
 static bool toc_ok;
@@ -235,6 +240,39 @@ void cd_sat_cdda_track_length(int track, uint32_t sectors)
     if (track > 1 && track < 100) playable_sectors[track] = sectors;
 }
 
+/* The CD block commands this file issues, not libyaul's cd_block_cmd_*: those check the response's low byte (flags and
+ * CD-DA repeat count) against the status codes, so once a looping track has repeated an odd number of times (1 & ERROR)
+ * every one of them "fails" - the next track's connection never set (the boss music never starting) and no data read
+ * possible (the victory screen blank) until something else restarts the play. The status code is the high byte. */
+static int cd_cmd(uint16_t hirq_mask, uint16_t cr1, uint16_t cr2, uint16_t cr3, uint16_t cr4)
+{
+    CdRegs r = { .hirq_mask = hirq_mask, .cr1 = cr1, .cr2 = cr2, .cr3 = cr3, .cr4 = cr4 }, st;
+    int err = cd_block_cmd_execute(&r, &st);
+    if (err) return err;
+    uint8_t code = (uint8_t)(st.cr1 >> 8) & 0x0F;
+    return code == 0x06 || code == 0x07 || code == 0x09 || code == 0x0A ? -code : 0;   /* open, no disc, error, fatal */
+}
+
+/* partition 0's first `sectors` sectors into dst (2-byte aligned) and out of the partition. libyaul's
+ * cd_block_transfer_data runs the same misread status check on "get then delete sector data": the command has
+ * started the transfer when it "fails", and it returns without reading the data or ending the transfer - the CD
+ * block then refuses every command after it (a white screen after MISSION ACCOMPLISHED, once the stage music had
+ * looped). The transfer is always ended here. */
+#define HIRQ_EHST 0x0400u
+static bool sectors_take(void *dst, uint32_t sectors)
+{
+    bool ok = !cd_cmd(HIRQ_EHST, 0x6300, 0, 0x0000, (uint16_t)sectors);
+    if (ok) {
+        uint32_t spins = 0;
+        while (!(CD_HIRQ & (HIRQ_DRDY | HIRQ_EHST))) if (++spins > 0x240000u) { ok = false; break; }
+    }
+    if (ok) { uint16_t *d = dst; for (uint32_t i = 0; i < sectors * 1024u; i++) d[i] = CD_DTR; }
+    CdRegs r = { .cr1 = 0x0600 }, st;   /* end data transfer */
+    cd_block_cmd_execute(&r, &st);
+    CD_HIRQ = (uint16_t)~HIRQ_DRDY;
+    return ok;
+}
+
 static int play_cmd(uint16_t cr1, uint16_t cr2, uint16_t cr3, uint16_t cr4)
 {
     CdRegs r = { .hirq_mask = HIRQ_PEND | HIRQ_CSCT, .cr1 = cr1, .cr2 = cr2, .cr3 = cr3, .cr4 = cr4 }, st;
@@ -246,7 +284,7 @@ static bool cdda_start(void)
     if (!cdda.track || cdda.paused || !toc_ok) return false;
     cdda.owned = cdda.pending = false;
     st_on = false;
-    if (cd_block_cmd_cd_dev_connection_set(0xFF)) {
+    if (cd_cmd(0x0040, 0x3000, 0, 0xFF00, 0)) {   /* the drive to no filter: audio goes to the SCSP (ESEL) */
         cdda.owned = false; cdda.retry_at = sat_timer_us() + 250000u;
         if (cdda.failures < 3) cdda.failures++;
         printf("cd: CD-DA connection failed for track %d\n", cdda.track);

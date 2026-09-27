@@ -178,9 +178,28 @@ static int gap_fit(uint32_t size, uint32_t *off)
     }
     return -1;
 }
+/* drop, in one pass, every slot that neither this frame nor the one being drawn needs and that is orphaned (orphans
+ * only) or last used at or before `before` */
+static int slots_evict(bool orphans, uint32_t before)
+{
+    int n = 0;
+    for (int i = 0; i < nslots; i++) {
+        Slot *s = &slots[i];
+        uint32_t u = slot_used(i);
+        if (u + 1 < frame_no && (orphans ? !s->t : u <= before)) {
+            if (s->t) s->t->loc[s->part] = 0;
+            continue;
+        }
+        slots[n++] = *s;
+    }
+    int gone = nslots - n;
+    nslots = n; evictions += (unsigned)gone;
+    return gone;
+}
 static bool vram_alloc(uint32_t size, RTex *t, int part, uint32_t *off)
 {
     size = (size + 31) & ~31u;
+    bool orphans_gone = false;
     for (;;) {
         int at = nslots < MAX_SLOTS ? gap_fit(size, off) : -1;
         if (at >= 0) {
@@ -189,13 +208,16 @@ static bool vram_alloc(uint32_t size, RTex *t, int part, uint32_t *off)
             nslots++;
             return true;
         }
-        /* evict the least recently used part that neither this frame nor the one being drawn needs */
-        int victim = -1;
+        /* the destroyed textures' copies first, all at once: a stage change leaves ~900 of them, and evicting them
+         * one scan + memmove at a time took the victory screen's zoom seconds of replay */
+        if (!orphans_gone) { orphans_gone = true; if (slots_evict(true, 0)) continue; }
+        /* then the least recently used parts that neither this frame nor the one being drawn needs: every part last
+         * drawn on that oldest frame at once (a texture's parts are drawn together) */
+        uint32_t oldest = UINT32_MAX;
         for (int i = 0; i < nslots; i++)
-            if (slot_used(i) + 1 < frame_no && (victim < 0 || slot_used(i) < slot_used(victim))) victim = i;
-        if (victim < 0) return false;
-        slot_remove(victim);
-        evictions++;
+            if (slot_used(i) + 1 < frame_no && slot_used(i) < oldest) oldest = slot_used(i);
+        if (oldest == UINT32_MAX) return false;
+        slots_evict(false, oldest);
     }
 }
 
