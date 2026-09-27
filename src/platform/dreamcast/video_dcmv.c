@@ -28,7 +28,14 @@ struct Video {
     zamv_decoder_t *dec;
     zamv_file_header_t hdr;
     zamv_dc_row_uploader_t up;
-    pvr_ptr_t tex; size_t tex_bytes; int tw, th;
+    /* Double-buffered: the ZAMV5 decoder writes straight into PVR texture memory (no separate host-side
+     * decode buffer to DMA later), and video_update() runs during app_update(), before rdc_frame_begin()'s
+     * pvr_wait_ready() - so a single texture would race the PowerVR's tile render pass, which may still be
+     * sampling the previous frame from that same VRAM when the next frame's SQ upload starts (visible as
+     * sporadic top-of-frame corruption). tex[1-cur] is always at least one full frame past its last draw
+     * before decode_one() writes into it again. */
+    pvr_ptr_t tex[2]; size_t tex_bytes; int tw, th, cur;
+    uint32_t fmt;
     pvr_poly_hdr_t phdr __attribute__((aligned(32)));
     float u0, v0, u1, v1;
     int w, h;                 /* display size (may differ from the encoded/padded frame size) */
@@ -52,15 +59,22 @@ static bool setup_texture(Video *v)
 {
     v->tw = pot(v->hdr.width); v->th = pot(v->hdr.height);
     v->tex_bytes = (size_t)v->hdr.width * v->hdr.height * 2;
-    v->tex = rdc_vram_alloc(v->tex_bytes);
-    if (!v->tex) return false;
+    v->tex[0] = rdc_vram_alloc(v->tex_bytes);
+    v->tex[1] = rdc_vram_alloc(v->tex_bytes);
+    if (!v->tex[0] || !v->tex[1]) {
+        if (v->tex[0]) rdc_vram_free(v->tex[0], v->tex_bytes);
+        if (v->tex[1]) rdc_vram_free(v->tex[1], v->tex_bytes);
+        v->tex[0] = v->tex[1] = NULL;
+        return false;
+    }
     rdc_forget_header();
-    uint32_t fmt = PVR_TXRFMT_YUV422 | PVR_TXRFMT_NONTWIDDLED | PVR_TXRFMT_X32_STRIDE;
+    v->fmt = PVR_TXRFMT_YUV422 | PVR_TXRFMT_NONTWIDDLED | PVR_TXRFMT_X32_STRIDE;
     PVR_SET(PVR_TEXTURE_MODULO, v->hdr.width / 32);
     v->u0 = 0.5f / v->tw; v->v0 = 0.5f / v->th;
     v->u1 = ((float)v->w - 0.5f) / v->tw;
     v->v1 = ((float)v->h - 0.5f) / v->th;
-    rdc_compile(&v->phdr, v->tex, fmt, v->tw, v->th, R_BLEND_NONE, true, false, false);
+    v->cur = 0;
+    rdc_compile(&v->phdr, v->tex[v->cur], v->fmt, v->tw, v->th, R_BLEND_NONE, true, false, false);
     return true;
 }
 
@@ -128,11 +142,14 @@ Video *video_open_file(Ren *r, const char *path, float fps)
 
 static bool decode_one(Video *v)
 {
-    if (zamv_dc_configure_yuv420(v->tex, v->hdr.width, v->hdr.height) < 0) return false;
+    int next = 1 - v->cur;   /* not read by the GPU since at least the frame before last: see the Video comment */
+    if (zamv_dc_configure_yuv420(v->tex[next], v->hdr.width, v->hdr.height) < 0) return false;
     if (zamv_dc_row_uploader_begin(&v->up) < 0) return false;
     int dr = zamv_decoder_decode_cb(v->dec, zamv_chunk_reader_read, v->chunk, NULL);
     zamv_dc_row_uploader_end(&v->up);
     if (dr <= 0) { v->finished = true; return false; }
+    v->cur = next;
+    rdc_compile(&v->phdr, v->tex[v->cur], v->fmt, v->tw, v->th, R_BLEND_NONE, true, false, false);
     v->frame_index++;
     return true;
 }
@@ -184,6 +201,7 @@ void video_close(Video *v)
     if (v->chunk) zamv_chunk_reader_destroy(v->chunk);
     fs_close(v->fd);
     rdc_forget_header();
-    rdc_vram_free(v->tex, v->tex_bytes);
+    rdc_vram_free(v->tex[0], v->tex_bytes);
+    rdc_vram_free(v->tex[1], v->tex_bytes);
     free(v);
 }
