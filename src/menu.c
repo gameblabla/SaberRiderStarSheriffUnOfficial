@@ -728,7 +728,12 @@ void menu_draw(Menu *m, Ren *r, int sw, int sh)
         if (t < R(1.0f)) { v = r_mul(R(2.1f), r_sin(r_mul(r_abs(t), R(1.5707964f)))); if (v > R(2.0f)) v = R(2.0f); v /= 2; }
         real sc = zoom_scale(v);
         if (bg) sprite_draw_scaled(bg, 0, (r_int(sw) - bg->w * sc) / 2, (r_int(sh) - bg->h * sc) / 2, bg->w * sc, bg->h * sc);
+#ifdef PLAT_SATURN
+        uint8_t al = 255;   /* opaque: the pulse stepped VDP1 through mesh / half-transparency / opaque (and a 3x zoom
+                             * forces mesh), so the lettering flickered as it pulsed and scaled */
+#else
         uint8_t al = pulse_alpha();
+#endif
         if (a) sprite_draw_scaled_mod(a, 0, (r_int(sw) - a->w * sc) / 2, (r_int(sh + 0x60) - a->h * sc) / 2, a->w * sc, a->h * sc, 255, 255, 255, al);
         if (b) sprite_draw_scaled_mod(b, 0, (r_int(sw) - b->w * sc) / 2, (r_int(sh + 0x90) - b->h * sc) / 2, b->w * sc, b->h * sc, 255, 255, 255, al);
         if (v < R(1.0f)) { uint8_t w = t < 0 ? 255 : 0; fill(r, sw, sh, w, w, w, clamp255((R(1) - v) * 255)); }
