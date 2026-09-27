@@ -13,6 +13,7 @@ typedef struct {
 } film_io_state_t;
 
 static film_io_state_t filmIo = {0};
+static uint32_t filmIoPrefillBytes;
 
 void film_buff_io_set(void *user, film_io_read_fn read_fn, film_io_available_fn available_fn) {
   filmIo.user = user;
@@ -26,6 +27,10 @@ void film_buff_io_clear(void) {
 
 bool film_buff_io_active(void) {
   return filmIo.read_fn != NULL;
+}
+
+void film_buff_io_prefill_set(uint32_t bytes) {
+  filmIoPrefillBytes = bytes;
 }
 
 static scu_dma_handle_t cd_dma = {.dnr = (uintptr_t) 0x25818000UL,
@@ -140,6 +145,15 @@ void initRingBuffer(binary_stream_t *stream) {
         prefillSamples = i + 1u;
         break;
       }
+    }
+    /* A clip opened ahead of time (Saber Rider's preloaded power clips) can
+     * afford more: what is in the ring plays while the drive seeks back from
+     * the music when the clip starts. */
+    uint32_t bytes = 0;
+    for (uint32_t i = 0; i < stream->sampleCache.numSamples; i++) {
+      bytes += (uint32_t) stream->sampleCache.samples[i].length;
+      if (bytes > filmIoPrefillBytes) break;
+      if (i + 1u > prefillSamples) prefillSamples = i + 1u;
     }
   }
 

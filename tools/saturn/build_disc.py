@@ -435,7 +435,7 @@ def bake_videos(data: Path, work: Path, stage: Path, log) -> None:
     film.make(vids / '2FE798C3.m4v', stage / '2FE798C3.CPK', work / 'film', (256, 104), '', xvid, sound(vids / '2FE798C3.m4v'), log)
     for clip in sorted((ROOT / 'assets/power').glob('*.m4v')):   # 320x240 at 24 fps, the voice in the .wav beside it
         film.make(clip, stage / (clip.stem.upper()[:8] + '.CPK'), work / 'film', (320, 224), 'crop=320:224:0:8',
-                  ['-r', '24', '-f', 'm4v'], clip.with_suffix('.wav'), log)
+                  ['-r', '24', '-f', 'm4v'], clip.with_suffix('.wav'), log, end_with_picture=True)
 
 
 def build(args: argparse.Namespace) -> None:

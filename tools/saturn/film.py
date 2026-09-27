@@ -19,6 +19,7 @@ FPS = 12
 RATE = 22050
 MAX_STRIPS = 2       # libyaul_cinepak has two strip codebooks
 CACHE_VERSION = 4    # CPK/FILM + ADX, continuous audio timestamps
+END_FADE = 0.15      # make(end_with_picture=True): seconds the audio fades out over, up to the picture's end
 
 
 def ffmpeg_exe() -> str:
@@ -166,8 +167,12 @@ def _mux(video_film: Path, adx_file: Path, out: Path) -> tuple[int, int, int, in
 
 
 def make(source: Path, out: Path, work: Path, size: tuple[int, int], vf: str,
-         in_args: list[str] = (), audio: Path | None = None, log=print) -> None:
-    """Convert a source movie to a libyaul Cinepak/ADX Sega FILM .CPK."""
+         in_args: list[str] = (), audio: Path | None = None, log=print, end_with_picture: bool = False) -> None:
+    """Convert a source movie to a libyaul Cinepak/ADX Sega FILM .CPK.
+
+    A clip plays until its picture and its audio have both ended. end_with_picture cuts the audio (fading out) at the
+    picture's end: the power clips' voices run on past it (1.1-1.3 s), which the PC plays over the game resumed, the
+    Saturn's cut-in held on its last frame."""
     width, height = size
     if width % 8 or height % 4 or height > 255:
         raise ValueError(f'unsupported Cinepak size {size}')
@@ -175,7 +180,7 @@ def make(source: Path, out: Path, work: Path, size: tuple[int, int], vf: str,
     key_data = [str(source), source.stat().st_size, source.stat().st_mtime,
                 str(audio_path), audio_path.stat().st_size if audio_path else 0,
                 audio_path.stat().st_mtime if audio_path else 0,
-                size, vf, list(in_args), FPS, RATE, MAX_STRIPS, CACHE_VERSION]
+                size, vf, list(in_args), FPS, RATE, MAX_STRIPS, CACHE_VERSION, end_with_picture and END_FADE]
     key = hashlib.sha1(json.dumps(key_data).encode()).hexdigest()[:16]
     cached = work / f'{out.stem}.{key}.cpk'
     if cached.exists() and cached.stat().st_size:
@@ -193,8 +198,13 @@ def make(source: Path, out: Path, work: Path, size: tuple[int, int], vf: str,
 
     audio_source = audio_path if audio_path else source
     audio_args = [] if audio_path else list(in_args)
+    af = 'asetpts=N/SR/TB'
+    if end_with_picture:
+        _, _, ticks, frames = _video_samples(video_film)
+        end = ((frames[-1][1] & 0x7FFFFFFF) + max(frames[-1][2], 1)) / ticks
+        af = f'atrim=end={end:.6f},afade=t=out:st={max(0.0, end - END_FADE):.6f}:d={END_FADE},' + af
     r = subprocess.run(ff + audio_args + ['-i', str(audio_source), '-vn', '-ac', '1', '-ar', str(RATE),
-                                         '-af', 'asetpts=N/SR/TB',
+                                         '-af', af,
                                          '-c:a', 'adpcm_adx', '-f', 'adx', str(adx)])
     if r.returncode != 0 or not adx.exists() or not adx.stat().st_size:
         # The game expects an audio-bearing FILM.  If a source is silent, encode

@@ -11,6 +11,9 @@ typedef uint32_t (*film_io_available_fn)(void *user);
 extern void film_buff_io_set(void *user, film_io_read_fn read_fn, film_io_available_fn available_fn);
 extern void film_buff_io_clear(void);
 extern bool film_buff_io_active(void);
+/* Callback I/O: how much of the stream initRingBuffer() reads ahead (at least
+ * through the first video sample).  0 keeps the old minimum. */
+extern void film_buff_io_prefill_set(uint32_t bytes);
 extern void film_sample_cache_new(binary_stream_t *stream, uint32_t totalNumSamples,
   film_sample_t *outputSamples, uint8_t *dmaScratch);
 

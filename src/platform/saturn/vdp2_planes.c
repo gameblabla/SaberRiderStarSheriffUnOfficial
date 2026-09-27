@@ -119,6 +119,10 @@ static void setup_screens(void)
     vdp2_cram_mode_set(1);
     vdp2_ioregs_t *regs = vdp2_regs_get();
     regs->ramctl = (uint16_t)((regs->ramctl & (uint16_t)~0x00FFu) | floor_ramctl);
+    /* NBG0-1's line scroll off: vdp2_scrn_ls_set only turns it on, and a plane without it that follows one with it
+     * (level 1's NBG0, then level 3's) read the old level's table: its page scrolled wrong, the ring's empty columns
+     * a hole in the far mountains that crept across the screen */
+    regs->scrctl = (uint16_t)(regs->scrctl & ~0x3E3Eu);
     set_cycle_patterns();
     for (int i = 0; i < P.h->nplanes; i++) {
         const SplPlane *pl = &P.planes[i];

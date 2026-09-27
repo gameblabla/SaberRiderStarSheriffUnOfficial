@@ -31,6 +31,7 @@ void rsat_video_draw(const RFRect *dst);   /* render_sat.c */
 const cdfs_filelist_entry_t *cd_sat_entry(const char *name); /* cd_sat.c */
 
 #define SAMPLE_BUFFER_BYTES (96 * 1024)
+#define PRELOAD_PREFILL (88 * 1024)   /* of the 96 KB sample ring: what a preloaded clip reads ahead */
 #define RAM_CLIP_MAX (512 * 1024)   /* a clip up to this size plays from RAM (it must also fit in low RAM) */
 
 int film_loop_handler(void) { return 1; }
@@ -185,6 +186,10 @@ static Video *open_name(const char *name, bool activate)
      * libyaul decoder still owns FILM/Cinepak/ADX parsing and buffering, but
      * its byte source is the game's FILE stream. */
     io_set(v);
+    /* A clip opened ahead (a power clip, at the stage's load) reads its first 88 KB now, where the wait is part of
+     * the load: half a second of FIREBALL.CPK plays from them while the drive seeks back from the music when the
+     * cut-in starts (the first picture used to wait for that seek, a white frame held after the power button). */
+    film_buff_io_prefill_set(activate || v->ram ? 0 : PRELOAD_PREFILL);
     init_film_start((cdfs_filelist_entry_t *)entry, v->work, 0, 0);
     if (v->work->play_status == ERROR || memcmp(v->work->filmHeader.film_str, "FILM", 4) ||
         memcmp(v->work->filmHeader.fdsc.fdsc_str, "FDSC", 4) ||
