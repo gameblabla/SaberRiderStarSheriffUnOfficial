@@ -397,7 +397,7 @@ void dark_update(DarkApril *d, Player *pl, const Input *pin, const Level *L, con
         }
         face(c, pl->ch.body.x); character_sync_ground(c); player_resolve(c, dt); character_animate(c, dt);
         if (d->t > APPEAR_T / 2 && pl->ch.state == CS_IDLE) face(&pl->ch, c->body.x);   /* the hero turns to look */
-        if (d->t >= APPEAR_T && live) { d->alpha = 1; d->state = DA_TALK; d->scene_meet = true; }
+        if (d->t >= APPEAR_T && live) { d->alpha = R(1); d->state = DA_TALK; d->scene_meet = true; }
         break; }
     case DA_TALK:
         if (live && !d->scene_meet) { d->state = DA_READY; pl->hp = pl->max_hp; }   /* Ramrod tops the hero up for round two */

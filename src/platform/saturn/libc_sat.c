@@ -181,7 +181,16 @@ int rand(void)
     return (int)((uint32_t)v >> 1);
 }
 
-static void swap_bytes(char *a, char *b, size_t n) { while (n--) { char t = *a; *a++ = *b; *b++ = t; } }
+/* a word at a time when both are aligned (the draw lists' items: a byte loop was a tenth of stage 2's frame) */
+static void swap_bytes(char *a, char *b, size_t n)
+{
+    if (!(((uintptr_t)a | (uintptr_t)b | n) & 3)) {
+        uint32_t *x = (uint32_t *)a, *y = (uint32_t *)b;
+        for (n >>= 2; n--; ) { uint32_t t = *x; *x++ = *y; *y++ = t; }
+        return;
+    }
+    while (n--) { char t = *a; *a++ = *b; *b++ = t; }
+}
 
 /* the core sorts a few dozen draw items at most: an insertion sort below 16, a median-of-three quicksort above */
 static void qsort_r_(char *base, size_t n, size_t sz, int (*cmp)(const void *, const void *))

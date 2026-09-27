@@ -266,11 +266,14 @@ static void title_draw(Game *g)
      * bottom, and a thin veil that fades out last */
     if (t < TITLE_WIPE_T) { r_set_draw_color(g->ren, 0, 0, 0, 255); RFRect q = { 0, 0, r_int(sw), r_int(sh) }; r_fill_rect(g->ren, &q); }
     else {
-        const int N = 10; real strip = r_int(sh) / N, w = r_div(t - TITLE_WIPE_T, TITLE_END_T - TITLE_WIPE_T);
+        const int N = 10; real w = r_div(t - TITLE_WIPE_T, TITLE_END_T - TITLE_WIPE_T);
         for (int i = 0; i < N; i++) {
+            /* whole rows: sh / N (22.4) in 16.16 fell short, and the last strip left the bottom line to the veil (on the
+             * Saturn a mesh: the level showed through it the moment the wipe began) */
+            int ya = i * sh / N; real strip = r_int((i + 1) * sh / N - ya);
             real open = PLAT_CLAMP(r_div(w - i * R(0.045f), R(0.5f)), R(0.0f), R(1.0f)); open = R(1) - r_mul(R(1) - open, R(1) - open);   /* ease out */
             real h = r_mul(strip, R(1) - open); if (h <= 0) continue;
-            r_set_draw_color(g->ren, 0, 0, 0, 255); RFRect q = { 0, i * strip + (strip - h) / 2, r_int(sw), h }; r_fill_rect(g->ren, &q);
+            r_set_draw_color(g->ren, 0, 0, 0, 255); RFRect q = { 0, r_int(ya) + (strip - h) / 2, r_int(sw), h }; r_fill_rect(g->ren, &q);
         }
         r_set_draw_color(g->ren, 0, 0, 0, (uint8_t)r_trunc(120 * (R(1) - w))); RFRect v = { 0, 0, r_int(sw), r_int(sh) }; r_fill_rect(g->ren, &v);
     }

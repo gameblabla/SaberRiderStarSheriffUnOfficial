@@ -115,6 +115,8 @@ struct RFloor {
 
 typedef struct { bool valid; RFloor *f; RFloorView view; } RFloorState;
 static RFloorState floor_state[2];
+/* the floor's video memory for record buffer b is done (floor_ahead), and the RPTA word that shows it */
+static bool floor_done[2]; static uint32_t floor_rpt[2];
 static bool floor_visible;
 
 static Ren ren;
@@ -334,7 +336,18 @@ static int cram_bank(RTex *t, uint8_t r, uint8_t g, uint8_t b)
         int victim = -1;
         for (int i = 0; i < CRAM_GRAN; i++)
             if (cslots[i].n && cslots[i].used + 2 < frame_no && (victim < 0 || cslots[i].used < cslots[victim].used)) victim = i;
-        if (victim < 0) return -1;
+        if (victim < 0) {   /* full of banks in use: the nearest tint of t's own, rather than not drawn at all (the
+                             * sheet April's overdrive afterimages draw in a tint each filled it in stage 3) */
+            int best = -1, bd = 0;
+            for (int i = 0; i < CRAM_GRAN; i++) {
+                if (!cslots[i].n || cslots[i].t != t) continue;
+                int dr = (int)(cslots[i].tint >> 16) - r, dg = (int)(cslots[i].tint >> 8 & 0xFF) - g, db = (int)(cslots[i].tint & 0xFF) - b;
+                int d = dr * dr + dg * dg + db * db;
+                if (best < 0 || d < bd) { best = i; bd = d; }
+            }
+            if (best >= 0) cslots[best].used = frame_no;
+            return best < 0 ? -1 : best * 64;
+        }
         cram_release(victim);
     }
 }
@@ -961,6 +974,12 @@ typedef struct { uint8_t op, flags, r, g, b, a, blend, prio; RTex *t; union { in
 static Rec *recbuf[2]; static int rec_n[2];
 static unsigned rec_overflow; static int rec_peak;
 static uint8_t m_r = 255, m_g = 255, m_b = 255, m_a = 255; static RBlend m_blend = R_BLEND_BLEND;   /* the master's draw state */
+/* the core's clip and viewport as it last set them, and each buffer's at its first record: its replay starts from
+ * those, not from where the last replay left off. A frame over REC_MAX loses its last records, and with them the
+ * r_set_clip(NULL) closing a clipped draw: the power attack's cut-in (its band alone is 128 fills) left the band's
+ * clip on every frame after it, the backdrop and all drawn only in the middle of the screen. */
+typedef struct { RRect clip, vp; bool clip_on, vp_on; } RecClip;
+static RecClip m_cv, rec_cv0[2];
 
 static Rec *rec_new(uint8_t op)
 {
@@ -974,6 +993,8 @@ void r_set_draw_color(Ren *r, uint8_t R, uint8_t G, uint8_t B, uint8_t A) { (voi
 void r_set_draw_blend(Ren *r, RBlend b) { (void)r; m_blend = b; }
 static void rec_rect(uint8_t op, const RRect *c)
 {
+    if (op == OP_CLIP) { m_cv.clip_on = c != NULL; if (c) m_cv.clip = *c; }
+    else { m_cv.vp_on = c != NULL; if (c) m_cv.vp = *c; }
     Rec *e = rec_new(op); if (!e) return;
     e->flags = c != NULL;
     if (c) { e->v.i[0] = c->x; e->v.i[1] = c->y; e->v.i[2] = c->w; e->v.i[3] = c->h; }
@@ -991,6 +1012,14 @@ void r_set_depth(Ren *r, int layer)
 void r_fill_rect(Ren *r, const RFRect *q)
 {
     (void)r;
+    /* a strip of the one before in the same colour as VDP1 draws it (RGB555): the one fill, taller (the cut-in's
+     * gradient band, 128 fills of a line, is ~40 bands of 15-bit colour) */
+    int n = rec_n[rec_w];
+    if (q && n > 0) {
+        Rec *p = &recbuf[rec_w][n - 1];
+        if (p->op == OP_FILL && p->flags == 1 && p->blend == (uint8_t)m_blend && p->a == m_a && ((p->r ^ m_r) | (p->g ^ m_g) | (p->b ^ m_b)) < 8 &&
+            p->v.i[0] == q->x && p->v.i[2] == q->w && p->v.i[1] + p->v.i[3] == q->y) { p->v.i[3] += q->h; return; }
+    }
     Rec *e = rec_new(OP_FILL); if (!e) return;
     if (q) { e->flags = 1; e->v.i[0] = q->x; e->v.i[1] = q->y; e->v.i[2] = q->w; e->v.i[3] = q->h; }
 }
@@ -1205,16 +1234,19 @@ static void fog_colors(uint32_t haze)
     }
 }
 
-/* the fog level (0..31) of the screen line den rows under the horizon, as the software floor fades that row */
-static uint32_t fog_level(const RFloorView *v, real den)
+/* the fog level (0..31) of a screen line whose floor is dist world units off, as the software floor fades that row
+ * (fog_max/256 of haze at fog1 and beyond): fk is the levels a unit past fog0 (fog_scale), so no division a line */
+static real fog_scale(const RFloorView *v)
 {
     real span = v->fog1 - v->fog0;
-    if (den <= 0 || span <= 0 || v->fog_max <= 0) return 0;
-    real f = r_div(r_div(r_mul(v->cam_h, v->focal), den) - v->fog0, span);
-    f = f < 0 ? 0 : f > R(1) ? R(1) : f;
-    int fa = r_trunc(f * v->fog_max);            /* of 256, as the software floor's */
-    int n = (fa * (FL_FOG_LEVELS - 1) + 128) >> 8;
-    return (uint32_t)(n < 0 ? 0 : n > FL_FOG_LEVELS - 1 ? FL_FOG_LEVELS - 1 : n);
+    return span > 0 && v->fog_max > 0 ? r_div(r_int(v->fog_max * (FL_FOG_LEVELS - 1)) / 256, span) : 0;
+}
+
+static uint32_t fog_level(const RFloorView *v, real dist, real fk)
+{
+    if (!fk || dist <= v->fog0) return 0;
+    int n = r_trunc(r_mul(dist - v->fog0, fk) + R(0.5f)), top = (v->fog_max * (FL_FOG_LEVELS - 1) + 128) >> 8;
+    return (uint32_t)(n > top ? top : n > FL_FOG_LEVELS - 1 ? FL_FOG_LEVELS - 1 : n);
 }
 
 static void fog_off(void)
@@ -1317,60 +1349,90 @@ static void floor_put_single_chars(RFloor *f, FlMap *m)
     }
 }
 
-/* the name table entry (the character number counts 32 byte units) of the character at (cx, cy) of level map m */
-static uint16_t floor_char_at(RFloor *f, FlMap *m, int cx, int cy)
+/* a mixed character of map m (corner materials key, cx & cy its character): from the cache, or made now; -1 when the
+ * cache is full (the caller then shows the top left cell's material alone) */
+static int __attribute__((noinline)) floor_mixed(RFloor *f, FlMap *m, uint32_t key, int cx, int cy)
 {
-    const RFloorDesc *d = &f->desc;
-    int cs = d->cell_shift, sub = m->shift - cs;   /* character = 2^sub cells a side when sub > 0 */
-    uint32_t cmask = (uint32_t)d->mapn - 1;
-    int wx = cx << m->shift, wy = cy << m->shift;
     int sx = cx & (m->span - 1), sy = cy & (m->span - 1);
-    int m0 = r_floor_cell(d, ((uint32_t)wx >> cs) & cmask, ((uint32_t)wy >> cs) & cmask);
-    if (m0 >= f->nmat) m0 = 0;
-    if (sub > 0) {
-        /* 2x2 cells (the corners' ones if the character spans more): a mixed character from the cache */
-        int h = 1 << (sub - 1) << cs;
-        uint32_t key = (uint32_t)m0;
-        for (int k = 1; k < 4; k++) {
-            int ux = wx + (k & 1) * h, uy = wy + (k >> 1) * h;
-            int mk = r_floor_cell(d, ((uint32_t)ux >> cs) & cmask, ((uint32_t)uy >> cs) & cmask);
-            key |= (uint32_t)(mk < f->nmat ? mk : 0) << (k * 4);
-        }
-        if (key != (uint32_t)m0 * 0x1111u && f->hkey) {
-            key = (key | (uint32_t)(sy * m->span + sx) << 16) + 1;
-            uint32_t i = (key * 2654435761u) >> 21;   /* 11 bits: FL_HASH */
-            for (int probe = 0; probe < FL_HASH; probe++, i = (i + 1) & (FL_HASH - 1)) {
-                if (f->hkey[i] == key) return (uint16_t)(f->hchar[i] * 2);
-                if (f->hkey[i]) continue;
-                if (f->next_char >= FL_CHARS) break;   /* full: the top left cell's material alone */
-                f->hkey[i] = key; f->hchar[i] = (uint16_t)f->next_char;
-                floor_put_char(f, f->next_char, m->level, wx, wy);   /* (beyond 2x2 cells: the key's corners share it) */
-                return (uint16_t)(f->next_char++ * 2);
+    key = (key | (uint32_t)(sy * m->span + sx) << 16) + 1;
+    uint32_t i = (key * 2654435761u) >> 21;   /* 11 bits: FL_HASH */
+    for (int probe = 0; probe < FL_HASH; probe++, i = (i + 1) & (FL_HASH - 1)) {
+        if (f->hkey[i] == key) return f->hchar[i] * 2;
+        if (f->hkey[i]) continue;
+        if (f->next_char >= FL_CHARS) break;   /* full: the top left cell's material alone */
+        f->hkey[i] = key; f->hchar[i] = (uint16_t)f->next_char;
+        floor_put_char(f, f->next_char, m->level, cx << m->shift, cy << m->shift);   /* (beyond 2x2 cells: the key's corners share it) */
+        return f->next_char++ * 2;
+    }
+    return -1;
+}
+
+/* The name table entries of map p's characters [x0, x1) x [y0, y1): each the character of its cell's material, or,
+ * where a character spans 2x2 cells (the corners' ones if more) of different materials, a mixed one. The camera at
+ * race speed brings ~400 entries a frame into A's torus (a column of 256 whenever it crosses one), and every entry
+ * doing its own shifts, lookups and hashing took 4-6 ms of stage 2's frame: the block's columns (cell, character,
+ * name table offset) are worked out once, stepped along (the SH-2 shifts by a variable amount in a library loop),
+ * into static tables (a big stack frame spilled every local out of reach of the short displacements), and a single
+ * material map's rows run a loop of their own. */
+static uint16_t fl_cellx[FL_MAP_SIDE], fl_cellxh[FL_MAP_SIDE], fl_chx[FL_MAP_SIDE], fl_ofs[FL_MAP_SIDE];
+
+static void floor_put_block(RFloor *f, int p, int x0, int x1, int y0, int y1)
+{
+    FlMap *m = &f->map[p];
+    const RFloorDesc *d = &f->desc;
+    int n = x1 - x0;
+    if (n <= 0 || y1 <= y0) return;
+    int sub = m->shift - d->cell_shift;   /* character = 2^sub cells a side when sub > 0, a cell 2^-sub characters else */
+    bool mixed = sub > 0 && f->hkey;
+    uint32_t cmask = (uint32_t)d->mapn - 1, half = sub > 0 ? 1u << (sub - 1) : 0;
+    int span = m->span, nmat = f->nmat, matstride = span * span;
+    /* character k's cell: k << sub, or k >> -sub, stepped along */
+    int k = sub < 0 ? -sub : 0;
+    uint32_t cstep = sub > 0 ? 1u << sub : 1u, per = 1u << k, pmask = per - 1u, smask = (uint32_t)(span - 1);
+    uint32_t c = sub >= 0 ? (uint32_t)x0 << sub : (uint32_t)x0 >> k, ph = (uint32_t)x0 & pmask, cx = (uint32_t)x0;
+    for (int i = 0; i < n; i++, cx++) {
+        uint32_t ex = cx & (FL_MAP_SIDE - 1);
+        fl_cellx[i] = (uint16_t)(c & cmask); fl_cellxh[i] = (uint16_t)((c + half) & cmask);
+        fl_chx[i] = (uint16_t)(cx & smask);
+        fl_ofs[i] = (uint16_t)((ex >> 6) * 4096 + (ex & 63));
+        if (sub >= 0) c += cstep; else if (++ph == per) { ph = 0; c++; }
+    }
+    volatile uint16_t *map = (volatile uint16_t *)FL_MAP_ADDR(p);
+    const uint8_t *const *rows = d->rows;
+    uint32_t cr = sub >= 0 ? (uint32_t)y0 << sub : (uint32_t)y0 >> k, phr = (uint32_t)y0 & pmask;
+    for (int cy = y0; cy < y1; cy++) {
+        uint32_t ey = (uint32_t)cy & (FL_MAP_SIDE - 1), ra = cr & cmask;
+        volatile uint16_t *row = map + (ey >> 6) * 4 * 4096 + (ey & 63) * 64;
+        const uint8_t *r0 = rows ? rows[ra] : d->cells + ra * (uint32_t)d->mapn;
+        int base = m->first + (int)((uint32_t)cy & smask) * span;
+        if (!mixed) {
+            const uint16_t *cl = fl_cellx, *ch = fl_chx, *of = fl_ofs;
+            for (int i = n; i > 0; i--) {
+                int m0 = r0[*cl++];
+                if (m0 >= nmat) m0 = 0;
+                row[*of++] = (uint16_t)((base + m0 * matstride + *ch++) * 2);
+            }
+        } else {
+            uint32_t rb = (cr + half) & cmask;
+            const uint8_t *r1 = rows ? rows[rb] : d->cells + rb * (uint32_t)d->mapn;
+            for (int i = 0; i < n; i++) {
+                int m0 = r0[fl_cellx[i]], m1 = r0[fl_cellxh[i]], m2 = r1[fl_cellx[i]], m3 = r1[fl_cellxh[i]];
+                if (m0 >= nmat) m0 = 0;
+                if (m1 >= nmat) m1 = 0;
+                if (m2 >= nmat) m2 = 0;
+                if (m3 >= nmat) m3 = 0;
+                int chr = -1;
+                if (m1 != m0 || m2 != m0 || m3 != m0)
+                    chr = floor_mixed(f, m, (uint32_t)m0 | (uint32_t)m1 << 4 | (uint32_t)m2 << 8 | (uint32_t)m3 << 12, x0 + i, cy);
+                row[fl_ofs[i]] = (uint16_t)(chr >= 0 ? chr : (base + m0 * matstride + fl_chx[i]) * 2);
             }
         }
+        if (sub >= 0) cr += cstep; else if (++phr == per) { phr = 0; cr++; }
     }
-    return (uint16_t)((m->first + (m0 * m->span + sy) * m->span + sx) * 2);
 }
 
-static volatile uint16_t *floor_entry(int p, int ex, int ey)
-{
-    ex &= FL_MAP_SIDE - 1; ey &= FL_MAP_SIDE - 1;
-    return (volatile uint16_t *)FL_MAP_ADDR(p) + ((ey >> 6) * 4 + (ex >> 6)) * 4096 + (ey & 63) * 64 + (ex & 63);
-}
-
-static void floor_put_rows(RFloor *f, int p, int y0, int y1)
-{
-    FlMap *m = &f->map[p];
-    for (int cy = y0; cy < y1; cy++)
-        for (int cx = m->ox; cx < m->ox + FL_MAP_SIDE; cx++) *floor_entry(p, cx, cy) = floor_char_at(f, m, cx, cy);
-}
-
-static void floor_put_cols(RFloor *f, int p, int x0, int x1)
-{
-    FlMap *m = &f->map[p];
-    for (int cy = m->oy; cy < m->oy + FL_MAP_SIDE; cy++)
-        for (int cx = x0; cx < x1; cx++) *floor_entry(p, cx, cy) = floor_char_at(f, m, cx, cy);
-}
+static void floor_put_rows(RFloor *f, int p, int y0, int y1) { floor_put_block(f, p, f->map[p].ox, f->map[p].ox + FL_MAP_SIDE, y0, y1); }
+static void floor_put_cols(RFloor *f, int p, int x0, int x1) { floor_put_block(f, p, x0, x1, f->map[p].oy, f->map[p].oy + FL_MAP_SIDE); }
 
 /* keep map p's torus centred on the camera: the character rows / columns that came into it are written */
 static void floor_follow(RFloor *f, int p, real cam_x, real cam_y)
@@ -1502,7 +1564,9 @@ static bool floor_hw_setup(RFloor *f)
     return true;
 }
 
-static void floor_update_hw(RFloor *f, const RFloorView *v)
+/* the floor's video memory for view v: the torus's new characters, the rotation parameters and coefficient tables (into
+ * the pair not on screen); returns the RPTA word that shows them (floor_set_rpta) */
+static uint32_t floor_update_vram(RFloor *f, const RFloorView *v)
 {
     if (f->cells_dirty) floor_reset_cells(f);
     for (int p = 0; p < 2; p++) floor_follow(f, p, v->cam_x, v->cam_y);
@@ -1531,6 +1595,7 @@ static void floor_update_hw(RFloor *f, const RFloorView *v)
     volatile uint32_t *kb = (volatile uint32_t *)VDP2_VRAM_ADDR(0, FL_KT_OFF(b, 1));
     int lb = f->map[1].level;
     fog_colors(v->haze);
+    real fk = fog_scale(v);
     for (int y = 0; y < SAT_SCREEN_H; y++) {
         real den = r_int(y) + v->row_off - v->horizon;
         if (y < v->y0 || y >= v->y1 || den <= 0) { ka[y] = kb[y] = 0x80000000u; continue; }
@@ -1538,14 +1603,18 @@ static void floor_update_hw(RFloor *f, const RFloorView *v)
         uint32_t k_a = (uint32_t)(step >> 1), k_b = (uint32_t)(step >> (lb + 1));
         if (k_a > 0x7FFFFFu) k_a = 0x7FFFFFu;
         if (k_b > 0x7FFFFFu) k_b = 0x7FFFFFu;
-        ka[y] = (step < a_max ? k_a : 0x80000000u) | fog_level(v, den) << 24;   /* A's word carries the line's fog */
+        ka[y] = (step < a_max ? k_a : 0x80000000u) | fog_level(v, r_mul(step, v->focal), fk) << 24;   /* A's word carries the line's fog */
         kb[y] = k_b;
     }
+    floor_buf = b ^ 1;
+    return FL_RP_OFF(b) >> 1;                    /* RPTA: the table's word address */
+}
+
+static void floor_set_rpta(uint32_t word)
+{
     vdp2_ioregs_t *regs = vdp2_regs_get();
-    uint32_t word = FL_RP_OFF(b) >> 1;           /* RPTA: the table's word address */
     regs->rptau = (uint16_t)((word >> 16) & 7u);
     regs->rptal = (uint16_t)(word & 0xFFFEu);
-    floor_buf = b ^ 1;
 }
 
 static void floor_disable_hw(void)
@@ -1557,20 +1626,24 @@ static void floor_disable_hw(void)
     floor_hw_floor = NULL;
 }
 
-static void floor_submit(const RFloorState *state)
+static void floor_submit(int slot)
 {
+    const RFloorState *state = &floor_state[slot];
+    bool done = floor_done[slot];
+    floor_done[slot] = false;
     floor_visible = false;
-    if (!state || !state->valid || !state->f) {
+    if (!state->valid || !state->f) {
         floor_disable_hw();
         return;
     }
     RFloor *f = state->f;
     if (floor_hw_floor && floor_hw_floor != f) floor_disable_hw();
+    bool ready = f->hw_ready && floor_hw_active && floor_hw_floor == f;
     if (!floor_hw_setup(f)) {
         floor_disable_hw();
         return;
     }
-    floor_update_hw(f, &state->view);
+    floor_set_rpta(ready && done ? floor_rpt[slot] : floor_update_vram(f, &state->view));
     floor_visible = true;
     vdp2_scrn_display_set(vdp2_scrn_display_get() | VDP2_SCRN_DISPTP_RBG0);
 }
@@ -1666,6 +1739,7 @@ static void replay(int buf)
     const Rec *R = recbuf[buf]; int n = rec_n[buf];
     replay_floor = floor_state[buf].valid;
     replay_dy = backdrop_dy[buf];
+    clip_on = rec_cv0[buf].clip_on; clip = rec_cv0[buf].clip; vp_on = rec_cv0[buf].vp_on; viewport = rec_cv0[buf].vp; clip_dirty = true;
     frame_no++;
     tracing = trace_from > 0 && traced < 6 && frame_no >= (unsigned)trace_from && (frame_no - (unsigned)trace_from) % 10 == 0;
     if (tracing) { traced++; printf("render trace: frame %u\n", (unsigned)frame_no); }
@@ -1703,6 +1777,17 @@ static void slave_idle(void)
 static bool pending;   /* a replay whose list hasn't gone to VDP1 yet */
 static void submit(int floor_slot);
 
+/* The floor of the frame the slave is replaying, done now, while it does (floor_submit then only points VDP2 at it):
+ * streaming its torus at race speed took 4-6 ms of stage 2's frame, and the master waits for the replay anyway.
+ * A floor floor_submit has set up only (its first frame is done there). */
+static void floor_ahead(int b)
+{
+    const RFloorState *st = &floor_state[b];
+    if (!st->valid || !st->f || !st->f->hw_ready || !floor_hw_active || floor_hw_floor != st->f) return;
+    floor_rpt[b] = floor_update_vram(st->f, &st->view);
+    floor_done[b] = true;
+}
+
 /* The frame the slave replayed last goes to VDP1 here, at the start of the frame (the main loop has only done the
  * game's update since the vblank), so VDP1 draws it while the master records the next one: in variable mode a list is
  * shown from the vblank after VDP1 has finished it, and put at the end of the master's work it had only what was left
@@ -1711,6 +1796,7 @@ void rsat_frame_begin(void)
 {
     floor_state[rec_w].valid = false;
     if (!use_slave) return;
+    if (pending) floor_ahead((int)slave_buf);
     uint32_t tw = sat_timer_us();
     slave_idle();                   /* the replay of the frame before */
     tm_slave_wait += sat_timer_us() - tw;
@@ -1817,7 +1903,7 @@ void rsat_timing(uint32_t *planes, uint32_t *vdp1_wait, uint32_t *put, uint32_t 
 static void submit(int floor_slot)
 {
     uint32_t t0 = sat_timer_us();
-    floor_submit(&floor_state[floor_slot]);
+    floor_submit(floor_slot);
     floor_state[floor_slot].valid = false;
     uint32_t t1 = sat_timer_us();
     vdp1_sync_wait();   /* the frame before is on screen: its planes' scroll too (sat_planes_shown) */
@@ -1847,7 +1933,7 @@ void rsat_frame_end(void)
     if (!use_slave) {   /* SABER_NOSLAVE: replay here and now */
         replay(rec_w);
         submit(rec_w);
-        rec_n[rec_w] = 0; backdrop_dy[rec_w] = 0;
+        rec_n[rec_w] = 0; backdrop_dy[rec_w] = 0; rec_cv0[rec_w] = m_cv;
         rec_seq++;
         for (RTex *t = graveyard[rec_w], *nx; t; t = nx) { nx = t->next_dead; tex_free_mem(t); }
         graveyard[rec_w] = NULL;
@@ -1866,7 +1952,7 @@ void rsat_frame_end(void)
     cpu_dual_slave_notify();
     pending = true;
     rec_w = done;
-    backdrop_dy[rec_w] = 0;
+    backdrop_dy[rec_w] = 0; rec_cv0[rec_w] = m_cv;
 }
 
 void rsat_stats(unsigned *parts_resident, unsigned *vram_used, unsigned *uploads, unsigned *evicted)

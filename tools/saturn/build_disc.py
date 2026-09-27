@@ -130,6 +130,28 @@ def atlas_rects(rel: str) -> list[tuple[int, int, int, int]] | None:
     return rects or None
 
 
+def bake_ramrod_arm(px: np.ndarray, tex: pckwrite.Pack, stats, log) -> np.ndarray:
+    """Ramrod's punching arm out of the stage 6 atlas as a texture of its own, ramrod/arm.png (ramrod.c draws its frames
+    from it on the Saturn, at the atlas's coordinates): the atlas is left at 16bpp by its mechs' colours, but the arm
+    quantises to 8bpp (42 dB). Its ten frames were ~300 KB at 16bpp, more than VDP1's texture memory holds next to the
+    rest of the stage, so every punch streamed them in again (10-20 KB of uploads a frame, 1.5 fields a frame).
+    Returns the atlas with the arm cleared (its frames are no longer stored there)."""
+    arm = []
+    for line in (ROOT / 'assets/ramrod/atlas.txt').read_text().splitlines():
+        f = line.split()
+        if len(f) == 8 and f[0] == 'arm':
+            arm.append(tuple(map(int, f[2:6])))
+    w, h = max(x + aw for x, _, aw, _ in arm), max(y + ah for _, y, _, ah in arm)
+    img, rest = np.zeros((h, w, 4), np.uint8), px.copy()
+    for x, y, aw, ah in arm:
+        img[y:y + ah, x:x + aw] = px[y:y + ah, x:x + aw]
+        rest[y:y + ah, x:x + aw] = 0
+    block = satbake.bake(img, b'', stats, name='ramrod/arm.png', rects=arm)
+    tex.add(namehash('ramrod/arm.png'), 'tex', block)
+    log(f'tex ramrod/arm.png (the atlas\'s arm frames) {len(block) // 1024} KB')
+    return rest
+
+
 def levprep(data: Path, work: Path, ids: list[int]) -> None:
     """the given blocks of the demo's packs, as the game reads them, into work/<ID>.levl"""
     exe = work / 'levprep'
@@ -208,7 +230,10 @@ def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log, force8: set[i
         rel = source.relative_to(ROOT / 'assets')
         if unused(rel):
             continue
-        block = satbake.bake(np.array(Image.open(source).convert('RGBA')), b'', stats, name=rel.as_posix(),
+        px = np.array(Image.open(source).convert('RGBA'))
+        if rel.as_posix() == 'ramrod/atlas.png':
+            px = bake_ramrod_arm(px, tex, stats, log)
+        block = satbake.bake(px, b'', stats, name=rel.as_posix(),
                              rects=atlas_rects(rel.as_posix()), force8=any(rel.match(g) for g in palette_pngs()))
         tex.add(namehash(rel.as_posix()), 'tex', block)
         log(f'tex {rel} {len(block) // 1024} KB')

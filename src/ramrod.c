@@ -118,7 +118,7 @@ enum { PH_INTRO, PH_STRIDE, PH_INSTR, PH_WAVE_IN, PH_FIGHT, PH_WAVE_CLEAR, PH_RA
 
 struct Ramrod {
     Ren *ren; int sw, sh; bool ok;
-    RTex *atlas, *sky, *cockpit; RFloor *floor; Anim anim[A_COUNT];
+    RTex *atlas, *sky, *cockpit, *arm; RFloor *floor; Anim anim[A_COUNT];   /* arm: the Saturn's 8bpp copy of A_ARM, else NULL */
     uint8_t tex4[(TEX * TEX / 2) * 4 / 3 + 8]; uint32_t pal4[MIPS][16]; int floor_h;   /* the floor: 4bpp levels (floor4) */
     int difficulty, lives, result;
     /* Ramrod */
@@ -277,6 +277,9 @@ static bool load_assets(Ramrod *r)
     r->atlas = load_tex(r, "atlas.png", NULL, NULL, NULL);
     r->sky = load_tex(r, "sky.png", &w, &h, NULL);
     r->cockpit = load_tex(r, "cockpit.png", NULL, NULL, NULL);
+#ifdef PLAT_SATURN
+    r->arm = load_tex(r, "arm.png", NULL, NULL, NULL);   /* the arm's frames at 8bpp (tools/saturn/build_disc.py) */
+#endif
     const char *fp = asset_path("ramrod/floor.png");
     uint32_t *fl = fp ? png_load_rgba(fp, &w, &h) : NULL;   /* the floor is only read as pixels (r_floor_create) */
     if (!r->atlas || !r->sky || !r->cockpit || !fl || w != TEX || h != TEX) {
@@ -368,6 +371,7 @@ void ramrod_destroy(Ramrod *r)
     if (r->atlas) rtex_destroy(r->atlas);
     if (r->sky) rtex_destroy(r->sky);
     if (r->cockpit) rtex_destroy(r->cockpit);
+    if (r->arm) rtex_destroy(r->arm);
     if (r->floor) r_floor_destroy(r->floor);
     free(r);
 }
@@ -974,12 +978,19 @@ static void render_world(Ramrod *r)
         case 1: draw_mech(r, &r->mech[it->i], it->f); break;
         case 2: { Shot *s = &r->shot[it->i]; if (!project(r, s->x, s->y, s->z, &sx, &sy, &kk)) break;
             real qx, qy, qk;
-            r_set_draw_blend(r->ren, R_BLEND_ADD);
+#ifdef PLAT_SATURN
+            /* VDP1 has no additive blending: its stand-in, half-transparency, is meshed over the floor, and Ramrod's own
+             * bolts read as a dither of dots. They are drawn solid (the plasma coming at you stays a glow) */
+            RBlend bolt = s->enemy ? R_BLEND_ADD : R_BLEND_BLEND;
+#else
+            RBlend bolt = R_BLEND_ADD;
+#endif
+            r_set_draw_blend(r->ren, bolt);
             if (!s->enemy && project(r, s->x - r_mul(s->vx, R(0.035f)), s->y - r_mul(s->vy, R(0.035f)), s->z - r_mul(s->vz, R(0.035f)), &qx, &qy, &qk)) {   /* the bolt's streak */
                 r_set_draw_color(r->ren, 255, 140, 30, 255); r_line(r->ren, qx, qy + R(1), sx, sy + R(1)); r_line(r->ren, qx + R(1), qy, sx + R(1), sy);
                 r_set_draw_color(r->ren, 255, 250, 200, 255); r_line(r->ren, qx, qy, sx, sy);
             }
-            rtex_set_blend(r->atlas, R_BLEND_ADD);
+            rtex_set_blend(r->atlas, bolt);
             if (s->enemy) draw_frame(r, A_PLASMA, r_trunc(r->total_t * 14) & 3, sx, sy, clampf(r_mul(kk, R(1.6f)), R(0.25f), R(4)), false, 255, 255, 255, 255);
             else draw_frame(r, A_BOLT, r_trunc(r->total_t * 20) & 1, sx, sy, r_max(R(0.3f), r_mul(kk, R(1.3f))), false, 255, 255, 255, 255);
             rtex_set_blend(r->atlas, R_BLEND_BLEND);
@@ -1058,7 +1069,7 @@ static void render_arm(Ramrod *r)
     bool right = r->punch_side == 1;
     if (right) x = r_int(r->sw) - (x + r_int(f->w));
     RFRect src = { r_int(f->x), r_int(f->y), r_int(f->w), r_int(f->h) }, dst = { r_floorr(x), r_floorr(y), r_int(f->w), r_int(f->h) };
-    r_tex_rot(r->ren, r->atlas, &src, &dst, 0, NULL, right ? R_FLIP_H : R_FLIP_NONE);
+    r_tex_rot(r->ren, r->arm ? r->arm : r->atlas, &src, &dst, 0, NULL, right ? R_FLIP_H : R_FLIP_NONE);
 }
 
 static void bar(Ren *ren, real x, real y, real w, real h, real f, uint8_t cr, uint8_t cg, uint8_t cb)

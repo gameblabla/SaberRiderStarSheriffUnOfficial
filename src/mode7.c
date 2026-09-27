@@ -764,6 +764,7 @@ static void update_ents(Mode7 *m, real dt)
             break;
         case K_PROP: {
             real dx = dwrap(m->px, e->x), dy = dwrap(m->py, e->y); real r = e->spr == S_CACTUS ? R(18) : e->spr == S_MESA ? R(70) : e->spr == S_ROCK_B ? R(40) : R(24);
+            if (r_abs(dx) >= r + R(16) || r_abs(dy) >= r + R(16)) break;   /* far off on one axis: no square root (every prop, every step) */
             real d = r_hypot(dx, dy);
             if (d < r + R(16)) {
                 real nx = r_div(dx, d > R(1) ? d : R(1)), ny = r_div(dy, d > R(1) ? d : R(1));
@@ -1098,9 +1099,12 @@ static void render_floor(Mode7 *m)
 
 static void render_horizon(Mode7 *m)
 {
-    r_set_draw_color(m->ren, 78, 160, 214, 255);
-    RFRect sky = { 0, 0, r_int(m->sw), r_int(HORIZON + 1) }; r_fill_rect(m->ren, &sky);
-    if (!m->sky_ok) return;
+    if (!m->sky_ok) {   /* (the panorama is opaque and covers the band: no fill under it, which the Saturn's VDP1
+                         * paid for with 320x113 pixels a frame, the one too many that held stage 2 to 1.5 fields a frame) */
+        r_set_draw_color(m->ren, 78, 160, 214, 255);
+        RFRect sky = { 0, 0, r_int(m->sw), r_int(HORIZON + 1) }; r_fill_rect(m->ren, &sky);
+        return;
+    }
     /* the panorama is scaled to fill the sky band exactly (no squash: both axes share one factor), then tiled at
      * its own width - it was authored to loop there, so this is a clean wrap with none of the dead columns /
      * narrow-slice repeats that reusing level 1's background layers had */
