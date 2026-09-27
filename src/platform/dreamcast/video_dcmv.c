@@ -11,6 +11,7 @@
 #include <zamv.h>
 #include <zamv_dc_helpers.h>
 #include <kos.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,8 +23,71 @@ uint64_t aud_video_audio_played_bytes(void);
 uint32_t aud_video_audio_rate(void);
 void     aud_music_settle(void);   /* the music worker has carried out every request (a stream about to take its own) */
 
+/* .zamv chunk fetches used to be a blocking fs_read() called straight from decode_one() (itself called from
+ * video_update() during app_update(), on the main thread) - so every ~64 KB refill stalled the whole game loop
+ * for a GD-ROM read, which is exactly the periodic pause/stutter seen on every single video (intro, briefing,
+ * power attacks - anything that plays one). A small thread now keeps a few chunk-sized slots filled ahead of the
+ * decoder's needs; prefetch_read_cb (the chunk reader's source) is then just a RAM copy unless playback has
+ * genuinely caught up with the drive. */
+#define PF_SLOTS 4
+#define PF_CHUNK_BYTES (64 * 1024)
+
+typedef struct {
+    file_t fd;
+    uint8_t *buf[PF_SLOTS];
+    size_t got[PF_SLOTS];
+    atomic_bool filled[PF_SLOTS];
+    int next_fill, next_drain;   /* fill: worker-owned; drain: consumer-owned */
+    kthread_t *thd;
+    atomic_bool quit;
+} Prefetch;
+
+static void *prefetch_worker(void *arg)
+{
+    Prefetch *p = arg;
+    while (!atomic_load(&p->quit)) {
+        int i = p->next_fill;
+        if (atomic_load(&p->filled[i])) { thd_pass(); continue; }   /* the consumer hasn't drained this slot yet */
+        ssize_t n = fs_read(p->fd, p->buf[i], PF_CHUNK_BYTES);
+        p->got[i] = n > 0 ? (size_t)n : 0;
+        atomic_store(&p->filled[i], true);
+        p->next_fill = (i + 1) % PF_SLOTS;
+        if (n <= 0) thd_sleep(50);   /* EOF/error: stop hammering the drive once every slot has seen it */
+    }
+    return NULL;
+}
+
+static int prefetch_read_cb(void *user, void *dst, size_t want, size_t *got)
+{
+    (void)want;   /* zamv_chunk_reader always asks for exactly its own chunk_bytes, PF_CHUNK_BYTES here */
+    Prefetch *p = user;
+    int i = p->next_drain;
+    while (!atomic_load(&p->filled[i])) thd_pass();   /* the worker should already be ahead of us */
+    memcpy(dst, p->buf[i], p->got[i]);
+    if (got) *got = p->got[i];
+    atomic_store(&p->filled[i], false);
+    p->next_drain = (i + 1) % PF_SLOTS;
+    return 0;
+}
+
+static void prefetch_stop(Prefetch *p)
+{
+    if (p->thd) { atomic_store(&p->quit, true); thd_join(p->thd, NULL); p->thd = NULL; }
+    for (int i = 0; i < PF_SLOTS; i++) { free(p->buf[i]); p->buf[i] = NULL; }
+}
+
+static bool prefetch_start(Prefetch *p, file_t fd)
+{
+    memset(p, 0, sizeof *p);
+    p->fd = fd;
+    for (int i = 0; i < PF_SLOTS; i++) if (!(p->buf[i] = malloc(PF_CHUNK_BYTES))) { prefetch_stop(p); return false; }
+    if (!(p->thd = thd_create(false, prefetch_worker, p))) { prefetch_stop(p); return false; }
+    return true;
+}
+
 struct Video {
     file_t fd;
+    Prefetch pf;
     zamv_chunk_reader_t *chunk;
     zamv_decoder_t *dec;
     zamv_file_header_t hdr;
@@ -45,15 +109,6 @@ struct Video {
 };
 
 static int pot(int n) { int p = 8; while (p < n) p <<= 1; return p; }
-
-static int fs_read_cb(void *user, void *dst, size_t want, size_t *got)
-{
-    file_t fd = (file_t)(intptr_t)user;
-    ssize_t n = fs_read(fd, dst, want);
-    if (n < 0) return -1;
-    if (got) *got = (size_t)n;
-    return 0;
-}
 
 static bool setup_texture(Video *v)
 {
@@ -86,7 +141,8 @@ static Video *open_zamv(const char *path, const char *audio_path)
     if (!v) { fs_close(fd); return NULL; }
     memset(v, 0, sizeof *v);
     v->fd = fd;
-    v->chunk = zamv_chunk_reader_create(fs_read_cb, (void *)(intptr_t)fd, 64 * 1024);
+    if (!prefetch_start(&v->pf, fd)) { printf("video: %s: no read-ahead thread\n", path); goto fail; }
+    v->chunk = zamv_chunk_reader_create(prefetch_read_cb, &v->pf, PF_CHUNK_BYTES);
     v->dec = zamv_decoder_create();
     if (!v->chunk || !v->dec || zamv_decoder_read_header_cb(v->dec, zamv_chunk_reader_read, v->chunk, &v->hdr) < 0) {
         printf("video: %s: bad ZAMV stream\n", path);
@@ -106,6 +162,7 @@ static Video *open_zamv(const char *path, const char *audio_path)
     }
     return v;
 fail:
+    prefetch_stop(&v->pf);
     if (v->dec) zamv_decoder_destroy(v->dec);
     if (v->chunk) zamv_chunk_reader_destroy(v->chunk);
     fs_close(fd);
@@ -197,6 +254,7 @@ void video_close(Video *v)
 {
     if (!v) return;
     if (v->has_audio) aud_video_audio_close();
+    prefetch_stop(&v->pf);
     if (v->dec) zamv_decoder_destroy(v->dec);
     if (v->chunk) zamv_chunk_reader_destroy(v->chunk);
     fs_close(v->fd);
