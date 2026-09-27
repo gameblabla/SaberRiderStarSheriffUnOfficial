@@ -31,6 +31,7 @@ void dialog_preload(uint32_t text_id);
 /* the hero the player picked: the level-1 scripts were written for Fireball, so with April the lines that name
  * him are rewritten for her and the two avatars swap roles (April speaks to Fireball instead of the other way round) */
 void dialog_set_hero(int character);
+void dialog_use_hero(int character);   /* the same without the preload (a stage being left: the next load preloads) */
 bool dialog_open(Dialog *d, uint32_t text_id);
 bool dialog_open_script(Dialog *d, const char *script);   /* the same script format from a string (our own stages) */
 bool dialog_open_text(Dialog *d, const char *text, int color);   /* plain text (no script header), e.g. the mission briefing */

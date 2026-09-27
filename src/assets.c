@@ -52,9 +52,14 @@ uint8_t *file_read(const char *path, size_t *size)
     const PackEntry *e = baked(path, RES_FILE);   /* "FILE", u32 size, 24 bytes 0, the bytes */
     if (e) {
         uint32_t n = e->data[4] | e->data[5] << 8 | e->data[6] << 16 | (uint32_t)e->data[7] << 24;
-        uint8_t *d = n + 32 <= e->size ? malloc((size_t)n + PAD) : NULL;
-        if (d) { memcpy(d, e->data + 32, n); memset(d + n, 0, PAD); *size = n; }
+        if (n + 32 > e->size) { packs_release_type(asset_key(path), RES_FILE); return NULL; }
+        /* the block itself, the bytes moved down over the header: a copy needed room for the file twice, and a stage's
+         * level file (forest.lvl) read at the end of a load did not always find it (the stage then did not start) */
+        uint8_t *d = e->owned ? packs_take_type(asset_key(path), RES_FILE) : NULL;
+        if (d) memmove(d, d + 32, n);
+        else if ((d = malloc((size_t)n + PAD)) != NULL) memcpy(d, e->data + 32, n);
         packs_release_type(asset_key(path), RES_FILE);
+        if (d) { memset(d + n, 0, PAD); *size = n; }
         return d;
     }
 #endif

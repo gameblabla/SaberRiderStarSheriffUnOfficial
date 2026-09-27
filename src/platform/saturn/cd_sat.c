@@ -63,11 +63,17 @@ void cd_sat_stream_stop(void) { st_on = false; }   /* the decoder no longer need
 static void cdda_interrupt(void);
 static bool data_busy;          /* a synchronous disc read owns the drive while sectors are copied */
 
+/* Filter 0 passes only the sectors of this stream (FAD range) to partition 0 and drops the rest: without the range a
+ * sector still coming from the drive's previous play (another file, or the position a pause left it at) could land in
+ * the partition just cleared and be taken as the first sector asked for - a pack block read as garbage (a sound sample
+ * failing its ADPK check and the stage refusing to start). */
 static bool stream_start(fad_t fad, uint32_t count)
 {
     cdda_interrupt();
     st_on = false;
-    if (cd_block_cmd_selector_reset(0, 0) || cd_block_cmd_cd_dev_connection_set(0) || cd_block_cmd_disk_play(0, fad, (int32_t)count))
+    if (cd_block_cmd_filter_range_set(0, fad, count) || cd_block_cmd_filter_mode_set(0x40, 0) ||
+        cd_block_cmd_filter_connection_set(3, 0, 0xFF, 0) ||
+        cd_block_cmd_selector_reset(0, 0) || cd_block_cmd_cd_dev_connection_set(0) || cd_block_cmd_disk_play(0, fad, (int32_t)count))
         return false;
     st_next = fad; st_end = fad + count; st_on = true;
     seeks_total++;

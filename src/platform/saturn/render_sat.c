@@ -802,6 +802,10 @@ static void part_emit(RTex *t, int pi, int ix0, int iy0, int ix1, int iy1, RFlip
         return;
     }
     int W = ix1 - ix0 + 1, H = iy1 - iy0 + 1;
+    /* half-transparency reads the framebuffer for every pixel drawn: a translucent part magnified 3x and more (the
+     * MISSION ACCOMPLISHED lettering zooming in from 32x covered the screen twice, 2.2 fields a frame) is meshed
+     * instead, which only writes every other pixel */
+    if ((pm & PM_HALF) && (W >= 3 * p->wpad || H >= 3 * p->h)) pm = (uint16_t)((pm & ~PM_HALF) | PM_MESH);
     RRect pc = { ix0, iy0, W, H };
     bool crop = !quad && !flip && W >= p->wpad && H >= p->h && (W > p->wpad || H > p->h) &&
                 (W - cc.w > 32 || H - cc.h > 32) && r_rect_intersect(&cc, &pc, &pc);
@@ -1252,7 +1256,8 @@ static void floor_put_char(const RFloor *f, int ch, int level, int wx, int wy)
     uint8_t *b = (uint8_t *)w;
     for (int y = 0; y < 8; y++) {
         int uy = wy + (y << level);
-        const uint8_t *crow = d->cells + (((uint32_t)uy >> cs) & cmask) * d->mapn;
+        uint32_t cy = ((uint32_t)uy >> cs) & cmask;
+        const uint8_t *crow = d->rows ? d->rows[cy] : d->cells + cy * d->mapn;
         for (int x = 0; x < 8; x++) {
             int ux = wx + (x << level);
             int m = crow[((uint32_t)ux >> cs) & cmask];
@@ -1286,7 +1291,7 @@ static uint16_t floor_char_at(RFloor *f, FlMap *m, int cx, int cy)
     uint32_t cmask = (uint32_t)d->mapn - 1;
     int wx = cx << m->shift, wy = cy << m->shift;
     int sx = cx & (m->span - 1), sy = cy & (m->span - 1);
-    int m0 = d->cells[(((uint32_t)wy >> cs) & cmask) * d->mapn + (((uint32_t)wx >> cs) & cmask)];
+    int m0 = r_floor_cell(d, ((uint32_t)wx >> cs) & cmask, ((uint32_t)wy >> cs) & cmask);
     if (m0 >= f->nmat) m0 = 0;
     if (sub > 0) {
         /* 2x2 cells (the corners' ones if the character spans more): a mixed character from the cache */
@@ -1294,7 +1299,7 @@ static uint16_t floor_char_at(RFloor *f, FlMap *m, int cx, int cy)
         uint32_t key = (uint32_t)m0;
         for (int k = 1; k < 4; k++) {
             int ux = wx + (k & 1) * h, uy = wy + (k >> 1) * h;
-            int mk = d->cells[(((uint32_t)uy >> cs) & cmask) * d->mapn + (((uint32_t)ux >> cs) & cmask)];
+            int mk = r_floor_cell(d, ((uint32_t)ux >> cs) & cmask, ((uint32_t)uy >> cs) & cmask);
             key |= (uint32_t)(mk < f->nmat ? mk : 0) << (k * 4);
         }
         if (key != (uint32_t)m0 * 0x1111u && f->hkey) {
@@ -1537,7 +1542,7 @@ RFloor *r_floor_create(Ren *r, const RFloorDesc *d)
 {
     (void)r;
     if (!d || d->mapn < 1 || (d->mapn & (d->mapn - 1)) || d->cell_shift < 0 || d->cell_shift > 15 || d->tex < 1 ||
-        (d->tex & (d->tex - 1)) || d->mips < 1 || d->nmat < 1 || !d->cells ||
+        (d->tex & (d->tex - 1)) || d->mips < 1 || d->nmat < 1 || (!d->cells && !d->rows) ||
         (!d->mat && (!d->mat4 || !d->pal4))) return NULL;
     RFloor *f = calloc(1, sizeof *f);
     if (!f) return NULL;

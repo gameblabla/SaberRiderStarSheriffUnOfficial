@@ -210,7 +210,7 @@ static void build_block(RFloor *f, int L, int bx, int by)
     for (int k = 0; k < 64; k++) {
         int tx = bx * 8 + f->tw_lx[k], ty = by * 8 + f->tw_ly[k];
         uint32_t wx = (uint32_t)tx << L, wy = (uint32_t)ty << L;
-        uint8_t m = d->cells[((wy >> cs) & mask) * d->mapn + ((wx >> cs) & mask)];
+        uint8_t m = r_floor_cell(d, (wx >> cs) & mask, (wy >> cs) & mask);
         if (m >= 16) m = 0;
         b[k] = f->idx[m * MAX_LEV + L][(ty & mm) * msz + (tx & mm)];
     }

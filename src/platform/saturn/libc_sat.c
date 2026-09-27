@@ -1,7 +1,8 @@
 /* The C library pieces libyaul lacks or has in a reduced form, for the core game on the Saturn:
  *   - the heaps: TLSF pools over high work RAM (after the program) and low work RAM (the whole 1 MB). malloc puts big
  *     blocks in low RAM (pack blocks, level data: read by the CPUs only), small ones in high RAM; hw_malloc is always
- *     high RAM, the only work RAM the SCU DMA can read (plan 8.5);
+ *     high RAM, the only work RAM the SCU DMA can read (plan 8.5). Low RAM is two pools: the top LW_SMALL bytes for
+ *     blocks under SMALL_MAX, the rest for bigger ones (see any_alloc);
  *   - printf / snprintf with %u, %l, %*... (no %f: the core formats its 16.16 reals itself), sscanf / fscanf (integers
  *     and strings), fgets, fmemopen, qsort, calloc, aligned_alloc.
  * No float anywhere: the SH-2 has no FPU and the core is in fixed point on the Saturn (real.h).
@@ -22,26 +23,45 @@
 #define LWRAM_BASE 0x00200000u
 #define LWRAM_END  0x00300000u
 #define BIG_BLOCK  4096          /* malloc: blocks this big go to low RAM first */
+/* Low RAM's small pool: the blocks that outlive a stage are nearly all small (cache entries' cell grids, fonts, file
+ * buffers, character tables) and are made in the middle of a stage's load. In one pool they ended up scattered through
+ * the big textures and level data around them, and once those were freed at the stage change, low RAM was 800 KB
+ * free in holes of 270 KB at most: the next stages' big blocks (the Grand Prix's map, Dark April's sheet, Ramrod's
+ * floor) no longer fitted. Blocks under SMALL_MAX go to the small pool first, the rest to the big pool; either may
+ * still spill into the other when it is full. */
+#define LW_SMALL   (224u * 1024)
+#define SMALL_MAX  16384
+#define LWBIG_END  (LWRAM_END - LW_SMALL)
 
 extern uint8_t __end[];          /* the linker script's ___end: end of .bss / .uncached */
-static tlsf_t hw_heap, lw_heap;
-static size_t hw_used, lw_used;
+static tlsf_t hw_heap, lw_heap, ls_heap;   /* high RAM, low RAM's big pool, low RAM's small pool */
+static size_t hw_used, lw_used;            /* (lw_used: both low RAM pools) */
 
 static void heaps_init(void)
 {
     if (hw_heap) return;
     uintptr_t start = ((uintptr_t)__end + 63) & ~(uintptr_t)63;
     hw_heap = tlsf_pool_create((void *)start, HWRAM_END - start);
-    lw_heap = tlsf_pool_create((void *)LWRAM_BASE, LWRAM_END - LWRAM_BASE);
+    lw_heap = tlsf_pool_create((void *)LWRAM_BASE, LWBIG_END - LWRAM_BASE);
+    ls_heap = tlsf_pool_create((void *)LWBIG_END, LW_SMALL);
 }
 
 static bool in_lw(const void *p) { return (uintptr_t)p >= LWRAM_BASE && (uintptr_t)p < LWRAM_END; }
+static tlsf_t lw_pool_of(const void *p) { return (uintptr_t)p >= LWBIG_END ? ls_heap : lw_heap; }
 
 static void *pool_alloc(tlsf_t h, size_t align, size_t n)
 {
     void *p = align > 4 ? tlsf_memalign(h, align, n) : tlsf_malloc(h, n);
-    if (p) { if (h == lw_heap) lw_used += tlsf_block_size(p); else hw_used += tlsf_block_size(p); }
+    if (p) { if (h != hw_heap) lw_used += tlsf_block_size(p); else hw_used += tlsf_block_size(p); }
     return p;
+}
+
+/* low RAM: a small block from the small pool first, a big one from the big pool first */
+static void *lw_alloc(size_t align, size_t n)
+{
+    bool small = n < SMALL_MAX;
+    void *p = pool_alloc(small ? ls_heap : lw_heap, align, n);
+    return p ? p : pool_alloc(small ? lw_heap : ls_heap, align, n);
 }
 
 static bool (*oom_hook)(void);
@@ -55,8 +75,8 @@ static void *any_alloc(size_t align, size_t n)
     if (n == 0) n = 1;
     void *p;
     for (;;) {
-        if (n >= BIG_BLOCK) { if (!(p = pool_alloc(lw_heap, align, n))) p = pool_alloc(hw_heap, align, n); }
-        else if (!(p = pool_alloc(hw_heap, align, n))) p = pool_alloc(lw_heap, align, n);
+        if (n >= BIG_BLOCK) { if (!(p = lw_alloc(align, n))) p = pool_alloc(hw_heap, align, n); }
+        else if (!(p = pool_alloc(hw_heap, align, n))) p = lw_alloc(align, n);
         if (p || !oom_hook) return p;
         bool (*h)(void) = oom_hook;
         oom_hook = NULL;   /* no recursion: what the hook frees may allocate */
@@ -71,13 +91,13 @@ void *memalign(size_t align, size_t n) { return any_alloc(align, n); }
 void *aligned_alloc(size_t align, size_t n) { return any_alloc(align, n); }
 void *hw_malloc(size_t n) { heaps_init(); return pool_alloc(hw_heap, 4, n ? n : 1); }
 void *hw_memalign(size_t align, size_t n) { heaps_init(); return pool_alloc(hw_heap, align, n ? n : 1); }
-void *lw_malloc(size_t n) { heaps_init(); return pool_alloc(lw_heap, 4, n ? n : 1); }
-void *lw_memalign(size_t align, size_t n) { heaps_init(); return pool_alloc(lw_heap, align, n ? n : 1); }
+void *lw_malloc(size_t n) { heaps_init(); return lw_alloc(4, n ? n : 1); }
+void *lw_memalign(size_t align, size_t n) { heaps_init(); return lw_alloc(align, n ? n : 1); }
 
 void free(void *p)
 {
     if (!p) return;
-    if (in_lw(p)) { lw_used -= tlsf_block_size(p); tlsf_free(lw_heap, p); }
+    if (in_lw(p)) { lw_used -= tlsf_block_size(p); tlsf_free(lw_pool_of(p), p); }
     else { hw_used -= tlsf_block_size(p); tlsf_free(hw_heap, p); }
 }
 
@@ -124,10 +144,11 @@ static void heap_walker(void *ptr, size_t size, int used, void *user)
 void sat_heap_largest(size_t *hw, size_t *lw, size_t dump)
 {
     heaps_init();
-    HeapWalk a = { 0, 0 }, b = { 0, dump };
+    HeapWalk a = { 0, 0 }, b = { 0, dump }, c = { 0, dump };
     tlsf_pool_walk(tlsf_pool_get(hw_heap), heap_walker, &a);
     tlsf_pool_walk(tlsf_pool_get(lw_heap), heap_walker, &b);
-    *hw = a.largest; *lw = b.largest;
+    tlsf_pool_walk(tlsf_pool_get(ls_heap), heap_walker, &c);
+    *hw = a.largest; *lw = b.largest > c.largest ? b.largest : c.largest;
 }
 
 /* ---------------------------------------------------------------- stdlib */

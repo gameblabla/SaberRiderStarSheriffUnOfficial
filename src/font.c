@@ -11,7 +11,9 @@ static Font g_fonts[MAX_FONTS]; static int g_nfonts;
 
 Font *font_get(uint32_t id)
 {
-    for (int i = 0; i < g_nfonts; i++) if (g_fonts[i].id == id) return &g_fonts[i];
+    /* the glyphs' texture too: a stage change trims it, and the callers' font_get is their preload (LOADING, the
+     * dialog's) - a font left bare read the disc at its first draw, under the music */
+    for (int i = 0; i < g_nfonts; i++) if (g_fonts[i].id == id) { if (g_fonts[i].spr) sprite_tex(g_fonts[i].spr); return &g_fonts[i]; }
     const PackEntry *e = packs_find_type(id, RES_FONT);
     if (!e || g_nfonts == MAX_FONTS) return NULL;
     const uint8_t *d = e->data;

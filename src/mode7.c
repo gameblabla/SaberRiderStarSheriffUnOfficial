@@ -36,6 +36,7 @@
 #define MAPSH 3              /* log2(cell size): 8 units */
 #endif
 #define WORLD (MAPN << MAPSH)
+#define MAP_STRIP 64         /* map rows per allocation */
 #define TEX 32               /* material texture size */
 #define MIPS 4
 enum { T_SAND, T_SAND2, T_ASPHALT, T_LINE, T_KERB_RED, T_KERB_WHITE, T_CHECKER, T_DIRT, T_SAND_DARK, T_DASH, T_SHOULDER, T_COUNT };
@@ -88,8 +89,10 @@ typedef float rdist2;
 struct Mode7 {
     Ren *ren; int sw, sh;
     RTex *atlas; Spr spr[S_COUNT]; bool ok;
-    uint32_t (*tiles)[MIPS][TEX * TEX];   /* [T_COUNT]: level L is (TEX >> L) square */
-    uint8_t *cells;                       /* [MAPN * MAPN] (both apart from the struct: a console's heap has them in two holes) */
+    /* apart from the struct and in pieces of 16 / 32 KB: after a platform stage a console's heap is in holes (the Saturn's
+     * low RAM had none of the 180 KB and 256 KB the two used to take whole, and stage 2 did not start) */
+    uint32_t (*tiles[T_COUNT])[TEX * TEX];   /* [MIPS] each: level L is (TEX >> L) square */
+    uint8_t *cells[MAPN];                    /* the material map's rows, in strips of MAP_STRIP rows (cells[k * MAP_STRIP]) */
     RFloor *floor; int floor_h;   /* the ground plane (platform/render.h), made on first draw */
     RTex *sky_tex; int sky_w, sky_h; bool sky_ok;
     /* track */
@@ -167,8 +170,8 @@ static Ent *ent_new(Mode7 *m)
 }
 static void ents_clear(Mode7 *m, bool keep_player_stuff) { (void)keep_player_stuff; memset(m->ents, 0, sizeof m->ents); }
 
-static uint8_t cell_at(const Mode7 *m, real x, real y) { int cx = (r_floor(x) >> MAPSH) & (MAPN - 1), cy = (r_floor(y) >> MAPSH) & (MAPN - 1); return m->cells[cy * MAPN + cx]; }
-static void cell_set(Mode7 *m, int cx, int cy, uint8_t t) { m->cells[(cy & (MAPN - 1)) * MAPN + (cx & (MAPN - 1))] = t; }
+static uint8_t cell_at(const Mode7 *m, real x, real y) { int cx = (r_floor(x) >> MAPSH) & (MAPN - 1), cy = (r_floor(y) >> MAPSH) & (MAPN - 1); return m->cells[cy][cx]; }
+static void cell_set(Mode7 *m, int cx, int cy, uint8_t t) { m->cells[cy & (MAPN - 1)][cx & (MAPN - 1)] = t; }
 static bool is_road(uint8_t t) { return t == T_ASPHALT || t == T_LINE || t == T_CHECKER || t == T_DASH || t == T_DIRT; }
 static bool is_rumble(uint8_t t) { return t == T_KERB_RED || t == T_KERB_WHITE || t == T_SHOULDER; }
 
@@ -290,7 +293,7 @@ static void draw_spr(Mode7 *m, int id, int frame, real cx, real ybot, real scale
 static void fill_sand(Mode7 *m)
 {
     /* frand(m) < 0.5f is the generator's top bit clear: the same draws, without a million float conversions */
-    for (int i = 0; i < MAPN * MAPN; i++) { m->rng = m->rng * 1664525u + 1013904223u; m->cells[i] = (m->rng >> 31) ? T_SAND2 : T_SAND; }
+    for (int i = 0; i < MAPN * MAPN; i++) { m->rng = m->rng * 1664525u + 1013904223u; m->cells[i / MAPN][i % MAPN] = (m->rng >> 31) ? T_SAND2 : T_SAND; }
     /* scorched patches: a few hundred blobs a few cells across */
     for (int k = 0; k < 400; k++) {
         int cx = r_trunc(frand(m) * MAPN), cy = r_trunc(frand(m) * MAPN), r = 2 + r_trunc(frand(m) * 4);
@@ -376,7 +379,7 @@ static void build_track(Mode7 *m)
     free(dist); free(near);
     if (plat_getenv("SABER_M7MAP")) {   /* debug: dump the material map */
         FILE *f = fopen(plat_getenv("SABER_M7MAP"), "wb");
-        if (f) { fprintf(f, "P5\n%d %d\n255\n", MAPN, MAPN); for (int i = 0; i < MAPN * MAPN; i++) fputc(m->cells[i] * 20, f); fclose(f); }
+        if (f) { fprintf(f, "P5\n%d %d\n255\n", MAPN, MAPN); for (int i = 0; i < MAPN * MAPN; i++) fputc(m->cells[i / MAPN][i % MAPN] * 20, f); fclose(f); }
     }
 }
 
@@ -492,8 +495,14 @@ static void start_race(Mode7 *m)
 Mode7 *mode7_create(Ren *ren, int sw, int sh, int difficulty, int lives, bool resume_phase2)
 {
     Mode7 *m = calloc(1, sizeof *m);
-    if (m) { m->cells = malloc(MAPN * MAPN); m->tiles = calloc(T_COUNT, sizeof *m->tiles); }
-    if (!m || !m->cells || !m->tiles) { fprintf(stderr, "mode7: no memory\n"); mode7_destroy(m); return NULL; }
+    bool mem = m != NULL;
+    for (int y = 0; mem && y < MAPN; y += MAP_STRIP) {
+        uint8_t *strip = malloc(MAP_STRIP * MAPN);
+        for (int k = 0; strip && k < MAP_STRIP; k++) m->cells[y + k] = strip + k * MAPN;
+        mem = strip != NULL;
+    }
+    for (int t = 0; mem && t < T_COUNT; t++) mem = (m->tiles[t] = calloc(MIPS, sizeof *m->tiles[t])) != NULL;
+    if (!mem) { fprintf(stderr, "mode7: no memory\n"); mode7_destroy(m); return NULL; }
     m->ren = ren; m->sw = sw; m->sh = sh; m->rng = 0xC0FFEE;
     m->floor_h = sh - HORIZON - 1;
     m->ok = load_atlas(m);
@@ -525,7 +534,8 @@ void mode7_destroy(Mode7 *m)
     if (m->atlas) rtex_destroy(m->atlas);
     if (m->floor) r_floor_destroy(m->floor);
     if (m->sky_tex) rtex_destroy(m->sky_tex);
-    free(m->cells); free(m->tiles);
+    for (int y = 0; y < MAPN; y += MAP_STRIP) free(m->cells[y]);
+    for (int t = 0; t < T_COUNT; t++) free(m->tiles[t]);
     free(m);
 }
 
@@ -1074,7 +1084,7 @@ static void render_floor(Mode7 *m)
     if (!m->floor) {
         static const uint32_t *mats[T_COUNT * MIPS];
         for (int t = 0; t < T_COUNT; t++) for (int L = 0; L < MIPS; L++) mats[t * MIPS + L] = m->tiles[t][L];
-        RFloorDesc d = { MAPN, MAPSH, m->cells, TEX, MIPS, T_COUNT, mats, NULL, NULL };
+        RFloorDesc d = { MAPN, MAPSH, NULL, TEX, MIPS, T_COUNT, mats, NULL, NULL, (const uint8_t *const *)m->cells };
         m->floor = r_floor_create(m->ren, &d);
         if (!m->floor) return;
     }

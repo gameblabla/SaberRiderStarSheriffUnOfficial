@@ -16,7 +16,8 @@ static const uint8_t TEXTRGB[4][3] = { {255,255,255}, {255,232,208}, {224,232,25
 
 static int g_hero = HERO_FIREBALL;
 static void paginate(Dialog *d);
-void dialog_set_hero(int character) { g_hero = character; dialog_preload(0); }
+void dialog_use_hero(int character) { g_hero = character; }
+void dialog_set_hero(int character) { dialog_use_hero(character); dialog_preload(0); }
 
 static void preload_sprite(uint32_t id) { if (packs_peek_type(id, RES_SPRITE) || packs_peek_type(id, RES_TEX)) sprite_tex(sprite_get(id)); }
 

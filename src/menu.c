@@ -137,6 +137,9 @@ static const PackEntry *credits_entry(void)
 
 static void charsel_preload(void);
 static Sprite *victory_art(int stage, int character);
+/* a preload: the sprite AND its texture. sprite_get alone makes the texture only when it first makes the entry; once a
+ * stage has trimmed the textures it returns the entry bare, and the first draw read the disc under the menu's music. */
+static Sprite *warm(Sprite *s) { if (s) sprite_tex(s); return s; }
 
 void menu_enter(Menu *m, int state)
 {
@@ -151,6 +154,8 @@ void menu_enter(Menu *m, int state)
         if (prev == MS_OPTIONS || prev == MS_CREDITS) m->t = m->dur / 2;   /* no zoom-in when coming back from a sub menu */
         m->sel = 0;
         font_get(0x4058897F);   /* LOADING, for GAME START: read now, before the music (a read stops CD-DA on the Saturn) */
+        { static const uint32_t ART[] = { 0xD7DEBAC0, 0xB04BAC5F, 0x989121EC, 0x01E9B701, 0x8FF0AB30 };   /* draw_main's */
+          for (size_t i = 0; i < sizeof ART / sizeof *ART; i++) warm(sprite_get(ART[i])); }
         music_play(0, true); break;
     case MS_OPTIONS:
         m->sel = prev == MS_CONTROLS ? OPT_CONTROLS : 1; m->music_track = 0;
@@ -160,16 +165,20 @@ void menu_enter(Menu *m, int state)
     case MS_BRIEFING:   /* its room, the hero pieces after it and character select, off the disc before the music starts
                            (the Saturn: one read, tools/saturn/build_disc.py READ_TOGETHER); open_briefing starts it */
         m->dlg.active = false;
-        sprite_get(0x0EAE8AEB); cblock_preload(cblock_get(0x2DEF1664)); charsel_preload();
+        warm(sprite_get(0x0EAE8AEB)); cblock_preload(cblock_get(0x2DEF1664)); charsel_preload();
         break;
     case MS_CHARSEL: m->t = R(-0.25f); m->character = 1; charsel_preload(); music_play(1, true); break;
-    case MS_GAMEOVER: m->dur = R(3.0f); music_play(4, false); break;        /* FUN_0042d690 -> state 9 + music 4 */
+    case MS_GAMEOVER:   /* FUN_0042d690 -> state 9 + music 4; the Nemesis art read first (a read stops CD-DA on the Saturn) */
+        m->dur = R(3.0f);
+        music_stop(); warm(sprite_get(0x64981FC5)); warm(sprite_get(0x24138418));
+        music_play(4, false); break;
     case MS_CONTINUE: music_stop(); m->continue_now = false; break;      /* silence but the clock ticks */
     case MS_ACCOMPLISHED:   /* state 0xf + music 7; its art read first (a read stops CD-DA on the Saturn, and ~200 KB of
                              * painting read on the first frame used to take most of the zoom-in away) */
         m->dur = R(10.0f);
-        if (!victory_art(m->cleared_stage, m->character)) sprite_get(0xE963788C);
-        sprite_get(0xF6172502); sprite_get(0xF629241D);
+        music_stop();   /* the stage's jingle has faded out; the reads below must not run under it */
+        if (!warm(victory_art(m->cleared_stage, m->character))) warm(sprite_get(0xE963788C));
+        warm(sprite_get(0xF6172502)); warm(sprite_get(0xF629241D));
         music_play(7, false); break;
     case MS_CREDITS: m->credits_page = 0; m->credits_t = 0; music_play(9, true); break;   /* FUN_004265a0: backer credits music */
     default: break;
@@ -547,10 +556,10 @@ static const uint32_t CS_PORT_OFF[4] = { 0x3459994C, 0xAA051172, 0x3F368A4E, 0x2
 static void charsel_preload(void)
 {
     static const uint32_t MISC[] = { 0x4813ED48, 0xAE16B01D, 0xE34D3083, 0x5B550481, 0x7673D08E, 0x7255866F, 0x92702CF3, 0x2178AD91 };
-    for (int i = 0; i < 8; i++) sprite_get(MISC[i]);   /* title, arrows, cursor, highlight, n/a, the spiral and its moon */
+    for (int i = 0; i < 8; i++) warm(sprite_get(MISC[i]));   /* title, arrows, cursor, highlight, n/a, the spiral and its moon */
     for (int i = 0; i < 4; i++) {
-        sprite_get(CS_FRAME[i]); sprite_get(CS_NAME_ON[i]); sprite_get(CS_NAME_OFF[i]);
-        sprite_get(CS_PORT_ON[i]); sprite_get(CS_PORT_OFF[i]);
+        warm(sprite_get(CS_FRAME[i])); warm(sprite_get(CS_NAME_ON[i])); warm(sprite_get(CS_NAME_OFF[i]));
+        warm(sprite_get(CS_PORT_ON[i])); warm(sprite_get(CS_PORT_OFF[i]));
     }
     font_get(0x4058897F);   /* LOADING */
 }
@@ -709,10 +718,10 @@ void menu_draw(Menu *m, Ren *r, int sw, int sh)
     case MS_ACCOMPLISHED: {   /* FUN_00429e70: Fireball art + pulsing MISSION / ACCOMPLISHED zoom in from 32x over
                                * v = min(2.1 sin(pi|t|/2), 2)/2 under a black veil; t runs 0..4, then -1..0 zooms
                                * back out under a white veil (FUN_00429de0) */
-        fill(r, sw, sh, 0, 0, 0, 255);
         m->drawn++;
         Sprite *bg = victory_art(m->cleared_stage, m->character), *a = sprite_get(0xF6172502), *b = sprite_get(0xF629241D);
         if (!bg) bg = sprite_get(0xE963788C);   /* the demo's Fireball art when ours is missing */
+        if (!bg || bg->w < sw || bg->h < sh) fill(r, sw, sh, 0, 0, 0, 255);   /* (the art, 1x and up, covers the screen) */
         real t = m->t <= R(4.0f) ? m->t : m->t - R(5.0f), v = R(1.0f);
         if (t < R(1.0f)) { v = r_mul(R(2.1f), r_sin(r_mul(r_abs(t), R(1.5707964f)))); if (v > R(2.0f)) v = R(2.0f); v /= 2; }
         real sc = zoom_scale(v);

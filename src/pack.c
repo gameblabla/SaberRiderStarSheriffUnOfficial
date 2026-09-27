@@ -131,18 +131,34 @@ bool pack_load(Pack *p, const char *path)
 static unsigned g_reads;
 unsigned packs_reads(void) { return g_reads; }
 
+static bool g_locked;
+static unsigned g_refused;
+static uint32_t g_refused_id[64];
+void packs_lock(bool locked) { g_locked = locked; if (locked) g_refused = 0; }
+unsigned packs_refused(void) { return g_refused; }
+
 /* read (and decompress) a block */
 static bool entry_load(const Pack *p, PackEntry *pe)
 {
     if (pe->data) return true;
+    if (g_locked) {
+        unsigned n = g_refused < 64 ? g_refused : 64, i = 0;
+        while (i < n && g_refused_id[i] != pe->id) i++;
+        if (i == n) {
+            fprintf(stderr, "pack: %s %08X not in memory and the packs are locked (a stage is playing): refused\n", p->name, pe->id);
+            if (g_refused < 64) g_refused_id[g_refused] = pe->id;
+            g_refused++;
+        }
+        return false;
+    }
     static int log = -1; if (log < 0) log = plat_getenv("SABER_READLOG") != NULL;   /* debug: every read from a pack */
     if (log) fprintf(stderr, "pack: read %s %08X (%u KB) at %u ms\n", p->name, pe->id, (unsigned)(pe->stored / 1024), (unsigned)plat_ticks_ms());
     g_reads++;
-    uint8_t *raw = block_alloc(pe->stored + 16);
+    uint8_t *raw = block_alloc(pe->stored + PACK_SLACK);
     if (!raw) { fprintf(stderr, "pack: block %08X: no memory for %u bytes\n", pe->id, (unsigned)pe->stored); return false; }
     if (!read_at(p->f, pe->off, raw, pe->stored)) { fprintf(stderr, "pack: block %08X read failed\n", pe->id); free(raw); return false; }
     if (pe->stored == pe->declen) { pe->data = raw; pe->size = pe->declen; pe->owned = true; return true; }
-    uint8_t *buf = block_alloc(pe->declen + 16);
+    uint8_t *buf = block_alloc(pe->declen + PACK_SLACK);
     int r = !buf ? -1
 #if defined(PLAT_DREAMCAST)
           : pe->lz40 ? (lz40_decode(raw, (int)pe->stored, buf, (int)pe->declen) == (int)pe->declen ? (int)pe->declen : -1)   /* stops at declen: padding follows */

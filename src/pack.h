@@ -40,7 +40,9 @@ const PackEntry *pack_find(const Pack *p, uint32_t id);
 bool  packs_open(const char *data_dir, const char *const *names, int n);
 const PackEntry *packs_find(uint32_t id);
 const PackEntry *packs_find_type(uint32_t id, ResType t);
-/* Transfer an already loaded block to its caller; caller must free it. */
+/* Transfer an already loaded block to its caller; caller must free it. A block read by us has PACK_SLACK bytes of room
+ * after its size (a decoder's over-read, or a file moved down over its 32-byte header with its zeroed tail). */
+#define PACK_SLACK 96
 uint8_t *packs_take_type(uint32_t id, ResType t);
 /* the entry without reading its data (type / size queries) */
 const PackEntry *packs_peek(uint32_t id);
@@ -55,6 +57,11 @@ void  packs_set_evict_hook(bool (*hook)(void));
 bool  packs_evict(void);   /* the hook, for other allocations out of memory (the Saturn's malloc) */
 /* blocks read from the packs so far (SABER_PERF: a read in the middle of a level is a stall) */
 unsigned packs_reads(void);
+/* While locked no block is read: a lookup of one not in memory fails (and is named once), as if the block were absent.
+ * The Saturn locks the packs for the whole of a stage's play (gfx_lock_reads): a data read there stops the CD-DA music
+ * for the length of the seek. packs_refused() counts the lookups refused since the lock was taken. */
+void  packs_lock(bool locked);
+unsigned packs_refused(void);
 uint32_t hex_id(const char *s8);
 
 /* The packs' data is little-endian. A big-endian console (the Saturn's SH-2) turns the arrays it keeps to host order in

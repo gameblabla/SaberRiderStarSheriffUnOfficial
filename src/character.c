@@ -20,12 +20,28 @@ static real diag(real mx) { return 0.7f * mx; }
 #define MAX_DEFS 48
 static CharDef *g_defs[MAX_DEFS]; static int g_ndefs;
 
-static const CharDef *chardef_get(uint32_t crhc_id, const uint8_t *d)
+void character_defs_release(void)
+{
+    for (int i = 0; i < g_ndefs; i++) free(g_defs[i]);
+    g_ndefs = 0;
+}
+
+/* the type's tables and fields, from its CRHC block the first time (the block is then let go: the def holds all a
+ * Character is made from, so an enemy spawned later reads nothing) */
+static const CharDef *chardef_get(uint32_t crhc_id)
 {
     for (int i = 0; i < g_ndefs; i++) if (g_defs[i]->crhc_id == crhc_id) return g_defs[i];
+    const PackEntry *e = packs_find(crhc_id);
+    if (!e || memcmp(e->data, "CRHC", 4)) { fprintf(stderr, "CRHC %08X not found\n", crhc_id); return NULL; }
+    const uint8_t *d = e->data;
     CharDef *def = g_ndefs < MAX_DEFS ? calloc(1, sizeof *def) : NULL;
     if (!def) { fprintf(stderr, "CRHC %08X: no room for its tables\n", crhc_id); return NULL; }
-    def->crhc_id = crhc_id;
+    def->crhc_id = crhc_id; def->sprite_id = rd32(d + 4);
+    def->origin_x = rdf(d + 0x08); def->origin_y = rdf(d + 0x0c);
+    def->speed = rdf(d + 0x10); def->slide_speed = rdf(d + 0x14); def->slide_time = rdf(d + 0x18);
+    def->jump_vel = rdf(d + 0x1c); def->alert_time = rdf(d + 0x20);
+    def->box_ox = rdf(d + 0x24); def->box_oy = rdf(d + 0x28); def->box_hx = rdf(d + 0x2c); def->box_hy = rdf(d + 0x30);
+    def->hp_max = (int)rd32(d + 0xadc);
     for (int i = 0; i < CHAR_CRHC_ANIMS; i++) {
         const uint8_t *a = d + 0x34 + i * 0x18;
         def->anims[i].id = rd32(a); def->anims[i].first = rd32(a + 4); def->anims[i].last = rd32(a + 8);
@@ -42,22 +58,24 @@ static const CharDef *chardef_get(uint32_t crhc_id, const uint8_t *d)
                     def->anims[i].last, def->anims[i].loop, RS(def->anims[i].frame_time, 3), def->anims[i].flags, RS(def->muzzle[i][0], 0), RS(def->muzzle[i][1], 0),
                     RS(def->hurt[i].ox, 0), RS(def->hurt[i].oy, 0), RS(def->hurt[i].hw, 0), RS(def->hurt[i].hh, 0));
     g_defs[g_ndefs++] = def;
+#ifdef PLAT_LOW_MEMORY
+    packs_release(crhc_id);
+#endif
     return def;
 }
 
 bool character_init(Character *c, uint32_t crhc_id, bool enemy)
 {
     memset(c, 0, sizeof *c);
-    const PackEntry *e = packs_find(crhc_id);
-    if (!e || memcmp(e->data, "CRHC", 4)) { fprintf(stderr, "CRHC %08X not found\n", crhc_id); return false; }
-    const uint8_t *d = e->data;
-    if (!(c->def = chardef_get(crhc_id, d))) return false;
-    c->crhc_id = crhc_id; c->sprite_id = rd32(d + 4);
-    c->origin_x = rdf(d + 0x08); c->origin_y = rdf(d + 0x0c);
-    c->speed = rdf(d + 0x10); c->slide_speed = rdf(d + 0x14); c->slide_time = rdf(d + 0x18);
-    c->jump_vel = rdf(d + 0x1c); c->alert_time = rdf(d + 0x20);
-    c->box_ox = rdf(d + 0x24); c->box_oy = rdf(d + 0x28); c->box_hx = rdf(d + 0x2c); c->box_hy = rdf(d + 0x30);
-    c->hp_max = rd32(d + 0xadc);
+    const CharDef *def = chardef_get(crhc_id);
+    if (!def) return false;
+    c->def = def;
+    c->crhc_id = crhc_id; c->sprite_id = def->sprite_id;
+    c->origin_x = def->origin_x; c->origin_y = def->origin_y;
+    c->speed = def->speed; c->slide_speed = def->slide_speed; c->slide_time = def->slide_time;
+    c->jump_vel = def->jump_vel; c->alert_time = def->alert_time;
+    c->box_ox = def->box_ox; c->box_oy = def->box_oy; c->box_hx = def->box_hx; c->box_hy = def->box_hy;
+    c->hp_max = def->hp_max;
     { const PackEntry *se = packs_peek(c->sprite_id); if (se && se->type == RES_SPRITE) c->spr = sprite_get(c->sprite_id); else c->cb = cblock_get(c->sprite_id); }
     static const int8_t fireball_bob[8] = { 0, 0, 1, 0, 0, 1 };
     memcpy(c->torso_bob, fireball_bob, sizeof c->torso_bob);

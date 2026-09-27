@@ -88,7 +88,8 @@ void r_geometry(Ren *r, RTex *t, const RVertex *v, int nv, const int *idx, int n
  * material index. Material m is a tex x tex texture with `mips` box-filtered levels (level L is (tex >> L)
  * square, RGBA like textures), sampled by world position: 1 texel = 1 world unit at level 0, repeating every
  * tex units, so a material continues seamlessly across cells. The cells array stays owned by the caller; call
- * r_floor_cells_changed after editing it. */
+ * r_floor_cells_changed after editing it. Row y of the map is cells + y * mapn, or rows[y] when rows is set (a map
+ * in strips: a console's heap may have no hole for the whole of it). */
 typedef struct RFloor RFloor;
 typedef struct {
     int mapn, cell_shift; const uint8_t *cells;
@@ -96,7 +97,13 @@ typedef struct {
     const uint32_t *const *mat;      /* mat[m * mips + L] */
     const uint8_t *const *mat4;      /* or, mat NULL: the levels in 4bpp (two texels a byte, the even one in the low */
     const uint32_t *const *pal4;     /* nibble), each with its own 16 colour palette; both [m * mips + L] */
+    const uint8_t *const *rows;      /* or NULL: [mapn] row pointers in place of cells */
 } RFloorDesc;
+/* the material of cell (cx, cy), both already wrapped to [0, mapn) */
+static inline uint8_t r_floor_cell(const RFloorDesc *d, uint32_t cx, uint32_t cy)
+{
+    return d->rows ? d->rows[cy][cx] : d->cells[cy * (uint32_t)d->mapn + cx];
+}
 /* texel i of material level k (= m * mips + L), RGBA, in either form */
 static inline uint32_t r_floor_texel(const RFloorDesc *d, int k, int i)
 {

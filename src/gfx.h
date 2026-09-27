@@ -19,6 +19,7 @@ typedef struct {
     uint32_t last_used;  /* gfx frame of the last draw */
     RTex *ftex;          /* the Saturn: its frames baked whole (tools/saturn/build_disc.py FRAME_BAKED); NULL while evicted */
     int fstate, fper_row;   /* ftex: 0 not looked for yet, 1 baked (fper_row frames a row), -1 none */
+    bool frames_only;    /* the scene draws it by whole frames only (gfx_keep_cblock_frames): ftex kept, no tile sheet */
 } CBlock;
 
 typedef struct Sprite {
@@ -40,6 +41,9 @@ void  gfx_flush(void);
 void  gfx_trim(void);   /* drop every pack / PNG texture (made again on the next draw): a stage change */
 bool  gfx_keep_sprite(const Sprite *s);   /* keep a prepared scene texture out of both eviction paths */
 bool  gfx_keep_cblock(const CBlock *c);
+/* the Saturn: a cblock the scene only draws by whole frames (cblock_draw_frame) - its frames baked whole are kept and
+ * its tile sheet let go (the power cut-in's pieces: 66 KB less for the stage); elsewhere gfx_keep_cblock */
+bool  gfx_keep_cblock_frames(const CBlock *c);
 void  gfx_keep_loaded(void);              /* retain the warmed scene set at the music ownership boundary */
 /* the same, but reload anything the load tail already evicted before keeping it (the disc is still unlocked here):
  * returns how many textures could not be made resident, each named on stderr. Without this, a texture dropped during

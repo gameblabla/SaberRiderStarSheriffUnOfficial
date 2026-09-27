@@ -849,3 +849,39 @@ The front end, the loading screens and level 1 look as before (screenshots).
   rows on screen only (texture address moved down), or one command a row cut to the columns on screen when much of each
   line is off screen - VDP1 walks a line's pixels up to the clip (mednafen stops at its end, the hardware may not), and
   at 32x the corners wrapped past 13 bits.
+
+### Fixes from `glitches.txt` and the CONTINUE report (2026-09-27)
+
+Tested with whole runs in mednafen: stage 1 to the credits with every hero (`SABER_WIN=600`, C tapped every 1.5 s for
+the story scenes), then a second game in the same session; stage 5 with the Dark April fight (`SABER_DARKHP=1`, fuzz
+input) on to the credits; stages 2, 6 and 7 for 2+ minutes of fuzz input each; CONTINUE / GAME OVER with the pad.
+
+- **No disc reads in play at all** (April's random music cut-offs): `packs_lock` (pack.c) refuses any block not in
+  memory while a stage plays (named once, counted in the tripwire); `gfx_lock_reads` takes it, for every stage now
+  (the Grand Prix, Ramrod and the final phase too, `lock_scene`), and `leave_level` (now also their exit) lets it go.
+  What made reads in play: the Saber / Fireball clip opened again for the next use in the middle of play (170 ms stall;
+  now under the next cut-in, `power.c`), and entries a menu or stage "preloaded" with `sprite_get` / `font_get` /
+  `sprite_from_png` / `cblock_get` on a cache hit - the texture was only made with the entry, so after a stage's trim
+  the preload did nothing and the first draw read the disc (menu.c `warm`, font.c, gfx.c stamps a hit as touched so
+  `gfx_prepare_scene` makes it resident).
+- **Stale sectors**: a stream start cleared partition 0 but a sector still arriving from the drive's previous play
+  could land in it and be taken as the first sector asked for: a sound sample read as garbage (its ADPK check failed,
+  the sound bank refused the scene, the stage did not start - the random black screen between stages). Filter 0 now
+  takes only the stream's FAD range (`stream_start`, cd_sat.c).
+- **Stage 2 did not start after stage 1** (then a black screen for good): Mode 7 wanted 180 KB and 256 KB whole, and low
+  RAM had no such hole. The WIP commit's cut-in warm-up (43 + 66 KB, for a stage without power attacks) made it
+  certain; that is now only done where the drawn cut-in is used. The map is in 32 KB strips (`RFloorDesc.rows`,
+  `r_floor_cell`, all three floor renderers) and the mip levels one block per material.
+- **Low RAM in holes after a few stages** (Dark April's sheet, Ramrod's floor, a forest file no longer loading late in a
+  run): blocks that outlive a stage (cell grids, fonts, file buffers, character tables) were made mid-load among the
+  stage's big blocks. Low RAM is now two pools (libc_sat.c: the top 224 KB for blocks under 16 KB). `chardef_get`
+  tables are per stage and hold the CRHC fields, so the 2.9 KB CRHC blocks go right after (13 per level 1 load had
+  stayed for good); `gfx_prepare_scene` reloads only what the scene touched (it reloaded every texture since boot); a
+  baked file is its pack block moved down (`file_read`, `PACK_SLACK`), not a second copy; the sound bank loads after
+  the trim. Between stages: 225 KB used, holes up to 270 KB before; see the chains for after.
+- **A stage that cannot start** no longer leaves a half-made stage on a black screen taking no input (the dead CONTINUE
+  screen: the confirm sound, then nothing): `stage_start` names it, releases it and goes back to the title.
+- **MISSION ACCOMPLISHED choking** (2.2 fields a frame over the zoom): the black fill under a painting that covers the
+  screen is gone, and a translucent part magnified 3x or more is meshed instead of half-transparent (VDP1 read the
+  framebuffer for every pixel of the 32x MISSION / ACCOMPLISHED lettering): 1.05 fields a frame.
+- Result screens read their art after stopping the stage's jingle, and GAME OVER's art before its music.

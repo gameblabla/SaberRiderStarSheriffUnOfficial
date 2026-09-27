@@ -207,6 +207,8 @@ static bool sample_load(AudSample *s)
     }
     const PackEntry *e = packs_find_type(s->key, RES_SAMPLE);
     if (!e || e->size < 16 || memcmp(e->data, "ADPK", 4)) {
+        if (e) printf("snd: sample %08lX bad: %u bytes at %p, %02X %02X %02X %02X %02X %02X %02X %02X\n", (unsigned long)s->key,
+                      (unsigned)e->size, (const void *)e->data, e->data[0], e->data[1], e->data[2], e->data[3], e->data[4], e->data[5], e->data[6], e->data[7]);
         printf("snd: sample %08lX missing/bad\n", (unsigned long)s->key);
         s->missing = true;
         return false;
@@ -286,7 +288,11 @@ bool aud_playing(int h) { return voice_handle(h) != NULL; }
  * reusing the bank, including one-shots which already released their logical handles. */
 bool aud_prepare_scene(int stage, int hero)
 {
-    if (movie || !driver_ok || stage < 0 || stage > 7 || hero < 0 || hero > 3) return false;
+    /* Every refusal below is loud: the caller (level_start) cannot start a stage without a resident bank, and a silent
+     * false here is a stage that never begins - no music, no effects, and a menu that will not respond. */
+    if (movie) { printf("snd: scene %d hero %d refused: a clip owns the driver\n", stage, hero); return false; }
+    if (!driver_ok) { printf("snd: scene %d hero %d refused: the driver is not up\n", stage, hero); return false; }
+    if (stage < 0 || stage > 7 || hero < 0 || hero > 3) { printf("snd: scene %d hero %d refused: out of range\n", stage, hero); return false; }
     uint32_t mask = 1u << (stage * 4 + hero), total = 0;
     for (int i = 0; i < nsamples; i++) if (samples[i].scene_mask & mask) {
         const PackEntry *e = packs_peek_type(samples[i].key, RES_SAMPLE);
@@ -294,10 +300,14 @@ bool aud_prepare_scene(int stage, int hero)
             printf("snd: sound manifest/pack mismatch %08lX\n", (unsigned long)samples[i].key);
             return false;
         }
-        if (samples[i].bytes > BANK_END - BANK_OFF - total) return false;
+        if (samples[i].bytes > BANK_END - BANK_OFF - total) {
+            printf("snd: scene %d hero %d refused: %08lX does not fit (%lu used, %lu bytes left)\n", stage, hero,
+                   (unsigned long)samples[i].key, (unsigned long)total, (unsigned long)(BANK_END - BANK_OFF - total));
+            return false;
+        }
         total += samples[i].bytes;
     }
-    if (!total) return false;
+    if (!total) { printf("snd: scene %d hero %d refused: no sample is in this scene\n", stage, hero); return false; }
     aud_music_stop();
     pend.s = NULL;
     for (int i = 0; i < CHANNELS; i++) { voice_release(&voices[i]); voices[i].action = ACT_STOP; }
@@ -310,7 +320,14 @@ bool aud_prepare_scene(int stage, int hero)
         if (sat_timer_us() - t0 > 100000u) { printf("snd: bank stop acknowledgement timed out\n"); return false; }
     }
     for (int i = 0; i < nsamples; i++) {
-        if (samples[i].users) return false;
+        /* A sample still referenced by a voice cannot be thrown out of the bank: the 68000 may still be reading it.
+         * The stops above were acknowledged, so this means a logical handle outlived its voice - a bug, and one that
+         * used to strand the game in a menu with no explanation. */
+        if (samples[i].users) {
+            printf("snd: scene %d hero %d refused: %08lX still has %u user(s)\n", stage, hero,
+                   (unsigned long)samples[i].key, samples[i].users);
+            return false;
+        }
         samples[i].addr = 0; samples[i].reported = false;
     }
     memset(id_used, 0, sizeof id_used);

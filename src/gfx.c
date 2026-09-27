@@ -10,6 +10,7 @@
 #define TILES_PER_ROW 32
 static Ren *R;
 static uint32_t g_frame = 2;
+static uint32_t g_scene_frame;   /* g_frame at the last gfx_trim(): an entry touched since then belongs to the scene */
 
 /* the Saturn: a draw between gfx_lock_reads() and gfx_trim() may not read the disc (it would stop the CD-DA music).
  * See gfx.h. g_locked_refused counts the textures such a draw had to do without, and names each once. */
@@ -36,9 +37,9 @@ static bool may_read(uint32_t id)
  * texture (may_read), which is a far better failure than stopping the music. */
 static bool keep_new(void) { return g_locked; }
 
-void gfx_lock_reads(void) { g_locked = true; g_locked_refused = 0; g_nrefused = 0; }
-void gfx_unlock_reads(void) { g_locked = false; }
-unsigned gfx_locked_reads(void) { return g_locked_refused; }
+void gfx_lock_reads(void) { g_locked = true; g_locked_refused = 0; g_nrefused = 0; packs_lock(true); }
+void gfx_unlock_reads(void) { g_locked = false; packs_lock(false); }
+unsigned gfx_locked_reads(void) { return g_locked_refused + packs_refused(); }
 
 static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
@@ -193,7 +194,7 @@ static bool cblock_build(CBlock *c, bool parse)
 
 CBlock *cblock_get(uint32_t id)
 {
-    for (int i = 0; i < g_ncb; i++) if (g_cb[i].id == id) return &g_cb[i];
+    for (int i = 0; i < g_ncb; i++) if (g_cb[i].id == id) { g_cb[i].last_used = g_frame; return &g_cb[i]; }   /* (gfx_prepare_scene: touched) */
     if (g_ncb == MAX_CB) { fprintf(stderr, "cblock %08X: cache full\n", id); return NULL; }
     CBlock *c = &g_cb[g_ncb];
     memset(c, 0, sizeof *c);
@@ -226,14 +227,14 @@ static CBlock *cblock_sheet(uint32_t id, RTex *tex, int w, int h, int tw, int th
 
 CBlock *cblock_from_rgba(uint32_t id, const uint32_t *px, int w, int h, int tw, int th)
 {
-    for (int i = 0; i < g_ncb; i++) if (g_cb[i].id == id) return &g_cb[i];
+    for (int i = 0; i < g_ncb; i++) if (g_cb[i].id == id) { g_cb[i].last_used = g_frame; return &g_cb[i]; }   /* (gfx_prepare_scene: touched) */
     if (g_ncb == MAX_CB) return NULL;
     return cblock_sheet(id, make_tex(id, w, h, px), w, h, tw, th);
 }
 
 CBlock *cblock_from_png(uint32_t id, const char *path, int tw, int th)
 {
-    for (int i = 0; i < g_ncb; i++) if (g_cb[i].id == id) return &g_cb[i];
+    for (int i = 0; i < g_ncb; i++) if (g_cb[i].id == id) { g_cb[i].last_used = g_frame; return &g_cb[i]; }   /* (gfx_prepare_scene: touched) */
     int w, h; RTex *t = gfx_image_tex(path, &w, &h);
     if (t) rtex_set_tag(t, id);
     CBlock *c = cblock_sheet(id, t, w, h, tw, th);
@@ -454,14 +455,14 @@ static Sprite *sprite_strip(uint32_t id, RTex *tex, int w, int h, int frames)
 
 Sprite *sprite_from_rgba(uint32_t id, const uint32_t *px, int w, int h, int frames)
 {
-    for (int i = 0; i < g_nspr; i++) if (g_spr[i].id == id) return &g_spr[i];
+    for (int i = 0; i < g_nspr; i++) if (g_spr[i].id == id) { g_spr[i].last_used = g_frame; return &g_spr[i]; }   /* (gfx_prepare_scene: touched) */
     if (g_nspr == MAX_SPR || frames < 1) return NULL;
     return sprite_strip(id, make_tex(id, w, h, px), w, h, frames);
 }
 
 Sprite *sprite_from_png(uint32_t id, const char *path, int frame_w)
 {
-    for (int i = 0; i < g_nspr; i++) if (g_spr[i].id == id) return &g_spr[i];
+    for (int i = 0; i < g_nspr; i++) if (g_spr[i].id == id) { g_spr[i].last_used = g_frame; return &g_spr[i]; }   /* (gfx_prepare_scene: touched) */
     int w, h; RTex *t = gfx_image_tex(path, &w, &h);
     if (t) rtex_set_tag(t, id);
     Sprite *s = t ? sprite_strip(id, t, w, h, frame_w > 0 && w >= frame_w ? w / frame_w : 1) : NULL;
@@ -471,7 +472,7 @@ Sprite *sprite_from_png(uint32_t id, const char *path, int frame_w)
 
 Sprite *sprite_get(uint32_t id)
 {
-    for (int i = 0; i < g_nspr; i++) if (g_spr[i].id == id) return &g_spr[i];
+    for (int i = 0; i < g_nspr; i++) if (g_spr[i].id == id) { g_spr[i].last_used = g_frame; return &g_spr[i]; }   /* (gfx_prepare_scene: touched) */
 #ifdef PLAT_BAKED_ASSETS
     if (g_nspr < MAX_SPR && packs_peek_type(id, RES_TEX)) {
         Sprite *s = &g_spr[g_nspr]; memset(s, 0, sizeof *s);
@@ -526,6 +527,20 @@ bool gfx_keep_cblock(const CBlock *cc)
     return true;
 }
 
+bool gfx_keep_cblock_frames(const CBlock *cc)
+{
+#ifdef PLAT_SATURN
+    CBlock *c = (CBlock *)cc;
+    if (!c) return false;
+    if (!cblock_frames_tex(c)) return gfx_keep_cblock(c);   /* not baked whole (or no room): the tiles then */
+    if (c->tex && c->from_pack) { rtex_destroy(c->tex); c->tex = NULL; }
+    c->frames_only = c->retained = true;
+    return true;
+#else
+    return gfx_keep_cblock(cc);
+#endif
+}
+
 void gfx_keep_loaded(void)
 {
     for (int i = 0; i < g_nspr; i++) if (g_spr[i].tex) g_spr[i].retained = true;
@@ -541,16 +556,25 @@ void gfx_keep_loaded(void)
  * a silent hole in the picture. */
 unsigned gfx_prepare_scene(void)
 {
+    /* only what this scene's load touched: the cache also holds every menu's and earlier stage's entries (textureless
+     * since the trim), and reloading those as well ran the heap out on each stage change */
     unsigned missing = 0;
     for (int i = 0; i < g_nspr; i++) {
         Sprite *s = &g_spr[i];
-        if (!(s->from_pack || s->file)) continue;
+        if (!(s->from_pack || s->file) || s->last_used < g_scene_frame) continue;
         if (!s->tex && !sprite_tex(s)) { fprintf(stderr, "gfx: scene sprite %08X could not be made resident\n", s->id); missing++; continue; }
         s->retained = true;
     }
     for (int i = 0; i < g_ncb; i++) {
         CBlock *c = &g_cb[i];
-        if (!(c->from_pack || c->file)) continue;
+        if (!(c->from_pack || c->file) || c->last_used < g_scene_frame) continue;
+#ifdef PLAT_SATURN
+        if (c->frames_only) {
+            if (!cblock_frames_tex(c)) { fprintf(stderr, "gfx: scene cblock %08X frames could not be made resident\n", c->id); missing++; }
+            c->retained = true;
+            continue;
+        }
+#endif
         if (!c->tex && !cblock_tex(c)) { fprintf(stderr, "gfx: scene cblock %08X could not be made resident\n", c->id); missing++; continue; }
 #ifdef PLAT_SATURN
         cblock_frames_tex(c);
@@ -592,12 +616,13 @@ static bool evict_any(void)
 void gfx_trim(void)
 {
     gfx_unlock_reads();
+    g_scene_frame = ++g_frame;
     for (int i = 0; i < g_nspr; i++) {
         g_spr[i].retained = false;
         if ((g_spr[i].from_pack || g_spr[i].file) && g_spr[i].tex) { rtex_destroy(g_spr[i].tex); g_spr[i].tex = NULL; }
     }
     for (int i = 0; i < g_ncb; i++) {
-        g_cb[i].retained = false;
+        g_cb[i].retained = g_cb[i].frames_only = false;
         if ((g_cb[i].from_pack || g_cb[i].file) && g_cb[i].tex) { rtex_destroy(g_cb[i].tex); g_cb[i].tex = NULL; }
     }
     for (int i = 0; i < g_ncb; i++) if (g_cb[i].ftex) { rtex_destroy(g_cb[i].ftex); g_cb[i].ftex = NULL; }

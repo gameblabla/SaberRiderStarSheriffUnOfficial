@@ -40,10 +40,10 @@ static int hero_of(const Power *pw) { return pw->hero & 3; }
  * coin flip against 43 KB) and it must be RETAINED, because the tail of the load still runs out of memory and
  * packs_evict takes any texture not yet marked - gfx_keep_loaded() comes too late to rebuild what it already lost.
  * Called from level_start right after the stage trim; power_reset()'s own preload then finds it cached. */
-void power_warm_cutin(int hero)
+void power_warm_cutin(int hero, bool bomb)
 {
-    if (CLIP[hero & 3]) return;   /* Saber and Fireball draw a .CPK clip instead, streamed and bracketed by the film player */
-    gfx_keep_cblock(cblock_get(0x2DEF1664));
+    if (!bomb && CLIP[hero & 3]) return;   /* Saber and Fireball draw a .CPK clip instead (the final phase's bomb is drawn for all) */
+    gfx_keep_cblock_frames(cblock_get(0x2DEF1664));   /* drawn by whole frames only (power_draw) */
 }
 
 static void preload_clip(const Power *pw)
@@ -51,7 +51,7 @@ static void preload_clip(const Power *pw)
     const char *clip = pw->bomb ? NULL : CLIP[hero_of(pw)];
     if (!clip) {   /* the drawn cut-in: the briefing's face and the portrait, read now and not under the music */
         video_preload_file(NULL, 0);
-        cblock_preload(cblock_get(0x2DEF1664));
+        gfx_keep_cblock_frames(cblock_get(0x2DEF1664));
         Sprite *po = sprite_get(PORTRAIT[hero_of(pw)]); if (po) sprite_tex(po);
         return;
     }
@@ -106,8 +106,10 @@ void power_start(Power *pw, Ren *ren)
 static void end_cutin(Power *pw)
 {
     if (pw->video) { video_close(pw->video); pw->video = NULL; }
+    /* A used clip is not prepared again here for the next time: opening it reads the disc (~170 ms stall, the music
+     * stopped) in the middle of play. The next power_start opens it under its own cut-in, where the clip takes the
+     * drive anyway; the drawn cut-in's textures simply stay resident. */
     pw->phase = PW_FLASH; pw->t = 0; pw->strike = true;
-    pw->preload_pending = pw->items > 0 && !pw->bomb && CLIP[hero_of(pw)] != NULL;
     pw->cooldown = pw->cooldown_max = pw->bomb ? BOMB_COOLDOWN : COOLDOWN;
     music_set_duck(R(1.0f));
     int h = hero_of(pw);
@@ -127,13 +129,7 @@ void power_update(Power *pw, const Input *in, real dt)
         } else if (pw->t >= pw->dur || skip) end_cutin(pw);
         return;
     }
-    if (pw->phase == PW_FLASH) {
-        /* One flash frame is already on screen before this runs.  Warm the
-         * remaining clip here so a second power press later has the same
-         * low latency without freezing live gameplay on a CD seek. */
-        if (pw->preload_pending) { preload_clip(pw); pw->preload_pending = false; }
-        if ((pw->t += dt) >= FLASH_DUR) pw->phase = PW_IDLE;
-    }
+    if (pw->phase == PW_FLASH && (pw->t += dt) >= FLASH_DUR) pw->phase = PW_IDLE;
     if (pw->cooldown > 0) pw->cooldown -= dt;
     if (pw->boost_t > 0) pw->boost_t -= dt;
 }
@@ -144,7 +140,6 @@ void power_close(Power *pw)
 {
     if (pw->video) { video_close(pw->video); pw->video = NULL; voice_stop(); }
     video_preload_file(NULL, 0);
-    pw->preload_pending = false;
     if (pw->phase == PW_CUTIN) music_set_duck(R(1.0f));
     pw->phase = PW_IDLE;
 }

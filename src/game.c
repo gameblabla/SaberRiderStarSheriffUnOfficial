@@ -56,6 +56,19 @@ static void debug_win_arm(void)
 static unsigned reads_at_music;
 #endif
 
+#ifdef PLAT_SATURN
+/* the scene is loaded: what it warmed is made resident and kept, and from here to the next gfx_trim() (leave_level)
+ * nothing may read the disc - the drive would give the CD-DA music up for the length of the seek. leave_level's
+ * tripwire reports anything that tried. */
+static void lock_scene(void)
+{
+    unsigned missing = gfx_prepare_scene();
+    if (missing) fprintf(stderr, "game: %u scene textures could not be made resident before the music\n", missing);
+    gfx_lock_reads();
+    reads_at_music = packs_reads();
+}
+#endif
+
 static bool level_start(Game *g)
 {
     Ren *ren = g->ren; int sw = g->sw, sh = g->sh;
@@ -69,22 +82,25 @@ static bool level_start(Game *g)
     if (g->ramrod) { ramrod_destroy(g->ramrod); g->ramrod = NULL; }
     if (g->space) { space_destroy(g->space); g->space = NULL; }
     power_close(&g->power);
+    character_defs_release();   /* every Character of the stage before is gone (g is cleared below) */
 #ifdef PLAT_SATURN
+    gfx_trim();   /* the menus' graphics (or the stage before's): first, the sample bank's reads need the memory too */
     if (!audio_prepare_scene(stage, menu.character)) return false;
-    gfx_trim();   /* the menus' graphics (or the stage before's) */
 #endif
     debug_win_arm();
     memset(g, 0, sizeof *g);
     g->ren = ren; g->sw = sw; g->sh = sh; g->menu = menu; g->in_level = true; g->stage = stage; g->carry_lives = carry; g->continues_left = conts; g->mode7_phase2 = mode7_phase2;
 #ifdef PLAT_SATURN
-    power_warm_cutin(menu.character);   /* first, while the trim has just emptied the heap: its 43 KB baked cut-in */
+    /* first, while the trim has just emptied the heap: the drawn cut-in's 43 KB baked twin. Only where a power attack is
+     * drawn: the Grand Prix and the mechs have none, and holding it there costs stage 2 the one block mode7_create needs. */
+    if (stage != 2 && stage != 6) power_warm_cutin(menu.character, stage == 7);
 #endif
     if (stage == 2) {   /* the Mode-7 Grand Prix: its own world, HUD and flow */
         music_stop();   /* finish the previous stage's jingle before the title card */
         g->mode7 = mode7_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives, mode7_phase2);
         if (g->mode7) {
 #ifdef PLAT_SATURN
-            gfx_prepare_scene();
+            lock_scene();
 #endif
             title_start(g);
         }
@@ -94,7 +110,7 @@ static bool level_start(Game *g)
         g->ramrod = ramrod_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives);
         if (g->ramrod) {
 #ifdef PLAT_SATURN
-            gfx_prepare_scene();
+            lock_scene();
 #endif
             title_start(g);
         }
@@ -104,7 +120,7 @@ static bool level_start(Game *g)
         g->space = space_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives, g->menu.character);
         if (g->space) {
 #ifdef PLAT_SATURN
-            gfx_prepare_scene();
+            lock_scene();
 #endif
             title_start(g);
         }
@@ -201,17 +217,9 @@ static bool level_start(Game *g)
         fprintf(stderr, "game: could not prepare the player's final graphics before music\n");
         return false;
     }
-    /* Reload-then-keep: the tail of the load above still ran out of memory, so anything it dropped has to be made
-     * resident here, while the disc is still unlocked, or its first draw in the level would be a locked read. */
-    {
-        unsigned missing = gfx_prepare_scene();
-        if (missing) fprintf(stderr, "game: %u scene textures could not be made resident before the music\n", missing);
-    }
-    /* From here to the next gfx_trim() (level_start / leave_level) a draw may not read the disc: the drive gives the
-     * CD-DA music up for the length of a seek, which is the audible cutoff this replaces. Anything still missing now
-     * is reported by id (may_read) instead. gfx_locked_reads() is the tripwire: it must stay 0 across a level. */
-    gfx_lock_reads();
-    reads_at_music = packs_reads();
+    /* Reload-then-keep (the tail of the load above still ran out of memory, so anything it dropped is made resident
+     * again while the disc is unlocked), then no disc reads until the stage is left */
+    lock_scene();
 #endif
     music_play(g->night_on ? 13 : g->forest_on ? 15 : g->lab_on ? 14 : 5, true);
     g->cam_x = px - r_int(sw / 2); if (g->cam_x < 0) g->cam_x = 0;
@@ -326,6 +334,22 @@ static void leave_level(Game *g)
 #endif
 }
 
+/* A stage that could not start (level_start false: out of memory, a missing file) has already cleared the game and
+ * set in_level, and left a half-made stage behind: that was a black screen taking no input for good (after a CONTINUE,
+ * or between stages). It is named, what it made is released, and the game goes back to the title instead. */
+static void stage_start(Game *g, const char *why)
+{
+    if (level_start(g)) return;
+    fprintf(stderr, "game: stage %d did not start (%s): back to the title\n", g->stage, why);
+    if (g->mode7) { mode7_destroy(g->mode7); g->mode7 = NULL; }
+    if (g->ramrod) { ramrod_destroy(g->ramrod); g->ramrod = NULL; }
+    if (g->space) { space_destroy(g->space); g->space = NULL; }
+    g->title_on = false;
+    leave_level(g);
+    music_stop();
+    menu_enter(&g->menu, MS_SPLASH1);
+}
+
 static void game_over(Game *g)
 {
     if (g->continues_left > 0) { g->menu.continues_left = g->continues_left; menu_enter(&g->menu, MS_CONTINUE); }
@@ -387,9 +411,9 @@ void game_update(Game *g, real dt)
     input_update(&g->in);
     if (!g->in_level) {
         menu_update(&g->menu, &g->in, dt, g->sw, g->ren);
-        if (g->menu.start_level) { g->menu.start_level = false; g->stage = 1; g->carry_lives = 0; g->continues_left = g->menu.continues; g->mode7_phase2 = false; level_start(g); }   /* character select always starts stage 1 */
-        if (g->menu.continue_now) { g->menu.continue_now = false; g->continues_left--; g->carry_lives = 0; level_start(g); }   /* CONTINUE? taken: fresh lives, at the stage-2 pursuit if reached */
-        if (g->menu.next_stage) { g->menu.next_stage = false; level_start(g); }
+        if (g->menu.start_level) { g->menu.start_level = false; g->stage = 1; g->carry_lives = 0; g->continues_left = g->menu.continues; g->mode7_phase2 = false; stage_start(g, "character select"); }   /* character select always starts stage 1 */
+        if (g->menu.continue_now) { g->menu.continue_now = false; g->continues_left--; g->carry_lives = 0; stage_start(g, "CONTINUE taken"); }   /* fresh lives, at the stage-2 pursuit if reached */
+        if (g->menu.next_stage) { g->menu.next_stage = false; stage_start(g, "next stage"); }
         return;
     }
     if (g->title_on) { title_update(g, dt); return; }
@@ -399,8 +423,8 @@ void game_update(Game *g, real dt)
         if (res) {
             int lives = mode7_lives(g->mode7);
             if (res == 2) g->mode7_phase2 = mode7_phase2_reached(g->mode7);
-            mode7_destroy(g->mode7); g->mode7 = NULL; g->in_level = false;
-            dialog_set_hero(g->menu.character);
+            mode7_destroy(g->mode7); g->mode7 = NULL; leave_level(g);
+            dialog_use_hero(g->menu.character);   /* (no preload: the stage was just trimmed and its music still plays) */
             if (res == 1) { g->menu.cleared_stage = g->stage; g->stage = 3; g->carry_lives = lives; g->menu.more_stages = true; menu_enter(&g->menu, MS_ACCOMPLISHED); }   /* on to Hyperjumper Pass */
             else game_over(g);
         }
@@ -411,9 +435,9 @@ void game_update(Game *g, real dt)
         int res = debug_win() ? 1 : ramrod_result(g->ramrod);
         if (res) {
             int lives = ramrod_lives(g->ramrod);
-            ramrod_destroy(g->ramrod); g->ramrod = NULL; g->in_level = false;
-            dialog_set_hero(g->menu.character);
-            if (res == 1) { g->stage = 7; g->carry_lives = lives; level_start(g); }   /* no result screen: the outro's radio scene leads straight into the final phase */
+            ramrod_destroy(g->ramrod); g->ramrod = NULL; leave_level(g);
+            dialog_use_hero(g->menu.character);
+            if (res == 1) { g->stage = 7; g->carry_lives = lives; stage_start(g, "final phase"); }   /* no result screen: the outro's radio scene leads straight into the final phase */
             else game_over(g);
         }
         return;
@@ -423,8 +447,8 @@ void game_update(Game *g, real dt)
         int res = debug_win() ? 1 : space_result(g->space);
         if (res) {
             int lives = space_lives(g->space);
-            space_destroy(g->space); g->space = NULL; g->in_level = false;
-            dialog_set_hero(g->menu.character);
+            space_destroy(g->space); g->space = NULL; leave_level(g);
+            dialog_use_hero(g->menu.character);
             if (res == 1) { g->menu.cleared_stage = 7; g->stage = 8; g->carry_lives = lives; g->menu.ending = true; menu_enter(&g->menu, MS_ACCOMPLISHED); }   /* the last battle: the credits roll */
             else game_over(g);
         }

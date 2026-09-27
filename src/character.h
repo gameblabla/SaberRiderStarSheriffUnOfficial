@@ -26,7 +26,9 @@ enum { WALK_AIM_ALL, WALK_AIM_DIAG, WALK_AIM_NONE };   /* torso overlays while w
  * every character of that type: character_init looks it up (they used to be copied into each of the 64 enemy slots,
  * ~185 KB, which the Saturn's 1 MB of fast RAM can't spare). */
 typedef struct CharDef {
-    uint32_t crhc_id;
+    uint32_t crhc_id, sprite_id;
+    real origin_x, origin_y, speed, slide_speed, slide_time, jump_vel, alert_time, box_ox, box_oy, box_hx, box_hy;
+    int hp_max;
     AnimDef anims[CHAR_MAX_ANIMS];
     HurtBox hurt[CHAR_MAX_ANIMS];
     real muzzle[CHAR_MAX_ANIMS][2];
@@ -70,6 +72,9 @@ typedef struct {
 } Character;
 
 bool character_init(Character *c, uint32_t crhc_id, bool enemy);
+/* a stage change: the character types' tables go (every Character goes with the stage; the next one's are read as its
+ * load initialises them, so a spawn in the middle of play never needs its CRHC block again) */
+void character_defs_release(void);
 /* a character's hurtbox for its current animation */
 static inline const HurtBox *character_hurt(const Character *c) { return &c->def->hurt[c->anim < CHAR_MAX_ANIMS ? c->anim : 0]; }
 void character_reset(Character *c, bool enemy);
