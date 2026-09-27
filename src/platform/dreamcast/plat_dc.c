@@ -45,8 +45,7 @@ int plat_default_ratio(void) { return -1; }   /* original 4:3 (320x240, every pi
 enum { MODE_640, MODE_832, MODE_320 };
 static const struct { int w, h; } MODE_SIZE[3] = { { 640, 480 }, { 832, 480 }, { 320, 240 } };
 /* the SCREEN choices for the cable: VGA 640x480 / 832x480 / 320x240, anything else 640x480 / 320x240
- * (DC_HIRES_MODES, Makefile.dc: off only if a toolchain still needs the -fno-unroll-loops workaround disabled for
- * some other reason - see the Makefile.dc comment on the sh4zam #69 GCC/LRA regression) */
+ * (DC_HIRES_MODES, Makefile.dc: without it, 320x240 only) */
 static int screen_mode(int screen)
 {
 #ifndef DC_HIRES_MODES
@@ -59,11 +58,13 @@ static int screen_mode(int screen)
 #endif
 }
 static const pvr_init_params_t PVR_PARAMS = {
-    .opb_sizes = { PVR_BINSIZE_0, PVR_BINSIZE_0, PVR_BINSIZE_32, PVR_BINSIZE_0, PVR_BINSIZE_0 },   /* everything is in the translucent list */
+    /* opaque, -, translucent, -, punch-through (render_pvr.c: each draw goes to the cheapest list that draws it exactly);
+     * a tile with more primitives in a list chains blocks from the overflow pool, shared by the lists */
+    .opb_sizes = { PVR_BINSIZE_16, PVR_BINSIZE_0, PVR_BINSIZE_16, PVR_BINSIZE_0, PVR_BINSIZE_16 },
     .vertex_buf_size = 512 * 1024,
     .dma_enabled = 0,
     .fsaa_enabled = 0,
-    .autosort_disabled = 1,       /* draw in submission order, like the 2D renderer it replaces */
+    .autosort_disabled = 1,       /* translucent primitives in submission order, like the 2D renderer it replaces */
     .opb_overflow_count = 2,
 };
 

@@ -21,11 +21,11 @@ ASMSRC  := src/platform/dreamcast/dcfmv/lz40_dec.S
 OBJ     += $(ASMSRC:src/%.S=$(OBJDIR)/%.o)
 # PLAT_BAKED_ASSETS: textures, samples and our other files come baked into tex.pck / snd.pck / files.pck (build_disc.py)
 DEFS    := -DPLAT_DREAMCAST -DPLAT_LOW_MEMORY -DPLAT_BAKED_ASSETS -DZAMV_USE_SH4ZAM
-# 640x480/832x480 + stretch/wide screen modes (see plat_dc.c screen_mode). Used to stay behind this define because
-# 640x480/832x480 dropped to 30 fps on real hardware: newer GCC's loop unrolling collides with its LRA register
-# allocator in tight per-vertex transform loops (the same regression sh4zam's own "Bruce's Balls" example hit,
-# https://github.com/gyrovorbis/sh4zam/issues/69 - fixed there by turning unrolling off for that loop). render_pvr.o's
-# own -fno-unroll-loops override below is the same fix, so the hires modes are safe to ship now.
+# 640x480/832x480 + stretch/wide screen modes (see plat_dc.c screen_mode). They ran at 20-30 fps on real hardware
+# (60 in emulators, which render the PVR scene on the host GPU) because the PVR itself could not render the frame in
+# time: everything went through the translucent list, which shades every pixel of every layer, four times the pixels
+# of 320x240. render_pvr.c now sends opaque and cut-out draws to the opaque / punch-through lists (hidden pixels are
+# never shaded) and keeps the translucent list for real blending.
 DEFS    += -DDC_HIRES_MODES
 # KOS, kos-ports and the game must all use one SH4 float ABI: environ.sh sets
 # KOS_SH4_PRECISION=-m4-single-only (32-bit double). Mixing it with -m4-single links the wrong
@@ -39,8 +39,9 @@ CFLAGS  := -std=gnu11 -Isrc -Ithird_party/zamv $(DEFS) -MMD -MP -fno-finite-math
 # -ffast-math/-ffp-contract=fast would break that, so turn them back off (after KOS_CFLAGS is already on the
 # command line, hence the plain += above, not a reorder) for the vendored codec's own translation units only.
 $(OBJDIR)/zamv/%.o: CFLAGS += -fno-fast-math -ffp-contract=off -fno-strict-aliasing -Wno-unused-function
-# render_pvr.c is the one translation unit with the sh4zam#69 FTRV/LRA per-vertex loops (draw_tex, rdc_poly's
-# Sutherland-Hodgman clip, r_tex_batch): keep -O3's unrolling off there only, instead of the whole build - the
+# render_pvr.c is the one translation unit with sh4zam#69-shaped FTRV per-vertex loops (draw_tex, rdc_poly's
+# Sutherland-Hodgman clip, r_tex_batch; https://github.com/gyrovorbis/sh4zam/issues/69: GCC's loop unrolling against
+# its LRA register allocator in such loops): keep -O3's unrolling off there only, instead of the whole build - the
 # ZAMV5 decoder's own hot loops (qpel MC, residual/bitstream parsing) are a different shape (small fixed-trip-count
 # loops, no resident-XMTRX inline asm) and get real throughput back from GCC's normal unrolling.
 $(OBJDIR)/platform/dreamcast/render_pvr.o: CFLAGS += -fno-unroll-loops

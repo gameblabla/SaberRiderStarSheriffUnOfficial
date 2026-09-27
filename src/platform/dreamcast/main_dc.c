@@ -16,6 +16,25 @@ bool dc_reset_combo(void);
 size_t rdc_vram_used(void);
 int rdc_prims(void);
 void rdc_header_stats(int *sent, int *asked);
+void rdc_list_stats(unsigned n[3], float scr[3], unsigned *ovf);
+
+/* SABER_PERF=2: what the PVR was given, once a second (the largest frame): primitives and screens of area per list.
+ * The translucent list's area is what costs: every one of those pixels is shaded, the others only once in front.
+ * (Its own line: a serial console line takes ~17 ms, which SABER_PERF=1's frame times should not see.) */
+static void pvr_perf(void)
+{
+    static int on = -1; if (on < 0) { const char *e = plat_getenv("SABER_PERF"); on = e && atoi(e) >= 2; }
+    if (!on) return;
+    static unsigned frames, best[3]; static float scr_max[3];
+    unsigned n[3], ovf; float scr[3];
+    rdc_list_stats(n, scr, &ovf);
+    for (int i = 0; i < 3; i++) { if (n[i] > best[i]) best[i] = n[i]; if (scr[i] > scr_max[i]) scr_max[i] = scr[i]; }
+    if (++frames < 60) return;
+    fprintf(stderr, "pvr: %dx%d op %u prims %d.%02d scr | pt %u prims %d.%02d scr | tr %u prims %d.%02d scr | moved to tr (ram full) %u\n",
+            vid_mode->width, vid_mode->height, best[0], (int)scr_max[0], (int)(scr_max[0] * 100) % 100, best[1], (int)scr_max[1], (int)(scr_max[1] * 100) % 100,
+            best[2], (int)scr_max[2], (int)(scr_max[2] * 100) % 100, ovf);
+    frames = 0; for (int i = 0; i < 3; i++) { best[i] = 0; scr_max[i] = 0; }
+}
 
 static void report_memory(const char *when)
 {
@@ -56,6 +75,7 @@ int main(int argc, char **argv)
         uint64_t t_begin = timer_ns_gettime64();
         app_draw();
         rdc_frame_end();
+        if (app_perf_on()) pvr_perf();
         if (app_perf_on()) app_perf((uint32_t)((t_upd - now) / 1000), (uint32_t)((timer_ns_gettime64() - t_begin) / 1000), (uint32_t)(delta_ns / 1000), steps, rdc_prims());
         prev = now;
         dc_video_update();

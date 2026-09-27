@@ -1,7 +1,18 @@
-/* platform/render.h on the Dreamcast's PowerVR through KOS direct rendering: every draw call of a frame is written
- * straight into the store queues and fired at the tile accelerator (pvr_dr_target / pvr_dr_commit, as in KOS's
- * sh4zam "Bruce's Balls" example), all of it in the translucent list with autosort off, so the PVR draws in
- * submission order exactly like a 2D painter. A header goes out only when the texture / blend / filter changes.
+/* platform/render.h on the Dreamcast's PowerVR through KOS direct rendering (pvr_dr_target / pvr_dr_commit, as in
+ * KOS's sh4zam "Bruce's Balls" example). A header goes out only when the texture / blend / filter changes.
+ *
+ * The PVR draws like a 2D painter: every primitive gets its own depth, rising in submission order (zseq), and is
+ * depth-tested against the ones drawn later. That lets each draw go to the cheapest list that gives the same pixels:
+ * opaque ones (R_BLEND_NONE, or blended with an opaque texture / colour) to the opaque list, 1-bit-alpha cut-outs
+ * drawn nearest to the punch-through list, and only real blending (alpha / additive, translucent textures, faded
+ * sprites) to the translucent list, presorted (autosort off: submission order) and not writing depth. The opaque and
+ * punch-through lists only shade the pixel that ends up in front; the translucent list shades every pixel of every
+ * layer, which at 640x480 (four times the pixels of 320x240) was more than the PVR could render in a 60 Hz frame on
+ * real hardware (emulators render the scene on the host GPU, so they never showed it).
+ * The translucent list streams straight into the store queues; the opaque / punch-through ones collect in RAM
+ * (Stream) and go to the TA at the end of the frame (the TA takes each list in one piece). A full RAM buffer sends
+ * the rest to the translucent list, which is still exact. SABER_PVR_TR=1 puts everything in the translucent list
+ * as before (the depth ordering stays, so it looks the same).
  *
  * Textures come baked from the disc (rtex_create_baked: tex.pck blocks made by tools/dc/texbake.py): twiddled
  * power-of-two pages in 4/8-bit palette, VQ or 16-bit formats, DMA'd to VRAM as they are read. Their colours go to
@@ -20,6 +31,7 @@
 #include <string.h>
 #include <math.h>
 #include <malloc.h>
+#include <arch/cache.h>
 
 PvrView pvr_view = { 2.0f, 2.0f, 0.0f, 0.0f, 320, 240 };
 
@@ -29,18 +41,27 @@ Ren *rdc_renderer(void) { return &the_ren; }
 
 /* ------------------------------------------------------------------ textures */
 #define PAGE_MAX 1024
+/* header variants of a texture page: [variant][linear] */
+enum { HV_OP, HV_PT, HV_TR, HV_ADD, HV_COUNT };
+/* what (a part of) a texture's alpha holds: all 255 / only 0 or 255 / anything / all 0 */
+enum { CLS_OPAQUE, CLS_CUT, CLS_TRANS, CLS_EMPTY };
+/* the alpha map: a nibble per 8x8 block of the image, what its texels hold */
+#define AM_NOT_OPAQUE 1            /* an alpha below 255 */
+#define AM_NOT_EMPTY  2            /* an alpha above 0 */
+#define AM_PARTIAL    4            /* an alpha strictly between */
 typedef struct {
-    pvr_poly_hdr_t hdr[3][2];      /* [blend][linear], compiled on first use */
+    pvr_poly_hdr_t hdr[HV_COUNT][2];   /* compiled on first use */
     pvr_ptr_t mem; size_t bytes;
     int x0, y0, w, h;              /* the part of the image this page holds */
     int tw, th;                    /* power-of-two size given to the PVR */
-    uint8_t have;                  /* bit b*2+l: hdr[b][l] valid */
+    uint8_t have;                  /* bit v*2+l: hdr[v][l] valid */
     uint32_t txr;                  /* PVR texture format word (pixel format, twiddling, VQ, palette) */
     void *parked;                  /* the page's VRAM, copied out while the PVR is re-initialised */
 } Page;
 
 struct RTex {
-    int w, h; uint32_t fmt; bool streaming, baked;
+    int w, h; uint32_t fmt; bool streaming, baked; uint8_t cls;
+    uint8_t *amap; int amw;        /* alpha map (NULL: only cls is known), its width in blocks */
     int npx, npy; Page *pages;
     uint16_t *pal; int npal;       /* the palette RAM entries it holds (baked paletted textures) */
     uint8_t r, g, b, a; RBlend blend; RScale scale; uint32_t tag;
@@ -69,11 +90,42 @@ pvr_ptr_t rdc_vram_alloc(size_t bytes)
 }
 static void vram_free(pvr_ptr_t p, size_t bytes) { if (p) { pvr_mem_free(p); vram_used -= bytes; } }
 void rdc_vram_free(pvr_ptr_t p, size_t bytes) { vram_free(p, bytes); }
-/* the header sent last this frame, by contents: floor levels and FMV frames recompile theirs in place, and a
- * freed page's memory can come back as another texture's header, so its address alone says nothing */
-static pvr_poly_hdr_t last_hdr __attribute__((aligned(32)));
-static bool have_last;
-void rdc_forget_header(void) { have_last = false; }
+/* the header asked for last (rdc_header) and, per list, the header sent last this frame, by contents: floor levels
+ * and FMV frames recompile theirs in place, and a freed page's memory can come back as another texture's header, so
+ * its address alone says nothing */
+typedef struct {
+    pvr_poly_hdr_t last;           /* first: 32-byte aligned */
+    uint8_t *base, *p, *end;       /* RAM buffer (opaque / punch-through), NULL: the store queues (translucent) */
+    unsigned gen; bool have;
+    unsigned prims; float area;    /* this frame, for SABER_PERF */
+} __attribute__((aligned(32))) Stream;
+static Stream streams[PVR_LIST_PT_POLY + 1];
+static pvr_poly_hdr_t want_hdr __attribute__((aligned(32)));
+static int want_list; static unsigned want_gen; static bool have_want;
+static bool all_tr;                /* SABER_PVR_TR: everything in the translucent list */
+static bool list_stats;            /* SABER_PERF=2: the screen area per list (rdc_list_stats) */
+void rdc_forget_header(void) { have_want = false; for (int i = 0; i <= PVR_LIST_PT_POLY; i++) streams[i].have = false; }
+
+static uint8_t cls_of_fmt(uint32_t fmt) { return fmt == PVR_TXRFMT_RGB565 ? CLS_OPAQUE : fmt == PVR_TXRFMT_ARGB1555 ? CLS_CUT : CLS_TRANS; }
+static inline uint8_t am_bits(uint32_t a) { return (a != 255 ? AM_NOT_OPAQUE : 0) | (a ? AM_NOT_EMPTY : 0) | (a && a != 255 ? AM_PARTIAL : 0); }
+static uint8_t *amap_new(RTex *t) { t->amw = (t->w + 7) / 8; return t->amap = calloc(((size_t)t->amw * ((t->h + 7) / 8) + 1) / 2, 1); }
+static inline void amap_or(RTex *t, int bx, int by, uint8_t bits) { size_t i = (size_t)by * t->amw + bx; t->amap[i >> 1] |= (uint8_t)(bits << ((i & 1) * 4)); }
+
+/* what the texels of a source rectangle hold (drawn nearest: exactly those texels are sampled; bilinear reaches past
+ * the edges, so it gets the whole texture's class). A tile sheet's tiles are mostly all opaque or all empty. */
+static inline __attribute__((always_inline)) int rect_cls(const RTex *t, bool linear, float x0, float y0, float x1, float y1)
+{
+    if (!t->amap || linear) return t->cls;
+    /* texels x0 .. x1 - 1 (the last one sampled is below x1) */
+    int bx0 = (int)x0 >> 3, by0 = (int)y0 >> 3, bx1 = (int)(x1 - 1.0f / 256) >> 3, by1 = (int)(y1 - 1.0f / 256) >> 3, bh = (t->h + 7) >> 3;
+    if (bx0 < 0) bx0 = 0; if (by0 < 0) by0 = 0; if (bx1 >= t->amw) bx1 = t->amw - 1; if (by1 >= bh) by1 = bh - 1;
+    unsigned m = 0;
+    for (int by = by0; by <= by1 && m != 7; by++) for (int bx = bx0; bx <= bx1; bx++) {
+        size_t i = (size_t)by * t->amw + bx;
+        m |= (t->amap[i >> 1] >> ((i & 1) * 4)) & 7u;
+    }
+    return !(m & AM_NOT_OPAQUE) ? CLS_OPAQUE : !(m & AM_NOT_EMPTY) ? CLS_EMPTY : !(m & AM_PARTIAL) ? CLS_CUT : CLS_TRANS;
+}
 
 static int pot(int n) { int p = 16; while (p < n) p <<= 1; return p; }
 
@@ -94,19 +146,21 @@ static const uint32_t *src_row(Src *s, int y)
     return s->buf + (size_t)(y - s->y0) * s->w;
 }
 
-static uint32_t detect_format(Src *s)
+/* the 16-bit format an image needs, and its alpha map (t->amap, when there is memory for it) */
+static uint32_t detect_format(RTex *t, Src *s)
 {
-    bool cut = false;
+    bool cut = false, part = false;
+    uint8_t *am = amap_new(t);
     for (int y = 0; y < s->h; y++) {
         const uint32_t *row = src_row(s, y);
-        for (int x = 0; x < s->w; x++) {
-            uint32_t a = row[x] >> 24;
-            if (a == 255) continue;
-            if (a != 0) return PVR_TXRFMT_ARGB4444;
-            cut = true;
+        for (int x0 = 0; x0 < s->w; x0 += 8) {
+            uint8_t bits = 0;
+            for (int x = x0; x < x0 + 8 && x < s->w; x++) bits |= am_bits(row[x] >> 24);
+            cut |= (bits & AM_NOT_OPAQUE) != 0; part |= (bits & AM_PARTIAL) != 0;
+            if (am) amap_or(t, x0 >> 3, y >> 3, bits);
         }
     }
-    return cut ? PVR_TXRFMT_ARGB1555 : PVR_TXRFMT_RGB565;
+    return part ? PVR_TXRFMT_ARGB4444 : cut ? PVR_TXRFMT_ARGB1555 : PVR_TXRFMT_RGB565;
 }
 
 static inline uint16_t conv(uint32_t v, uint32_t fmt)
@@ -150,10 +204,11 @@ static RTex *create(int w, int h, bool streaming, Src *src)
     if (!t) return NULL;
     t->w = w; t->h = h; t->streaming = streaming;
     t->r = t->g = t->b = t->a = 255; t->blend = R_BLEND_BLEND; t->scale = R_SCALE_NEAREST;
-    t->fmt = src ? detect_format(src) : PVR_TXRFMT_RGB565;
+    t->fmt = src ? detect_format(t, src) : PVR_TXRFMT_RGB565;
+    t->cls = cls_of_fmt(t->fmt);
     t->npx = (w + PAGE_MAX - 1) / PAGE_MAX; t->npy = (h + PAGE_MAX - 1) / PAGE_MAX;
     t->pages = memalign(32, sizeof(Page) * t->npx * t->npy);
-    if (!t->pages) { free(t); return NULL; }
+    if (!t->pages) { free(t->amap); free(t); return NULL; }
     memset(t->pages, 0, sizeof(Page) * t->npx * t->npy);
     for (int py = 0; py < t->npy; py++) for (int pxi = 0; pxi < t->npx; pxi++) {
         Page *pg = &t->pages[py * t->npx + pxi];
@@ -164,7 +219,7 @@ static RTex *create(int w, int h, bool streaming, Src *src)
         int rows = pg->h < pg->th ? pg->h + 1 : pg->h;     /* one spare row for the bilinear filter */
         pg->bytes = ((size_t)pg->tw * rows * 2 + 31) & ~(size_t)31;
         pg->mem = rdc_vram_alloc(pg->bytes);
-        if (!pg->mem) { free_pages(t); free(t); return NULL; }
+        if (!pg->mem) { free_pages(t); free(t->amap); free(t); return NULL; }
         pg->txr = t->fmt | PVR_TXRFMT_NONTWIDDLED;
     }
     if (src) for (int i = 0; i < t->npx * t->npy; i++) upload_page(t, &t->pages[i], src);
@@ -283,6 +338,30 @@ static void expand_page(const uint8_t *d, bool pal4, int texels, const uint32_t 
     }
 }
 
+/* a baked page's alpha into t->amap (false: it can't say, VQ or blocks that are not 8x8-aligned). Twiddled texels
+ * come 64 at a time per aligned 8x8 block (squares of min(tw, th) along the long side, y in the even bits, as
+ * texbake.py lays them out); the spare texels past the image repeat its edge, they are skipped. */
+static bool amap_page(RTex *t, const Page *pg, uint32_t pf, const uint8_t *d, const uint32_t *col, int ncol)
+{
+    int mn = pg->tw < pg->th ? pg->tw : pg->th, fmt = pf & 7, n = pg->tw * pg->th;
+    if ((pf & 0x100) || fmt > 6 || (fmt > 2 && fmt < 5) || mn < 8 || (pg->x0 & 7) || (pg->y0 & 7)) return false;
+    for (int k = 0; k < n; k += 64) {
+        int sq = k / (mn * mn), li = k % (mn * mn), lx = 0, ly = 0;
+        for (int b = 0; b < 10; b++) { ly |= ((li >> (2 * b)) & 1) << b; lx |= ((li >> (2 * b + 1)) & 1) << b; }
+        if (pg->tw > pg->th) lx += sq * mn; else ly += sq * mn;
+        if (lx >= pg->w || ly >= pg->h) continue;
+        uint8_t bits = 0;
+        for (int i = k; i < k + 64; i++) {
+            uint32_t a;
+            if (fmt >= 5) { int ix = fmt == 5 ? (d[i >> 1] >> ((i & 1) * 4)) & 15 : d[i]; a = ix < ncol ? col[ix] >> 24 : 128; }
+            else { uint16_t v = rd16(d + 2 * i); a = fmt == 0 ? (v >> 15) * 255u : fmt == 1 ? 255u : ((v >> 12) & 15) * 17u; }
+            bits |= am_bits(a);
+        }
+        amap_or(t, (pg->x0 + lx) >> 3, (pg->y0 + ly) >> 3, bits);
+    }
+    return true;
+}
+
 RTex *rtex_create_baked(Ren *r, uint8_t *blk, size_t size)
 {
     (void)r;
@@ -295,11 +374,17 @@ RTex *rtex_create_baked(Ren *r, uint8_t *blk, size_t size)
     RTex *t = calloc(1, sizeof *t);
     if (!t) return NULL;
     t->w = w; t->h = h; t->baked = true; t->fmt = fmt16;
+    t->cls = cls_of_fmt(fmt16);   /* texbake's alpha_kind of the whole image; the palette's own alphas below */
+    for (int k = 0; k < ncol && t->cls != CLS_TRANS; k++) {
+        uint32_t a = col[k] >> 24;
+        if (a != 255) t->cls = a ? CLS_TRANS : CLS_CUT;
+    }
     t->r = t->g = t->b = t->a = 255; t->blend = R_BLEND_BLEND; t->scale = R_SCALE_NEAREST;
     t->npx = np; t->npy = 1;
     t->pages = memalign(32, sizeof(Page) * np);
     if (!t->pages) { free(t); return NULL; }
     memset(t->pages, 0, sizeof(Page) * np);
+    bool amap_ok = amap_new(t) != NULL;
     bool pal4 = true;
     for (int i = 0; i < np; i++) pal4 &= (rd32(blk + 32 + i * 32 + 12) & 7) == 5;
     /* The colours into palette RAM, else 16 bits. Palette RAM runs out long before VRAM does, so a small texture (16-bit
@@ -326,9 +411,10 @@ RTex *rtex_create_baked(Ren *r, uint8_t *blk, size_t size)
         uint8_t *d = blk + off;
         pg->bytes = expand && paletted ? (size_t)pg->tw * pg->th * 2 : len;
         if (off + len > size || !(pg->mem = rdc_vram_alloc(pg->bytes))) {
-            free_pages(t); pal_release(t->pal, t->npal); free(t->pal); free(t);
+            free_pages(t); pal_release(t->pal, t->npal); free(t->pal); free(t->amap); free(t);
             return NULL;
         }
+        if (amap_ok) amap_ok = amap_page(t, pg, pf, d, col, ncol);   /* before the palette indices are remapped */
         if (expand && paletted) {
             expand_page(d, (pf & 7) == 5, pg->tw * pg->th, col, fmt16, pg->mem);
             pg->txr = fmt16 | PVR_TXRFMT_TWIDDLED;
@@ -351,6 +437,7 @@ RTex *rtex_create_baked(Ren *r, uint8_t *blk, size_t size)
         } else pg->txr = ((pf & 7) << 27) | (pf & 0x100 ? PVR_TXRFMT_VQ_ENABLE : 0) | PVR_TXRFMT_TWIDDLED;
         vram_load(d, pg->mem, len);
     }
+    if (!amap_ok) { free(t->amap); t->amap = NULL; }
     t->next = live_tex; if (live_tex) live_tex->prev = t; live_tex = t;
     return t;
 }
@@ -377,6 +464,7 @@ void rtex_update(RTex *t, const uint32_t *px, int pitch)
 {
     if (!t || !px || t->baked) return;
     Src src = { .px = px, .pitch = pitch, .w = t->w, .h = t->h };
+    free(t->amap); t->amap = NULL;   /* new contents: only the format's class holds */
     for (int i = 0; i < t->npx * t->npy; i++) upload_page(t, &t->pages[i], &src);
 }
 void rtex_destroy(RTex *t)
@@ -384,7 +472,7 @@ void rtex_destroy(RTex *t)
     if (!t) return;
     if (t->prev) t->prev->next = t->next; else live_tex = t->next;
     if (t->next) t->next->prev = t->prev;
-    free_pages(t); pal_release(t->pal, t->npal); free(t->pal); free(t);
+    free_pages(t); pal_release(t->pal, t->npal); free(t->pal); free(t->amap); free(t);
 }
 
 /* ------------------------------------------------------------------ display mode switches */
@@ -406,7 +494,7 @@ bool rdc_vram_park(void)
         memcpy(pg->parked, pg->mem, pg->bytes);
     }
     for (RTex *t = live_tex; t; t = t->next) for (int i = 0; i < t->npx * t->npy; i++) { t->pages[i].mem = NULL; t->pages[i].have = 0; }
-    vram_used = 0; have_last = false;   /* pvr_shutdown gives the whole texture pool back */
+    vram_used = 0; rdc_forget_header();   /* pvr_shutdown gives the whole texture pool back */
     printf("video: parked %u KB of textures\n", (unsigned)(bytes / 1024));
     return true;
 }
@@ -444,18 +532,22 @@ Ren *rtex_renderer(const RTex *t) { (void)t; return &the_ren; }
 size_t rdc_vram_used(void) { return vram_used; }
 
 /* ------------------------------------------------------------------ headers */
-void rdc_compile(pvr_poly_hdr_t *h, pvr_ptr_t base, uint32_t fmt, int tw, int th, RBlend blend, bool linear, bool repeat, bool offset)
+/* list: PVR_LIST_OP_POLY (blend is ignored: the pixel is replaced), _PT_POLY (alpha-tested cut-outs) or _TR_POLY.
+ * Every list keeps the painter's order through the depth test (zseq): a primitive only lands in front of the ones
+ * drawn before it. The translucent list does not write depth (its primitives are drawn in submission order anyway). */
+static void compile(pvr_poly_hdr_t *h, int list, pvr_ptr_t base, uint32_t fmt, int tw, int th, RBlend blend, bool linear, bool repeat, bool offset)
 {
     pvr_poly_cxt_t cxt;
     if (base) {
-        pvr_poly_cxt_txr(&cxt, PVR_LIST_TR_POLY, fmt, tw, th, base, linear ? PVR_FILTER_BILINEAR : PVR_FILTER_NEAREST);
+        pvr_poly_cxt_txr(&cxt, list, fmt, tw, th, base, linear ? PVR_FILTER_BILINEAR : PVR_FILTER_NEAREST);
         cxt.txr.env = PVR_TXRENV_MODULATEALPHA;
         cxt.txr.uv_clamp = repeat ? PVR_UVCLAMP_NONE : PVR_UVCLAMP_UV;
-    } else pvr_poly_cxt_col(&cxt, PVR_LIST_TR_POLY);
+    } else pvr_poly_cxt_col(&cxt, list);
     cxt.gen.culling = PVR_CULLING_NONE;
     cxt.gen.specular = offset;
-    cxt.depth.comparison = PVR_DEPTHCMP_ALWAYS;
-    cxt.depth.write = false;
+    cxt.depth.comparison = PVR_DEPTHCMP_GREATER;
+    cxt.depth.write = list == PVR_LIST_TR_POLY ? PVR_DEPTHWRITE_DISABLE : PVR_DEPTHWRITE_ENABLE;
+    if (list == PVR_LIST_OP_POLY) blend = R_BLEND_NONE;
     switch (blend) {
     case R_BLEND_NONE: cxt.blend.src = PVR_BLEND_ONE; cxt.blend.dst = PVR_BLEND_ZERO; break;
     case R_BLEND_ADD: cxt.blend.src = PVR_BLEND_SRCALPHA; cxt.blend.dst = PVR_BLEND_ONE; break;
@@ -464,23 +556,51 @@ void rdc_compile(pvr_poly_hdr_t *h, pvr_ptr_t base, uint32_t fmt, int tw, int th
     pvr_poly_compile(h, &cxt);
 }
 
-static const pvr_poly_hdr_t *page_hdr(RTex *t, Page *pg)
+/* floor levels and FMV frames: R_BLEND_NONE is opaque */
+void rdc_compile(pvr_poly_hdr_t *h, pvr_ptr_t base, uint32_t fmt, int tw, int th, RBlend blend, bool linear, bool repeat, bool offset)
 {
-    int b = t->blend, l = t->scale == R_SCALE_LINEAR;
-    if (!(pg->have & (1 << (b * 2 + l)))) {
-        rdc_compile(&pg->hdr[b][l], pg->mem, pg->txr, pg->tw, pg->th, (RBlend)b, l, false, false);
-        pg->have |= (uint8_t)(1 << (b * 2 + l));
-    }
-    return &pg->hdr[b][l];
+    compile(h, blend == R_BLEND_NONE && !all_tr ? PVR_LIST_OP_POLY : PVR_LIST_TR_POLY, base, fmt, tw, th, blend, linear, repeat, offset);
 }
 
-static pvr_poly_hdr_t col_hdr[3] __attribute__((aligned(32)));
+/* a texture's page drawn with its blend and alpha mod, over texels of class cls (rect_cls): opaque when nothing shows
+ * through, punch-through for cut-outs drawn nearest (bilinear gives their edges real translucency), translucent
+ * otherwise */
+static __attribute__((noinline)) void page_compile(Page *pg, int v, int l)
+{
+    static const int list[HV_COUNT] = { PVR_LIST_OP_POLY, PVR_LIST_PT_POLY, PVR_LIST_TR_POLY, PVR_LIST_TR_POLY };
+    compile(&pg->hdr[v][l], all_tr ? PVR_LIST_TR_POLY : list[v], pg->mem, pg->txr, pg->tw, pg->th,
+            v == HV_OP ? R_BLEND_NONE : v == HV_ADD ? R_BLEND_ADD : R_BLEND_BLEND, l, false, false);
+    pg->have |= (uint8_t)(1 << (v * 2 + l));
+}
+static inline __attribute__((always_inline)) const pvr_poly_hdr_t *page_hdr(RTex *t, Page *pg, int cls)
+{
+    int l = t->scale == R_SCALE_LINEAR, v;
+    if (t->blend == R_BLEND_NONE) v = HV_OP;
+    else if (t->blend == R_BLEND_ADD) v = HV_ADD;
+    else if (t->a != 255) v = HV_TR;
+    else v = cls == CLS_OPAQUE ? HV_OP : cls != CLS_TRANS && !l ? HV_PT : HV_TR;   /* (CLS_EMPTY: the callers skip it) */
+    if (!(pg->have & (1 << (v * 2 + l)))) page_compile(pg, v, l);
+    return &pg->hdr[v][l];
+}
+/* nothing to draw: only alpha-0 texels, blended (R_BLEND_NONE copies them) */
+static inline bool invisible(const RTex *t, int cls) { return cls == CLS_EMPTY && t->blend != R_BLEND_NONE; }
+
+/* untextured: opaque for R_BLEND_NONE and for R_BLEND_BLEND at full alpha */
+static pvr_poly_hdr_t col_hdr[3] __attribute__((aligned(32))), col_op __attribute__((aligned(32)));
+static inline const pvr_poly_hdr_t *fill_hdr(RBlend b, unsigned a) { return b == R_BLEND_NONE || (b == R_BLEND_BLEND && a == 255) ? &col_op : &col_hdr[b]; }
 
 /* ------------------------------------------------------------------ frame, state, clipping */
 static bool in_frame;
 static int prims, hdr_sent, hdr_asked;
+static unsigned overflows;
 static struct { uint8_t r, g, b, a; RBlend blend; bool clip_on; RRect clip; bool vp_on; RRect vp; } st = { 255, 255, 255, 255, R_BLEND_NONE, false, { 0 }, false, { 0 } };
 static float clx0, cly0, clx1, cly1;   /* the effective clip in screen space */
+
+/* the depth of the next primitive: above the background plane (KOS: 0.0001), rising by 1/1024 of itself a primitive
+ * (13 bits of the PVR's float depth to spare; thousands of primitives stay far below FLT_MAX) */
+#define Z0 1.0f
+#define ZSTEP (1.0f + 1.0f / 1024.0f)
+static float zseq;
 
 static void update_clip(void)
 {
@@ -501,19 +621,35 @@ static void update_clip(void)
 void rdc_view_changed(void) { update_clip(); }
 void rdc_clip_screen(float *x0, float *y0, float *x1, float *y1) { *x0 = clx0; *y0 = cly0; *x1 = clx1; *y1 = cly1; }
 
+/* RAM for the opaque and punch-through lists of one frame (a quad is 160 bytes with its header) */
+#define OP_BYTES (160 * 1024)
+#define PT_BYTES (160 * 1024)
+
 void rdc_init(void)
 {
+    all_tr = plat_getenv("SABER_PVR_TR") != NULL;
+    const char *perf = plat_getenv("SABER_PERF"); list_stats = perf && atoi(perf) >= 2;
     rdc_pal_restore();
-    for (int b = 0; b < 3; b++) rdc_compile(&col_hdr[b], NULL, 0, 0, 0, (RBlend)b, false, false, false);
+    for (int b = 0; b < 3; b++) compile(&col_hdr[b], PVR_LIST_TR_POLY, NULL, 0, 0, 0, (RBlend)b, false, false, false);
+    compile(&col_op, all_tr ? PVR_LIST_TR_POLY : PVR_LIST_OP_POLY, NULL, 0, 0, 0, R_BLEND_NONE, false, false, false);
+    static const int list[2] = { PVR_LIST_OP_POLY, PVR_LIST_PT_POLY }; static const size_t bytes[2] = { OP_BYTES, PT_BYTES };
+    for (int i = 0; i < 2 && !all_tr; i++) {
+        Stream *s = &streams[list[i]];
+        if (!(s->base = memalign(32, bytes[i]))) { printf("pvr: no RAM for list %d, it goes translucent\n", list[i]); continue; }
+        s->end = s->base + bytes[i];
+    }
     update_clip();
 }
 
 void rdc_frame_begin(void)
 {
     pvr_wait_ready();
+    PVR_SET(PVR_PT_ALPHA_REF, 0x80);   /* punch-through: a cut-out's texels are 0 or 255 */
     pvr_scene_begin();
     pvr_list_begin(PVR_LIST_TR_POLY);
-    in_frame = true; prims = hdr_sent = hdr_asked = 0; have_last = false;
+    in_frame = true; prims = hdr_sent = hdr_asked = 0;
+    for (int i = 0; i <= PVR_LIST_PT_POLY; i++) { Stream *s = &streams[i]; s->p = s->base; s->have = false; s->prims = 0; s->area = 0; }
+    have_want = false; zseq = Z0;
     st.clip_on = st.vp_on = false; update_clip();
 }
 
@@ -522,37 +658,114 @@ void rdc_frame_end(void)
     if (!in_frame) return;
     in_frame = false;
     pvr_list_finish();
+    /* the lists collected in RAM (every list pvr_init enabled goes to the TA each frame, empty ones as a blank header) */
+    static const int list[2] = { PVR_LIST_OP_POLY, PVR_LIST_PT_POLY };
+    for (int i = 0; i < 2; i++) {
+        Stream *s = &streams[list[i]];
+        pvr_list_begin(list[i]);
+        if (s->p != s->base) pvr_prim(s->base, (size_t)(s->p - s->base));
+        pvr_list_finish();
+    }
     pvr_scene_finish();
 }
 bool rdc_in_frame(void) { return in_frame; }
 int rdc_prims(void) { return prims; }
 void rdc_header_stats(int *sent, int *asked) { *sent = hdr_sent; *asked = hdr_asked; }
+/* this frame's primitives and screen area (in whole screens, SABER_PERF=2) per list, and the primitives a full RAM
+ * list sent to the translucent list so far */
+void rdc_list_stats(unsigned n[3], float scr[3], unsigned *ovf)
+{
+    static const int list[3] = { PVR_LIST_OP_POLY, PVR_LIST_PT_POLY, PVR_LIST_TR_POLY };
+    float full = (float)vid_mode->width * vid_mode->height;
+    for (int i = 0; i < 3; i++) { n[i] = streams[list[i]].prims; scr[i] = streams[list[i]].area / full; }
+    *ovf = overflows;
+}
 
 /* ------------------------------------------------------------------ submission */
 void rdc_header(const pvr_poly_hdr_t *h)
 {
     if (!in_frame) return;
     hdr_asked++;
-    if (have_last && !memcmp(&last_hdr, h, sizeof *h)) return;
-    last_hdr = *h; have_last = true; hdr_sent++;
-    void *dst = pvr_dr_target();
-    memcpy(dst, h, sizeof *h);
-    pvr_dr_commit(dst);
+    if (have_want && !memcmp(&want_hdr, h, sizeof *h)) return;
+    want_hdr = *h; have_want = true; want_gen++;
+    want_list = (int)((h->cmd >> 24) & 7);
 }
 
-static inline void put(uint32_t flags, const RdcVert *v)
+static void emit_hdr(Stream *s, const pvr_poly_hdr_t *h)
+{
+    if (s->base) {
+        uint32_t *d = (uint32_t *)s->p; s->p += 32;
+        arch_dcache_alloc_line_with_value(d, h->cmd);
+        memcpy(d, h, sizeof *h);
+    } else {
+        void *d = pvr_dr_target();
+        memcpy(d, h, sizeof *h);
+        pvr_dr_commit(d);
+    }
+    hdr_sent++;
+}
+
+/* the stream a primitive of nv vertices goes to, with the header asked for sent there first. A RAM list without
+ * room for it hands it to the translucent list: the same header made translucent (blend ONE/ZERO stays a plain copy,
+ * a punch-through header already blends by alpha), no depth write. */
+static __attribute__((noinline)) Stream *prim_slow(int nv)
+{
+    int list = want_list;
+    Stream *s = &streams[list];
+    bool moved = false;
+    if (s->base && s->p + 32 * (nv + 1) > s->end) { if (!overflows++) printf("pvr: list %d is full, the rest of the frame goes translucent\n", list); s = &streams[PVR_LIST_TR_POLY]; moved = true; }
+    else if (list != PVR_LIST_TR_POLY && !s->base) { s = &streams[PVR_LIST_TR_POLY]; moved = true; }
+    if (s->gen != want_gen || !s->have) {
+        pvr_poly_hdr_t h __attribute__((aligned(32))) = want_hdr;
+        if (moved) {
+            h.cmd = (h.cmd & ~(7u << 24)) | (uint32_t)PVR_LIST_TR_POLY << 24;
+            h.mode1 |= PVR_TA_PM1_DEPTHWRITE;
+            h.mode2 |= PVR_TA_PM2_ALPHA;
+        }
+        s->gen = want_gen;
+        if (!s->have || memcmp(&s->last, &h, sizeof h)) { s->last = h; s->have = true; emit_hdr(s, &h); }
+    }
+    return s;
+}
+/* the common case inline: the header is already there and the RAM list has room */
+static inline __attribute__((always_inline)) Stream *prim_begin(int nv)
+{
+    Stream *s = &streams[want_list];
+    if (__builtin_expect(s->gen == want_gen && s->have && (!s->base || s->p + 32 * nv <= s->end), 1)) return s;
+    return prim_slow(nv);
+}
+
+/* a vertex into a RAM list (the cache line allocated, not read) / into the store queues */
+static inline void vput_ram(Stream *s, uint32_t flags, float x, float y, float z, float u, float v, uint32_t argb, uint32_t oargb)
+{
+    pvr_vertex_t *d = (pvr_vertex_t *)s->p; s->p += 32;
+    arch_dcache_alloc_line_with_value(d, flags);
+    d->x = x; d->y = y; d->z = z; d->u = u; d->v = v; d->argb = argb; d->oargb = oargb;
+}
+static inline void vput_sq(uint32_t flags, float x, float y, float z, float u, float v, uint32_t argb, uint32_t oargb)
 {
     pvr_vertex_t *d = pvr_dr_target();
-    d->flags = flags; d->x = v->x; d->y = v->y; d->z = v->z;
-    d->u = v->u; d->v = v->v; d->argb = v->argb; d->oargb = v->oargb;
+    d->flags = flags; d->x = x; d->y = y; d->z = z; d->u = u; d->v = v; d->argb = argb; d->oargb = oargb;
     pvr_dr_commit(d);
 }
 
+/* a strip at the next depth. Its own z (1/w, the Mode-7 floor's perspective) is scaled to start there: the PVR's
+ * perspective correction only sees z's ratios, so the texturing is unchanged */
 void rdc_strip(const RdcVert *v, int n)
 {
     if (!in_frame || n < 3) return;
-    for (int i = 0; i < n - 1; i++) put(PVR_CMD_VERTEX, &v[i]);
-    put(PVR_CMD_VERTEX_EOL, &v[n - 1]);
+    float zmin = v[0].z, zmax = v[0].z, x0 = v[0].x, x1 = v[0].x, y0 = v[0].y, y1 = v[0].y;
+    for (int i = 1; i < n; i++) {
+        if (v[i].z < zmin) zmin = v[i].z; if (v[i].z > zmax) zmax = v[i].z;
+        if (v[i].x < x0) x0 = v[i].x; if (v[i].x > x1) x1 = v[i].x;
+        if (v[i].y < y0) y0 = v[i].y; if (v[i].y > y1) y1 = v[i].y;
+    }
+    float k = zmin > 0 && zmax < zmin * 65536.0f ? zseq / zmin : 0;   /* 0: flat (a constant z, or nothing sane to scale) */
+    Stream *s = prim_begin(n);
+    if (s->base) for (int i = 0; i < n; i++) vput_ram(s, i < n - 1 ? PVR_CMD_VERTEX : PVR_CMD_VERTEX_EOL, v[i].x, v[i].y, k ? v[i].z * k : zseq, v[i].u, v[i].v, v[i].argb, v[i].oargb);
+    else for (int i = 0; i < n; i++) vput_sq(i < n - 1 ? PVR_CMD_VERTEX : PVR_CMD_VERTEX_EOL, v[i].x, v[i].y, k ? v[i].z * k : zseq, v[i].u, v[i].v, v[i].argb, v[i].oargb);
+    zseq = (k ? zmax * k : zseq) * ZSTEP;
+    s->prims++; if (list_stats) s->area += (x1 - x0) * (y1 - y0);
     prims++;
 }
 
@@ -620,10 +833,10 @@ void rdc_poly(const RdcVert *v, int n)
     rdc_strip(s, k);
 }
 
-/* an axis-aligned quad in screen space (x0 < x1, y0 < y1; flips are in the texture coordinates): its four vertices
- * go straight into the store queues when it lies inside the clip, through rdc_poly (clipped) when it straddles it.
- * The current header must already be the right one. */
-static inline void quad(float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, uint32_t argb)
+/* an axis-aligned quad in screen space (x0 < x1, y0 < y1; flips are in the texture coordinates) at the next depth:
+ * its four vertices go straight into the header's list when it lies inside the clip, through rdc_poly (clipped) when
+ * it straddles it. The current header must already be the right one. */
+static inline __attribute__((always_inline)) void quad(float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, uint32_t argb)
 {
     if (x1 <= clx0 || x0 >= clx1 || y1 <= cly0 || y0 >= cly1) return;
     if (x0 < clx0 || x1 > clx1 || y0 < cly0 || y1 > cly1) {
@@ -631,11 +844,20 @@ static inline void quad(float x0, float y0, float x1, float y1, float u0, float 
         rdc_poly(v, 4);
         return;
     }
-    pvr_vertex_t *d;
-    d = pvr_dr_target(); d->flags = PVR_CMD_VERTEX;     d->x = x0; d->y = y0; d->z = 1; d->u = u0; d->v = v0; d->argb = argb; d->oargb = 0; pvr_dr_commit(d);
-    d = pvr_dr_target(); d->flags = PVR_CMD_VERTEX;     d->x = x1; d->y = y0; d->z = 1; d->u = u1; d->v = v0; d->argb = argb; d->oargb = 0; pvr_dr_commit(d);
-    d = pvr_dr_target(); d->flags = PVR_CMD_VERTEX;     d->x = x0; d->y = y1; d->z = 1; d->u = u0; d->v = v1; d->argb = argb; d->oargb = 0; pvr_dr_commit(d);
-    d = pvr_dr_target(); d->flags = PVR_CMD_VERTEX_EOL; d->x = x1; d->y = y1; d->z = 1; d->u = u1; d->v = v1; d->argb = argb; d->oargb = 0; pvr_dr_commit(d);
+    Stream *s = prim_begin(4);
+    float z = zseq; zseq *= ZSTEP;
+    if (s->base) {
+        vput_ram(s, PVR_CMD_VERTEX, x0, y0, z, u0, v0, argb, 0);
+        vput_ram(s, PVR_CMD_VERTEX, x1, y0, z, u1, v0, argb, 0);
+        vput_ram(s, PVR_CMD_VERTEX, x0, y1, z, u0, v1, argb, 0);
+        vput_ram(s, PVR_CMD_VERTEX_EOL, x1, y1, z, u1, v1, argb, 0);
+    } else {
+        vput_sq(PVR_CMD_VERTEX, x0, y0, z, u0, v0, argb, 0);
+        vput_sq(PVR_CMD_VERTEX, x1, y0, z, u1, v0, argb, 0);
+        vput_sq(PVR_CMD_VERTEX, x0, y1, z, u0, v1, argb, 0);
+        vput_sq(PVR_CMD_VERTEX_EOL, x1, y1, z, u1, v1, argb, 0);
+    }
+    s->prims++; if (list_stats) s->area += (x1 - x0) * (y1 - y0);
     prims++;
 }
 
@@ -660,7 +882,7 @@ static void fill_screen_quad(float x0, float y0, float x1, float y1)
 {
     uint32_t c = draw_argb();
     RdcVert v[4] = { { x0, y0, 1, 0, 0, c, 0 }, { x1, y0, 1, 0, 0, c, 0 }, { x1, y1, 1, 0, 0, c, 0 }, { x0, y1, 1, 0, 0, c, 0 } };
-    rdc_header(&col_hdr[st.blend]);
+    rdc_header(fill_hdr(st.blend, st.a));
     rdc_poly(v, 4);
 }
 
@@ -687,7 +909,7 @@ void r_fill_rects(Ren *r, const RFRect *q, int n)
     (void)r;
     if (!in_frame || n <= 0) return;
     uint32_t c = draw_argb();
-    rdc_header(&col_hdr[st.blend]);
+    rdc_header(fill_hdr(st.blend, st.a));
     for (int i = 0; i < n; i++)
         if (q[i].w > 0 && q[i].h > 0) quad(SX(q[i].x), SY(q[i].y), SX(q[i].x + q[i].w), SY(q[i].y + q[i].h), 0, 0, 0, 0, c);
 }
@@ -712,7 +934,7 @@ void r_line(Ren *r, float x0, float y0, float x1, float y1)
     uint32_t c = draw_argb();
     RdcVert v[4] = { { SX(ax + nx), SY(ay + ny), 1, 0, 0, c, 0 }, { SX(bx + nx), SY(by + ny), 1, 0, 0, c, 0 },
                      { SX(bx - nx), SY(by - ny), 1, 0, 0, c, 0 }, { SX(ax - nx), SY(ay - ny), 1, 0, 0, c, 0 } };
-    rdc_header(&col_hdr[st.blend]);
+    rdc_header(fill_hdr(st.blend, st.a));
     rdc_poly(v, 4);
 }
 
@@ -746,12 +968,14 @@ static void draw_tex(RTex *t, const RFRect *src, const RFRect *dst, double angle
         float lx0 = (px0 - s.x) * kx, lx1 = (px1 - s.x) * kx, ly0 = (py0 - s.y) * ky, ly1 = (py1 - s.y) * ky;
         if (fh) { float a = d.w - lx1, b = d.w - lx0; lx0 = b; lx1 = a; }   /* lx0 now belongs to px0 */
         if (fv) { float a = d.h - ly1, b = d.h - ly0; ly0 = b; ly1 = a; }
+        int cls = rect_cls(t, t->scale == R_SCALE_LINEAR, px0, py0, px1, py1);
+        if (invisible(t, cls)) continue;
         float u0 = (px0 - pg->x0) / pg->tw, u1 = (px1 - pg->x0) / pg->tw, v0 = (py0 - pg->y0) / pg->th, v1 = (py1 - pg->y0) / pg->th;
         if (angle == 0) {   /* the common case: an upright rectangle */
             float X0 = SX(d.x + lx0), X1 = SX(d.x + lx1), Y0 = SY(d.y + ly0), Y1 = SY(d.y + ly1), U0 = u0, U1 = u1, V0 = v0, V1 = v1, k;
             if (X0 > X1) { k = X0; X0 = X1; X1 = k; k = U0; U0 = U1; U1 = k; }
             if (Y0 > Y1) { k = Y0; Y0 = Y1; Y1 = k; k = V0; V0 = V1; V1 = k; }
-            rdc_header(page_hdr(t, pg));
+            rdc_header(page_hdr(t, pg, cls));
             quad(X0, Y0, X1, Y1, U0, V0, U1, V1, argb);
             continue;
         }
@@ -761,7 +985,7 @@ static void draw_tex(RTex *t, const RFRect *src, const RFRect *dst, double angle
             shz_vec2_t p = shz_xmtrx_transform_vec2(shz_vec2_init(lx[k] - cx, ly[k] - cy));
             v[k] = (RdcVert){ SX(d.x + cx + p.x), SY(d.y + cy + p.y), 1, uu[k], vv[k], argb, 0 };
         }
-        rdc_header(page_hdr(t, pg));
+        rdc_header(page_hdr(t, pg, cls));
         rdc_poly(v, 4);
     }
 }
@@ -776,6 +1000,8 @@ void r_tex_batch(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, int n)
     float sx = pvr_view.sx, sy = pvr_view.sy;
     float ox = pvr_view.ox + (st.vp_on ? st.vp.x * sx : 0), oy = pvr_view.oy + (st.vp_on ? st.vp.y * sy : 0);
     Page *pg = NULL; float iu = 0, iv = 0;
+    const pvr_poly_hdr_t *cur = NULL;   /* the header asked for last: a tile's texels pick opaque / punch-through */
+    bool per_tile = t->amap && t->scale != R_SCALE_LINEAR && t->blend != R_BLEND_NONE;   /* else the texture's class does */
     for (int i = 0; i < n; i++) {
         const RFRect *s = &src[i], *d = &dst[i];
         float w = d->w < 0 ? -d->w : d->w;
@@ -787,10 +1013,13 @@ void r_tex_batch(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, int n)
                 Page *p = &t->pages[k];
                 if (s->x >= p->x0 && s->y >= p->y0 && s->x + s->w <= p->x0 + p->w && s->y + s->h <= p->y0 + p->h) pg = p;
             }
-            if (!pg) { RFRect dd = { d->x, d->y, w, d->h }; draw_tex(t, s, &dd, 0, NULL, d->w < 0 ? R_FLIP_H : R_FLIP_NONE); continue; }
-            rdc_header(page_hdr(t, pg));
-            iu = 1.0f / pg->tw; iv = 1.0f / pg->th;
+            if (!pg) { RFRect dd = { d->x, d->y, w, d->h }; draw_tex(t, s, &dd, 0, NULL, d->w < 0 ? R_FLIP_H : R_FLIP_NONE); cur = NULL; continue; }
+            iu = 1.0f / pg->tw; iv = 1.0f / pg->th; cur = NULL;
         }
+        int cls = per_tile ? rect_cls(t, false, s->x, s->y, s->x + s->w, s->y + s->h) : t->cls;
+        if (invisible(t, cls)) continue;
+        const pvr_poly_hdr_t *h = page_hdr(t, pg, cls);
+        if (h != cur) { rdc_header(h); cur = h; }
         float u0 = (s->x - pg->x0) * iu, u1 = u0 + s->w * iu, v0 = (s->y - pg->y0) * iv, v1 = v0 + s->h * iv;
         if (d->w < 0) { float k = u0; u0 = u1; u1 = k; }
         quad(x0, y0, x1, y1, u0, v0, u1, v1, argb);
@@ -810,7 +1039,14 @@ void r_geometry(Ren *r, RTex *t, const RVertex *vx, int nv, const int *idx, int 
     if (!in_frame) return;
     int n = idx ? ni : nv;
     Page *pg = t && t->pages ? &t->pages[0] : NULL;
-    rdc_header(pg ? page_hdr(t, pg) : &col_hdr[st.blend]);
+    /* the vertex colours' alpha fades like the texture's alpha mod does */
+    int amin = 255;
+    for (int i = 0; i < n; i++) { int a = (int)(vx[idx ? idx[i] : i].color.a * 255 + 0.5f); if (a < amin) amin = a; }
+    if (pg) {
+        uint8_t a = t->a; if (amin < a) t->a = (uint8_t)amin;
+        rdc_header(page_hdr(t, pg, t->cls));
+        t->a = a;
+    } else rdc_header(fill_hdr(st.blend, (unsigned)amin));
     for (int i = 0; i + 2 < n; i += 3) {
         RdcVert v[3];
         for (int k = 0; k < 3; k++) {
@@ -828,6 +1064,6 @@ void rdc_floor_haze(float ya, float yb, uint32_t haze, float sw)
 {
     uint32_t c = 0xff000000u | (haze & 0xff) << 16 | ((haze >> 8) & 0xff) << 8 | ((haze >> 16) & 0xff);
     RdcVert v[4] = { { SX(0), SY(ya), 1, 0, 0, c, 0 }, { SX(sw), SY(ya), 1, 0, 0, c, 0 }, { SX(sw), SY(yb), 1, 0, 0, c, 0 }, { SX(0), SY(yb), 1, 0, 0, c, 0 } };
-    rdc_header(&col_hdr[R_BLEND_NONE]);
+    rdc_header(&col_op);
     rdc_poly(v, 4);
 }
