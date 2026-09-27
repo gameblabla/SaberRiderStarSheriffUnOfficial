@@ -328,33 +328,44 @@ void aud_music_stop(void) { music_post(want_track, 0, false); }
 void aud_music_gain(float g) { music_gain = g; }
 void aud_music_pause(bool pause) { music_post(want_pause, 0, pause); }
 
-/* ---- video soundtrack: progressive ADPCM read straight off the disc (a .vsnd sidecar next to the .zamv, the same
- * "SMPL" + rate/samples/bytes header + KOS wav2adpcm body as a snd.pck sample block), no RAM cache. ZAMV5 carries no
- * audio of its own (unlike the old DCMV files), so video_dcmv.c drives this stream instead, and paces its decode
- * against aud_video_audio_played_bytes() the way the old code paced against dcfmv's own audio clock. */
-static file_t vaud_fd = -1;
+/* ---- video soundtrack: whole ADPCM body preloaded to RAM (a .vsnd sidecar next to the .zamv, the same "SMPL" +
+ * rate/samples/bytes header + KOS wav2adpcm body as a snd.pck sample block). ZAMV5 carries no audio of its own
+ * (unlike the old DCMV files), so video_dcmv.c drives this stream instead, and paces its decode against
+ * aud_video_audio_played_bytes() the way the old code paced against dcfmv's own audio clock.
+ *
+ * This used to fs_read() a few KB straight off the disc from inside the AICA poll callback, once per buffer refill.
+ * That let the video's own zamv_chunk_reader (video_dcmv.c, also fs_read on the same /cd filesystem, same thread)
+ * and this callback fight over the GD-ROM's one read head: two files, .zamv and .vsnd, growing apart on disc as
+ * playback goes on, so every few hundred ms the drive had to seek away from the video bitstream to fetch a few KB
+ * of audio and back again. On real hardware (GDEMU) that is exactly "random drop out": a seek stalls whichever
+ * fs_read lost the race, which starves either the video decoder (a stuck frame) or the AICA stream (an audible
+ * gap), and since video_update() paces frames off aud_video_audio_played_bytes() a stalled audio read stalls the
+ * picture too. A video's sidecar tops out in the low single-digit MB (largest current one 1.3 MB) - small enough to
+ * pull in with one read at open time, the same "one read from the disc, no header parsing" rule this file already
+ * applies to every other sample (see the file's own top comment) - after which nothing here touches the disc again
+ * until the next video opens. */
+static uint8_t *vaud_data;
+static size_t vaud_bytes_total;
+static size_t vaud_pos;
 static uint32_t vaud_rate;
-static size_t vaud_bytes_left;
 static uint64_t vaud_bytes_played;
 static snd_stream_hnd_t vaud_h = SND_STREAM_INVALID;
-static uint8_t vaud_buf[4096] __attribute__((aligned(32)));
 
 void aud_video_audio_close(void);
 
 static void *vaud_cb(snd_stream_hnd_t hnd, int req, int *got)
 {
-    if (hnd != vaud_h || vaud_fd < 0) { *got = req; return silence; }
-    size_t want = (size_t)req < sizeof vaud_buf ? (size_t)req : sizeof vaud_buf;
-    size_t n = 0;
-    if (vaud_bytes_left) {
-        size_t r = want < vaud_bytes_left ? want : vaud_bytes_left;
-        ssize_t rd = fs_read(vaud_fd, vaud_buf, r);
-        if (rd > 0) { n = (size_t)rd; vaud_bytes_left -= n; }
+    if (hnd != vaud_h || !vaud_data) { *got = req; return silence; }
+    size_t want = (size_t)req < sizeof silence ? (size_t)req : sizeof silence;
+    size_t n = vaud_bytes_total - vaud_pos; if (n > want) n = want;
+    void *p = vaud_data + vaud_pos;
+    vaud_pos += n;
+    if (n < want) {   /* pad the tail in place: playback never wraps back over the sample's own bytes */
+        memset(vaud_data + vaud_pos, 0x80, want - n);   /* ADPCM has no zero code: +step/8, -step/8 holds the level */
     }
-    if (n < want) memset(vaud_buf + n, 0x80, want - n);   /* ADPCM has no zero code: +step/8, -step/8 holds the level */
     vaud_bytes_played += want;
     *got = (int)want;
-    return vaud_buf;
+    return p;
 }
 
 bool aud_video_audio_open(const char *path)
@@ -364,12 +375,16 @@ bool aud_video_audio_open(const char *path)
     if (fd < 0) return false;
     uint8_t hdr[32];
     if (fs_read(fd, hdr, sizeof hdr) != (ssize_t)sizeof hdr || memcmp(hdr, "SMPL", 4)) { fs_close(fd); return false; }
-    vaud_rate = rd32(hdr + 4);
-    vaud_bytes_left = rd32(hdr + 12);
-    vaud_bytes_played = 0;
-    vaud_fd = fd;
+    uint32_t rate = rd32(hdr + 4), bytes = rd32(hdr + 12);
+    /* pad one full silence buffer past the end: vaud_cb's tail request can ask for up to sizeof(silence) bytes
+     * starting at vaud_pos == bytes, and that read must land in owned memory even though it is then overwritten. */
+    uint8_t *buf = (uint8_t *)memalign(32, (size_t)bytes + sizeof silence);
+    if (!buf || fs_read(fd, buf, bytes) != (ssize_t)bytes) { free(buf); fs_close(fd); return false; }
+    fs_close(fd);
+    vaud_data = buf; vaud_bytes_total = bytes; vaud_pos = 0;
+    vaud_rate = rate; vaud_bytes_played = 0;
     if (vaud_h == SND_STREAM_INVALID) vaud_h = snd_stream_alloc(vaud_cb, STREAM_BUF);
-    if (vaud_h == SND_STREAM_INVALID) { fs_close(fd); vaud_fd = -1; return false; }
+    if (vaud_h == SND_STREAM_INVALID) { free(buf); vaud_data = NULL; return false; }
     snd_stream_start_adpcm(vaud_h, vaud_rate, 0);
     snd_stream_volume(vaud_h, 204);   /* the core's voice bus level (0.8), same as the old dcfmv path used */
     return true;
@@ -377,7 +392,7 @@ bool aud_video_audio_open(const char *path)
 void aud_video_audio_close(void)
 {
     if (vaud_h != SND_STREAM_INVALID) snd_stream_stop(vaud_h);
-    if (vaud_fd >= 0) { fs_close(vaud_fd); vaud_fd = -1; }
+    free(vaud_data); vaud_data = NULL;
 }
 uint64_t aud_video_audio_played_bytes(void) { return vaud_bytes_played; }
 uint32_t aud_video_audio_rate(void) { return vaud_rate; }
@@ -391,7 +406,7 @@ void aud_update(void)
         if (strm[i].draining && now >= strm[i].end_ms) { snd_stream_stop(strm[i].h); strm[i].active = false; strm[i].smp = NULL; continue; }
         snd_stream_poll(strm[i].h);
     }
-    if (vaud_fd >= 0) snd_stream_poll(vaud_h);
+    if (vaud_data) snd_stream_poll(vaud_h);
     apply_music_vol();
 }
 

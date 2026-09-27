@@ -24,8 +24,8 @@ DEFS    := -DPLAT_DREAMCAST -DPLAT_LOW_MEMORY -DPLAT_BAKED_ASSETS -DZAMV_USE_SH4
 # 640x480/832x480 + stretch/wide screen modes (see plat_dc.c screen_mode). Used to stay behind this define because
 # 640x480/832x480 dropped to 30 fps on real hardware: newer GCC's loop unrolling collides with its LRA register
 # allocator in tight per-vertex transform loops (the same regression sh4zam's own "Bruce's Balls" example hit,
-# https://github.com/gyrovorbis/sh4zam/issues/69 - fixed there by turning unrolling off for that loop). -fno-unroll-loops
-# below is the same fix applied to the whole translation unit, so the hires modes are safe to ship now.
+# https://github.com/gyrovorbis/sh4zam/issues/69 - fixed there by turning unrolling off for that loop). render_pvr.o's
+# own -fno-unroll-loops override below is the same fix, so the hires modes are safe to ship now.
 DEFS    += -DDC_HIRES_MODES
 # KOS, kos-ports and the game must all use one SH4 float ABI: environ.sh sets
 # KOS_SH4_PRECISION=-m4-single-only (32-bit double). Mixing it with -m4-single links the wrong
@@ -33,13 +33,17 @@ DEFS    += -DDC_HIRES_MODES
 ifneq ($(KOS_SH4_PRECISION),-m4-single-only)
 $(error KOS_SH4_PRECISION is '$(KOS_SH4_PRECISION)'; set it to -m4-single-only in environ.sh and rebuild KOS + kos-ports)
 endif
-# KOS_CFLAGS brings -O3 -ffast-math; the game keeps IEEE infinities out of fast-math's way. -fno-unroll-loops: see the
-# DC_HIRES_MODES comment above - sh4zam issue #69's GCC/LRA regression, worked around the same way upstream did.
-CFLAGS  := -std=gnu11 -Isrc -Ithird_party/zamv $(DEFS) -MMD -MP -fno-finite-math-only -fno-unroll-loops -Wno-unused-parameter -Wno-misleading-indentation -Wno-format
+# KOS_CFLAGS brings -O3 -ffast-math; the game keeps IEEE infinities out of fast-math's way.
+CFLAGS  := -std=gnu11 -Isrc -Ithird_party/zamv $(DEFS) -MMD -MP -fno-finite-math-only -Wno-unused-parameter -Wno-misleading-indentation -Wno-format
 # ZAMV5's whole contract is bit-exact agreement with its scalar IEEE round-to-nearest/even oracle; KOS_CFLAGS'
 # -ffast-math/-ffp-contract=fast would break that, so turn them back off (after KOS_CFLAGS is already on the
 # command line, hence the plain += above, not a reorder) for the vendored codec's own translation units only.
 $(OBJDIR)/zamv/%.o: CFLAGS += -fno-fast-math -ffp-contract=off -fno-strict-aliasing -Wno-unused-function
+# render_pvr.c is the one translation unit with the sh4zam#69 FTRV/LRA per-vertex loops (draw_tex, rdc_poly's
+# Sutherland-Hodgman clip, r_tex_batch): keep -O3's unrolling off there only, instead of the whole build - the
+# ZAMV5 decoder's own hot loops (qpel MC, residual/bitstream parsing) are a different shape (small fixed-trip-count
+# loops, no resident-XMTRX inline asm) and get real throughput back from GCC's normal unrolling.
+$(OBJDIR)/platform/dreamcast/render_pvr.o: CFLAGS += -fno-unroll-loops
 LIBS    := -lADX -lsh4zam -lm -Wl,--wrap=snd_stream_shutdown -Wl,--wrap=snd_stream_start -Wl,--wrap=snd_stream_poll   # see aud_dc.c
 DATA    ?= SaberRider/data
 
