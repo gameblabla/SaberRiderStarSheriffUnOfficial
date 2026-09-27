@@ -21,7 +21,9 @@ static void fill(Ren *r, int sw, int sh, uint8_t R, uint8_t G, uint8_t B, uint8_
     r_set_draw_color(r, R, G, B, A);
     RFRect q = { 0, 0, r_int(sw), r_int(sh) }; r_fill_rect(r, &q);
 }
-static bool confirm(const Input *in) { return btn_pressed(in, BTN_PAUSE) || btn_pressed(in, BTN_JUMP) || btn_pressed(in, BTN_SHOOT); }
+/* START or any face button: the power button too (A on a Saturn pad, the button players reach for first; it took
+ * nothing on CONTINUE?) */
+static bool confirm(const Input *in) { return btn_pressed(in, BTN_PAUSE) || btn_pressed(in, BTN_JUMP) || btn_pressed(in, BTN_SHOOT) || btn_pressed(in, BTN_POWER); }
 static bool action(const Input *in) { return btn_pressed(in, BTN_JUMP) || btn_pressed(in, BTN_SHOOT); }
 static uint8_t clamp255(real v) { return v <= 0 ? 0 : v >= R(255) ? 255 : (uint8_t)r_trunc(v); }
 /* the menu's universal easing: min(1, 2 sin(pi t / period)) — 0 at both ends of the period, 1 in the middle */
