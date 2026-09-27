@@ -702,9 +702,10 @@ void r_point(Ren *r, float x, float y) { RFRect q = { floorf(x), floorf(y), 1, 1
 void r_line(Ren *r, float x0, float y0, float x1, float y1)
 {
     (void)r;
-    float dx = x1 - x0, dy = y1 - y0, len = sqrtf(dx * dx + dy * dy);
-    if (len < 0.01f) { r_point(r, x0, y0); return; }
-    dx /= len; dy /= len;
+    shz_vec2_t d = shz_vec2_init(x1 - x0, y1 - y0);
+    if (shz_vec2_magnitude_sqr(d) < 0.0001f) { r_point(r, x0, y0); return; }
+    d = shz_vec2_normalize(d);
+    float dx = d.x, dy = d.y;
     /* through the pixel centres, half a pixel past each end, one pixel wide */
     float ax = x0 + 0.5f - dx * 0.5f, ay = y0 + 0.5f - dy * 0.5f, bx = x1 + 0.5f + dx * 0.5f, by = y1 + 0.5f + dy * 0.5f;
     float nx = -dy * 0.5f, ny = dx * 0.5f;
@@ -731,8 +732,9 @@ static void draw_tex(RTex *t, const RFRect *src, const RFRect *dst, double angle
     if (s.w <= 0 || s.h <= 0) return;
     uint32_t argb = (uint32_t)t->a << 24 | (uint32_t)t->r << 16 | (uint32_t)t->g << 8 | t->b;
     float cx = center ? center->x : d.w * 0.5f, cy = center ? center->y : d.h * 0.5f;
-    float ca = 1, sa = 0;
-    if (angle != 0) { shz_sincos_t sc = shz_sincosf((float)(angle * (3.14159265358979 / 180.0))); ca = sc.cos; sa = sc.sin; }
+    /* XMTRX holds the rotation for every page of this sprite (FTRV per vertex beats scalar sin/cos muls, and nothing
+     * else here uses the matrix register bank) */
+    if (angle != 0) shz_xmtrx_init_rotation_z((float)(angle * (3.14159265358979 / 180.0)));
     bool fh = flip & R_FLIP_H, fv = flip & R_FLIP_V;
     for (int i = 0; i < t->npx * t->npy; i++) {
         Page *pg = &t->pages[i];
@@ -756,9 +758,8 @@ static void draw_tex(RTex *t, const RFRect *src, const RFRect *dst, double angle
         float lx[4] = { lx0, lx1, lx1, lx0 }, ly[4] = { ly0, ly0, ly1, ly1 }, uu[4] = { u0, u1, u1, u0 }, vv[4] = { v0, v0, v1, v1 };
         RdcVert v[4];
         for (int k = 0; k < 4; k++) {
-            float x = lx[k], y = ly[k];
-            if (angle != 0) { float rx = x - cx, ry = y - cy; x = cx + rx * ca - ry * sa; y = cy + rx * sa + ry * ca; }
-            v[k] = (RdcVert){ SX(d.x + x), SY(d.y + y), 1, uu[k], vv[k], argb, 0 };
+            shz_vec2_t p = shz_xmtrx_transform_vec2(shz_vec2_init(lx[k] - cx, ly[k] - cy));
+            v[k] = (RdcVert){ SX(d.x + cx + p.x), SY(d.y + cy + p.y), 1, uu[k], vv[k], argb, 0 };
         }
         rdc_header(page_hdr(t, pg));
         rdc_poly(v, 4);

@@ -44,10 +44,9 @@ int plat_default_ratio(void) { return -1; }   /* original 4:3 (320x240, every pi
  * so it waits for the end of a frame: dc_video_update. */
 enum { MODE_640, MODE_832, MODE_320 };
 static const struct { int w, h; } MODE_SIZE[3] = { { 640, 480 }, { 832, 480 }, { 320, 240 } };
-/* Temporary WIP: only 320x240 is offered. 640x480 suffers performance issues and needs fixing first;
- * the 640x480 / 832x480 / stretch / wide modes stay behind DC_HIRES_MODES (-DDC_HIRES_MODES, see
- * Makefile.dc) until then. */
-/* the SCREEN choices for the cable: VGA 640x480 / 832x480 / 320x240, anything else 640x480 / 320x240 */
+/* the SCREEN choices for the cable: VGA 640x480 / 832x480 / 320x240, anything else 640x480 / 320x240
+ * (DC_HIRES_MODES, Makefile.dc: off only if a toolchain still needs the -fno-unroll-loops workaround disabled for
+ * some other reason - see the Makefile.dc comment on the sh4zam #69 GCC/LRA regression) */
 static int screen_mode(int screen)
 {
 #ifndef DC_HIRES_MODES
@@ -104,7 +103,7 @@ static void set_mode(int mode)
 void dc_video_init(void)
 {
     boot_sync_width = PVR_GET(REG_SYNC_WIDTH); boot_hpos_irq = PVR_GET(PVR_HPOS_IRQ);
-    set_mode(MODE_320);   /* Temporary WIP: 320x240 only (see screen_mode) */
+    set_mode(screen_mode(0));
     pvr_init(&PVR_PARAMS);
     pvr_set_bg_color(0, 0, 0);
 }
