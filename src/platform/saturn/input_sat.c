@@ -1,4 +1,4 @@
-/* the pad in port 1 (plan 10): D-pad moves, B jump, C shoot, A power attack (Y / Z / X: the same on the top row),
+/* the pad in port 1, else port 2 (plan 10): D-pad moves, B jump, C shoot, A power attack (Y / Z / X: the same on the top row),
  * L / R aim, Start pause */
 #include "../../input.h"
 #include "sat_internal.h"
@@ -7,7 +7,16 @@
 /* libyaul: `pressed` is the buttons down now, `held` the ones that went down since the last read */
 static smpc_peripheral_digital_t pad;
 
-static void read_pad(void) { smpc_peripheral_digital_port(1, &pad); }
+/* Only peripherals whose first two data bytes are the Saturn pad buttons count: the digital pad, the racing wheel and
+ * the 3D pad. A keyboard or mouse in port 1 would otherwise read as random buttons; the pad in port 2 is used then. */
+static void read_pad(void)
+{
+    for (uint8_t port = 1; port <= 2; port++) {
+        smpc_peripheral_digital_port(port, &pad);
+        if (pad.connected && (pad.type == ID_DIGITAL || pad.type == ID_RACING || pad.type == ID_ANALOG)) return;
+    }
+    pad.connected = 0;
+}
 
 void plat_input_poll(bool down[BTN_COUNT])
 {

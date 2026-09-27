@@ -147,6 +147,9 @@ def main() -> int:
     ap.add_argument('--cpu', type=int, default=0)
     ap.add_argument('--callers', action='store_true', help='with --profile: which functions call the soft-float routines '
                     '(and floorf & co.) how often, from the edge coverage (-> <profile>.callers.tsv)')
+    ap.add_argument('--device', action='append', default=[], metavar='PORT:NAME',
+                    help='plug a device into a port before --state-in (e.g. 0:jpkeyboard, 0:3dpad, 1:mouse); a user '
+                         'save state only loads with the devices it was saved with')
     ap.add_argument('--state-in', type=Path)
     ap.add_argument('--state-out', type=Path)
     ap.add_argument('--regs', action='store_true', help='at the end: both SH-2s\' PC / PR (with function names) and registers')
@@ -167,6 +170,9 @@ def main() -> int:
         if args.firmware:
             emu.call('set', 'filesys.path_firmware', args.firmware.resolve())
         emu.call('load', args.cue.resolve(), 'ss')
+        for dev in args.device:
+            port, name = dev.split(':', 1)
+            emu.call('device', port, name)
         if args.state_in:
             emu.call('load_state', args.state_in.resolve())
         ring = LogRing(emu, log_addr) if log_addr else None
