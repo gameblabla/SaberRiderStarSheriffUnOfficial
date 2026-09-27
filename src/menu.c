@@ -240,7 +240,6 @@ void menu_update(Menu *m, const Input *in, real dt, int sw, Ren *r)
             break;
         case OPT_PLAYER: lives_caps(m->difficulty, &maxl, &maxc); m->lives += dir; if (m->lives < 0) m->lives = 0; if (m->lives > maxl) m->lives = maxl; break;
         case OPT_CONTINUE: lives_caps(m->difficulty, &maxl, &maxc); m->continues += dir; if (m->continues < 0) m->continues = 0; if (m->continues > maxc) m->continues = maxc; break;
-#ifndef PLAT_DREAMCAST
         case OPT_SCREEN:
             if (dir) { int n = plat_screen_modes(); m->screen = (m->screen + n + dir) % n; m->apply_screen_mode = true; if (plat_screen_43_only(m->screen)) m->ratio = RATIO_43; }
             break;
@@ -249,11 +248,12 @@ void menu_update(Menu *m, const Input *in, real dt, int sw, Ren *r)
             if (dir) { m->ratio = m->ratio == RATIO_WIDE ? RATIO_43 : RATIO_WIDE; m->apply_screen_mode = true; }   /* 320x224 <-> 352x224 */
             break;
 #endif
+#ifdef PLAT_DREAMCAST
+            if (dir && !plat_screen_43_only(m->screen)) { m->ratio = m->ratio == RATIO_WIDE ? RATIO_43 : RATIO_WIDE; m->apply_screen_mode = true; }   /* ORIGINAL <-> WIDE, no STRETCH */
+            break;
+#endif
             if (dir && !plat_screen_43_only(m->screen)) { m->ratio = m->ratio == RATIO_WIDE ? (dir > 0 ? RATIO_43 : RATIO_STRETCH) : m->ratio == RATIO_43 ? (dir > 0 ? RATIO_STRETCH : RATIO_WIDE) : (dir > 0 ? RATIO_WIDE : RATIO_43); m->apply_screen_mode = true; }
             break;
-#else
-        /* SCREEN / RATIO are hidden on Dreamcast for now (320x240 + original 4:3 forced) */
-#endif
         case OPT_FILTER: if (dir) m->filter = (m->filter + FILTER_COUNT + dir) % FILTER_COUNT; break;
         case OPT_MUSIC:
             if (dir || confirm(in)) {
@@ -404,10 +404,13 @@ static void draw_options(Menu *m, Ren *r, int sw, int sh)
 #ifdef PLAT_SATURN
     rows[4][0] = "SCREEN"; rows[4][1] = m->ratio == RATIO_WIDE ? "352x224" : "320x224";
 #endif
+#ifdef PLAT_DREAMCAST
+    rows[4][1] = m->ratio == RATIO_WIDE ? "WIDE" : "ORIGINAL";
+#endif
     int dy = plat_bind_supported() ? 0x0e : 0x10;   /* an eighth row (CONTROLS) fits above BACKER CREDITS at 14 px */
     int vi = 0;
     for (int i = 0; i < 7; i++) {
-        if (!opt_selectable(OPT_LEVEL + i)) continue;   /* hidden options leave no row (Dreamcast SCREEN/RATIO) */
+        if (!opt_selectable(OPT_LEVEL + i)) continue;   /* hidden options leave no row (Saturn SCREEN, CONTROLS) */
         hilite(m->sel == OPT_LEVEL + i, &R, &G, &B);
         font_draw(f, rows[i][0], r_int(lx), r_int(y0 + 0xd8 + vi * dy), R, G, B);
         font_draw(f, rows[i][1], r_int(vx), r_int(y0 + 0xd8 + vi * dy), 255, 255, 255);

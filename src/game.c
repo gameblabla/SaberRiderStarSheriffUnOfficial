@@ -27,7 +27,7 @@ bool game_init(Game *g, Ren *ren, int sw, int sh, int start_level)
     if (plat_getenv("SABER_LIVES")) g->menu.lives = atoi(plat_getenv("SABER_LIVES"));   /* debug: starting lives */
     g->menu.ratio = plat_default_ratio();
     if (plat_getenv("SABER_RATIO")) g->menu.ratio = atoi(plat_getenv("SABER_RATIO"));   /* debug: start in a screen ratio (0 wide, -1 4:3, 1 stretch) */
-    if (plat_getenv("SABER_SCREEN")) g->menu.screen = atoi(plat_getenv("SABER_SCREEN"));   /* debug: start on a SCREEN choice (Dreamcast: 320x240 only for now) */
+    if (plat_getenv("SABER_SCREEN")) g->menu.screen = atoi(plat_getenv("SABER_SCREEN"));   /* debug: start on a SCREEN choice (Dreamcast 0: 640x480, VGA 1: 832x480, 2 (1 off VGA): 320x240) */
     if (plat_screen_43_only(g->menu.screen)) g->menu.ratio = RATIO_43;
     if (g->menu.ratio != RATIO_WIDE || g->menu.screen || plat_wide_width(0) != sw) {   /* (the Saturn's WIDE: 352, not 426) */
         g->sw = g->menu.ratio == RATIO_WIDE ? plat_wide_width(g->menu.screen) : 320;
