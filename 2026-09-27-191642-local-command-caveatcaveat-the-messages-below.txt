@@ -1,0 +1,1350 @@
+ ▐▛███▛█   Claude Code v2.1.283
+▝▜██████▀  Opus 5.5 · Claude Pro
+ ▝▝   ▝▝   ~/Documents/DEV/Saber_Rider
+
+
+❯ /clear                                                                        
+
+❯ /model                                                                        
+  ⎿  Set model to Opus 5.5 and saved as your default for new sessions
+
+❯ /effort                                                                       
+  ⎿  Set effort level to high (saved as your default for new sessions):
+     Comprehensive implementation with extensive testing and documentation ·
+     burns fastest — medium handles most tasks
+
+❯  flycast build/dc/saber_rider.cdi and the video still sucks and chokes/visual 
+  glitches in spite of numerous attempts before to try to fix it.               
+  /home/anonymous/Documents/DEV/Saber_Rider/game/2026-09-27-183358-resume-from- 
+  last-git-commit-work-for-dreamcast-g.txt.                                     
+
+  Read 3 files, ran 3 shell commands, recalled 1 memory (ctrl+o to expand)
+
+● I'm reviewing the code from the last session and locating the headless Flycast
+  harness it built at /tmp/flycast-auto-build/flycast, so I can reproduce the
+  video problems myself before making any changes.
+
+  Read 1 file, ran 4 shell commands (ctrl+o to expand)
+
+● I've traced the issue to the video clock: vaud_bytes_played only updates when
+  KOS refills the audio buffer (~every 370ms) and does so before those bytes
+  actually play, causing bursts of ~9 decoded frames followed by freezes. I'm
+  now looking into how KOS tracks the true playback position so the clock can
+  advance smoothly.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+● The clock bug is confirmed from the code. Next I'm checking the renderer for
+  anything that can collide with the YUV converter uploads, which could explain
+  the visual glitches.
+
+  Searched for 1 pattern, listed 1 directory, ran 4 shell commands (ctrl+o to expand)
+
+● I'm setting up my own headless Flycast capture: an isolated config, replay
+  input, raw frame dump and the serial log, so I can measure the stutter and
+  look at the glitches myself.
+
+  Searched for 1 pattern, listed 2 directories, ran 1 shell command (ctrl+o to expand)
+
+● Now I'll add a small debug log (enabled by SABER_VIDLOG in saber.env) that
+  records, per video frame, the time, the clock's target and the decode cost, so
+  I can measure the pacing directly.
+
+  Searched for 1 pattern, ran 3 shell commands (ctrl+o to expand)
+
+● Now the harness script:
+
+  Made 1 scratchpad edit +43, ran 1 shell command (ctrl+o to expand)
+
+● The A press was cancelled out by a no-op event at the same timestamp. Fixing
+  the replay generator:
+
+  Read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+● I noticed tile 4 has a torn frame with a band from a different picture at the
+  top. The skip press hasn't appeared in the log yet, so I'll run longer to let
+  it flush.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● I've confirmed two issues: the clock steps in 371ms jumps causing bursty
+  playback, and decode times average 67ms against a 40ms budget (mostly disc
+  read waits, not decode itself), limiting playback to ~13.6fps. Checking
+  Flycast's GD-ROM read speed next.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Flycast emulates GD-ROM DMA at 1.8 MB/s, which is plenty for this stream (~265
+  KB/s). So the slow reads probably come from how KOS performs them. Checking
+  fs_iso9660:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Found it: KOS's iso_read only uses fast DMA when the buffer is 32-byte
+  aligned, but the prefetch buffers come from plain malloc, forcing slow
+  single-sector reads instead. Checking now if the chunk reader's buffer has the
+  same alignment issue.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The chunk reader buffer uses plain malloc, so reads have always taken the slow
+  per-sector path — explaining the stutter before and after the prefetch
+  thread. I'll examine the torn frames closely to understand the visual glitch
+  before fixing it.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● The capture reveals horizontal tearing where the top and bottom of a frame
+  come from different pictures. I'll examine Flycast's YUV converter
+  implementation to determine if this is a genuine hardware race condition or an
+  emulator artifact.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Found the bug: writing to STARTRENDER resets the YUV converter's pointer, so
+  if a render triggers mid-decode, the remaining frame data overwrites from the
+  top of the texture, causing the torn band. I'll now check when KOS actually
+  writes STARTRENDER.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● I confirmed that the safe window for YUV uploads is between pvr_wait_ready()
+  and pvr_scene_begin(), since STARTRENDER can otherwise fire mid-decode. Now
+  I'll implement the fix: move decode/upload into a rdc_frame_begin() hook,
+  switch disc reads to aligned streaming DMA with semaphores, and derive the
+  video clock from stream start time capped by queued audio instead of refill
+  counts.
+
+  Ran 1 shell command (ctrl+o to expand)
+● Now rewriting video_dcmv.c with the three changes:
+
+  Read 1 file (ctrl+o to expand)
+
+● Write(game/src/platform/dreamcast/video_dcmv.c)
+  ⎿  Added 79 lines, removed 49 lines
+       3   * (PVR_TA_YUV_CONV) - no VQ texture, no runtime LZ unpack, one
+           Store Queue gather per macroblock row. The decoder
+       4   * itself has no notion of audio: a video's soundtrack is a sep
+          arate .vsnd sidecar (mono AICA ADPCM, the same shape
+       5   * as a snd.pck sample block) streamed by aud_dc.c's own dedica
+          ted channel, and playback paces its frames against
+       6 - * that stream's played-byte count, falling back to a wall-cloc
+         -k accumulator for silent clips (the power-attack               
+       7 - * animations). Pack videos are /cd/video/<ID>.zamv(+.vsnd), ou
+         -r clips the same path as the clip with those                   
+       8 - * extensions. */                                              
+       6 + * that stream's clock, falling back to a wall-clock accumulato
+         +r for silent clips (the power-attack animations).              
+       7 + * Pack videos are /cd/video/<ID>.zamv(+.vsnd), our clips the s
+         +ame path as the clip with those extensions.                    
+       8 + *                                                             
+       9 + * video_update() only works out how many frames are due; the d
+         +ecode itself (and so the YUV converter feed) runs from         
+      10 + * rdc_frame_begin(), right after pvr_wait_ready(). A render st
+         +art (the STARTRENDER write KOS makes from its list-done /      
+      11 + * vblank interrupts) resets the converter to the top-left of i
+         +ts texture: one landing in the middle of a frame's             
+      12 + * macroblocks wrote the rest of them over the top rows (a torn
+         + band at the top of the picture). Once pvr_wait_ready()        
+      13 + * returns, the previous scene's render has been started and th
+         +e next one can't start before this frame's                     
+      14 + * pvr_scene_finish(), so nothing resets the converter under us
+         + there.                                                        
+      15 + *                                                             
+      16 + * SABER_VIDLOG=1 (saber.env) keeps each decode's timing and pr
+         +ints it when the video closes. */                              
+      17  #include "../../video.h"
+      18  #include "pvr_internal.h"
+      19  #include "../plat.h"
+     ...
+      28  /* aud_dc.c: the video's own dedicated AICA ADPCM channel (see 
+          its top-of-file comment) */
+      29  bool     aud_video_audio_open(const char *path);
+      30  void     aud_video_audio_close(void);
+      23 -uint64_t aud_video_audio_played_bytes(void);                   
+      24 -uint32_t aud_video_audio_rate(void);                           
+      31 +uint32_t aud_video_audio_ms(void);                             
+      32  void     aud_music_settle(void);   /* the music worker has carr
+          ied out every request (a stream about to take its own) */
+      33  
+      27 -/* .zamv chunk fetches used to be a blocking fs_read() called s
+         -traight from decode_one() (itself called from                  
+      28 - * video_update() during app_update(), on the main thread) - so
+         - every ~64 KB refill stalled the whole game loop               
+      29 - * for a GD-ROM read, which is exactly the periodic pause/stutt
+         -er seen on every single video (intro, briefing,                
+      30 - * power attacks - anything that plays one). A small thread now
+         - keeps a few chunk-sized slots filled ahead of the             
+      31 - * decoder's needs; prefetch_read_cb (the chunk reader's source
+         -) is then just a RAM copy unless playback has                  
+      32 - * genuinely caught up with the drive. */                      
+      34 +/* .zamv chunks come from a small read-ahead thread, so the gam
+         +e loop never waits for the drive. Its buffers must be          
+      35 + * 32-byte aligned: KOS's iso9660 only streams a read straight 
+         +into the caller's buffer by DMA when it is, and                
+      36 + * otherwise goes one 2 KB sector at a time through its cache -
+         + a drive command per sector, which is what made a              
+      37 + * 64 KB refill take up to half a second and the videos stall. 
+         +*/                                                             
+      38  #define PF_SLOTS 4
+      39  #define PF_CHUNK_BYTES (64 * 1024)
+      40  
+     ...
+      42      file_t fd;
+      43      uint8_t *buf[PF_SLOTS];
+      44      size_t got[PF_SLOTS];
+      40 -    atomic_bool filled[PF_SLOTS];                              
+      45 +    semaphore_t free_slots, full_slots;                        
+      46      int next_fill, next_drain;   /* fill: worker-owned; drain: 
+          consumer-owned */
+      47      kthread_t *thd;
+      48      atomic_bool quit;
+     ...
+      51  static void *prefetch_worker(void *arg)
+      52  {
+      53      Prefetch *p = arg;
+      49 -    while (!atomic_load(&p->quit)) {                           
+      54 +    for (;;) {                                                 
+      55 +        sem_wait(&p->free_slots);                              
+      56 +        if (atomic_load(&p->quit)) break;                      
+      57          int i = p->next_fill;
+      51 -        if (atomic_load(&p->filled[i])) { thd_pass(); continue;
+         - }   /* the consumer hasn't drained this slot yet */           
+      58          ssize_t n = fs_read(p->fd, p->buf[i], PF_CHUNK_BYTES);
+      53 -        p->got[i] = n > 0 ? (size_t)n : 0;                     
+      54 -        atomic_store(&p->filled[i], true);                     
+      59 +        p->got[i] = n > 0 ? (size_t)n : 0;   /* 0: end of file 
+         +(or a read error), which the decoder takes as its end */       
+      60          p->next_fill = (i + 1) % PF_SLOTS;
+      56 -        if (n <= 0) thd_sleep(50);   /* EOF/error: stop hammeri
+         -ng the drive once every slot has seen it */                    
+      61 +        sem_signal(&p->full_slots);                            
+      62      }
+      63      return NULL;
+      64  }
+     ...
+      68      (void)want;   /* zamv_chunk_reader always asks for exactly 
+          its own chunk_bytes, PF_CHUNK_BYTES here */
+      69      Prefetch *p = user;
+      70      int i = p->next_drain;
+      66 -    while (!atomic_load(&p->filled[i])) thd_pass();   /* the wo
+         -rker should already be ahead of us */                          
+      71 +    sem_wait(&p->full_slots);                                  
+      72      memcpy(dst, p->buf[i], p->got[i]);
+      73      if (got) *got = p->got[i];
+      69 -    atomic_store(&p->filled[i], false);                        
+      74      p->next_drain = (i + 1) % PF_SLOTS;
+      75 +    sem_signal(&p->free_slots);                                
+      76      return 0;
+      77  }
+      78  
+      79  static void prefetch_stop(Prefetch *p)
+      80  {
+      76 -    if (p->thd) { atomic_store(&p->quit, true); thd_join(p->thd
+         -, NULL); p->thd = NULL; }                                      
+      81 +    if (p->thd) { atomic_store(&p->quit, true); sem_signal(&p->
+         +free_slots); thd_join(p->thd, NULL); p->thd = NULL; }          
+      82 +    sem_destroy(&p->free_slots); sem_destroy(&p->full_slots);  
+      83      for (int i = 0; i < PF_SLOTS; i++) { free(p->buf[i]); p->bu
+          f[i] = NULL; }
+      84  }
+      85  
+     ...
+      87  {
+      88      memset(p, 0, sizeof *p);
+      89      p->fd = fd;
+      84 -    for (int i = 0; i < PF_SLOTS; i++) if (!(p->buf[i] = malloc
+         -(PF_CHUNK_BYTES))) { prefetch_stop(p); return false; }         
+      90 +    sem_init(&p->free_slots, PF_SLOTS); sem_init(&p->full_slots
+         +, 0);                                                          
+      91 +    for (int i = 0; i < PF_SLOTS; i++) if (!(p->buf[i] = memali
+         +gn(32, PF_CHUNK_BYTES))) { prefetch_stop(p); return false; }   
+      92      if (!(p->thd = thd_create(false, prefetch_worker, p))) { pr
+          efetch_stop(p); return false; }
+      93      return true;
+      94  }
+     ...
+      100      zamv_decoder_t *dec;
+      101      zamv_file_header_t hdr;
+      102      zamv_dc_row_uploader_t up;
+       96 -    /* Double-buffered: the ZAMV5 decoder writes straight into
+          - PVR texture memory (no separate host-side                    
+       97 -     * decode buffer to DMA later), and video_update() runs du
+          -ring app_update(), before rdc_frame_begin()'s                 
+       98 -     * pvr_wait_ready() - so a single texture would race the P
+          -owerVR's tile render pass, which may still be                 
+       99 -     * sampling the previous frame from that same VRAM when th
+          -e next frame's SQ upload starts (visible as                   
+      100 -     * sporadic top-of-frame corruption). tex[1-cur] is always
+          - at least one full frame past its last draw                   
+      101 -     * before decode_one() writes into it again. */           
+      103 +    /* Double-buffered: the decoder writes straight into PVR t
+          +exture memory, and the scene before this one (whose           
+      104 +     * render pvr_wait_ready() has just started) may still be 
+          +reading tex[cur]. */                                          
+      105      pvr_ptr_t tex[2]; size_t tex_bytes; int tw, th, cur;
+      106      uint32_t fmt;
+      107      pvr_poly_hdr_t phdr __attribute__((aligned(32)));
+      108      float u0, v0, u1, v1;
+      109      int w, h;                 /* display size (may differ from
+            the encoded/padded frame size) */
+      107 -    int frame_index;                                          
+      110 +    int frame_index;          /* frames decoded */            
+      111 +    int frames_due;           /* frames the clock says should 
+          +be up by now (video_update) */                                
+      112      bool finished, has_audio, started;
+      113      float clock_ms;           /* the wall-clock fallback for v
+           ideos with no soundtrack */
+      114      /* SABER_VIDLOG: per-decode timing kept in RAM (a serial p
+           rint per frame would itself stall), dumped at close */
+      111 -    struct { uint32_t t_ms, target_ms, dec_us; } *log; int nlo
+          -g; uint64_t open_us;                                          
+      115 +    struct { uint32_t t_ms, due, dec_us; } *log; int nlog; uin
+          +t64_t open_us;                                                
+      116  };
+      117  #define VIDLOG_MAX 4096
+      118  
+      119 +/* open videos, for rdc_frame_begin's decode pass (a menu can 
+          +hold one while a power clip plays) */                         
+      120 +#define MAX_OPEN 4                                            
+      121 +static Video *open_videos[MAX_OPEN];                          
+      122 +                                                              
+      123  static int pot(int n) { int p = 8; while (p < n) p <<= 1; retu
+           rn p; }
+      124  
+      125  static bool setup_texture(Video *v)
+     ...
+      147  
+      148  static Video *open_zamv(const char *path, const char *audio_pa
+           th)
+      149  {
+      150 +    int slot = 0;                                             
+      151 +    while (slot < MAX_OPEN && open_videos[slot]) slot++;      
+      152 +    if (slot == MAX_OPEN) { printf("video: %s: too many open v
+          +ideos\n", path); return NULL; }                               
+      153      file_t fd = fs_open(path, O_RDONLY);
+      154      if (fd < 0) { printf("video: %s missing\n", path); return 
+           NULL; }
+      155      Video *v = memalign(32, sizeof *v);
+     ...
+      177          aud_music_settle();   /* a music stop still under way 
+           must let go of its stream first */
+      178          v->has_audio = aud_video_audio_open(audio_path);
+      179      }
+      180 +    open_videos[slot] = v;                                    
+      181      return v;
+      182  fail:
+      183      prefetch_stop(&v->pf);
+     ...
+      217  
+      218  static bool decode_one(Video *v)
+      219  {
+      208 -    int next = 1 - v->cur;   /* not read by the GPU since at l
+          -east the frame before last: see the Video comment */          
+      209 -    if (zamv_dc_configure_yuv420(v->tex[next], v->hdr.width, v
+          -->hdr.height) < 0) return false;                              
+      210 -    if (zamv_dc_row_uploader_begin(&v->up) < 0) return false; 
+      220 +    int next = 1 - v->cur;                                    
+      221 +    if (zamv_dc_configure_yuv420(v->tex[next], v->hdr.width, v
+          +->hdr.height) < 0) { v->finished = true; return false; }      
+      222 +    if (zamv_dc_row_uploader_begin(&v->up) < 0) { v->finished 
+          += true; return false; }                                       
+      223      int dr = zamv_decoder_decode_cb(v->dec, zamv_chunk_reader_
+           read, v->chunk, NULL);
+      224      zamv_dc_row_uploader_end(&v->up);
+      225      if (dr <= 0) { v->finished = true; return false; }
+     ...
+      229      return true;
+      230  }
+      231  
+      232 +/* rdc_frame_begin, between pvr_wait_ready() and the new scene
+          +: see the top of the file. One frame per video per            
+      233 + * display frame keeps the frame time bounded; a video that fe
+          +ll behind (a load hitch) catches up at up to two. */          
+      234 +void video_dc_decode_due(void)                                
+      235 +{                                                             
+      236 +    for (int i = 0; i < MAX_OPEN; i++) {                      
+      237 +        Video *v = open_videos[i];                            
+      238 +        if (!v || v->finished) continue;                      
+      239 +        for (int n = 0; n < 2 && v->frame_index < v->frames_du
+          +e && !v->finished; n++) {                                     
+      240 +            if (n && v->frames_due - v->frame_index < 3) break
+          +;                                                             
+      241 +            uint64_t t0 = timer_us_gettime64();               
+      242 +            decode_one(v);                                    
+      243 +            if (v->log && v->nlog < VIDLOG_MAX)               
+      244 +                v->log[v->nlog++] = (typeof(*v->log)){ (uint32
+          +_t)((t0 - v->open_us) / 1000), (uint32_t)v->frames_due,       
+      245 +                                                        (uint3
+          +2_t)(timer_us_gettime64() - t0) };                            
+      246 +        }                                                     
+      247 +    }                                                         
+      248 +}                                                             
+      249 +                                                              
+      250  bool video_update(Video *v, float dt)
+      251  {
+      252      if (!v || v->finished) return false;
+      253      if (!v->started) { v->started = true; v->clock_ms = 0; }
+      224 -    float frame_ms = 1000.0f * (float)v->hdr.fps_den / (float)
+          -(v->hdr.fps_num ? v->hdr.fps_num : 1);                        
+      225 -    float target_ms;                                          
+      226 -    if (v->has_audio) {                                       
+      227 -        uint64_t rate = aud_video_audio_rate();               
+      228 -        target_ms = rate ? (float)(aud_video_audio_played_byte
+          -s() * 2000ull / rate) : 0;   /* 2 samples/ADPCM byte */       
+      229 -    } else {                                                  
+      230 -        v->clock_ms += dt * 1000.0f;                          
+      231 -        target_ms = v->clock_ms;                              
+      232 -    }                                                         
+      233 -    if (target_ms >= (float)(v->frame_index + 1) * frame_ms) {
+      234 -        uint64_t t0 = timer_us_gettime64();                   
+      235 -        decode_one(v);                                        
+      236 -        if (v->log && v->nlog < VIDLOG_MAX)                   
+      237 -            v->log[v->nlog++] = (typeof(*v->log)){ (uint32_t)(
+          -(t0 - v->open_us) / 1000), (uint32_t)target_ms, (uint32_t)(tim
+          -er_us_gettime64() - t0) };                                    
+      238 -    }                                                         
+      254 +    float t_ms;                                               
+      255 +    if (v->has_audio) t_ms = (float)aud_video_audio_ms();     
+      256 +    else { v->clock_ms += dt * 1000.0f; t_ms = v->clock_ms; } 
+      257 +    /* frame k (0-based) is up from k * frame time: the first 
+          +one right away */                                             
+      258 +    int due = (int)(t_ms * (float)v->hdr.fps_num / (1000.0f * 
+          +(float)(v->hdr.fps_den ? v->hdr.fps_den : 1))) + 1;           
+      259 +    if (v->hdr.frame_count && due > (int)v->hdr.frame_count) d
+          +ue = (int)v->hdr.frame_count;                                 
+      260 +    v->frames_due = due;                                      
+      261 +    /* every frame shown and the soundtrack's time for the las
+          +t one over: done (a decode error or an early end of           
+      262 +     * the stream sets finished in decode_one) */             
+      263 +    if (v->hdr.frame_count && v->frame_index >= (int)v->hdr.fr
+          +ame_count &&                                                  
+      264 +        t_ms * (float)v->hdr.fps_num >= 1000.0f * (float)v->hd
+          +r.frame_count * (float)(v->hdr.fps_den ? v->hdr.fps_den : 1)) 
+      265 +        v->finished = true;                                   
+      266      return !v->finished;
+      267  }
+      268  
+     ...
+      291  void video_close(Video *v)
+      292  {
+      293      if (!v) return;
+      294 +    for (int i = 0; i < MAX_OPEN; i++) if (open_videos[i] == v
+          +) open_videos[i] = NULL;                                      
+      295      if (v->log) {
+      268 -        printf("vidlog: %d frames (t_ms target_ms dec_us)\n", 
+          -v->nlog);                                                     
+      269 -        for (int i = 0; i < v->nlog; i++) printf("vidlog %d %l
+          -u %lu %lu\n", i, (unsigned long)v->log[i].t_ms, (unsigned long
+          -)v->log[i].target_ms, (unsigned long)v->log[i].dec_us);       
+      296 +        printf("vidlog: %d frames (t_ms due dec_us)\n", v->nlo
+          +g);                                                           
+      297 +        for (int i = 0; i < v->nlog; i++) printf("vidlog %d %l
+          +u %lu %lu\n", i, (unsigned long)v->log[i].t_ms, (unsigned long
+          +)v->log[i].due, (unsigned long)v->log[i].dec_us);             
+      298          free(v->log);
+      299      }
+      300      if (v->has_audio) aud_video_audio_close();
+     ...
+      303      if (v->chunk) zamv_chunk_reader_destroy(v->chunk);
+      304      fs_close(v->fd);
+      305      rdc_forget_header();
+      306 +    /* the scene rendering now may still sample either texture
+          + */                                                           
+      307 +    pvr_wait_render_done();                                   
+      308      rdc_vram_free(v->tex[0], v->tex_bytes);
+      309      rdc_vram_free(v->tex[1], v->tex_bytes);
+      310      free(v);
+
+● Now the audio clock in aud_dc.c:
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  Found 10 new diagnostic issues in 1 file (ctrl+o to expand)
+
+● Those diagnostics are clangd not knowing the KOS include paths; the real check
+  is the KOS build. Fixing two stale comment references, then building:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Build is clean. Running the same capture:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Frame rate is now a steady 25.0 fps with no more 200–480 ms stalls, but decode
+  time jumped from ~12 ms to a 30 ms average (67 ms max), likely because the
+  read-ahead thread is competing for CPU while KOS waits on the drive. I'll
+  check that next.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Decode cost tracks content complexity—around 11 ms for simple planet shots but
+  35–50 ms between seconds 4 and 24. I'll check how KOS handles stream DMA
+  waits to determine if this is genuine decode work or contention with the
+  reader thread.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Decode time scales roughly linearly with bitstream size (~7ms + 2ms/KB),
+  meaning the busy intro frames at 13-20KB cost 35-50ms each and are CPU-bound
+  in Flycast's SH4 timing—especially since the 3.4 Mbit/s encode target is very
+  high for 320×240 at 25fps. I'll check the encoder settings in build_disc.py
+  next.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Checking the new capture for tears before working on decode cost. I'll look at
+  the same intro section as before:
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● That section looks clean. I'll write a tear detector that scores each frame
+  for sharp full-width seams at macroblock-row boundaries, then compare the old
+  and new captures across the full run.
+
+  Read 2 files, ran 2 shell commands (ctrl+o to expand)
+
+● The title-logo zoom frames in the new run are false positives, while the base
+  run's flagged frames are genuine tears; since the detector also missed some
+  visible tears, I'll lower the threshold and re-compare using only the video
+  portion of each run.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The fix eliminates tearing entirely (0/1033 frames vs 7/257 in the baseline),
+  but busy scenes still show high CPU cost—about 50 SH4 cycles per bit, which
+  seems too slow. Before lowering the bitrate, I'll dig into where the decoder
+  is spending that time.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The bit reader has no cheap optimization since the codec's already
+  table-driven, so the real fix is moving decoding to a background thread with a
+  small frame queue, letting the render thread just upload finished frames
+  cheaply. I'll check how the decoder currently returns a finished frame.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Since the decoder can write finished frames directly into a provided buffer, a
+  background thread can decode into a ring of RAM frames while the render
+  thread uploads from it. I'll check the power-attack clip sizes next, as those
+  play during gameplay when CPU and RAM are more constrained.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All five 320×240 clips need a small 3-frame queue (~345 KB), and since the
+  decoder only fills during main-thread blocks, the clip will stall rather than
+  freeze if it falls too far behind. I'll check the KOS genwait signature next.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● I'll use the genwait API to write the threaded decoder, and I'm reverting the
+  earlier per-row store-queue lock change in zamv_dc_helpers.c since the
+  row-upload path is unused and the original justification (treating sq_lock as
+  non-mutex) doesn't hold.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now the new video_dcmv.c:
+
+● Write(game/src/platform/dreamcast/video_dcmv.c)
+  ⎿  Added 132 lines, removed 71 lines
+       1  /* video.h on the Dreamcast: videos converted to ZAMV5 (third_p
+          arty/zamv, from KOS's zamv5-sh4zam-r8 example) by
+       2 - * tools/dc/build_disc.py, decoded with SH4ZAM acceleration str
+         -aight into the PVR's hardware YUV converter                    
+       3 - * (PVR_TA_YUV_CONV) - no VQ texture, no runtime LZ unpack, one
+         - Store Queue gather per macroblock row. The decoder            
+       4 - * itself has no notion of audio: a video's soundtrack is a sep
+         -arate .vsnd sidecar (mono AICA ADPCM, the same shape           
+       5 - * as a snd.pck sample block) streamed by aud_dc.c's own dedica
+         -ted channel, and playback paces its frames against             
+       6 - * that stream's clock, falling back to a wall-clock accumulato
+         -r for silent clips (the power-attack animations).              
+       7 - * Pack videos are /cd/video/<ID>.zamv(+.vsnd), our clips the s
+         -ame path as the clip with those extensions.                    
+       2 + * tools/dc/build_disc.py, decoded with SH4ZAM acceleration and
+         + shown through the PVR's hardware YUV converter                
+       3 + * (PVR_TA_YUV_CONV, one Store Queue gather per macroblock row)
+         +. The decoder itself has no notion of audio: a video's         
+       4 + * soundtrack is a separate .vsnd sidecar (mono AICA ADPCM, the
+         + same shape as a snd.pck sample block) streamed by             
+       5 + * aud_dc.c's own dedicated channel, and playback paces its fra
+         +mes against that stream's clock, falling back to a             
+       6 + * wall-clock accumulator for silent clips (the power-attack an
+         +imations). Pack videos are /cd/video/<ID>.zamv(+.vsnd),        
+       7 + * our clips the same path as the clip with those extensions.  
+       8   *
+       9 - * video_update() only works out how many frames are due; the d
+         -ecode itself (and so the YUV converter feed) runs from         
+      10 - * rdc_frame_begin(), right after pvr_wait_ready(). A render st
+         -art (the STARTRENDER write KOS makes from its list-done /      
+      11 - * vblank interrupts) resets the converter to the top-left of i
+         -ts texture: one landing in the middle of a frame's             
+      12 - * macroblocks wrote the rest of them over the top rows (a torn
+         - band at the top of the picture). Once pvr_wait_ready()        
+      13 - * returns, the previous scene's render has been started and th
+         -e next one can't start before this frame's                     
+      14 - * pvr_scene_finish(), so nothing resets the converter under us
+         - there.                                                        
+       9 + * Three threads per video:                                    
+      10 + *  - a read-ahead thread keeps a few 64 KB chunks of the file 
+         +in RAM, so nothing else waits for the drive;                   
+      11 + *  - a decode thread, below the game's priority, decodes into 
+         +a small ring of YUV420 frames in RAM. It runs while the        
+      12 + *    game loop waits for the PVR, so a busy scene's frame (40-
+         +50 ms of SH-4 time at the intro's bit rate) never holds        
+      13 + *    up the game's frame, and the ring soaks up the busy stret
+         +ches;                                                          
+      14 + *  - the game thread only sends the frame that is due to the Y
+         +UV converter (about a millisecond of store queue               
+      15 + *    bursts), from rdc_frame_begin() right after pvr_wait_read
+         +y(). A render start (the STARTRENDER write KOS makes           
+      16 + *    from its list-done / vblank interrupts) resets the conver
+         +ter to the top-left of its texture: one landing in the         
+      17 + *    middle of a frame's macroblocks wrote the rest of them ov
+         +er the top rows (a torn band at the top of the picture).       
+      18 + *    Once pvr_wait_ready() returns, the previous scene's rende
+         +r has been started and the next one can't start before         
+      19 + *    this frame's pvr_scene_finish(), so nothing resets the co
+         +nverter under us there.                                        
+      20   *
+      16 - * SABER_VIDLOG=1 (saber.env) keeps each decode's timing and pr
+         -ints it when the video closes. */                              
+      21 + * SABER_VIDLOG=1 (saber.env) keeps each shown frame's timing a
+         +nd prints it when the video closes. */                         
+      22  #include "../../video.h"
+      23  #include "pvr_internal.h"
+      24  #include "../plat.h"
+      25  #include <zamv.h>
+      26  #include <zamv_dc_helpers.h>
+      27  #include <kos.h>
+      28 +#include <dc/sq.h>                                             
+      29  #include <stdatomic.h>
+      30  #include <stdio.h>
+      31  #include <stdlib.h>
+     ...
+      37  uint32_t aud_video_audio_ms(void);
+      38  void     aud_music_settle(void);   /* the music worker has carr
+          ied out every request (a stream about to take its own) */
+      39  
+      34 -/* .zamv chunks come from a small read-ahead thread, so the gam
+         -e loop never waits for the drive. Its buffers must be          
+      35 - * 32-byte aligned: KOS's iso9660 only streams a read straight 
+         -into the caller's buffer by DMA when it is, and                
+      36 - * otherwise goes one 2 KB sector at a time through its cache -
+         - a drive command per sector, which is what made a              
+      37 - * 64 KB refill take up to half a second and the videos stall. 
+         -*/                                                             
+      40 +/* ---- read-ahead ----                                        
+      41 + * Its buffers must be 32-byte aligned: KOS's iso9660 only stre
+         +ams a read straight into the caller's buffer by DMA            
+      42 + * when it is, and otherwise goes one 2 KB sector at a time thr
+         +ough its cache - a drive command per sector, which is          
+      43 + * what made a 64 KB refill take up to half a second and the vi
+         +deos stall. */                                                 
+      44  #define PF_SLOTS 4
+      45  #define PF_CHUNK_BYTES (64 * 1024)
+      46  
+     ...
+      75      Prefetch *p = user;
+      76      int i = p->next_drain;
+      77      sem_wait(&p->full_slots);
+      78 +    if (atomic_load(&p->quit)) return -1;   /* video_close waki
+         +ng the decoder */                                              
+      79      memcpy(dst, p->buf[i], p->got[i]);
+      80      if (got) *got = p->got[i];
+      81      p->next_drain = (i + 1) % PF_SLOTS;
+     ...
+      85  
+      86  static void prefetch_stop(Prefetch *p)
+      87  {
+      81 -    if (p->thd) { atomic_store(&p->quit, true); sem_signal(&p->
+         -free_slots); thd_join(p->thd, NULL); p->thd = NULL; }          
+      88 +    atomic_store(&p->quit, true);                              
+      89 +    if (p->thd) { sem_signal(&p->free_slots); thd_join(p->thd, 
+         +NULL); p->thd = NULL; }                                        
+      90      sem_destroy(&p->free_slots); sem_destroy(&p->full_slots);
+      91      for (int i = 0; i < PF_SLOTS; i++) { free(p->buf[i]); p->bu
+          f[i] = NULL; }
+      92  }
+     ...
+      101      return true;
+      102  }
+      103  
+      104 +/* ---- the video ---- */                                     
+      105 +#define RING_MAX 3                /* decoded frames kept ahead
+          + (115 KB each at 320x240) */                                  
+      106 +                                                              
+      107  struct Video {
+      108      file_t fd;
+      109      Prefetch pf;
+      110      zamv_chunk_reader_t *chunk;
+      111      zamv_decoder_t *dec;
+      112      zamv_file_header_t hdr;
+      102 -    zamv_dc_row_uploader_t up;                                
+      103 -    /* Double-buffered: the decoder writes straight into PVR t
+          -exture memory, and the scene before this one (whose           
+      104 -     * render pvr_wait_ready() has just started) may still be 
+          -reading tex[cur]. */                                          
+      113 +    /* decode thread -> game thread: frame k lives in ring[k %
+          + nring] from produced > k until consumed > k */               
+      114 +    zamv_frame_t ring[RING_MAX]; int nring;                   
+      115 +    semaphore_t ring_free;                                    
+      116 +    atomic_int produced;          /* frames decoded (decode th
+          +read) */                                                      
+      117 +    int consumed;                 /* frames given back to the 
+          +decoder (game thread) */                                      
+      118 +    atomic_bool eof, quit;                                    
+      119 +    kthread_t *thd;                                           
+      120 +    /* Double-buffered: the scene before this one (whose rende
+          +r pvr_wait_ready() has just started) may still be             
+      121 +     * reading tex[cur]. */                                   
+      122      pvr_ptr_t tex[2]; size_t tex_bytes; int tw, th, cur;
+      123      uint32_t fmt;
+      124      pvr_poly_hdr_t phdr __attribute__((aligned(32)));
+      125      float u0, v0, u1, v1;
+      126      int w, h;                 /* display size (may differ from
+            the encoded/padded frame size) */
+      110 -    int frame_index;          /* frames decoded */            
+      127 +    int shown;                /* index of the frame in the tex
+          +ture, -1 before the first */                                  
+      128      int frames_due;           /* frames the clock says should 
+           be up by now (video_update) */
+      129      bool finished, has_audio, started;
+      130      float clock_ms;           /* the wall-clock fallback for v
+           ideos with no soundtrack */
+      114 -    /* SABER_VIDLOG: per-decode timing kept in RAM (a serial p
+          -rint per frame would itself stall), dumped at close */        
+      115 -    struct { uint32_t t_ms, due, dec_us; } *log; int nlog; uin
+          -t64_t open_us;                                                
+      131 +    /* SABER_VIDLOG: per-frame timing kept in RAM (a serial pr
+          +int per frame would itself stall), dumped at close */         
+      132 +    struct { uint32_t t_ms, frame, due, ready, up_us; } *log; 
+          +int nlog; uint64_t open_us;                                   
+      133  };
+      134  #define VIDLOG_MAX 4096
+      135  
+      119 -/* open videos, for rdc_frame_begin's decode pass (a menu can 
+          -hold one while a power clip plays) */                         
+      136 +/* open videos, for rdc_frame_begin's upload pass (a menu can 
+          +hold one while a power clip plays) */                         
+      137  #define MAX_OPEN 4
+      138  static Video *open_videos[MAX_OPEN];
+      139  
+      140 +static void *decode_worker(void *arg)                         
+      141 +{                                                             
+      142 +    Video *v = arg;                                           
+      143 +    for (;;) {                                                
+      144 +        sem_wait(&v->ring_free);                              
+      145 +        if (atomic_load(&v->quit)) break;                     
+      146 +        int k = atomic_load(&v->produced);                    
+      147 +        if (zamv_decoder_decode_cb(v->dec, zamv_chunk_reader_r
+          +ead, v->chunk, &v->ring[k % v->nring]) <= 0) break;           
+      148 +        atomic_store(&v->produced, k + 1);                    
+      149 +        genwait_wake_all(&v->produced);                       
+      150 +    }                                                         
+      151 +    atomic_store(&v->eof, true);                              
+      152 +    genwait_wake_all(&v->produced);                           
+      153 +    return NULL;                                              
+      154 +}                                                             
+      155 +                                                              
+      156  static int pot(int n) { int p = 8; while (p < n) p <<= 1; retu
+           rn p; }
+      157  
+      158  static bool setup_texture(Video *v)
+     ...
+      178      return true;
+      179  }
+      180  
+      181 +static void free_video(Video *v)                              
+      182 +{                                                             
+      183 +    if (v->thd) {   /* wake the decoder wherever it waits: for
+          + a ring slot, or for the read-ahead */                        
+      184 +        atomic_store(&v->quit, true); atomic_store(&v->pf.quit
+          +, true);                                                      
+      185 +        sem_signal(&v->ring_free); sem_signal(&v->pf.full_slot
+          +s);                                                           
+      186 +        thd_join(v->thd, NULL);                               
+      187 +    }                                                         
+      188 +    prefetch_stop(&v->pf);                                    
+      189 +    sem_destroy(&v->ring_free);                               
+      190 +    for (int i = 0; i < v->nring; i++) zamv_frame_free(&v->rin
+          +g[i]);                                                        
+      191 +    if (v->dec) zamv_decoder_destroy(v->dec);                 
+      192 +    if (v->chunk) zamv_chunk_reader_destroy(v->chunk);        
+      193 +    fs_close(v->fd);                                          
+      194 +    if (v->tex[0]) {                                          
+      195 +        rdc_forget_header();                                  
+      196 +        /* the scene queued or rendering now may still sample 
+          +either texture */                                             
+      197 +        if (!rdc_in_frame()) { pvr_wait_ready(); pvr_wait_rend
+          +er_done(); }                                                  
+      198 +        rdc_vram_free(v->tex[0], v->tex_bytes);               
+      199 +        rdc_vram_free(v->tex[1], v->tex_bytes);               
+      200 +    }                                                         
+      201 +    free(v->log);                                             
+      202 +    free(v);                                                  
+      203 +}                                                             
+      204 +                                                              
+      205  static Video *open_zamv(const char *path, const char *audio_pa
+           th)
+      206  {
+      207      int slot = 0;
+     ...
+      212      Video *v = memalign(32, sizeof *v);
+      213      if (!v) { fs_close(fd); return NULL; }
+      214      memset(v, 0, sizeof *v);
+      158 -    v->fd = fd;                                               
+      215 +    v->fd = fd; v->shown = -1;                                
+      216 +    sem_init(&v->ring_free, 0);                               
+      217      if (!prefetch_start(&v->pf, fd)) { printf("video: %s: no r
+           ead-ahead thread\n", path); goto fail; }
+      218      v->chunk = zamv_chunk_reader_create(prefetch_read_cb, &v->
+           pf, PF_CHUNK_BYTES);
+      219      v->dec = zamv_decoder_create();
+     ...
+      226          goto fail;
+      227      }
+      228      v->w = v->hdr.width; v->h = v->hdr.height;
+      229 +    /* the ring: as deep as memory allows, one frame at the le
+          +ast */                                                        
+      230 +    while (v->nring < RING_MAX && zamv_frame_alloc(&v->ring[v-
+          +>nring], v->hdr.width, v->hdr.height) == 0) v->nring++;       
+      231 +    if (!v->nring) { printf("video: %s: no memory for a frame\
+          +n", path); goto fail; }                                       
+      232      if (!setup_texture(v)) goto fail;
+      172 -    zamv_decoder_set_row_callback(v->dec, zamv_dc_upload_row_d
+          -irect_cb, &v->up);                                            
+      233      if (plat_getenv("SABER_VIDLOG")) v->log = malloc(VIDLOG_MA
+           X * sizeof *v->log);
+      234 +    for (int i = 0; i < v->nring; i++) sem_signal(&v->ring_fre
+          +e);                                                           
+      235 +    if (!(v->thd = thd_create(false, decode_worker, v))) { pri
+          +ntf("video: %s: no decode thread\n", path); goto fail; }      
+      236 +    thd_set_prio(v->thd, PRIO_DEFAULT + 1);   /* only while th
+          +e game thread waits (see the top of the file) */              
+      237      v->open_us = timer_us_gettime64();
+      238  
+      239      if (audio_path) {
+     ...
+      243      open_videos[slot] = v;
+      244      return v;
+      245  fail:
+      183 -    prefetch_stop(&v->pf);                                    
+      184 -    if (v->dec) zamv_decoder_destroy(v->dec);                 
+      185 -    if (v->chunk) zamv_chunk_reader_destroy(v->chunk);        
+      186 -    fs_close(fd);                                             
+      187 -    free(v);                                                  
+      246 +    free_video(v);                                            
+      247      return NULL;
+      248  }
+      249  
+     ...
+      274      return open_zamv(p, NULL);   /* our own clips (power attac
+           ks) carry no soundtrack */
+      275  }
+      276  
+      218 -static bool decode_one(Video *v)                              
+      277 +/* one decoded frame into the texture the next scene will draw
+          + */                                                           
+      278 +static void upload(Video *v, const zamv_frame_t *f)           
+      279  {
+      280      int next = 1 - v->cur;
+      221 -    if (zamv_dc_configure_yuv420(v->tex[next], v->hdr.width, v
+          -->hdr.height) < 0) { v->finished = true; return false; }      
+      222 -    if (zamv_dc_row_uploader_begin(&v->up) < 0) { v->finished 
+          -= true; return false; }                                       
+      223 -    int dr = zamv_decoder_decode_cb(v->dec, zamv_chunk_reader_
+          -read, v->chunk, NULL);                                        
+      224 -    zamv_dc_row_uploader_end(&v->up);                         
+      225 -    if (dr <= 0) { v->finished = true; return false; }        
+      281 +    if (zamv_dc_configure_yuv420(v->tex[next], v->hdr.width, v
+          +->hdr.height) < 0) return;                                    
+      282 +    void *port = sq_lock((void *)PVR_TA_YUV_CONV);            
+      283 +    for (int my = 0; my < v->hdr.height / 16; my++) zamv_dc_sq
+          +_send_row_direct(port, f, my);                                
+      284 +    sq_wait();                                                
+      285 +    sq_unlock();                                              
+      286      v->cur = next;
+      287      rdc_compile(&v->phdr, v->tex[v->cur], v->fmt, v->tw, v->th
+           , R_BLEND_NONE, true, false, false);
+      228 -    v->frame_index++;                                         
+      229 -    return true;                                              
+      288  }
+      289  
+      232 -/* rdc_frame_begin, between pvr_wait_ready() and the new scene
+          -: see the top of the file. One frame per video per            
+      233 - * display frame keeps the frame time bounded; a video that fe
+          -ll behind (a load hitch) catches up at up to two. */          
+      290 +/* rdc_frame_begin, between pvr_wait_ready() and the new scene
+          +: see the top of the file. Shows the latest decoded frame     
+      291 + * that is due; frames the game loop was too slow to show go b
+          +y unseen. */                                                  
+      292  void video_dc_decode_due(void)
+      293  {
+      294      for (int i = 0; i < MAX_OPEN; i++) {
+      295          Video *v = open_videos[i];
+      296          if (!v || v->finished) continue;
+      239 -        for (int n = 0; n < 2 && v->frame_index < v->frames_du
+          -e && !v->finished; n++) {                                     
+      240 -            if (n && v->frames_due - v->frame_index < 3) break
+          -;                                                             
+      241 -            uint64_t t0 = timer_us_gettime64();               
+      242 -            decode_one(v);                                    
+      243 -            if (v->log && v->nlog < VIDLOG_MAX)               
+      244 -                v->log[v->nlog++] = (typeof(*v->log)){ (uint32
+          -_t)((t0 - v->open_us) / 1000), (uint32_t)v->frames_due,       
+      245 -                                                        (uint3
+          -2_t)(timer_us_gettime64() - t0) };                            
+      297 +        int target = v->frames_due - 1;                       
+      298 +        if (target <= v->shown) continue;                     
+      299 +        int produced = atomic_load(&v->produced);             
+      300 +        /* the decoder only runs while this thread waits; if t
+          +he game loop leaves it no time (a heavy scene under a         
+      301 +         * power clip) and it falls behind, give it some rathe
+          +r than let the picture stand still */                         
+      302 +        if (target - produced >= 1 && !atomic_load(&v->eof)) {
+      303 +            int flags = irq_disable();                        
+      304 +            if (atomic_load(&v->produced) == produced && !atom
+          +ic_load(&v->eof)) genwait_wait(&v->produced, "video frame", 20
+          +);                                                            
+      305 +            irq_restore(flags);                               
+      306 +            produced = atomic_load(&v->produced);             
+      307          }
+      308 +        int k = target < produced - 1 ? target : produced - 1;
+      309 +        if (k <= v->shown) continue;                          
+      310 +        uint64_t t0 = timer_us_gettime64();                   
+      311 +        upload(v, &v->ring[k % v->nring]);                    
+      312 +        if (v->log && v->nlog < VIDLOG_MAX)                   
+      313 +            v->log[v->nlog++] = (typeof(*v->log)){ (uint32_t)(
+          +(t0 - v->open_us) / 1000), (uint32_t)k, (uint32_t)v->frames_du
+          +e,                                                            
+      314 +                                                    (uint32_t)
+          +produced, (uint32_t)(timer_us_gettime64() - t0) };            
+      315 +        v->shown = k;                                         
+      316 +        for (; v->consumed <= k; v->consumed++) sem_signal(&v-
+          +>ring_free);                                                  
+      317      }
+      318  }
+      319  
+     ...
+      324      float t_ms;
+      325      if (v->has_audio) t_ms = (float)aud_video_audio_ms();
+      326      else { v->clock_ms += dt * 1000.0f; t_ms = v->clock_ms; }
+      257 -    /* frame k (0-based) is up from k * frame time: the first 
+          -one right away */                                             
+      258 -    int due = (int)(t_ms * (float)v->hdr.fps_num / (1000.0f * 
+          -(float)(v->hdr.fps_den ? v->hdr.fps_den : 1))) + 1;           
+      259 -    if (v->hdr.frame_count && due > (int)v->hdr.frame_count) d
+          -ue = (int)v->hdr.frame_count;                                 
+      327 +    float fps = (float)v->hdr.fps_num / (float)(v->hdr.fps_den
+          + ? v->hdr.fps_den : 1);                                       
+      328 +    /* frame k (0-based) is up from k frame times in: the firs
+          +t one right away */                                           
+      329 +    int due = (int)(t_ms * fps * 0.001f) + 1;                 
+      330 +    int count = atomic_load(&v->eof) ? atomic_load(&v->produce
+          +d) : (int)v->hdr.frame_count;   /* 0: not known yet */        
+      331 +    if (count && due > count) due = count;                    
+      332      v->frames_due = due;
+      261 -    /* every frame shown and the soundtrack's time for the las
+          -t one over: done (a decode error or an early end of           
+      262 -     * the stream sets finished in decode_one) */             
+      263 -    if (v->hdr.frame_count && v->frame_index >= (int)v->hdr.fr
+          -ame_count &&                                                  
+      264 -        t_ms * (float)v->hdr.fps_num >= 1000.0f * (float)v->hd
+          -r.frame_count * (float)(v->hdr.fps_den ? v->hdr.fps_den : 1)) 
+      265 -        v->finished = true;                                   
+      333 +    /* every frame shown and the last one's time over */      
+      334 +    if (count && v->shown + 1 >= count && t_ms * fps * 0.001f 
+          +>= (float)count) v->finished = true;                          
+      335      return !v->finished;
+      336  }
+      337  
+      338  static void draw(Video *v, float x, float y, float w, float h)
+      339  {
+      271 -    if (!v || !rdc_in_frame() || !v->frame_index) return;     
+      340 +    if (!v || !rdc_in_frame() || v->shown < 0) return;        
+      341      float X0, Y0, X1, Y1;
+      342      extern void rdc_xform(float x, float y, float *X, float *Y
+           );
+      343      rdc_xform(x, y, &X0, &Y0); rdc_xform(x + w, y + h, &X1, &Y
+           1);
+     ...
+      362      if (!v) return;
+      363      for (int i = 0; i < MAX_OPEN; i++) if (open_videos[i] == v
+           ) open_videos[i] = NULL;
+      364      if (v->log) {
+      296 -        printf("vidlog: %d frames (t_ms due dec_us)\n", v->nlo
+          -g);                                                           
+      297 -        for (int i = 0; i < v->nlog; i++) printf("vidlog %d %l
+          -u %lu %lu\n", i, (unsigned long)v->log[i].t_ms, (unsigned long
+          -)v->log[i].due, (unsigned long)v->log[i].dec_us);             
+      298 -        free(v->log);                                         
+      365 +        printf("vidlog: %d frames shown of %d decoded, ring %d
+          + (t_ms frame due ready up_us)\n", v->nlog, atomic_load(&v->pro
+          +duced), v->nring);                                            
+      366 +        for (int i = 0; i < v->nlog; i++)                     
+      367 +            printf("vidlog %d %lu %lu %lu %lu %lu\n", i, (unsi
+          +gned long)v->log[i].t_ms, (unsigned long)v->log[i].frame,     
+      368 +                   (unsigned long)v->log[i].due, (unsigned lon
+          +g)v->log[i].ready, (unsigned long)v->log[i].up_us);           
+      369      }
+      370      if (v->has_audio) aud_video_audio_close();
+      301 -    prefetch_stop(&v->pf);                                    
+      302 -    if (v->dec) zamv_decoder_destroy(v->dec);                 
+      303 -    if (v->chunk) zamv_chunk_reader_destroy(v->chunk);        
+      304 -    fs_close(v->fd);                                          
+      305 -    rdc_forget_header();                                      
+      306 -    /* the scene queued or rendering now may still sample eith
+          -er texture */                                                 
+      307 -    if (!rdc_in_frame()) { pvr_wait_ready(); pvr_wait_render_d
+          -one(); }                                                      
+      308 -    rdc_vram_free(v->tex[0], v->tex_bytes);                   
+      309 -    rdc_vram_free(v->tex[1], v->tex_bytes);                   
+      310 -    free(v);                                                  
+      371 +    free_video(v);                                            
+      372  }
+
+● I'll fix two issues before building: tightening the "wait for decoder"
+  condition so it only stalls when truly two frames behind, and making open_zamv
+  wait for the first frame before starting audio so playback doesn't start out
+  of sync.
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  Found 10 new diagnostic issues in 1 file (ctrl+o to expand)
+
+● Clean build (the diagnostics are clangd without KOS paths). Running the
+  capture:
+  Ran 1 shell command (ctrl+o to expand)
+
+● Frame cadence now hits the ideal 33/50 ms alternation with no skips and 0.4 ms
+  average uploads, but there's still a lag tail of up to 10 frames. Checking
+  where that occurs.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The lag is isolated to seconds 12–15 where the heavy frame size overwhelms the
+  SH4's decode speed, peaking at 0.4s behind before recovering; separately,
+  some uploads spiked to 10ms, possibly from store-queue contention, so I'm
+  checking if the decoder's frame copy uses the store queues.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Since shz_memcpy128 uses the cache rather than store queues, SQ contention
+  isn't the cause of the ~10ms spikes recurring every 1.1s — the likely culprit
+  is the read-ahead thread preempting the game thread during drive polling. I'll
+  check cdrom_poll to confirm.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Since thd_poll spins with thd_pass(), it's competing with the game thread for
+  timeslices at equal priority. I'll lower the read-ahead thread's priority to
+  match the decoder's, relying on the ~0.7 s buffer to absorb any added read
+  latency.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The read-ahead thread wasn't the cause—the 10 ms upload spikes persist (9 in
+  28 s, all at exactly 10.26 ms). Now I'll time the store-queue lock and send
+  loop separately to isolate which part stalls.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The 10ms stall matches a full KOS scheduler timeslice, suggesting another
+  thread at the same priority is preempting it despite the lock only taking 1µs.
+  I'll check how thd_set_prio handles a thread that's already queued.
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+● Next I'll check the ageing period constant and PRIO_MAX to confirm how quickly
+  the decoder thread's priority rises above the game thread's.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Found it: the decoder ages up past the game thread's priority while the ring
+  buffer is full, causing it to preempt mid-upload. I'll move both worker
+  threads to PRIO_MAX (exempt from ageing) and remove the upload
+  instrumentation, relying on the explicit catch-up wait instead.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Still exactly 10 slow uploads at 10.26 ms, so the decoder's ageing wasn't the
+  cause. I'm dumping KOS's thread list at the moment of a slow upload to see who
+  is taking the timeslice:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● This looks like a measurement glitch in timer_us_gettime64() (a pending tick
+  interrupt during the read) rather than a real stall. I'll check whether the
+  frames after these spikes actually arrive late.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The spikes are just a timer-read artifact with no real playback impact, so
+  I'll remove the thread dump. The intro is now smooth aside from the CPU-bound
+  12–15s stretch; next I'll check the briefing video (with ADX music streaming)
+  and a power-attack clip during gameplay.
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● The power button is Y on the Dreamcast pad. I'm extending the harness so a
+  press can name its key, then running the briefing (SABER_MENU=7, music
+  playing) and a Saber power attack in stage 1:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Both runs failed. Checking the logs:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● The two repacks share intermediate files, so running them in parallel
+  corrupted both discs. Running them one after the other:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Still hitting "Bad image format" even running one at a time — likely because
+  hard-linked files in build/dc/stage got corrupted by the earlier parallel run
+  writing in place. I'll check how boot_image writes its files.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Confirmed the issue: scramble rewrites 1ST_READ.BIN in place, so my
+  hard-linked copies were overwriting the real build/dc/stage file—the harness
+  needs to break that link first, though a repack at the end will regenerate it.
+  Now comparing the working and broken test discs.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The broken discs are 50 MB against 163 MB for the good ones. I'm checking
+  whether any shared staged file got truncated:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The staged data is intact. Next suspect is disk space:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The root filesystem is nearly full because my test runs each left ~300MB of
+  ISO/CDI files in build/dc-test. I'll clean up those test directories along
+  with my large scratch captures.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Disk space is back to 2.1 GB free—build/dc-test only contained my own
+  directories, though the disk was already near-full before this session (I'll
+  note that at the end). Now updating the harness to break the 1ST_READ.BIN hard
+  link before repacking and to delete each test disc after its run completes.
+  Ran 1 shell command (ctrl+o to expand)
+
+● The briefing run didn't dump its log; the dialog probably needs more presses
+  to close. Checking where it ended:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● It reached character select (menu 8), yet there's no log, so the briefing
+  video probably never opened. SABER_MENU=7 may skip open_briefing:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● It only opens from the main menu's GAME START. Starting from the main menu
+  instead (SABER_MENU=5) and pressing A:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The briefing is perfect: all 151 frames at 25 fps, zero lag, and a clean 33/50
+  ms cadence while ADX music streams from the same disc. Now the power-attack
+  clip in gameplay:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● No power attack fired; the stage's title card was still up at 10 s. Retrying
+  with later Y presses:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Only one status line in 34 s suggests the game stopped responding. Checking
+  the log and the final screenshot:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The replay ran (34 emulated seconds in 4.8s wall time), but only one status
+  line printed—possibly the main loop hung when the power clip opened. I'll
+  rerun the same level with no presses to check if the hang is tied to the clip.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The same happens with no presses, so the clip isn't the trigger. Checking what
+  the screen shows at the end:
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● The Ramrod intro scene runs, but I need to confirm whether a status line
+  appearing in just one 10-second window is expected behavior. I'll stash my
+  changes, build and test on the last commit for comparison, then restore my
+  files afterward.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Changes are restored and the rebuilt ELF matches byte-for-byte. I'll check the
+  untracked game/glitches.txt for context, then add an ELF override to the
+  harness.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The last commit shows the same single-status-line behavior, confirming this is
+  normal harness behavior rather than a hang, and glitches.txt only covers
+  stage/audio issues, not video. The power attack likely didn't fire because the
+  scene needs input first, so I'll retry with A presses before Y.
+
+  Read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+● SABER_START just hangs on the opening frame in both builds, so I'll switch to
+  the full flow instead: GAME START, then A every 1.5s through
+  briefing/character select to reach stage 1 (~25s), then Y for the power
+  attack—this also tests closing a video mid-play.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The briefing was closed mid-play at frame 20 without trouble, and the level
+  was reached. There's no power-clip log, though. Checking the capture for
+  whether the clip played:
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● The power clip is corrupted, likely because SH4ZAM's transform matrix in the
+  XMTRX register bank gets overwritten by the renderer during gameplay. I'll
+  check how the decoder loads that matrix.
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● Found it: since XMTRX is per-thread but only loaded once in read_header,
+  gameplay code rotating sprites (render_pvr.c:738) clobbers it, corrupting
+  later IDCT decodes—a pre-existing bug unrelated to my changes. I'll fix this
+  by reloading the IDCT matrix at the start of every frame decode, at the cost
+  of 16 float loads.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● The power clip now decodes cleanly. There's still no log entry for it, so I'm
+  checking how power.c ends and closes the clip:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The clip closes through end_cutin once video_update returns false, so finished
+  never became true. Checking whether the clip's header frame count matches the
+  frames actually in the file:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The frame counts match. Looking at the end of the capture in more detail to
+  see how the clip finishes:
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● The first Y press fired too early since the stage wasn't playable yet, so only
+  the second one registered. I'll rerun with Y at 48s and let it run to 70s so
+  the clip has time to finish and close.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The power clip completed all 278 frames cleanly at ~24fps with only 2 dropped
+  frames, briefly lagging under gameplay load but recovering; the 2.3s delay
+  before its first frame is just power.c's built-in lead-in. Now running the
+  final check on the intro with the tear detector on the final build.
+  Ran 1 shell command (ctrl+o to expand)
+
+● The final build has 0 torn frames, a steady 25.01 fps, no dropped frames, and
+  96.5% of intervals on the ideal cadence. Now cleaning up scratch captures and
+  rebuilding the disc image at build/dc/saber_rider.cdi.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The repack padded the CDI to 738.7 MB (from 163 MB) using the Makefile default
+  for outer-edge disc placement, and 9.5 GB of free space remains. I'll now
+  boot that exact disc headless to confirm the intro plays.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The real disc boots and plays fine—without frame capture, Flycast looped
+  through the intro and main menu repeatedly with no errors or hangs before
+  hitting the 200s timeout. Now I'll check for any leftover Xvfb processes of
+  mine.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Nothing left running. Reviewing the final diff:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● video_dc_decode_due now uploads rather than decodes, so I'm renaming it to
+  video_dc_upload_due before finishing:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Saving what I learned to memory for future sessions:
+
+  Ran 1 shell command, wrote 1 memory (ctrl+o to expand)
+
+● I fixed the video glitches and the stutter, and this time I measured the
+  problems before changing anything. The rebuilt disc is at
+  build/dc/saber_rider.cdi, ready for you to try in Flycast.
+
+  What was actually wrong (four separate bugs):
+
+  1. Torn frames (the visual glitch). In Flycast, starting a render resets the
+     Dreamcast's YUV video converter back to the top of the picture. KOS starts
+     renders from an interrupt, which could land in the middle of a video
+     frame's upload, so the rest of the frame was written over the top rows.
+     Frames are now uploaded right after pvr_wait_ready(), where no render can
+     start. The old build tore 7 of 257 intro frames; the new one tore 0 across
+     the whole intro.
+  2. Long stalls during playback. KOS only reads from disc at full speed when
+     the destination buffer is 32-byte aligned. Ours weren't, so each 64 KB read
+     became 32 separate one-sector reads. Some frames waited 200–480 ms for
+     data, and the intro only managed about 13.6 fps. The buffers are aligned
+     now.
+  3. Bursts then freezes. The video clock only moved each time KOS refilled the
+     audio buffer, in 0.37 s steps, and started 0.74 s early. So the video
+     played about 9 frames in a rush, then froze. The clock now follows real
+     time since the audio started.
+  4. Power-attack clips were garbage in gameplay. The decoder keeps a matrix in
+     an SH4 register bank that the game's rotated sprites also use, so the
+     in-game renderer overwrote it. The decoder now reloads it every frame. This
+     bug was older than today's changes.
+
+  Decoding also moved to a background thread with a 3-frame buffer, so the game
+  only spends about 0.4 ms per frame on video.
+
+  Results in headless Flycast:
+  - Intro: a steady 25.0 fps with no dropped frames.
+  - Briefing: all 151 frames with zero lag, even with the menu music streaming
+    from the disc at the same time.
+  - Power clip: plays cleanly at about 24 fps to the end.
+  - Repeated playback: the intro played to its end and restarted many times with
+    no errors or hangs.
+
+  Still there: seconds 12–15 of the intro are too heavy for Flycast's CPU. The
+  video is encoded at 3.4 Mbit/s, which is high for 320×240, and busy frames
+  take about 50 ms to decode against a 40 ms budget. The picture falls up to 0.4
+  s behind the audio there and then catches up. Power clips can fall about 6
+  frames behind during gameplay. The fix is re-encoding the videos at a lower
+  bitrate, which costs some picture quality, so that's your call.
+
+  Other notes:
+  - I undid the previous session's change to the store-queue lock in
+    zamv_dc_helpers.c. The reason it gave was wrong, and that code path isn't
+    used any more.
+  - A new SABER_VIDLOG=1 setting in saber.env logs per-frame timing when a video
+    closes.
+  - make repack pads the disc by default, so the CDI is now 738.7 MB instead of
+    163 MB.
+  - Disk space: my test discs filled your root disk at one point, leaving 884 KB
+    free. I deleted only the test folders I had created, and it's now at 9.5 GB
+    free. The disk was already close to full before I started.
+
+  Nothing is committed yet. The changes are in video_dcmv.c, aud_dc.c,
+  render_pvr.c, pvr_internal.h, third_party/zamv/codec.c and zamv_dc_helpers.c.
+  Your own edit to tools/release.sh is untouched. Should I commit, or try a
+  lower-bitrate re-encode first?
+
+✻ Worked for 32m 57s · done 7:08 PM
