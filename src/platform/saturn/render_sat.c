@@ -91,7 +91,7 @@ struct RTex {
 #define FL_TAB_OFF    0x60000u                   /* B1, as an offset into video memory */
 #define FL_RP_OFF(b)  (FL_TAB_OFF + (uint32_t)(b) * 0x100u)
 #define FL_KT_OFF(b, p) (FL_TAB_OFF + 0x1000u + (uint32_t)(b) * 0x800u + (uint32_t)(p) * 0x400u)
-#define FL_LC_OFF     (FL_TAB_OFF + 0x3000u)     /* the line colour table (one word: the fog's haze) */
+#define FL_LC_OFF     (FL_TAB_OFF + 0x3000u)     /* the line colour table (one word: the fog colours' block) */
 #define FL_RAMCTL_RDBS 0x6Bu                     /* A0 char (3), A1 name (2), B0 name (2), B1 coefficients (1) */
 
 typedef struct {
@@ -773,7 +773,10 @@ static bool part_emit_cropped(const Cmd *base, int bits, int wpad, int h, int ix
     int c0 = (c->x - ix0) * wpad / W, c1 = (c->x + c->w - ix0) * wpad / W;
     if (r1 > h - 1) r1 = h - 1;
     if (c1 > wpad - 1) c1 = wpad - 1;
-    int per = 64 / bits;   /* texels in 8 bytes (the address unit): the first column's step */
+    int per = (bits == 16 ? 128 : 64) / bits;   /* the first column's step: texels in 8 bytes (the address unit), 16
+                                                 * for RGB, whose address drops its lowest bit (mednafen: tex_base &= ~7; a
+                                                 * row cropped at an odd unit showed the texels 4 columns on: the victory
+                                                 * art sheared at the parts' seams as it zoomed) */
     c0 -= c0 % per;
     int n = (c1 + 1 - c0 + 7) & ~7;
     if (W - c->w > 32 && r1 - r0 < 128 && n + 8 <= 504) {
@@ -1144,82 +1147,91 @@ static bool floor_cram_reserved;
 static int floor_buf;                            /* the parameter / coefficient table pair written next */
 
 /* The distance fog: the software floor fades a row towards `haze` by fog_max/256 of its (dd - fog0) / (fog1 - fog0).
- * VDP2 blends RBG0 with the line colour screen (one colour, the haze in the floor palette's entry 0, which no
- * character shows) by RBG0's colour calculation ratio, which is one register for the whole screen: SCU timer 1 sets
- * it line by line over the fog rows. It fires once a frame at the timer 0 compare (the hblank before the band's first
- * line), then every line until the band is over, where the blending goes off again (the vblank's register commit
- * also starts each frame without it). The handler takes the line from VCNT (latched by reading EXTEN), not from a
- * count: T1S puts it past the hsync, where VCNT is already the line about to be drawn, so an interrupt more or less
- * (switching timer 1's mode can raise one) changes nothing. fog_ratio[y]: 0 no fog on line y, else n / 32 of haze. */
-static volatile uint8_t fog_ratio[512];
-static volatile int fog_end;
-static volatile bool fog_every, fog_on;
-static volatile uint16_t fog_ccctl;              /* CCCTL with RBG0's colour calculation off */
-#define FOG_T1S 40                               /* dots after the hblank starts: past the hsync in both widths */
+ * VDP2 adds the line colour screen to RBG0 (colour calculation in add mode, LNCLEN: RBG0 over the line colour screen):
+ * lerp(floor, haze, f) = floor + f * (haze - floor) is taken as floor + f * (haze - mean), the mean being the floor's
+ * average colour as the map shows it (the least squares additive fit; a channel darker than the floor adds nothing,
+ * add mode can't subtract). Colour RAM FL_FOG_CRAM + n holds n / 31 of it; each line picks its n in bits 30-24 of
+ * parameter A's coefficient (KTCTL line colour data: the low 7 bits of the line colour's address, the table's single
+ * word giving the rest), so the fog changes with the coefficient tables it belongs to, at the vblank. */
+static int floor_level_size(const RFloor *f, int level);
+static uint32_t floor_texel(const RFloor *f, int mat, int level, int x, int y);
+#define FL_FOG_CRAM   256                        /* after the floor's palette: a 128 aligned block */
+#define FL_FOG_LEVELS 32
+static uint32_t fog_haze = 0xFFFFFFFFu;          /* the haze the fog colours were made for (never an opaque colour) */
+static int fog_mean[3];                          /* the floor's average colour (8 bits a channel) */
 
-static void fog_irq(void)
+/* the floor's average colour: its materials' (the last mip's texels) weighted by how many cells of the map show each */
+static void fog_mean_of(RFloor *f)
 {
-    (void)MEMORY_READ(16, VDP2(EXTEN));          /* latches HCNT / VCNT */
-    int y = MEMORY_READ(16, VDP2(VCNT)) & 0x1FF;
-    if (y < fog_end) {
-        unsigned n = fog_ratio[y];
-        if (n) MEMORY_WRITE(16, VDP2(CCRR), n - 1u);
-        MEMORY_WRITE(16, VDP2(CCCTL), n ? fog_ccctl | 0x0010u : fog_ccctl);
-        if (!fog_every) { fog_every = true; MEMORY_WRITE(32, SCU(T1MD), 0x001); }
-    } else {
-        MEMORY_WRITE(16, VDP2(CCCTL), fog_ccctl);
-        if (fog_every) { fog_every = false; MEMORY_WRITE(32, SCU(T1MD), 0x101); }   /* once a frame again */
+    const RFloorDesc *d = &f->desc;
+    uint32_t count[256] = { 0 };
+    int step = d->mapn > 128 ? d->mapn / 128 : 1;
+    for (int y = 0; y < d->mapn; y += step) for (int x = 0; x < d->mapn; x += step) {
+        int m = r_floor_cell(d, (uint32_t)x, (uint32_t)y);
+        count[m < f->nmat ? m : 0]++;
     }
+    uint32_t sum[3] = { 0, 0, 0 }, total = 0;
+    int level = d->mips - 1, size = floor_level_size(f, level);
+    for (int m = 0; m < f->nmat; m++) {
+        if (!count[m]) continue;
+        uint32_t ms[3] = { 0, 0, 0 }, n = 0;
+        for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
+            uint32_t c = floor_texel(f, m, level, x, y);
+            if (c < 0x80000000u) continue;
+            ms[0] += c & 0xFFu; ms[1] += (c >> 8) & 0xFFu; ms[2] += (c >> 16) & 0xFFu; n++;
+        }
+        if (!n) continue;
+        for (int k = 0; k < 3; k++) sum[k] += ms[k] / n * count[m];
+        total += count[m];
+    }
+    for (int k = 0; k < 3; k++) fog_mean[k] = total ? (int)(sum[k] / total) : 0;
+    fog_haze = 0xFFFFFFFFu;
+}
+
+/* the fog colours for this haze: (haze - mean) * n / 31, RGB555 */
+static void fog_colors(uint32_t haze)
+{
+    if (haze == fog_haze) return;
+    fog_haze = haze;
+    int d[3];
+    for (int k = 0; k < 3; k++) {
+        int h = (int)((haze >> (8 * k)) & 0xFFu);
+        d[k] = h - fog_mean[k] > h / 4 ? h - fog_mean[k] : h / 4;
+    }
+    volatile uint16_t *cram = (volatile uint16_t *)VDP2_CRAM_ADDR(FL_FOG_CRAM);
+    for (int n = 0; n < FL_FOG_LEVELS; n++) {
+        int r = d[0] * n / (FL_FOG_LEVELS - 1) >> 3, g = d[1] * n / (FL_FOG_LEVELS - 1) >> 3, b = d[2] * n / (FL_FOG_LEVELS - 1) >> 3;
+        cram[n] = (uint16_t)(b << 10 | g << 5 | r);
+    }
+}
+
+/* the fog level (0..31) of the screen line den rows under the horizon, as the software floor fades that row */
+static uint32_t fog_level(const RFloorView *v, real den)
+{
+    real span = v->fog1 - v->fog0;
+    if (den <= 0 || span <= 0 || v->fog_max <= 0) return 0;
+    real f = r_div(r_div(r_mul(v->cam_h, v->focal), den) - v->fog0, span);
+    f = f < 0 ? 0 : f > R(1) ? R(1) : f;
+    int fa = r_trunc(f * v->fog_max);            /* of 256, as the software floor's */
+    int n = (fa * (FL_FOG_LEVELS - 1) + 128) >> 8;
+    return (uint32_t)(n < 0 ? 0 : n > FL_FOG_LEVELS - 1 ? FL_FOG_LEVELS - 1 : n);
 }
 
 static void fog_off(void)
 {
-    if (!fog_on) return;
-    fog_on = false;
-    MEMORY_WRITE(32, SCU(T1MD), 0);
-    scu_timer_t1_set(NULL);
     vdp2_ioregs_t *regs = vdp2_regs_get();
     regs->lnclen &= (uint16_t)~0x0010u;
-    regs->ccctl &= (uint16_t)~0x0010u;
-    MEMORY_WRITE(16, VDP2(CCCTL), regs->ccctl);
+    regs->ccctl &= (uint16_t)~0x0110u;
 }
 
-/* the rows' fog, as the software floor computes it, and the timer set to the band */
-static void fog_update(const RFloorView *v)
+static void fog_on(void)
 {
-    int first = -1, end = -1;
-    real span = v->fog1 - v->fog0, hk = r_mul(v->cam_h, v->focal);
-    for (int y = 0; y < SAT_SCREEN_H; y++) {
-        real den = r_int(y) + v->row_off - v->horizon;
-        int n = 0;
-        if (y >= v->y0 && y < v->y1 && den > 0 && span > 0 && v->fog_max > 0) {
-            real f = r_div(r_div(hk, den) - v->fog0, span);
-            f = f < 0 ? 0 : f > R(1) ? R(1) : f;
-            int fa = r_trunc(f * v->fog_max);    /* of 256, as the software floor's */
-            n = (fa * 32 + 128) >> 8;
-        }
-        fog_ratio[y] = (uint8_t)n;
-        if (n) { if (first < 0) first = y; end = y + 1; }
-    }
-    if (first < 0) { fog_off(); return; }
-    uint32_t haze = v->haze;
-    *(volatile uint16_t *)VDP2_CRAM_ADDR(0) = (uint16_t)(((haze >> 19) & 31u) << 10 | ((haze >> 11) & 31u) << 5 | ((haze >> 3) & 31u));
-    fog_end = end;
-    MEMORY_WRITE(32, SCU(T0C), (uint32_t)first);   /* timer 0 counts the hblanks since the vblank: N matches in the
-                                                     * hblank before line N (checked in mednafen) */
-    if (fog_on) return;
     vdp2_ioregs_t *regs = vdp2_regs_get();
-    *(volatile uint16_t *)VDP2_VRAM_ADDR(0, FL_LC_OFF) = 0;   /* the line colour: CRAM 0 */
-    regs->lctau = (uint16_t)((FL_LC_OFF >> 1 >> 16) & 7u);    /* one colour for every line */
+    *(volatile uint16_t *)VDP2_VRAM_ADDR(0, FL_LC_OFF) = FL_FOG_CRAM;   /* the line colour's address, but its low 7 bits */
+    regs->lctau = (uint16_t)((FL_LC_OFF >> 1 >> 16) & 7u);    /* one word for every line */
     regs->lctal = (uint16_t)((FL_LC_OFF >> 1) & 0xFFFFu);
     regs->lnclen |= 0x0010u;                     /* RBG0 over the line colour screen */
-    regs->ccctl &= (uint16_t)~0x0710u;           /* blend by the top's ratio, off until the band */
-    fog_ccctl = regs->ccctl;
-    fog_every = false;
-    fog_on = true;
-    scu_timer_t1_value_set(FOG_T1S);
-    scu_timer_t1_set(fog_irq);
-    MEMORY_WRITE(32, SCU(T1MD), 0x101);          /* timer 1 at the timer 0 compare's line only */
+    regs->ccctl = (uint16_t)((regs->ccctl & (uint16_t)~0x0710u) | 0x0110u);   /* RBG0's colour calculation, add as is */
 }
 
 static uint16_t floor_color(uint32_t c)
@@ -1456,10 +1468,11 @@ static bool floor_hw_setup(RFloor *f)
     if (f->hw_ready && floor_hw_active && floor_hw_floor == f) return true;
     if (floor_hw_active) floor_hw_off();
     if (!floor_prepare(f)) return false;
-    rsat_cram_reserve_floor(256);
+    rsat_cram_reserve_floor(FL_FOG_CRAM + FL_FOG_LEVELS);
     floor_cram_reserved = true;
     volatile uint16_t *cram = (volatile uint16_t *)VDP2_CRAM_ADDR(0);
     for (int i = 0; i < 256; i++) cram[i] = i < f->npal ? f->pal[i] : 0;
+    fog_mean_of(f);
     for (int p = 0; p < 2; p++) floor_put_single_chars(f, &f->map[p]);
     floor_reset_cells(f);
 
@@ -1477,10 +1490,12 @@ static bool floor_hw_setup(RFloor *f)
     regs->craofb = (uint16_t)(regs->craofb & ~0x0007u);   /* RBG0's colours from CRAM 0 */
     regs->rpmd = 2;                              /* per dot: A, or B where A's coefficient has its MSB set */
     regs->rprctl = 0;
-    regs->ktctl = 0x0101u;                       /* A and B: coefficient table on, two words, kx = ky = coefficient */
+    regs->ktctl = 0x0111u;                       /* A and B: coefficient table on, two words, kx = ky = coefficient;
+                                                  * A's line colour data (the fog) */
     uint32_t e = FL_KT_OFF(0, 0) >> 2 >> 16;
     regs->ktaof = (uint16_t)(e | e << 8);
     vdp2_scrn_priority_set(VDP2_SCRN_RBG0, 1);
+    fog_on();
     f->hw_ready = true;
     floor_hw_floor = f;
     floor_hw_active = true;
@@ -1515,6 +1530,7 @@ static void floor_update_hw(RFloor *f, const RFloorView *v)
     volatile uint32_t *ka = (volatile uint32_t *)VDP2_VRAM_ADDR(0, FL_KT_OFF(b, 0));
     volatile uint32_t *kb = (volatile uint32_t *)VDP2_VRAM_ADDR(0, FL_KT_OFF(b, 1));
     int lb = f->map[1].level;
+    fog_colors(v->haze);
     for (int y = 0; y < SAT_SCREEN_H; y++) {
         real den = r_int(y) + v->row_off - v->horizon;
         if (y < v->y0 || y >= v->y1 || den <= 0) { ka[y] = kb[y] = 0x80000000u; continue; }
@@ -1522,7 +1538,7 @@ static void floor_update_hw(RFloor *f, const RFloorView *v)
         uint32_t k_a = (uint32_t)(step >> 1), k_b = (uint32_t)(step >> (lb + 1));
         if (k_a > 0x7FFFFFu) k_a = 0x7FFFFFu;
         if (k_b > 0x7FFFFFu) k_b = 0x7FFFFFu;
-        ka[y] = step < a_max ? k_a : 0x80000000u;
+        ka[y] = (step < a_max ? k_a : 0x80000000u) | fog_level(v, den) << 24;   /* A's word carries the line's fog */
         kb[y] = k_b;
     }
     vdp2_ioregs_t *regs = vdp2_regs_get();
@@ -1530,7 +1546,6 @@ static void floor_update_hw(RFloor *f, const RFloorView *v)
     regs->rptau = (uint16_t)((word >> 16) & 7u);
     regs->rptal = (uint16_t)(word & 0xFFFEu);
     floor_buf = b ^ 1;
-    fog_update(v);
 }
 
 static void floor_disable_hw(void)
