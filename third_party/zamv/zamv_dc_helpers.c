@@ -118,11 +118,17 @@ int zamv_dc_row_uploader_begin(zamv_dc_row_uploader_t *u) {
     if(u->staging_bytes && (!u->staging || ((uintptr_t)u->staging & 31u))) return -1;
     if(u->sq_locked) return -1;
 #ifdef __DREAMCAST__
-    /* sq_lock both serializes SQ ownership and programs QACR. Its return value is
-       already translated into the P4 Store Queue address range expected by the
-       direct SH4ZAM SQ writer. */
-    u->pvr_yuv_port = (void *)sq_lock((void *)PVR_TA_YUV_CONV);
-    if(!u->pvr_yuv_port) return -1;
+    /* sq_lock() itself is *not* taken here and held for the whole frame anymore: the decode call this
+       brackets (zamv_decoder_decode_cb) also pulls bitstream chunks through the caller's read callback,
+       which - once that read can genuinely block on a slow/starved source instead of always being an
+       instant synchronous fs_read() - stops being a bounded, non-yielding stretch of code. Holding the
+       Store Queue's real lock across a wait that can go through the KOS scheduler let a decode stall
+       leave the SQ "locked" from this thread's point of view while nothing actually serialized it against
+       a genuine hardware use elsewhere, and the result was a macroblock row landing with stale/torn data
+       (half the frame from the previous decode, half from the new one). zamv_dc_upload_row_direct_cb below
+       now takes the real lock fresh for just the handful of SQ bursts each row needs and releases it
+       immediately after, so nothing is held across the parts of decode that can wait on I/O. This flag is
+       now only this uploader's own "a frame is in progress" bookkeeping. */
     u->sq_locked = 1;
     return 0;
 #else
@@ -132,10 +138,6 @@ int zamv_dc_row_uploader_begin(zamv_dc_row_uploader_t *u) {
 
 void zamv_dc_row_uploader_end(zamv_dc_row_uploader_t *u) {
     if(!u || !u->sq_locked) return;
-#ifdef __DREAMCAST__
-    sq_wait();
-    sq_unlock();
-#endif
     u->sq_locked = 0;
     u->pvr_yuv_port = NULL;
 }
@@ -238,8 +240,18 @@ int zamv_dc_sq_send_row_direct(void *port,const zamv_frame_t *f,int my) {
 
 void zamv_dc_upload_row_direct_cb(void *user,const zamv_frame_t *frame,int my) {
     zamv_dc_row_uploader_t *u=(zamv_dc_row_uploader_t*)user;
-    if(!u||!u->sq_locked||!u->pvr_yuv_port)return;
+    if(!u||!u->sq_locked)return;
+#ifdef __DREAMCAST__
+    /* Locked and released around just this row's bursts - see the comment in
+       zamv_dc_row_uploader_begin for why the lock no longer spans the whole frame. */
+    void *port = (void *)sq_lock((void *)PVR_TA_YUV_CONV);
+    if(!port) return;
+    (void)zamv_dc_sq_send_row_direct(port,frame,my);
+    sq_wait();
+    sq_unlock();
+#else
     (void)zamv_dc_sq_send_row_direct(u->pvr_yuv_port,frame,my);
+#endif
 }
 
 /* Cross-check the Store Queue gather against the normative packer on real
