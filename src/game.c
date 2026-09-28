@@ -55,15 +55,19 @@ static void debug_win_arm(void)
 #ifdef PLAT_SATURN
 /* the pack read count when the level's music took the drive; leave_level's tripwire measures against it */
 static unsigned reads_at_music;
+static uint64_t load_t0;   /* level_start's start: lock_scene reports the load's time */
+void cd_sat_report(void);  /* platform/saturn/cd_sat.c */
 #endif
 
 #ifdef PLAT_SATURN
 /* the scene is loaded: what it warmed is made resident and kept, and from here to the next gfx_trim() (leave_level)
  * nothing may read the disc - the drive would give the CD-DA music up for the length of the seek. leave_level's
  * tripwire reports anything that tried. */
-static void lock_scene(void)
+static void lock_scene(int stage)
 {
     unsigned missing = gfx_prepare_scene();
+    printf("load: stage %d in %u ms\n", stage, (unsigned)(plat_ticks_ms() - load_t0));
+    cd_sat_report();
     if (missing) fprintf(stderr, "game: %u scene textures could not be made resident before the music\n", missing);
     gfx_lock_reads();
     reads_at_music = packs_reads();
@@ -85,6 +89,7 @@ static bool level_start(Game *g)
     power_close(&g->power);
     character_defs_release();   /* every Character of the stage before is gone (g is cleared below) */
 #ifdef PLAT_SATURN
+    load_t0 = plat_ticks_ms();
     gfx_trim();   /* the menus' graphics (or the stage before's): first, the sample bank's reads need the memory too */
     if (!audio_prepare_scene(stage, menu.character)) return false;
 #endif
@@ -101,7 +106,7 @@ static bool level_start(Game *g)
         g->mode7 = mode7_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives, mode7_phase2);
         if (g->mode7) {
 #ifdef PLAT_SATURN
-            lock_scene();
+            lock_scene(stage);
 #endif
             title_start(g);
         }
@@ -111,7 +116,7 @@ static bool level_start(Game *g)
         g->ramrod = ramrod_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives);
         if (g->ramrod) {
 #ifdef PLAT_SATURN
-            lock_scene();
+            lock_scene(stage);
 #endif
             title_start(g);
         }
@@ -121,7 +126,7 @@ static bool level_start(Game *g)
         g->space = space_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives, g->menu.character);
         if (g->space) {
 #ifdef PLAT_SATURN
-            lock_scene();
+            lock_scene(stage);
 #endif
             title_start(g);
         }
@@ -220,7 +225,7 @@ static bool level_start(Game *g)
     }
     /* Reload-then-keep (the tail of the load above still ran out of memory, so anything it dropped is made resident
      * again while the disc is unlocked), then no disc reads until the stage is left */
-    lock_scene();
+    lock_scene(stage);
 #endif
     music_play(g->night_on ? 13 : g->forest_on ? 15 : g->lab_on ? 14 : 5, true);
     g->cam_x = px - r_int(sw / 2); if (g->cam_x < 0) g->cam_x = 0;

@@ -22,6 +22,7 @@ static uint8_t *ra_buf;
 static fad_t ra_fad;
 static uint32_t ra_count;
 static unsigned long reads_total, bytes_total, seeks_total;
+static unsigned long waits_total, stale_total, fails_total;   /* cd_sat_report: WAIT answers, stale sectors dropped, failed reads */
 
 void cd_sat_init(void)
 {
@@ -133,6 +134,7 @@ static bool read_sectors(fad_t fad, void *dst, uint32_t n, fad_t file_end)
         int32_t got = sector_fad(0);
         if (got < 0) { printf("cd: sector info failed reading %s\n", read_name ? read_name : "?"); st_on = false; goto done; }
         if ((fad_t)got != st_next) {
+            stale_total++;
             if (!stale) printf("cd: stale sector %u dropped reading %s, sector %u\n", (unsigned)got, read_name ? read_name : "?", (unsigned)st_next);
             if (++stale > 4096u || !sectors_drop(1)) { printf("cd: drop failed (%u stale) reading %s\n", (unsigned)stale, read_name ? read_name : "?"); st_on = false; goto done; }
             continue;
@@ -143,6 +145,7 @@ static bool read_sectors(fad_t fad, void *dst, uint32_t n, fad_t file_end)
     }
     ok = true;
 done:
+    if (!ok) fails_total++;
     data_busy = false;
     return ok;
 }
@@ -210,6 +213,15 @@ FILE *fopen(const char *restrict path, const char *restrict mode)
 }
 
 void cd_sat_stats(unsigned long *reads, unsigned long *bytes, unsigned long *seeks) { *reads = reads_total; *bytes = bytes_total; if (seeks) *seeks = seeks_total; }
+
+/* the disc's work since the last report (a stage's load: game.c lock_scene) */
+void cd_sat_report(void)
+{
+    static unsigned long r0, b0, s0, w0, st0, f0;
+    printf("cd: %lu reads (%lu KB), %lu seeks, %lu WAIT answers, %lu stale sectors, %lu failed reads\n", reads_total - r0,
+           (bytes_total - b0) / 1024, seeks_total - s0, waits_total - w0, stale_total - st0, fails_total - f0);
+    r0 = reads_total; b0 = bytes_total; s0 = seeks_total; w0 = waits_total; st0 = stale_total; f0 = fails_total;
+}
 
 /* how much a sequential read of f can take now without waiting for the drive (video_sat.c streams with it): the rest of
  * the read-ahead and the sectors the CD block holds; starts the stream at f's position when it isn't there */
@@ -280,6 +292,7 @@ static int cd_exec(CdRegs *r, CdRegs *st)
     for (uint32_t tries = 0; ; tries++) {
         int err = cd_block_cmd_execute(r, st);
         if (err <= 0 || err == 0xFF || !(err & 0x80)) return err;
+        waits_total++;
         if (tries >= 20000u) { printf("cd: command %04X still answered WAIT (%02X) after 2 s\n", (unsigned)r->cr1, (unsigned)err); return err; }
         sat_busy_wait_us(100, false);
     }

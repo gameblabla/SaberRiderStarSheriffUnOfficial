@@ -194,6 +194,19 @@ Status as of 2026-09-28 is given per item. "Confirmed" means the fix was checked
   command "failed": the boss music never started and the victory screen went blank.
   - Fix: our own `cd_cmd_st`, which reads the status from the high byte.
 
+### 10. Open: a very slow stage load after switching to 352x224
+
+- **On the console:** after OPTIONS > SCREEN 352x224 (and more lives / continues), starting the game took an
+  absurdly long time to load, with what looked like retries, before the stage began. Default settings load normally.
+- **Emulators:** not reproduced. Ymir with CD-block LLE, same menu steps, loads stage 1 in about the same time at 320
+  and 352. Mednafen reads the same packs in the same order in both modes, with no CD errors.
+- **What the clock change does** (BIOS `SYS_CHGSYSCK`, 0x06000320 -> ROM 0x4C8 and 0x1800, disassembled): SMPC
+  RESDISA, the master SH-2 into standby, CKCHG352 / CKCHG320, wake on NMI, then the SCU is set up again with the same
+  A-bus timing (ASR0 = ASR1 = 0x1FF01FF0, AREF = 0x1F), and RESENAB. The CD block's bus settings survive it.
+- **Next step:** the DIAG disc's stall screen now shows the log during a load (see below), and it logs every pack read
+  with its time plus one summary per stage load (`load: stage N in X ms`, then `cd: ... reads, seeks, WAIT answers,
+  stale sectors, failed reads`). A photo of it during the slow load says where the time goes.
+
 ### Debugging method that worked
 
 - **DIAG disc** (`DIAG=1`):
@@ -201,8 +214,10 @@ Status as of 2026-09-28 is given per item. "Confirmed" means the fix was checked
   - Boot stages show as full-screen VDP2 back-screen colours, which need no tiles, font or VRAM timing:
     - blue: patched IP.BIN (`tools/saturn/diag_ip.py`)
     - then red, orange, yellow, green, cyan and white for `sat_diag_stage(2..7)`
-  - Vertical stripes that stay constant down the screen during a load longer than 4 s are the stall overlay itself,
-    not the game.
+  - Its font is written again each time it comes up. Written once at boot, the menus' and stages' planes had
+    overwritten it by the first level load: the stall overlay showed vertical stripes on the console and nothing in
+    Ymir.
+  - It logs every pack read with its time (`SABER_READLOG` on by default) and a summary per stage load.
 - **OPTIONS > STAGE on the DIAG disc:** starts any stage directly as Fireball.
 - **Ymir with CD-block LLE:** use it for **any** CD-block change before a hardware run.
 - **Emulators can't check VDP2 timing:** they are not a reference for cycle patterns, CRAM timing or bank access.
@@ -212,7 +227,7 @@ Status as of 2026-09-28 is given per item. "Confirmed" means the fix was checked
 
 ## Dreamcast
 
-### 10. 640×480 / 832×480 at 20–30 fps: PVR fill rate
+### 11. 640×480 / 832×480 at 20–30 fps: PVR fill rate
 
 - **On the console:** the high-resolution modes ran at 20–30 fps.
 - **Emulators:** flycast always showed 60 fps. It renders the PVR scene on the host GPU and cannot show the PVR's

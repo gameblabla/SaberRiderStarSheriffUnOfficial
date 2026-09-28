@@ -31,6 +31,7 @@ const char *plat_getenv(const char *name)
     for (int i = 0; i < nenv; i++) if (!strcmp(env[i].name, name)) return env[i].value;
 #ifdef SAT_DIAG
     if (!strcmp(name, "SABER_MENU")) return "1";   /* the diagnostic disc starts on the logo splashes, before the intro FMV */
+    if (!strcmp(name, "SABER_READLOG")) return "1";   /* every pack read, with its time: the stall screen shows a slow load's */
 #endif
     return NULL;
 }

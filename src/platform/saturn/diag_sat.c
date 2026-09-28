@@ -87,8 +87,10 @@ static void setup(void)
     REG(0x0F8) = 7;                             /* PRINA: NBG0 on top */
     REG(0x110) = 0;                             /* no colour offset (a fade left dark) */
     REG(0x0AC) = 0x0003; REG(0x0AE) = 0xFFFF;   /* BKTAU / BKTAL: one back screen colour, at VRAM 0x7FFFE */
-    if (!font_ready) {   /* chars 1-127: each 1bpp row byte (bit 0 the left pixel) to four 4bpp bytes, colour 1 on 2;
-                          * char 0 all colour 0: transparent (the stage colour shows) */
+    if (!font_ready || !shown) {   /* chars 1-127: each 1bpp row byte (bit 0 the left pixel) to four 4bpp bytes, colour 1
+                                    * on 2; char 0 all colour 0: transparent (the stage colour shows). Again each time the
+                                    * overlay comes up: the menus' and stages' planes use that memory too (a stall during a
+                                    * level load showed vertical stripes on the console, nothing in Ymir) */
         const uint8_t *cg = __dbgio_default_font.cg;
         volatile uint16_t *d = VRAM16(CHR_OFF);
         for (int c = 0; c < 128; c++)
