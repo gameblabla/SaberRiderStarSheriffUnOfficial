@@ -644,6 +644,7 @@ void rdc_init(void)
 void rdc_frame_begin(void)
 {
     pvr_wait_ready();
+    video_dc_upload_due();   /* the YUV converter's window: see video_dcmv.c */
     PVR_SET(PVR_PT_ALPHA_REF, 0x80);   /* punch-through: a cut-out's texels are 0 or 255 */
     pvr_scene_begin();
     pvr_list_begin(PVR_LIST_TR_POLY);

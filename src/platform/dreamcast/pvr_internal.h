@@ -18,6 +18,7 @@ extern PvrView pvr_view;
 void rdc_init(void);
 void rdc_frame_begin(void);
 void rdc_frame_end(void);
+void video_dc_upload_due(void);   /* video_dcmv.c: show the decoded frame video_update found due */
 bool rdc_in_frame(void);
 
 /* one textured / coloured vertex in screen space (z = 1/w for perspective texturing) */

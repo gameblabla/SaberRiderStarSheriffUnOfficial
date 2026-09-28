@@ -331,7 +331,7 @@ void aud_music_pause(bool pause) { music_post(want_pause, 0, pause); }
 /* ---- video soundtrack: whole ADPCM body preloaded to RAM (a .vsnd sidecar next to the .zamv, the same "SMPL" +
  * rate/samples/bytes header + KOS wav2adpcm body as a snd.pck sample block). ZAMV5 carries no audio of its own
  * (unlike the old DCMV files), so video_dcmv.c drives this stream instead, and paces its decode against
- * aud_video_audio_played_bytes() the way the old code paced against dcfmv's own audio clock.
+ * aud_video_audio_ms() the way the old code paced against dcfmv's own audio clock.
  *
  * This used to fs_read() a few KB straight off the disc from inside the AICA poll callback, once per buffer refill.
  * That let the video's own zamv_chunk_reader (video_dcmv.c, also fs_read on the same /cd filesystem, same thread)
@@ -339,16 +339,22 @@ void aud_music_pause(bool pause) { music_post(want_pause, 0, pause); }
  * playback goes on, so every few hundred ms the drive had to seek away from the video bitstream to fetch a few KB
  * of audio and back again. On real hardware (GDEMU) that is exactly "random drop out": a seek stalls whichever
  * fs_read lost the race, which starves either the video decoder (a stuck frame) or the AICA stream (an audible
- * gap), and since video_update() paces frames off aud_video_audio_played_bytes() a stalled audio read stalls the
+ * gap), and since video_update() paces frames off this stream's clock a stalled audio read stalls the
  * picture too. A video's sidecar tops out in the low single-digit MB (largest current one 1.3 MB) - small enough to
  * pull in with one read at open time, the same "one read from the disc, no header parsing" rule this file already
  * applies to every other sample (see the file's own top comment) - after which nothing here touches the disc again
- * until the next video opens. */
+ * until the next video opens.
+ *
+ * The video's clock (aud_video_audio_ms) is the time since the stream started, held back to what has been handed to
+ * the AICA. It used to be the bytes handed over, but KOS asks for them half a buffer (0.37 s) at a time and a whole
+ * buffer ahead of what plays: the picture ran 0.74 s early and moved in 0.37 s lurches - nine frames in a burst, then
+ * a freeze. */
 static uint8_t *vaud_data;
 static size_t vaud_bytes_total;
 static size_t vaud_pos;
 static uint32_t vaud_rate;
-static uint64_t vaud_bytes_played;
+static uint64_t vaud_bytes_played;   /* handed to the AICA (the stream buffer runs ahead of what is heard) */
+static uint64_t vaud_start_us;
 static snd_stream_hnd_t vaud_h = SND_STREAM_INVALID;
 
 void aud_video_audio_close(void);
@@ -386,6 +392,7 @@ bool aud_video_audio_open(const char *path)
     if (vaud_h == SND_STREAM_INVALID) vaud_h = snd_stream_alloc(vaud_cb, STREAM_BUF);
     if (vaud_h == SND_STREAM_INVALID) { free(buf); vaud_data = NULL; return false; }
     snd_stream_start_adpcm(vaud_h, vaud_rate, 0);
+    vaud_start_us = timer_us_gettime64();
     snd_stream_volume(vaud_h, 204);   /* the core's voice bus level (0.8), same as the old dcfmv path used */
     return true;
 }
@@ -394,8 +401,13 @@ void aud_video_audio_close(void)
     if (vaud_h != SND_STREAM_INVALID) snd_stream_stop(vaud_h);
     free(vaud_data); vaud_data = NULL;
 }
-uint64_t aud_video_audio_played_bytes(void) { return vaud_bytes_played; }
-uint32_t aud_video_audio_rate(void) { return vaud_rate; }
+uint32_t aud_video_audio_ms(void)
+{
+    if (!vaud_rate) return 0;
+    uint64_t ms = (timer_us_gettime64() - vaud_start_us) / 1000;
+    uint64_t fed_ms = vaud_bytes_played * 2000 / vaud_rate;   /* 2 samples per ADPCM byte */
+    return (uint32_t)(ms < fed_ms ? ms : fed_ms);
+}
 
 /* ---- lifetime ---- */
 void aud_update(void)

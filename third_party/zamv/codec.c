@@ -503,6 +503,10 @@ int zamv_decoder_decode_cb(zamv_decoder_t*d,zamv_read_callback_t read_cb,void*re
     zamv_reader_t r;
     zr_init(&r,d->payload,n);
     uint32_t fp_cookie=zamv_sh4_fp_enter();
+    /* The IDCT runs through the resident XMTRX, which the rest of the program is free to use between frames (the
+       game's renderer loads a rotation there for every rotated sprite): load it for every frame, not just once when
+       the header was read. */
+    zamv_sh4_prepare_transform();
 #define ZAMV_DEC_RETURN(code) do { zamv_sh4_fp_leave(fp_cookie); return (code); } while(0)
     int mbw=d->hdr.width/16,mbh=d->hdr.height/16;
     uint8_t py[256],pu[64],pv[64];
