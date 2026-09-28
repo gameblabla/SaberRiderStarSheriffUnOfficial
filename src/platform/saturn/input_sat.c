@@ -33,6 +33,11 @@ void plat_input_poll(bool down[BTN_COUNT])
     down[BTN_PAUSE] |= pad.pressed.button.start;
 }
 
+void plat_input_shoulders(bool sh[2])
+{
+    sh[0] = pad.connected && pad.pressed.button.l; sh[1] = pad.connected && pad.pressed.button.r;   /* read_pad() ran in plat_input_poll */
+}
+
 /* A+B+C+Start: back to the system menu (the Saturn's usual reset combo) */
 bool sat_reset_combo(void)
 {

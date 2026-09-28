@@ -22,6 +22,7 @@ static int hearts_for(int difficulty) { return difficulty == 0 ? 3 : difficulty 
 bool game_init(Game *g, Ren *ren, int sw, int sh, int start_level)
 {
     memset(g, 0, sizeof *g);
+    g->carry_lives = -1;
     g->ren = ren; g->sw = sw; g->sh = sh;
     g->menu.difficulty = 1; g->menu.lives = 2; g->menu.continues = 3; g->menu.character = 1;   /* option defaults: NORMAL, 02, 03; Fireball */
     if (plat_getenv("SABER_HERO")) g->menu.character = atoi(plat_getenv("SABER_HERO")) & 3;   /* debug: 0 Saber 1 Fireball 2 April 3 Colt */
@@ -103,7 +104,7 @@ static bool level_start(Game *g)
 #endif
     if (stage == 2) {   /* the Mode-7 Grand Prix: its own world, HUD and flow */
         music_stop();   /* finish the previous stage's jingle before the title card */
-        g->mode7 = mode7_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives, mode7_phase2);
+        g->mode7 = mode7_create(ren, sw, sh, g->menu.difficulty, carry >= 0 ? carry : g->menu.lives, mode7_phase2);
         if (g->mode7) {
 #ifdef PLAT_SATURN
             lock_scene(stage);
@@ -113,7 +114,7 @@ static bool level_start(Game *g)
         return g->mode7 != NULL;
     }
     if (stage == 6) {   /* Ramrod in robot mode: first person from the cockpit */
-        g->ramrod = ramrod_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives);
+        g->ramrod = ramrod_create(ren, sw, sh, g->menu.difficulty, carry >= 0 ? carry : g->menu.lives);
         if (g->ramrod) {
 #ifdef PLAT_SATURN
             lock_scene(stage);
@@ -123,7 +124,7 @@ static bool level_start(Game *g)
         return g->ramrod != NULL;
     }
     if (stage == 7) {   /* straight on from the mechs: Ramrod in cruiser mode after the battle cruiser */
-        g->space = space_create(ren, sw, sh, g->menu.difficulty, carry > 0 ? carry : g->menu.lives, g->menu.character);
+        g->space = space_create(ren, sw, sh, g->menu.difficulty, carry >= 0 ? carry : g->menu.lives, g->menu.character);
         if (g->space) {
 #ifdef PLAT_SATURN
             lock_scene(stage);
@@ -161,7 +162,7 @@ static bool level_start(Game *g)
     if (plat_getenv("SABER_START")) px = r_parse(plat_getenv("SABER_START"), NULL);   /* debug */
     player_spawn(&g->player, (unsigned)(g->menu.character - 1) < 3 ? HERO_CRHC[g->menu.character - 1] : 0x8403195A, px, py);
     /* stages 3 and 4 inherit the spares left over from the stage before (a fresh --level 3/4 falls back to the option) */
-    g->player.lives = (stage >= 3 && carry > 0) ? carry : g->menu.lives;
+    g->player.lives = (stage >= 3 && carry >= 0) ? carry : g->menu.lives;
     g->player.hp = g->player.max_hp = hearts_for(g->menu.difficulty);
     power_reset(&g->power, g->menu.character, false);   /* two power attacks a stage */
     g->hero_speed = g->player.ch.speed;
@@ -422,9 +423,9 @@ void game_update(Game *g, real dt)
         menu_update(&g->menu, &g->in, dt, g->sw, g->ren);
         if (g->menu.start_level) {   /* character select always starts stage 1 (OPTIONS > STAGE on the Saturn's diagnostic disc: its stage) */
             g->menu.start_level = false; g->stage = g->menu.start_stage ? g->menu.start_stage : 1; g->menu.start_stage = 0;
-            g->carry_lives = 0; g->continues_left = g->menu.continues; g->mode7_phase2 = false; stage_start(g, "character select");
+            g->carry_lives = -1; g->continues_left = g->menu.continues; g->mode7_phase2 = false; stage_start(g, "character select");
         }
-        if (g->menu.continue_now) { g->menu.continue_now = false; g->continues_left--; g->carry_lives = 0; stage_start(g, "CONTINUE taken"); }   /* fresh lives, at the stage-2 pursuit if reached */
+        if (g->menu.continue_now) { g->menu.continue_now = false; g->continues_left--; g->carry_lives = -1; stage_start(g, "CONTINUE taken"); }   /* fresh lives, at the stage-2 pursuit if reached */
         if (g->menu.next_stage) { g->menu.next_stage = false; stage_start(g, "next stage"); }
         return;
     }

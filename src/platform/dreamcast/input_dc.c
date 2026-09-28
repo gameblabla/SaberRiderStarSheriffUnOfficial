@@ -12,15 +12,23 @@ void plat_input_poll(bool down[BTN_COUNT])
     cont_state_t *st = (cont_state_t *)maple_dev_status(dev);
     if (!st) return;
     uint32_t b = st->buttons;
-    down[BTN_LEFT]  |= (b & CONT_DPAD_LEFT) || st->joyx < -64;
-    down[BTN_RIGHT] |= (b & CONT_DPAD_RIGHT) || st->joyx > 64;
-    down[BTN_UP]    |= (b & CONT_DPAD_UP) || st->joyy < -64;
-    down[BTN_DOWN]  |= (b & CONT_DPAD_DOWN) || st->joyy > 64;
+    down[BTN_LEFT]  |= (b & CONT_DPAD_LEFT) != 0;
+    down[BTN_RIGHT] |= (b & CONT_DPAD_RIGHT) != 0;
+    down[BTN_UP]    |= (b & CONT_DPAD_UP) != 0;
+    down[BTN_DOWN]  |= (b & CONT_DPAD_DOWN) != 0;
+    input_stick(down, st->joyx, st->joyy, 128);
     down[BTN_JUMP]  |= (b & CONT_A) != 0;
     down[BTN_SHOOT] |= (b & (CONT_B | CONT_X)) != 0;
     down[BTN_AIM]   |= st->ltrig > 64 || st->rtrig > 64;
     down[BTN_PAUSE] |= (b & CONT_START) != 0;
     down[BTN_POWER] |= (b & CONT_Y) != 0;
+}
+
+void plat_input_shoulders(bool sh[2])
+{
+    maple_device_t *dev = maple_enum_type(0, MAPLE_FUNC_CONTROLLER);
+    cont_state_t *st = dev ? (cont_state_t *)maple_dev_status(dev) : NULL;
+    sh[0] = st && st->ltrig > 64; sh[1] = st && st->rtrig > 64;
 }
 
 /* A+B+X+Y+Start: back to the BIOS menu (the usual Dreamcast reset) */

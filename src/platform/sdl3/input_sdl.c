@@ -253,10 +253,9 @@ void plat_input_poll(bool down[BTN_COUNT])
 {
     if (!pad) return;
     int ax = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX), ay = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);
-    down[BTN_LEFT]  |= ax < -8000;
-    down[BTN_RIGHT] |= ax > 8000;
-    down[BTN_UP]    |= ay < -8000;
-    down[BTN_DOWN]  |= ay > 8000;
+    input_stick(down, ax, ay, 32768);
     for (int b = 0; b < BTN_COUNT; b++)
         for (int s = 0; s < BIND_SLOTS; s++) down[b] |= pad_code_down(pads[b][s]);
 }
+
+void plat_input_shoulders(bool sh[2]) { sh[0] = sh[1] = false; }   /* the PC pad's shoulders are remappable buttons */

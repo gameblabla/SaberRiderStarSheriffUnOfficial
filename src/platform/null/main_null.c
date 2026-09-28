@@ -42,6 +42,7 @@ uint32_t *plat_image_load_rgba(const char *path, int *w, int *h)
 }
 
 void plat_input_poll(bool down[BTN_COUNT]) { (void)down; }
+void plat_input_shoulders(bool sh[2]) { sh[0] = sh[1] = false; }
 bool plat_bind_supported(void) { return false; }
 void plat_bind_label(int dev, int btn, int slot, char *buf, size_t n) { (void)dev; (void)btn; (void)slot; if (n) buf[0] = 0; }
 void plat_bind_capture(int dev, int btn, int slot) { (void)dev; (void)btn; (void)slot; }

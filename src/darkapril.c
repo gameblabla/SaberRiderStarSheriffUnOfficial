@@ -141,7 +141,7 @@ void dark_begin(DarkApril *d, real arena_x, int sw, int difficulty)
 {
     memset(d, 0, sizeof *d);
     d->state = DA_WAIT; d->arena_x = arena_x; d->sw = sw; d->difficulty = difficulty;
-    d->hp = d->hp_max = difficulty == 0 ? 14 : difficulty == 1 ? 20 : 26;
+    d->hp = d->hp_max = difficulty == 0 ? 14 : difficulty == 1 ? 30 : 40;
     if (plat_getenv("SABER_DARKHP")) d->hp = d->hp_max = atoi(plat_getenv("SABER_DARKHP"));   /* debug */
     avatar_load();
     hero_quiet(true);   /* April's body, but the player's grunts stay the player's */

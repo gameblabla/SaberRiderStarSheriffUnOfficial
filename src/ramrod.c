@@ -589,7 +589,7 @@ static void mech_update(Ramrod *r, Mech *m, int idx, real dt)
 /* ---------------------------------------------------------------- Ramrod */
 static void player_control(Ramrod *r, const Input *in, real dt)
 {
-    bool strafe = btn_down(in, BTN_AIM);
+    bool strafe = btn_down(in, BTN_AIM) && !in->shoulder[0] && !in->shoulder[1];   /* the pad's L / R strafe on their own (they are AIM too) */
     real turn = 0;
     if (!strafe) { if (btn_down(in, BTN_LEFT)) turn -= R(1); if (btn_down(in, BTN_RIGHT)) turn += R(1); }
     r->turn_v = approach(r->turn_v, r_mul(turn, R(1.7f)), r_mul_dt(R(7.0f), dt));
@@ -597,6 +597,8 @@ static void player_control(Ramrod *r, const Input *in, real dt)
     real fwd = 0; if (btn_down(in, BTN_UP)) fwd += R(1); if (btn_down(in, BTN_DOWN)) fwd -= R(1);
     r->speed = approach(r->speed, fwd > 0 ? R(135) : fwd < 0 ? R(-90) : 0, r_mul_dt(R(320), dt));
     real st = 0; if (strafe) { if (btn_down(in, BTN_LEFT)) st -= R(1); if (btn_down(in, BTN_RIGHT)) st += R(1); }
+    if (in->shoulder[0]) st -= R(1);
+    if (in->shoulder[1]) st += R(1);
     r->strafe_v = approach(r->strafe_v, st * 120, r_mul_dt(R(420), dt));
     real c = r_cos(r->heading), s = r_sin(r->heading);
     r->px += r_mul_dt(r_mul(c, r->speed) - r_mul(s, r->strafe_v), dt); r->py += r_mul_dt(r_mul(s, r->speed) + r_mul(c, r->strafe_v), dt);
@@ -731,6 +733,7 @@ static int alive_mechs(const Ramrod *r) { int n = 0; for (int i = 0; i < MAX_MEC
 static void bot_input(Ramrod *r, Input *out)
 {
     for (int b = 0; b < BTN_COUNT; b++) out->state[b] = 1;
+    out->shoulder[0] = out->shoulder[1] = false;
     Mech *t = NULL; real td = R_MAX;
     for (int i = 0; i < MAX_MECH; i++) { Mech *m = &r->mech[i]; if (m->st == M_OFF || m->st == M_DYING) continue; real d = r_hypot(m->x - r->px, m->y - r->py); if (d < td) { td = d; t = m; } }
     static int ppress; ppress++;
