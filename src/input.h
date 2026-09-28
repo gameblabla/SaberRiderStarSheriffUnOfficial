@@ -10,6 +10,7 @@ void plat_input_poll(bool down[BTN_COUNT]);
 void plat_input_shoulders(bool sh[2]);   /* L / R held (false where the pad has none mapped) */
 /* an analog stick (x, y in -range..range) into the four directions: a round dead zone, then eight 45-degree wedges */
 void input_stick(bool down[BTN_COUNT], int x, int y, int range);
+void input_set_sensitivity(int s);   /* 1..10 (5 default): 10 answers the lightest tilt, 1 needs a firm push */
 static inline bool btn_down(const Input *in, int b) { return (in->state[b] & ~2) == 0; }
 static inline bool btn_pressed(const Input *in, int b) { return in->state[b] == 2; }
 

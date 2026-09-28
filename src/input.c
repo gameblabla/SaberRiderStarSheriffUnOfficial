@@ -13,9 +13,12 @@ void input_update(Input *in)
     }
 }
 
+static int sensitivity = 5;
+void input_set_sensitivity(int s) { sensitivity = s < 1 ? 1 : s > 10 ? 10 : s; }
+
 void input_stick(bool down[BTN_COUNT], int x, int y, int range)
 {
-    int dead = range * 3 / 10;   /* 30%: past the stick's rest wobble on worn pads */
+    int dead = range * (50 - 4 * sensitivity) / 100;   /* 46% .. 10% of the travel; 30% at the default, past a worn pad's rest wobble */
     if (x * x + y * y < dead * dead) return;
     int ax = x < 0 ? -x : x, ay = y < 0 ? -y : y;
     /* a diagonal once the minor axis passes tan(22.5 deg) ~ 0.414 of the major one (106/256) */

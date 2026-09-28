@@ -14,6 +14,7 @@ enum { MS_SPLASH0 = 0, MS_SPLASH1, MS_SPLASH2, MS_SPLASH3, MS_INTRO = 4, MS_MAIN
 #define CONTINUE_FROM 20     /* the countdown starts here, one per second */
 
 enum { OPT_EXIT, OPT_LEVEL, OPT_PLAYER, OPT_CONTINUE, OPT_SCREEN, OPT_RATIO, OPT_FILTER, OPT_MUSIC,
+       OPT_SENS,    /* the analog stick's sensitivity (not on the Saturn: its pad is digital) */
        OPT_STAGE,   /* the Saturn's diagnostic disc only (SAT_DIAG): straight into a stage, as Fireball */
        OPT_CONTROLS, OPT_CREDITS, OPT_COUNT };
 /* CONTROLS rows: the device, one per button, RESET, BACK */
@@ -47,6 +48,7 @@ typedef struct {
     /* settings (DAT_00aab780 difficulty, DAT_00aab788 lives, DAT_00aab784 continues, DAT_00ace3c0 screen, DAT_00aab770 ratio,
        DAT_00ace3bc filter, DAT_00ac9a9c music test) */
     int difficulty, lives, continues, screen, ratio, filter, music_track;
+    int sensitivity;           /* OPTIONS > SENSITIVITY 1..10 (input_stick's dead zone) */
     bool apply_screen_mode;    /* set when screen / ratio changed */
 } Menu;
 

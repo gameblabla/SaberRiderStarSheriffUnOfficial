@@ -55,6 +55,7 @@ static bool opt_selectable(int opt)
 {
     if (opt == OPT_CONTROLS && !plat_bind_supported()) return false;
 #ifdef PLAT_SATURN
+    if (opt == OPT_SENS) return false;
     if (opt == OPT_SCREEN) return false;   /* one choice, 320x224 or 352x224: the RATIO row (shown as SCREEN) */
     if (opt == OPT_FILTER) return false;   /* no filters: the TV draws the picture */
 #endif
@@ -276,6 +277,7 @@ void menu_update(Menu *m, const Input *in, real dt, int sw, Ren *r)
                 music_play(m->music_track == 0 ? 3 : 9 + m->music_track, true);   /* tracks 1..8 -> music table 10..17 */
             }
             break;
+        case OPT_SENS: m->sensitivity += dir; if (m->sensitivity < 1) m->sensitivity = 1; if (m->sensitivity > 10) m->sensitivity = 10; input_set_sensitivity(m->sensitivity); break;
         case OPT_STAGE: if (dir) m->debug_stage = (m->debug_stage - 1 + 7 + dir) % 7 + 1; break;
         default: break;
         }
@@ -415,23 +417,26 @@ static void draw_options(Menu *m, Ren *r, int sw, int sh)
     int lx = x0 + 0xb0, vx = x0 + 0x11c;
     static const char *DIFF[3] = { "EASY", "NORMAL", "HARD" };
     static const char *FILT[FILTER_COUNT] = { "NONE", "CRT", "DOUBLE", "DOUBLE+SCANLINES", "CRT+SCANLINES" };
-    char lives[16], cont[16], scr[32], mus[24], stg[16];
+    char lives[16], cont[16], scr[32], mus[24], stg[16], sens[8];
+    snprintf(sens, sizeof sens, "%d", m->sensitivity);
     snprintf(lives, sizeof lives, "%02d", m->lives); snprintf(cont, sizeof cont, "%02d", m->continues);
     plat_screen_label(m->screen, scr, sizeof scr);
     if (m->music_track == 0) snprintf(mus, sizeof mus, "OPTIONS"); else snprintf(mus, sizeof mus, "TEST TRACK%02d", m->music_track);
     if (m->debug_stage == 7) snprintf(stg, sizeof stg, "6 FINAL"); else snprintf(stg, sizeof stg, "%d", m->debug_stage);
-    const char *rows[8][2] = { { "LEVEL", DIFF[m->difficulty] }, { "PLAYER", lives }, { "CONTINUE", cont }, { "SCREEN", scr },
+    const char *rows[9][2] = { { "LEVEL", DIFF[m->difficulty] }, { "PLAYER", lives }, { "CONTINUE", cont }, { "SCREEN", scr },
                                { "RATIO", m->ratio == RATIO_WIDE ? "WIDE" : m->ratio == RATIO_43 ? "4:3" : "STRETCH" }, { "FILTER", FILT[m->filter] }, { "MUSIC TEST", mus },
-                               { "STAGE", stg } };
+                               { "SENSITIVITY", sens }, { "STAGE", stg } };
 #ifdef PLAT_SATURN
     rows[4][0] = "SCREEN"; rows[4][1] = m->ratio == RATIO_WIDE ? "352x224" : "320x224";
 #endif
 #ifdef PLAT_DREAMCAST
     rows[4][1] = m->ratio == RATIO_WIDE ? "WIDE" : "ORIGINAL";
 #endif
-    int dy = plat_bind_supported() ? 0x0e : 0x10;   /* an eighth row (CONTROLS) fits above BACKER CREDITS at 14 px */
+    int nrows = plat_bind_supported();
+    for (int i = 0; i < 9; i++) nrows += opt_selectable(OPT_LEVEL + i);
+    int dy = nrows > 8 ? 0x0d : nrows > 7 ? 0x0e : 0x10;   /* the rows (and CONTROLS) fit above BACKER CREDITS */
     int vi = 0;
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 9; i++) {
         if (!opt_selectable(OPT_LEVEL + i)) continue;   /* hidden options leave no row (Saturn SCREEN / FILTER, STAGE) */
         hilite(m->sel == OPT_LEVEL + i, &R, &G, &B);
         font_draw(f, rows[i][0], r_int(lx), r_int(y0 + 0xd8 + vi * dy), R, G, B);
@@ -440,7 +445,7 @@ static void draw_options(Menu *m, Ren *r, int sw, int sh)
     }
     if (plat_bind_supported()) {
         hilite(m->sel == OPT_CONTROLS, &R, &G, &B);
-        font_draw(f, "CONTROLS", r_int(lx), r_int(y0 + 0xd8 + 7 * dy), R, G, B);
+        font_draw(f, "CONTROLS", r_int(lx), r_int(y0 + 0xd8 + vi * dy), R, G, B);
     }
     hilite(m->sel == OPT_CREDITS, &R, &G, &B);
     font_draw(f, "BACKER CREDITS", r_int(x0 + 0xca), r_int(y0 + 0x14e), R, G, B);
