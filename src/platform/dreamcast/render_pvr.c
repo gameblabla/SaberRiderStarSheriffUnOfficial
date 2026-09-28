@@ -5,9 +5,10 @@
  * depth-tested against the ones drawn later. That lets each draw go to the cheapest list that gives the same pixels:
  * opaque ones (R_BLEND_NONE, or blended with an opaque texture / colour) to the opaque list, 1-bit-alpha cut-outs
  * drawn nearest to the punch-through list, and only real blending (alpha / additive, translucent textures, faded
- * sprites) to the translucent list, presorted (autosort off: submission order) and not writing depth. The opaque and
- * punch-through lists only shade the pixel that ends up in front; the translucent list shades every pixel of every
- * layer, which at 640x480 (four times the pixels of 320x240) was more than the PVR could render in a 60 Hz frame on
+ * sprites) to the translucent list, presorted (autosort off: submission order) and not writing depth. The opaque list
+ * only shades the pixel that ends up in front; punch-through still reads textures to reject transparent pixels and
+ * can take several passes. The translucent list shades every visible layer, which at 640x480 (four times the pixels
+ * of 320x240) was more than the PVR could render in a 60 Hz frame on
  * real hardware (emulators render the scene on the host GPU, so they never showed it).
  * The translucent list streams straight into the store queues; the opaque / punch-through ones collect in RAM
  * (Stream) and go to the TA at the end of the frame (the TA takes each list in one piece). A full RAM buffer sends
@@ -24,6 +25,7 @@
  * The logical screen (426x240 wide / 320x240 4:3, 416x240 in the 832x480 mode) is scaled to the display (plat_apply_screen).
  * A display mode switch re-initialises the PVR, which wipes VRAM: the textures are parked in RAM around it (rdc_vram_park). */
 #include "pvr_internal.h"
+#include "pvr_tile_regions.h"
 #include "../plat.h"
 #include <sh4zam/shz_sh4zam.h>
 #include <stdio.h>
@@ -43,12 +45,7 @@ Ren *rdc_renderer(void) { return &the_ren; }
 #define PAGE_MAX 1024
 /* header variants of a texture page: [variant][linear] */
 enum { HV_OP, HV_PT, HV_TR, HV_ADD, HV_COUNT };
-/* what (a part of) a texture's alpha holds: all 255 / only 0 or 255 / anything / all 0 */
-enum { CLS_OPAQUE, CLS_CUT, CLS_TRANS, CLS_EMPTY };
-/* the alpha map: a nibble per 8x8 block of the image, what its texels hold */
-#define AM_NOT_OPAQUE 1            /* an alpha below 255 */
-#define AM_NOT_EMPTY  2            /* an alpha above 0 */
-#define AM_PARTIAL    4            /* an alpha strictly between */
+/* The alpha map is a nibble per 8x8 block; classes and partitioning are in pvr_tile_regions.h. */
 typedef struct {
     pvr_poly_hdr_t hdr[HV_COUNT][2];   /* compiled on first use */
     pvr_ptr_t mem; size_t bytes;
@@ -103,6 +100,7 @@ static Stream streams[PVR_LIST_PT_POLY + 1];
 static pvr_poly_hdr_t want_hdr __attribute__((aligned(32)));
 static int want_list; static unsigned want_gen; static bool have_want;
 static bool all_tr;                /* SABER_PVR_TR: everything in the translucent list */
+static bool tile_split;            /* SABER_PVR_TILE_SPLIT=0: compare with whole-tile classification */
 static bool list_stats;            /* SABER_PERF=2: the screen area per list (rdc_list_stats) */
 void rdc_forget_header(void) { have_want = false; for (int i = 0; i <= PVR_LIST_PT_POLY; i++) streams[i].have = false; }
 
@@ -110,6 +108,7 @@ static uint8_t cls_of_fmt(uint32_t fmt) { return fmt == PVR_TXRFMT_RGB565 ? CLS_
 static inline uint8_t am_bits(uint32_t a) { return (a != 255 ? AM_NOT_OPAQUE : 0) | (a ? AM_NOT_EMPTY : 0) | (a && a != 255 ? AM_PARTIAL : 0); }
 static uint8_t *amap_new(RTex *t) { t->amw = (t->w + 7) / 8; return t->amap = calloc(((size_t)t->amw * ((t->h + 7) / 8) + 1) / 2, 1); }
 static inline void amap_or(RTex *t, int bx, int by, uint8_t bits) { size_t i = (size_t)by * t->amw + bx; t->amap[i >> 1] |= (uint8_t)(bits << ((i & 1) * 4)); }
+static inline unsigned amap_get(const RTex *t, int bx, int by) { size_t i = (size_t)by * t->amw + bx; return (t->amap[i >> 1] >> ((i & 1) * 4)) & 7u; }
 
 /* what the texels of a source rectangle hold (drawn nearest: exactly those texels are sampled; bilinear reaches past
  * the edges, so it gets the whole texture's class). A tile sheet's tiles are mostly all opaque or all empty. */
@@ -121,10 +120,9 @@ static inline __attribute__((always_inline)) int rect_cls(const RTex *t, bool li
     if (bx0 < 0) bx0 = 0; if (by0 < 0) by0 = 0; if (bx1 >= t->amw) bx1 = t->amw - 1; if (by1 >= bh) by1 = bh - 1;
     unsigned m = 0;
     for (int by = by0; by <= by1 && m != 7; by++) for (int bx = bx0; bx <= bx1; bx++) {
-        size_t i = (size_t)by * t->amw + bx;
-        m |= (t->amap[i >> 1] >> ((i & 1) * 4)) & 7u;
+        m |= amap_get(t, bx, by);
     }
-    return !(m & AM_NOT_OPAQUE) ? CLS_OPAQUE : !(m & AM_NOT_EMPTY) ? CLS_EMPTY : !(m & AM_PARTIAL) ? CLS_CUT : CLS_TRANS;
+    return am_class(m);
 }
 
 static int pot(int n) { int p = 16; while (p < n) p <<= 1; return p; }
@@ -621,13 +619,16 @@ static void update_clip(void)
 void rdc_view_changed(void) { update_clip(); }
 void rdc_clip_screen(float *x0, float *y0, float *x1, float *y1) { *x0 = clx0; *y0 = cly0; *x1 = clx1; *y1 = cly1; }
 
-/* RAM for the opaque and punch-through lists of one frame (a quad is 160 bytes with its header) */
-#define OP_BYTES (160 * 1024)
+/* RAM for the opaque and punch-through lists of one frame (a quad is 160 bytes with its header).
+ * Mixed tiles now contribute solid subrectangles too: reserve enough OP space for the wide platformer scenes,
+ * otherwise a successful split would send the extra opaque geometry back to TR when the old 160 KB filled. */
+#define OP_BYTES (256 * 1024)
 #define PT_BYTES (160 * 1024)
 
 void rdc_init(void)
 {
     all_tr = plat_getenv("SABER_PVR_TR") != NULL;
+    const char *split = plat_getenv("SABER_PVR_TILE_SPLIT"); tile_split = !split || atoi(split) != 0;
     const char *perf = plat_getenv("SABER_PERF"); list_stats = perf && atoi(perf) >= 2;
     rdc_pal_restore();
     for (int b = 0; b < 3; b++) compile(&col_hdr[b], PVR_LIST_TR_POLY, NULL, 0, 0, 0, (RBlend)b, false, false, false);
@@ -993,6 +994,33 @@ static void draw_tex(RTex *t, const RFRect *src, const RFRect *dst, double angle
 
 void r_tex(Ren *r, RTex *t, const RFRect *src, const RFRect *dst) { (void)r; draw_tex(t, src, dst, 0, NULL, R_FLIP_NONE); }
 
+/* Platformer tiles are 16x16, point sampled. Send their solid 8x8 regions to OP,
+ * omit empty regions, and keep PT/TR only around the actual cutout/blended edges.
+ * This reduces texture reads and PT passes, not just CPU submissions (Dev.Box
+ * System Architecture, sections 3.1.1.9 and 3.4.3). Equal neighbours are merged.
+ * UVs are cuts of the original mapping, including a mirrored tile; neither the
+ * atlas nor the destination is resampled. Bilinear and unaligned sources use
+ * the original path because they can sample across these alpha-map boundaries. */
+static void tile_quad(RTex *t, Page *pg, const RFRect *src, float x0, float y0, float x1, float y1,
+                      float u0, float v0, float u1, float v1, uint32_t argb, bool flip)
+{
+    int bx = (int)src->x >> 3, by = (int)src->y >> 3;
+    uint8_t cls[4] = { am_class(amap_get(t, bx, by)), am_class(amap_get(t, bx + 1, by)),
+                       am_class(amap_get(t, bx, by + 1)), am_class(amap_get(t, bx + 1, by + 1)) };
+    PvrTileRegion regions[4];
+    int n = pvr_tile_regions(cls, regions);
+    /* Evaluate shared edges once: adjacent quads must use exactly the same coordinates. */
+    float x[3] = { x0, (x0 + x1) * 0.5f, x1 }, y[3] = { y0, (y0 + y1) * 0.5f, y1 };
+    float u[3] = { u0, (u0 + u1) * 0.5f, u1 }, v[3] = { v0, (v0 + v1) * 0.5f, v1 };
+    for (int i = 0; i < n; i++) {
+        const PvrTileRegion *q = &regions[i];
+        if (invisible(t, q->cls)) continue;
+        int a = flip ? 2 - q->x - q->w : q->x, b = a + q->w;
+        rdc_header(page_hdr(t, pg, q->cls));
+        quad(x[a], y[q->y], x[b], y[q->y + q->h], u[a], v[q->y], u[b], v[q->y + q->h], argb);
+    }
+}
+
 void r_tex_batch(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, int n)
 {
     (void)r;
@@ -1019,10 +1047,16 @@ void r_tex_batch(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, int n)
         }
         int cls = per_tile ? rect_cls(t, false, s->x, s->y, s->x + s->w, s->y + s->h) : t->cls;
         if (invisible(t, cls)) continue;
-        const pvr_poly_hdr_t *h = page_hdr(t, pg, cls);
-        if (h != cur) { rdc_header(h); cur = h; }
         float u0 = (s->x - pg->x0) * iu, u1 = u0 + s->w * iu, v0 = (s->y - pg->y0) * iv, v1 = v0 + s->h * iv;
         if (d->w < 0) { float k = u0; u0 = u1; u1 = k; }
+        if (tile_split && per_tile && (cls == CLS_CUT || cls == CLS_TRANS) && s->w == 16 && s->h == 16 &&
+            s->x == (float)((int)s->x & ~7) && s->y == (float)((int)s->y & ~7)) {
+            tile_quad(t, pg, s, x0, y0, x1, y1, u0, v0, u1, v1, argb, d->w < 0);
+            cur = NULL;   /* tile_quad may have selected several different headers */
+            continue;
+        }
+        const pvr_poly_hdr_t *h = page_hdr(t, pg, cls);
+        if (h != cur) { rdc_header(h); cur = h; }
         quad(x0, y0, x1, y1, u0, v0, u1, v1, argb);
     }
 }

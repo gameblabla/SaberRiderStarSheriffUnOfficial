@@ -25,7 +25,9 @@ DEFS    := -DPLAT_DREAMCAST -DPLAT_LOW_MEMORY -DPLAT_BAKED_ASSETS -DZAMV_USE_SH4
 # (60 in emulators, which render the PVR scene on the host GPU) because the PVR itself could not render the frame in
 # time: everything went through the translucent list, which shades every pixel of every layer, four times the pixels
 # of 320x240. render_pvr.c now sends opaque and cut-out draws to the opaque / punch-through lists (hidden pixels are
-# never shaded) and keeps the translucent list for real blending.
+# never shaded for opaque geometry) and keeps the translucent list for real blending. Mixed 16x16 platformer tiles
+# are split into merged 8x8 alpha regions: empty regions cost no PVR work, solid regions avoid PT/TR texture reads.
+# SABER_PERF=2 reports actual PVR render timings on hardware; an emulator cannot validate the performance.
 DEFS    += -DDC_HIRES_MODES
 # KOS, kos-ports and the game must all use one SH4 float ABI: environ.sh sets
 # KOS_SH4_PRECISION=-m4-single-only (32-bit double). Mixing it with -m4-single links the wrong

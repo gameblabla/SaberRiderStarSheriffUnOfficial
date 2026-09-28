@@ -18,22 +18,33 @@ int rdc_prims(void);
 void rdc_header_stats(int *sent, int *asked);
 void rdc_list_stats(unsigned n[3], float scr[3], unsigned *ovf);
 
-/* SABER_PERF=2: what the PVR was given, once a second (the largest frame): primitives and screens of area per list.
- * The translucent list's area is what costs: every one of those pixels is shaded, the others only once in front.
- * (Its own line: a serial console line takes ~17 ms, which SABER_PERF=1's frame times should not see.) */
+/* SABER_PERF=2: peaks over 60 submitted frames: primitives and screens of area per list,
+ * plus KOS's hardware render/TA timings and parameter memory use. Areas describe submitted bounds, not GPU work:
+ * OP eliminates hidden shading, PT may read several transparent layers, and TR shades each visible layer.
+ * Serial output can disturb frame cadence; these extra reports are disabled at SABER_PERF=1. */
 static void pvr_perf(void)
 {
     static int on = -1; if (on < 0) { const char *e = plat_getenv("SABER_PERF"); on = e && atoi(e) >= 2; }
     if (!on) return;
-    static unsigned frames, best[3]; static float scr_max[3];
+    static unsigned frames, best[3], gpu_us, ta_us; static size_t vtx_bytes; static float scr_max[3];
     unsigned n[3], ovf; float scr[3];
     rdc_list_stats(n, scr, &ovf);
+    pvr_stats_t stats;
+    if (pvr_get_stats(&stats) == 0) {
+        /* KOS starts these uint64_t fields at -1. They describe completed work,
+         * which can precede the scene just submitted; compare interval peaks. */
+        if (stats.rnd_last_time != UINT64_MAX && stats.rnd_last_time / 1000 > gpu_us) gpu_us = (unsigned)(stats.rnd_last_time / 1000);
+        if (stats.reg_last_time != UINT64_MAX && stats.reg_last_time / 1000 > ta_us) ta_us = (unsigned)(stats.reg_last_time / 1000);
+        if (stats.vtx_buffer_used > vtx_bytes) vtx_bytes = stats.vtx_buffer_used;
+    }
     for (int i = 0; i < 3; i++) { if (n[i] > best[i]) best[i] = n[i]; if (scr[i] > scr_max[i]) scr_max[i] = scr[i]; }
     if (++frames < 60) return;
-    fprintf(stderr, "pvr: %dx%d op %u prims %d.%02d scr | pt %u prims %d.%02d scr | tr %u prims %d.%02d scr | moved to tr (ram full) %u\n",
+    fprintf(stderr, "pvr: %dx%d op %u prims %d.%02d scr | pt %u prims %d.%02d scr | tr %u prims %d.%02d scr | moved to tr (ram full) %u | gpu %u.%02u ms ta %u.%02u ms vtx %u KB\n",
             vid_mode->width, vid_mode->height, best[0], (int)scr_max[0], (int)(scr_max[0] * 100) % 100, best[1], (int)scr_max[1], (int)(scr_max[1] * 100) % 100,
-            best[2], (int)scr_max[2], (int)(scr_max[2] * 100) % 100, ovf);
+            best[2], (int)scr_max[2], (int)(scr_max[2] * 100) % 100, ovf,
+            gpu_us / 1000, gpu_us / 10 % 100, ta_us / 1000, ta_us / 10 % 100, (unsigned)(vtx_bytes / 1024));
     frames = 0; for (int i = 0; i < 3; i++) { best[i] = 0; scr_max[i] = 0; }
+    gpu_us = ta_us = 0; vtx_bytes = 0;
 }
 
 static void report_memory(const char *when)

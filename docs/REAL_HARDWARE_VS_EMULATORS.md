@@ -248,5 +248,14 @@ Status as of 2026-09-28 is given per item. "Confirmed" means the fix was checked
   - A per-8×8 alpha map of each texture classifies the exact source rectangle, so a tile sheet's solid tiles go
     opaque.
   - Stage 1 at 640×480 went from 2.87 translucent screens to 1.76 opaque + 0.93 punch-through + 0.17 translucent.
-- **Status:** not yet measured on the console. Use `SABER_PERF=2` for per-list loads, and `SABER_PVR_TR=1` for the
-  old path as an A/B comparison.
+- **Console follow-up (2026-09-28):** mostly improved Stage 1, but the platformer stages, especially Stage 4, still
+  slow down at 640x480 and 832x480. Punch-through still reads transparent texels and can require multiple passes;
+  classifying whole tiles leaves avoidable PT/TR area.
+- **Follow-up fix:** partition mixed 16x16 tiles into merged 8x8 alpha regions, skip empty regions and send solid
+  regions to OP. Increase OP staging to 256 KiB so the added regions fit. Asset/geometry checks reduce submitted
+  PT+TR tile area by about 36% on Stage 4's route and 53% on Stage 5's; these are not FPS measurements.
+  `SABER_PERF=2` now includes actual PVR render timing and parameter usage. See
+  [the hardware rationale, checks and console comparison](DREAMCAST_PLATFORMER_FILL.md).
+- **Status:** the follow-up builds and passes host partition/asset checks; awaiting real console validation.
+  `SABER_PVR_TILE_SPLIT=0` compares whole tiles against the new partitioning. `SABER_PVR_TR=1` retains the original
+  all-translucent comparison.
