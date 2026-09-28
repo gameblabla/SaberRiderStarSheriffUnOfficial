@@ -13,7 +13,9 @@ enum { MS_SPLASH0 = 0, MS_SPLASH1, MS_SPLASH2, MS_SPLASH3, MS_INTRO = 4, MS_MAIN
        MS_CONTROLS = 0x12 };   /* ours: OPTIONS > CONTROLS, key / pad remapping where the platform has it (plat_bind_supported) */
 #define CONTINUE_FROM 20     /* the countdown starts here, one per second */
 
-enum { OPT_EXIT, OPT_LEVEL, OPT_PLAYER, OPT_CONTINUE, OPT_SCREEN, OPT_RATIO, OPT_FILTER, OPT_MUSIC, OPT_CONTROLS, OPT_CREDITS, OPT_COUNT };
+enum { OPT_EXIT, OPT_LEVEL, OPT_PLAYER, OPT_CONTINUE, OPT_SCREEN, OPT_RATIO, OPT_FILTER, OPT_MUSIC,
+       OPT_STAGE,   /* the Saturn's diagnostic disc only (SAT_DIAG): straight into a stage, as Fireball */
+       OPT_CONTROLS, OPT_CREDITS, OPT_COUNT };
 /* CONTROLS rows: the device, one per button, RESET, BACK */
 enum { CR_DEVICE, CR_BUTTON0, CR_RESET = CR_BUTTON0 + BTN_COUNT, CR_BACK, CR_COUNT };
 enum { RATIO_WIDE = 0, RATIO_43 = -1, RATIO_STRETCH = 1 };
@@ -28,6 +30,8 @@ typedef struct {
     int loading;               /* START on the title: 1 + the frames of black + LOADING drawn before the briefing loads */
     int drawn;                 /* MISSION ACCOMPLISHED: its frames drawn (its clock waits for the first after the reads) */
     bool start_level;          /* set when character select finished -> game starts the level */
+    int start_stage;           /* with start_level: the stage to start (0: stage 1), OPTIONS > STAGE */
+    int debug_stage;           /* OPTIONS > STAGE's choice: 1..6, 7 = stage 6's final phase */
     bool continue_now;         /* CONTINUE? accepted: the game restarts the stage with fresh lives */
     int continues_left;        /* shown on the CONTINUE? screen (the game keeps the count) */
     bool next_stage;           /* MISSION ACCOMPLISHED finished: the game decides whether another stage follows */

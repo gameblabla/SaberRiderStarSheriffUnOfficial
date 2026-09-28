@@ -174,6 +174,12 @@ static void nq_put(int nbg, int k, uint32_t v)
     nq_at[nq_n] = (uint16_t)(nbg * 4096 + k); nq_val[nq_n++] = v;
 }
 
+/* A plane's empty cell is its own first one (layers.py), never cell 0 (NBG0's): the console reads a plane's characters
+ * only from the banks with its CP slots (set_cycle_patterns), and rows out of every band that took cell 0 read bank A0
+ * without one. Level 4's hedges (NBG2, cells in A1) showed flat purple over the top 12 rows, over the sky and the
+ * canopy; level 5's NBG3 (cells in B0) the same over its top 16. The emulators read any bank. */
+static uint32_t empty_name(const SplPlane *pl) { return (uint32_t)P.cellpal[pl->first_cell] << 16 | pl->first_cell; }
+
 static void setup_screens(void)
 {
     const vdp2_vram_ctl_t ctl = { .coeff_table = VDP2_VRAM_CTL_COEFF_TABLE_VRAM, .vram_mode = VDP2_VRAM_CTL_MODE_PART_BANK_BOTH };
@@ -203,7 +209,7 @@ static void setup_screens(void)
             vdp2_scrn_ls_set(&ls);
         }
         volatile uint32_t *pg = VRAM(PAGE(pl->nbg));
-        for (int k = 0; k < 64 * 64; k++) pg[k] = 0;   /* char 0 = plane 0's empty cell: transparent (the upload patterns) */
+        for (int k = 0; k < 64 * 64; k++) pg[k] = empty_name(pl);   /* (the upload patterns) */
     }
     for (int i = 0; i < P.h->nbands && i < MAX_BANDS; i++) { P.band[i].lo = P.band[i].hi = -1; P.band[i].chunk = -1; }
 }
@@ -349,7 +355,7 @@ static void write_column(BandRt *br, int col)
     int rows = b->row1 - b->row0, pc = col & 63;
     int src = b->wrap ? col % (int)b->wrap : col;
     if (src < 0 || src >= (int)b->cols) {   /* beyond the band: empty */
-        for (int r = 0; r < rows; r++) nq_put(pl->nbg, (b->row0 + r) * 64 + pc, 0);
+        for (int r = 0; r < rows; r++) nq_put(pl->nbg, (b->row0 + r) * 64 + pc, empty_name(pl));
         return;
     }
     const uint16_t *n = column(br, src);

@@ -414,7 +414,10 @@ void game_update(Game *g, real dt)
     input_update(&g->in);
     if (!g->in_level) {
         menu_update(&g->menu, &g->in, dt, g->sw, g->ren);
-        if (g->menu.start_level) { g->menu.start_level = false; g->stage = 1; g->carry_lives = 0; g->continues_left = g->menu.continues; g->mode7_phase2 = false; stage_start(g, "character select"); }   /* character select always starts stage 1 */
+        if (g->menu.start_level) {   /* character select always starts stage 1 (OPTIONS > STAGE on the Saturn's diagnostic disc: its stage) */
+            g->menu.start_level = false; g->stage = g->menu.start_stage ? g->menu.start_stage : 1; g->menu.start_stage = 0;
+            g->carry_lives = 0; g->continues_left = g->menu.continues; g->mode7_phase2 = false; stage_start(g, "character select");
+        }
         if (g->menu.continue_now) { g->menu.continue_now = false; g->continues_left--; g->carry_lives = 0; stage_start(g, "CONTINUE taken"); }   /* fresh lives, at the stage-2 pursuit if reached */
         if (g->menu.next_stage) { g->menu.next_stage = false; stage_start(g, "next stage"); }
         return;

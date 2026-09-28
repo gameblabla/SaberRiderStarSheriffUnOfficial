@@ -56,6 +56,10 @@ static bool opt_selectable(int opt)
     if (opt == OPT_CONTROLS && !plat_bind_supported()) return false;
 #ifdef PLAT_SATURN
     if (opt == OPT_SCREEN) return false;   /* one choice, 320x224 or 352x224: the RATIO row (shown as SCREEN) */
+    if (opt == OPT_FILTER) return false;   /* no filters: the TV draws the picture */
+#endif
+#if !(defined(PLAT_SATURN) && defined(SAT_DIAG))
+    if (opt == OPT_STAGE) return false;
 #endif
     return true;
 }
@@ -160,6 +164,7 @@ void menu_enter(Menu *m, int state)
         music_play(0, true); break;
     case MS_OPTIONS:
         m->sel = prev == MS_CONTROLS ? OPT_CONTROLS : 1; m->music_track = 0;
+        if (m->debug_stage < 1) m->debug_stage = 1;
         /* draw_options' art read now, before its music (a read stops CD-DA on the Saturn): read on its first frame, it
          * took the drive back from the track just started while the drive still sought to it, and the screen stayed on
          * the title on the console */
@@ -271,10 +276,15 @@ void menu_update(Menu *m, const Input *in, real dt, int sw, Ren *r)
                 music_play(m->music_track == 0 ? 3 : 9 + m->music_track, true);   /* tracks 1..8 -> music table 10..17 */
             }
             break;
+        case OPT_STAGE: if (dir) m->debug_stage = (m->debug_stage - 1 + 7 + dir) % 7 + 1; break;
         default: break;
         }
         if (confirm(in)) {
-            if (m->sel == OPT_EXIT) { sfx_play(0, 0); menu_enter(m, MS_MAIN); }
+            if (m->sel == OPT_STAGE) {   /* straight into the stage as Fireball: no briefing, no character select */
+                sfx_play(0, 0); music_stop();
+                m->character = 1; m->start_stage = m->debug_stage; m->start_level = true;
+            }
+            else if (m->sel == OPT_EXIT) { sfx_play(0, 0); menu_enter(m, MS_MAIN); }
             else if (m->sel == OPT_CREDITS) { sfx_play(0, 0); menu_enter(m, MS_CREDITS); }
             else if (m->sel == OPT_CONTROLS) { sfx_play(0, 0); menu_enter(m, MS_CONTROLS); }
         }
@@ -405,12 +415,14 @@ static void draw_options(Menu *m, Ren *r, int sw, int sh)
     int lx = x0 + 0xb0, vx = x0 + 0x11c;
     static const char *DIFF[3] = { "EASY", "NORMAL", "HARD" };
     static const char *FILT[FILTER_COUNT] = { "NONE", "CRT", "DOUBLE", "DOUBLE+SCANLINES", "CRT+SCANLINES" };
-    char lives[16], cont[16], scr[32], mus[24];
+    char lives[16], cont[16], scr[32], mus[24], stg[16];
     snprintf(lives, sizeof lives, "%02d", m->lives); snprintf(cont, sizeof cont, "%02d", m->continues);
     plat_screen_label(m->screen, scr, sizeof scr);
     if (m->music_track == 0) snprintf(mus, sizeof mus, "OPTIONS"); else snprintf(mus, sizeof mus, "TEST TRACK%02d", m->music_track);
-    const char *rows[7][2] = { { "LEVEL", DIFF[m->difficulty] }, { "PLAYER", lives }, { "CONTINUE", cont }, { "SCREEN", scr },
-                               { "RATIO", m->ratio == RATIO_WIDE ? "WIDE" : m->ratio == RATIO_43 ? "4:3" : "STRETCH" }, { "FILTER", FILT[m->filter] }, { "MUSIC TEST", mus } };
+    if (m->debug_stage == 7) snprintf(stg, sizeof stg, "6 FINAL"); else snprintf(stg, sizeof stg, "%d", m->debug_stage);
+    const char *rows[8][2] = { { "LEVEL", DIFF[m->difficulty] }, { "PLAYER", lives }, { "CONTINUE", cont }, { "SCREEN", scr },
+                               { "RATIO", m->ratio == RATIO_WIDE ? "WIDE" : m->ratio == RATIO_43 ? "4:3" : "STRETCH" }, { "FILTER", FILT[m->filter] }, { "MUSIC TEST", mus },
+                               { "STAGE", stg } };
 #ifdef PLAT_SATURN
     rows[4][0] = "SCREEN"; rows[4][1] = m->ratio == RATIO_WIDE ? "352x224" : "320x224";
 #endif
@@ -419,8 +431,8 @@ static void draw_options(Menu *m, Ren *r, int sw, int sh)
 #endif
     int dy = plat_bind_supported() ? 0x0e : 0x10;   /* an eighth row (CONTROLS) fits above BACKER CREDITS at 14 px */
     int vi = 0;
-    for (int i = 0; i < 7; i++) {
-        if (!opt_selectable(OPT_LEVEL + i)) continue;   /* hidden options leave no row (Saturn SCREEN, CONTROLS) */
+    for (int i = 0; i < 8; i++) {
+        if (!opt_selectable(OPT_LEVEL + i)) continue;   /* hidden options leave no row (Saturn SCREEN / FILTER, STAGE) */
         hilite(m->sel == OPT_LEVEL + i, &R, &G, &B);
         font_draw(f, rows[i][0], r_int(lx), r_int(y0 + 0xd8 + vi * dy), R, G, B);
         font_draw(f, rows[i][1], r_int(vx), r_int(y0 + 0xd8 + vi * dy), 255, 255, 255);
