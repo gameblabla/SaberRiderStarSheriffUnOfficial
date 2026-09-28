@@ -145,6 +145,7 @@ static uint32_t rec_seq = 1;   /* the recording's number (one a frame) */
 static bool use_slave;
 static void slave_idle(void);
 static void slave_entry(void);
+static void slave_start(void);
 
 /* when a slot's part was last drawn: its texture keeps it (an orphaned slot, its own copy) */
 static uint32_t slot_used(int i) { return slots[i].t ? slots[i].t->used[slots[i].part] : slots[i].used; }
@@ -1722,10 +1723,7 @@ void rsat_init(void)
     recbuf[0] = malloc(sizeof(Rec) * REC_MAX); recbuf[1] = malloc(sizeof(Rec) * REC_MAX);
     if (!cmds || !staging || !recbuf[0] || !recbuf[1]) printf("render: no RAM for the command list\n");
     use_slave = !plat_getenv("SABER_NOSLAVE");
-    if (use_slave) {   /* the slave SH-2 replays the recorded frames (slave_entry, on the master's notification) */
-        cpu_dual_comm_mode_set(CPU_DUAL_ENTRY_ICI);
-        cpu_dual_slave_set(slave_entry);
-    }
+    if (use_slave) slave_start();   /* the slave SH-2 replays the recorded frames (slave_entry, on the master's notification) */
     vdp1_sync_render_set(vdp1_shown, NULL);   /* libyaul calls it at the vblank-in the list is found drawn: the frame change */
     vdp1_sync_interval_set(-1);   /* variable: the framebuffers change once VDP1 has finished the frame (AUTO (0) changes
                                    * them every field and cuts off a frame VDP1 needs longer for) */
@@ -1758,19 +1756,52 @@ static void replay(int buf)
 /* ---- the slave */
 static volatile uint32_t slave_busy __uncached;   /* 1 while the slave replays */
 static volatile uint32_t slave_buf __uncached;    /* the record buffer it replays */
+static volatile uint32_t slave_replays __uncached;   /* replays the slave has taken (0: it never ran one) */
 
+/* The slave's ICI handler. It replays only when there is a frame to: a second notification (slave_idle's, when the
+ * first seemed lost) finds slave_busy clear and does nothing. */
 static void slave_entry(void)
 {
+    if (!slave_busy) return;
+    slave_replays++;
     cpu_cache_purge();   /* the master wrote the records and textures: no stale lines here */
     replay((int)slave_buf);
     slave_busy = 0;
 }
 
-/* wait for the slave to finish its replay; the master then reads / changes the renderer's state safely */
+/* SSHOFF / SSHON with the slave's ICI entry (the SMPC commands never over the vblank's INTBACK) */
+static void slave_start(void)
+{
+    sat_smpc_lock();
+    slave_replays = 0;   /* (a restart after the clock change is watched as the first start) */
+    cpu_dual_comm_mode_set(CPU_DUAL_ENTRY_ICI);
+    cpu_dual_slave_set(slave_entry);
+    sat_smpc_unlock();
+}
+
+/* wait for the slave to finish its replay; the master then reads / changes the renderer's state safely.
+ * Never for ever: a notification the slave missed (it clears its FRT flags as it starts up) is sent again, and a slave
+ * that has never replayed anything after a second is taken as not running - it is stopped and the master replays that
+ * frame and every later one itself (as SABER_NOSLAVE), rather than a black screen. */
 static void slave_idle(void)
 {
     if (!use_slave) return;
-    while (slave_busy) { }
+    if (slave_busy) {
+        uint32_t t0 = sat_timer_us(), renotify = t0;
+        while (slave_busy) {
+            uint32_t now = sat_timer_us();
+            if (now - renotify > 50000u) { renotify = now; cpu_dual_slave_notify(); }
+            if (!slave_replays && now - t0 > 1000000u) {
+                sat_smpc_lock(); smpc_smc_sshoff_call(); sat_smpc_unlock();
+                printf("render: the slave SH-2 never answered; the master draws alone\n");
+                use_slave = false;
+                cpu_cache_purge();
+                replay((int)slave_buf);
+                slave_busy = 0;
+                return;
+            }
+        }
+    }
     cpu_cache_purge();   /* the slave wrote the renderer's state */
 }
 
@@ -1813,6 +1844,7 @@ static bool mode_wide;
 void rsat_set_mode(bool wide)
 {
     if (wide == mode_wide) return;
+    sat_smpc_lock();   /* the clock change and SSHOFF / SSHON / SNDON below: no INTBACK in between */
     slave_idle();
     if (pending) { submit((int)slave_buf); pending = false; }   /* the frame the slave replayed: shown first */
     vdp1_sync_wait();
@@ -1831,8 +1863,9 @@ void rsat_set_mode(bool wide)
     vdp1_setup();
     vdp1_sync_interval_set(-1);
     vdp2_tvmd_display_set();
-    if (use_slave) { cpu_dual_comm_mode_set(CPU_DUAL_ENTRY_ICI); cpu_dual_slave_set(slave_entry); }
+    if (use_slave) slave_start();
     aud_clock_change(false);
+    sat_smpc_unlock();
     mode_wide = wide;
     printf("screen: %dx%d\n", wide ? SAT_WIDE_W : 320, SAT_SCREEN_H);
 }
@@ -1935,8 +1968,10 @@ void rsat_frame_end(void)
         submit(rec_w);
         rec_n[rec_w] = 0; backdrop_dy[rec_w] = 0; rec_cv0[rec_w] = m_cv;
         rec_seq++;
-        for (RTex *t = graveyard[rec_w], *nx; t; t = nx) { nx = t->next_dead; tex_free_mem(t); }
-        graveyard[rec_w] = NULL;
+        for (int b = 0; b < 2; b++) {   /* (the other buffer's: left by a slave that stopped answering, slave_idle) */
+            for (RTex *t = graveyard[b], *nx; t; t = nx) { nx = t->next_dead; tex_free_mem(t); }
+            graveyard[b] = NULL;
+        }
         return;
     }
     slave_idle();                   /* (idle already: rsat_frame_begin waited) */

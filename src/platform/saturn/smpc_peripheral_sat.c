@@ -1,6 +1,7 @@
 /* libyaul's smpc_peripheral.c (f490e2d6, MIT, Copyright (c) Israel Jacquez), linked in place of the library's copy
  * (it defines every symbol of that archive member). Only change: _peripheral_update takes peripherals of any data
- * size instead of asserting on sizes other than 2, 4 and 6 - switching a port to a keyboard or mouse crashed the game. */
+ * size instead of asserting on sizes other than 2, 4 and 6 - switching a port to a keyboard or mouse crashed the game;
+ * the INTBACK is always ended (CONTINUE or BREAK) and never overlaps another SMPC command (sat_smpc_lock, below). */
 
 #include <assert.h>
 #include <string.h>
@@ -19,6 +20,8 @@
 
 #include <smpc/map.h>
 #include <scu/map.h>
+
+#include <cpu/frt.h>
 
 extern smpc_time_t __smpc_time;
 extern smpc_peripheral_port_t __smpc_peripheral_ports[];
@@ -65,6 +68,8 @@ smpc_peripheral_port_t __smpc_peripheral_ports[2];
 
 static volatile bool _collection_complete = false;
 static volatile uint32_t _oreg_offset = 0;
+static uint32_t _collect_offset = 0;   /* where the handler buffers the next OREGs (the INTBACK in flight) */
+static volatile uint32_t _smpc_hold = 0;
 
 /* OREG buffer that can hold a maximum of 6 peripherals with a data size
  * of 255-bytes (+1 for alignment) as well as an entire buffer for SMPC
@@ -114,7 +119,52 @@ smpc_peripheral_intback_issue(void)
         /* Set to 255-byte mode for both ports; time optimized
          *
          * Return peripheral data and time, cartridge code, area code, etc */
+        _collect_offset = 0;
         smpc_smc_intback_call(0x01, P1MD0 | P2MD0 | PEN | OPE);
+}
+
+/* The vblank's INTBACK and the game's other SMPC commands (slave / sound CPU off and on, the clock change) share the
+ * SMPC, one command at a time. An INTBACK issued while the last one's data was still unread used to be left waiting
+ * for its CONTINUE / BREAK (the handler returned without either): mednafen drops such a command at the next vblank,
+ * a real SMPC need not - SF stays set and the next command (SSHON in rsat_init, with the interrupts off) waits for
+ * ever. Now: an INTBACK only when the last one was read and no command is being issued (sat_smpc_intback_ok), and
+ * sat_smpc_lock waits for the one in flight to end (a BREAK if it hangs) before the caller's commands. */
+bool
+sat_smpc_intback_ok(void)
+{
+        return _smpc_hold == 0 && !_collection_complete && (MEMORY_READ(8, SMPC(SF)) & 0x01) == 0;
+}
+
+/* SF clear within ~`us` (the FRT's counts, 0.84-0.9 a microsecond at /32, polled: works with the interrupts off; a
+ * loop count as well, should the FRT be stopped) */
+static bool
+_sf_wait(uint32_t us)
+{
+        const uint32_t want = us;
+        uint32_t got = 0, loops = 0;
+        uint16_t last = cpu_frt_count_get();
+        while (MEMORY_READ(8, SMPC(SF)) & 0x01) {
+                const uint16_t now = cpu_frt_count_get();
+                got += (uint16_t)(now - last);
+                last = now;
+                if (got > want || ++loops > 4000000u) return false;
+        }
+        return true;
+}
+
+void
+sat_smpc_lock(void)
+{
+        _smpc_hold++;
+        if (_sf_wait(60000)) return;   /* an INTBACK takes at most a field */
+        MEMORY_WRITE(8, IREG(0), BR);  /* stuck waiting for CONTINUE: end it */
+        _sf_wait(60000);
+}
+
+void
+sat_smpc_unlock(void)
+{
+        if (_smpc_hold) _smpc_hold--;
 }
 
 void
@@ -359,15 +409,15 @@ _peripheral_update(smpc_peripheral_port_t *per_port_parent,
 static void
 _system_manager_handler(void)
 {
-        static uint32_t offset = 0;
+        uint32_t offset = _collect_offset;
 
         /* Prevent a buffer overrun if the user hasn't called to process the
-         * collection buffer */
-        if (_collection_complete) {
-            return;
+         * collection buffer: the INTBACK still has to be ended, or the SMPC
+         * waits for its CONTINUE / BREAK */
+        if (_collection_complete || offset + SMPC_OREGS > sizeof(_oreg_buf)) {
+                MEMORY_WRITE(8, IREG(0), BR);
+                return;
         }
-
-        assert(offset < sizeof(_oreg_buf));
 
         /* We don't have much time in the critical section. Just buffer the
          * registers */
@@ -383,13 +433,15 @@ _system_manager_handler(void)
                          * is complete */
                         _collection_complete = true;
 
-                        offset = 0;
+                        _collect_offset = 0;
 
                         /* Issue a "BREAK" for the "INTBACK" command */
                         MEMORY_WRITE(8, IREG(0), BR);
                         return;
                 }
         }
+
+        _collect_offset = offset;
 
         /* Issue a "CONTINUE" for the "INTBACK" command */
         MEMORY_WRITE(8, IREG(0), CONT);

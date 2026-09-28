@@ -1,6 +1,8 @@
 # Sega Saturn build (libyaul; a stock console, no RAM cartridge). See plan.md.
 #   source ~/.yaul.env
-#   make -f Makefile.saturn             -> build/saturn/saber_rider.iso + .cue from the staged disc tree
+#   make -f Makefile.saturn             -> build/saturn/saber_rider.iso from the staged disc tree, then
+#                                          tools/saturn/make_bincue.py turns the .iso + tracks/*.BIN into one
+#                                          saber_rider.bin + a single-FILE saber_rider.cue (a real disc's layout)
 #   make -f Makefile.saturn disc        -> bake the disc tree first (tools/saturn/build_disc.py; needs the demo's data)
 #   make -f Makefile.saturn RENDER=null -> no graphics (platform/null/render_null.c): the bring-up / CPU-profile build
 # The core game (src/*.c) + the Saturn platform (src/platform/saturn), linked by libyaul's build rules.
@@ -13,9 +15,18 @@ include $(YAUL_INSTALL_ROOT)/share/build.pre.mk
 RENDER  ?= vdp
 DATA    ?= SaberRider/data
 OUT     := build/saturn
+OBJ     := obj-saturn
+# DIAG=1: the diagnostic disc for a console (src/platform/saturn/diag_sat.c: the log on screen at boot and when the
+# game stalls), built apart in build/saturn-diag from build/saturn's staged files and CD-DA tracks (make disc first)
+DIAG    ?= 0
+ifeq ($(DIAG),1)
+OUT     := build/saturn-diag
+OBJ     := obj-saturn-diag
+SH_CFLAGS += -DSAT_DIAG
+endif
 
 SH_PROGRAM    := saber_rider
-SH_BUILD_DIR  := obj-saturn
+SH_BUILD_DIR  := $(OBJ)
 SH_OUTPUT_DIR := $(OUT)
 SH_SRCS := $(wildcard src/*.c) $(filter-out %/render_sat.c %/vdp2_planes.c %/video_sat.c,$(wildcard src/platform/saturn/*.c))
 SH_SRCS += src/platform/saturn/lz40s.sx   # the LZ40S decoder (SH-2 assembly)
@@ -70,7 +81,24 @@ $(SH_BUILD_PATH)/$(SH_PROGRAM).nofloat: $(SH_BUILD_PATH)/$(SH_PROGRAM).elf
 # the image also follows the staged files (build_disc.py), not only the program; the CUE (which libyaul makes only
 # once) follows the image and the CD-DA tracks
 $(SH_OUTPUT_PATH)/$(SH_PROGRAM).iso: $(filter-out %/0.BIN,$(wildcard $(IMAGE_DIRECTORY)/*))
+ifeq ($(DIAG),1)
+$(SH_OUTPUT_PATH)/$(SH_PROGRAM).iso: | diag-stage
+.PHONY: diag-stage
+diag-stage:
+	@[ -f build/saturn/stage/SND.PCK ] || { echo "no build/saturn/stage: make -f Makefile.saturn disc first"; exit 1; }
+	mkdir -p $(OUT)/stage
+	for f in build/saturn/stage/*; do [ "$${f##*/}" = 0.BIN ] || cp -lf "$$f" $(OUT)/stage/; done
+	rm -f $(OUT)/tracks; mkdir -p $(OUT)/tracks
+	cp -lf build/saturn/tracks/* $(OUT)/tracks/
+endif
 $(SH_OUTPUT_PATH)/$(SH_PROGRAM).cue: $(SH_OUTPUT_PATH)/$(SH_PROGRAM).iso $(wildcard $(AUDIO_TRACKS_DIRECTORY)/*)
+
+# the disc as one bin + cue, after every build: libyaul's cue (the .iso as MODE1/2048 + one file per CD-DA track) is
+# rewritten in place, so the bin is touched last and stays newer than it
+.build: $(SH_OUTPUT_PATH)/$(SH_PROGRAM).bin
+$(SH_OUTPUT_PATH)/$(SH_PROGRAM).bin: $(SH_OUTPUT_PATH)/$(SH_PROGRAM).cue tools/saturn/make_bincue.py tools/saturn/iso2352.c
+	python3 tools/saturn/make_bincue.py $(OUT)
+	touch $@
 
 .PHONY: disc
 disc:

@@ -101,10 +101,18 @@ static void sample_unref(AudSample *s);
 /* ---- the driver ---- */
 static void wait_samples(int n) { while (n--) { SCSP_SCIRE = IRQ_SAMPLE; for (int k = 0; k < 20000 && !(SCSP_SCIPD & IRQ_SAMPLE); k++) { } } }
 
+/* the 68000 off / on (SNDOFF / SNDON: never over the vblank's INTBACK, sat_smpc_lock) */
+static void snd_cpu(bool on)
+{
+    sat_smpc_lock();
+    if (on) smpc_smc_sndon_call(); else smpc_smc_sndoff_call();
+    sat_smpc_unlock();
+}
+
 /* the 68000 off and every slot, timer and DSP register cleared (the sound RAM is kept) */
 static void scsp_quiet(void)
 {
-    smpc_smc_sndoff_call();
+    snd_cpu(false);
     SCSP_MVOL = 1u << 9;   /* 4 Mbit sound RAM, master volume 0 */
     for (int n = 0; n < 32; n++) { SLOT(n, 0x00) = 0; SLOT(n, 0x0A) = 0x001F; }
     SLOT(0, 0x00) = 1u << 12;   /* KYONEX: the key-offs take effect */
@@ -119,11 +127,11 @@ static void scsp_quiet(void)
 
 static bool driver_start(void)
 {
-    smpc_smc_sndoff_call();
+    snd_cpu(false);
     SCSP_MVOL = 1u << 9;
     for (uint32_t i = 0; i < DRV_BYTES; i += 2) SND16(i) = (uint16_t)(adp68k_bin[i] << 8 | adp68k_bin[i + 1]);
     SCSP_MCIRE = 0xFFFF; SCSP_SCIRE = 0xFFFF;
-    smpc_smc_sndon_call();
+    snd_cpu(true);
     uint32_t t0 = sat_timer_us();
     while (!(SCSP_MCIPD & IRQ_DRIVER))   /* the driver says it is up (it has set the SCSP up: ~20 ms) */
         if (sat_timer_us() - t0 > 500000u) { printf("snd: adp68k did not start\n"); return false; }

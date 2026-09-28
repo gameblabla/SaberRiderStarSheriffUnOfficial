@@ -78,3 +78,19 @@ bool sat_floor_visible(void);
 
 /* input_sat.c */
 bool sat_reset_combo(void);           /* A+B+C+Start held on pad 1 */
+
+/* smpc_peripheral_sat.c: the SMPC runs one command at a time; the vblank's INTBACK only when sat_smpc_intback_ok, and
+ * the game's own SMPC commands (SSHON / SNDON..., the clock change) between sat_smpc_lock / sat_smpc_unlock (nests;
+ * call it with the interrupts on where possible: the INTBACK in flight ends through its interrupt) */
+bool sat_smpc_intback_ok(void);
+void sat_smpc_lock(void);
+void sat_smpc_unlock(void);
+
+/* diag_sat.c (make DIAG=1): the log on screen until the main loop runs, and when it stalls */
+#ifdef SAT_DIAG
+void sat_diag_vblank(void);   /* from the vblank-out handler */
+void sat_diag_alive(void);    /* the main loop finished a frame */
+#else
+static inline void sat_diag_vblank(void) { }
+static inline void sat_diag_alive(void) { }
+#endif

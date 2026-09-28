@@ -23,10 +23,13 @@ static void vblank_out(void *work)
     (void)work;
     /* INTBACK is polled from an interrupt.  libyaul waits for SMPC SF to
      * clear before issuing it; a long SMPC command can otherwise trap the
-     * master SH-2 inside this callback and freeze video and CD loading. */
-    if ((*(volatile uint8_t *)0x20100063u & 1u) == 0)
+     * master SH-2 inside this callback and freeze video and CD loading.
+     * Not while the last one's data is unread (a long load) or while the
+     * game issues its own SMPC command (sat_smpc_lock). */
+    if (sat_smpc_intback_ok())
         smpc_peripheral_intback_issue();
     sat_vblank_tick();
+    sat_diag_vblank();
 }
 
 void user_init(void)
@@ -67,6 +70,7 @@ static void __attribute__((noreturn, noinline)) game_main(void)
     sat_timer_init();
     printf("saber rider: saturn build " __DATE__ " " __TIME__ "\n");
     cd_sat_init();
+    printf("boot: renderer\n");
     rsat_init();
 #ifndef SAT_RENDER_NULL
     if (plat_getenv("SABER_RBENCH")) rsat_bench();
@@ -74,11 +78,13 @@ static void __attribute__((noreturn, noinline)) game_main(void)
     report_memory("boot");
 
     const char *lv = plat_getenv("SABER_LEVEL");
+    printf("boot: game\n");
     if (!app_init(rsat_renderer(), plat_default_data_dir(), lv ? atoi(lv) : 0)) {
         printf("app_init failed\n");
         for (;;) vdp2_sync(), vdp2_sync_wait();
     }
     report_memory("init");
+    printf("boot: main loop\n");
     sat_set_oom_hook(packs_evict);   /* malloc out of memory: textures not drawn lately go (gfx.c), as for pack blocks */
 
     uint32_t prev_vb = sat_vblanks(), last_report = 0, frames = 0;
@@ -109,6 +115,7 @@ static void __attribute__((noreturn, noinline)) game_main(void)
         }
         vdp2_sync();
         vdp2_sync_wait();
+        sat_diag_alive();
         frames++;
         if (app_perf_on() && t0 - last_report > 10000000u) {   /* SABER_PERF: the state and memory (a stack / heap walk) */
             Game *g = app_game(); unsigned long reads, bytes, seeks; cd_sat_stats(&reads, &bytes, &seeks);
