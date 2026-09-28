@@ -1,38 +1,41 @@
 #!/usr/bin/env bash
-# Package a release: three separate zips in release/
+# Package a release: separate zips in release/
 #   saber_rider-linux-x86_64-<version>.zip  the SDL3 build, its bundled libraries, assets/ and the demo's data/*.pck
 #   saber_rider-windows-x86_64-<version>.zip  the MinGW-w64 static build (no DLLs to ship), assets/ and the demo's data/*.pck
 #   saber_rider-dreamcast-<version>.zip     the self-booting CDI (the packs are on the disc)
+#   saber_rider-saturn-<version>.zip        the CD image (a single cue/bin, like a retail disc; the packs are baked onto it)
 #
-#   tools/release.sh [--linux] [--win] [--dc] [--full-disc] [DATA_DIR]
-#     --linux / --win / --dc   only those packages (default: all)
+#   tools/release.sh [--linux] [--win] [--dc] [--sat] [--full-disc] [DATA_DIR]
+#     --linux / --win / --dc / --sat   only those packages (default: all)
 #     --full-disc      rebuild the whole Dreamcast disc (music and FMV conversion too) instead of re-baking build/dc/stage
 #     DATA_DIR         the demo's data/ folder with the .pck packs (default SaberRider/data, the copy in this repo)
 # The Dreamcast part sources $KOS_ENV (default /opt/toolchains/dc/kos/environ.sh).
+# The Saturn part sources $YAUL_ENV (default ~/.yaul.env) and always rebuilds build/saturn from scratch.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-want_linux=0 want_win=0 want_dc=0 full_disc=0 DATA=""
+want_linux=0 want_win=0 want_dc=0 want_sat=0 full_disc=0 DATA=""
 for a in "$@"; do
     case "$a" in
         --linux) want_linux=1 ;;
         --win|--windows) want_win=1 ;;
         --dc) want_dc=1 ;;
+        --sat|--saturn) want_sat=1 ;;
         --full-disc) full_disc=1 ;;
-        -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
         -*) echo "unknown option $a" >&2; exit 2 ;;
         *) DATA="$a" ;;
     esac
 done
-[ $want_linux = 0 ] && [ $want_win = 0 ] && [ $want_dc = 0 ] && want_linux=1 want_win=1 want_dc=1
+[ $want_linux = 0 ] && [ $want_win = 0 ] && [ $want_dc = 0 ] && [ $want_sat = 0 ] && want_linux=1 want_win=1 want_dc=1 want_sat=1
 DATA="$(cd "${DATA:-$ROOT/SaberRider/data}" && pwd)"
 PACKS=(pack.pck common.pck levels.pck menu.pck level1.pck video.pck)
 for p in "${PACKS[@]}"; do [ -f "$DATA/$p" ] || { echo "missing $DATA/$p (pass the demo's data/ folder)" >&2; exit 1; }; done
 
 VERSION="$(date +%Y%m%d)-$(git rev-parse --short HEAD)"
-git diff --quiet HEAD -- src assets Makefile Makefile.dc Makefile.win tools || VERSION="$VERSION-dirty"
+git diff --quiet HEAD -- src assets Makefile Makefile.dc Makefile.win Makefile.saturn tools || VERSION="$VERSION-dirty"
 OUT="$ROOT/release"
 mkdir -p "$OUT"
 
@@ -147,7 +150,35 @@ EOF
     echo "-> $zipf ($(du -h "$zipf" | cut -f1))"
 }
 
+# ---------------------------------------------------------------- Saturn
+package_saturn() {
+    echo "== Saturn build"
+    local env_sh="${YAUL_ENV:-$HOME/.yaul.env}"
+    [ -f "$env_sh" ] || { echo "Yaul environment not found: $env_sh" >&2; exit 1; }
+    rm -rf build/saturn obj-saturn
+    (   source "$env_sh"
+        make -j"$(nproc)" -f Makefile.saturn disc "DATA=$DATA" RENDER=vdp
+    )
+    local stage="$OUT/saturn" dir="$OUT/saturn/SaberRider-Saturn"
+    rm -rf "$stage"; mkdir -p "$dir"
+    cp build/saturn/saber_rider.cue build/saturn/saber_rider.bin "$dir/"
+    cat > "$dir/README.txt" <<EOF
+Saber Rider and the Star Sheriffs - demo reconstruction, Sega Saturn ($VERSION)
+
+saber_rider.cue + saber_rider.bin is one disc image (data track and CD-DA tracks in a single bin, like a
+retail Saturn disc); burn it (ImgBurn / cdrecord with the cue sheet), load it on an ODE (Satiator,
+action-replay-based, etc.), or run it in an emulator (Mednafen, SSF, Kronos).
+
+Controls: D-pad moves, A/B/C shoot / power attack / jump per layout, shoulders aim, Start pauses.
+EOF
+    local zipf="$OUT/saber_rider-saturn-$VERSION.zip"
+    rm -f "$zipf"
+    (cd "$stage" && zip -qr9 "$zipf" SaberRider-Saturn)
+    echo "-> $zipf ($(du -h "$zipf" | cut -f1))"
+}
+
 [ $want_linux = 1 ] && package_linux
 [ $want_win = 1 ] && package_win
 [ $want_dc = 1 ] && package_dc
+[ $want_sat = 1 ] && package_saturn
 ls -la "$OUT"/*.zip

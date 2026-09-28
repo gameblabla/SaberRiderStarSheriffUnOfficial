@@ -16,6 +16,7 @@ static void rsat_init(void) { }
 static void rsat_frame_begin(void) { }
 static void rsat_frame_end(void) { }
 static void rsat_timing(uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d) { *a = *b = *c = *d = 0; }
+static void rsat_cram_flush(void) { }
 #endif
 
 static void vblank_out(void *work)
@@ -29,16 +30,28 @@ static void vblank_out(void *work)
     if (sat_smpc_intback_ok())
         smpc_peripheral_intback_issue();
     sat_vblank_tick();
+}
+
+/* the vertical blank's start (libyaul runs this before it commits VDP2's registers): colour RAM and the diagnostic
+ * screen are written here, while VDP2 doesn't draw (the console loses a colour RAM write made during the display) */
+static void vblank_in(void *work)
+{
+    (void)work;
+    rsat_cram_flush();
     sat_diag_vblank();
 }
 
 void user_init(void)
 {
+    sat_diag_stage(2);   /* (make DIAG=1) the boot stages' colours: diag_sat.c */
     vdp2_tvmd_display_res_set(VDP2_TVMD_INTERLACE_NONE, VDP2_TVMD_HORZ_NORMAL_A, VDP2_TVMD_VERT_224);
     vdp2_scrn_back_color_set(VDP2_VRAM_ADDR(3, 0x01FFFE), RGB1555(1, 0, 0, 0));
     vdp_sync_vblank_out_set(vblank_out, NULL);
+    vdp_sync_vblank_in_set(vblank_in, NULL);
     cd_block_init();
+    sat_diag_stage(3);
     smpc_peripheral_init();
+    sat_diag_stage(4);
     vdp2_tvmd_display_set();
 }
 
@@ -68,10 +81,13 @@ static void report_memory(const char *when)
 static void __attribute__((noreturn, noinline)) game_main(void)
 {
     sat_timer_init();
+    sat_diag_stage(5);
     printf("saber rider: saturn build " __DATE__ " " __TIME__ "\n");
     cd_sat_init();
+    sat_diag_stage(6);
     printf("boot: renderer\n");
     rsat_init();
+    sat_diag_stage(7);
 #ifndef SAT_RENDER_NULL
     if (plat_getenv("SABER_RBENCH")) rsat_bench();
 #endif

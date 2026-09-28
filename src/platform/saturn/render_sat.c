@@ -273,6 +273,44 @@ static int floor_cram_granules;
 
 static int pal_granules(int npal) { return npal < 64 ? 1 : npal < 128 ? 2 : 4; }
 
+/* Colour RAM is written in the vertical blank only: the console drops a CPU write to it while VDP2 draws the screen
+ * (mednafen and Ymir take it at any time) - level 1's far plane showed black where its palettes were uploaded mid-frame,
+ * single entries of the others black or stale (dashes across the rocks), stage 2's floor grey in the distance. Every
+ * writer (the planes, the floor, the 8bpp banks of the slave's replay) puts its colours in this copy and marks their
+ * granules; the vblank-in handler (rsat_cram_flush) copies the marked ones. The copy and the marks are uncached (the
+ * slave writes them, the master's interrupt reads them); a mark is set once its granule is written, and cleared before
+ * it is copied, so a granule written again while it is copied goes again at the next vblank. */
+static uint16_t cram_copy[2048] __uncached __attribute__((aligned(4)));
+static volatile uint8_t cram_dirty[CRAM_GRAN] __uncached;
+static volatile bool cram_ready;   /* the marks cleared (rsat_init): the handler runs from user_init on */
+
+static void cram_mark(int first, int n)
+{
+    for (int g = first / 64; g <= (first + n - 1) / 64 && g < CRAM_GRAN; g++) cram_dirty[g] = 1;
+}
+
+void rsat_cram_put_be(int first, const uint8_t *be, int n)
+{
+    for (int i = 0; i < n && first + i < 2048; i++) cram_copy[first + i] = (uint16_t)(be[i * 2] << 8 | be[i * 2 + 1]);
+    if (n > 0) cram_mark(first, n);
+}
+
+#define VDP2_TVSTAT_VBLANK() ((*(volatile uint16_t *)0x25F80004u & 0x0008u) != 0)
+
+/* from the vblank-in handler: the marked granules into colour RAM while the vertical blank lasts (the rest at the next) */
+void rsat_cram_flush(void)
+{
+    volatile uint32_t *hw = (volatile uint32_t *)VDP2_CRAM_ADDR(0);
+    const uint32_t *src = (const uint32_t *)cram_copy;
+    if (!cram_ready) return;
+    for (int g = 0; g < CRAM_GRAN; g++) {
+        if (!cram_dirty[g]) continue;
+        if (!VDP2_TVSTAT_VBLANK()) return;
+        cram_dirty[g] = 0;
+        for (int i = g * 32; i < g * 32 + 32; i++) hw[i] = src[i];
+    }
+}
+
 static void cram_release(int g)
 {
     for (int k = 0; k < cslots[g].n; k++) cowner[g + k] = -1;
@@ -321,7 +359,7 @@ static int cram_bank(RTex *t, uint8_t r, uint8_t g, uint8_t b)
             if (!free_run) continue;
             for (int k = 0; k < need; k++) cowner[base + k] = (int8_t)base;
             cslots[base] = (CSlot){ t, tint, frame_no, (uint8_t)need };
-            volatile uint16_t *c = (volatile uint16_t *)VDP2_CRAM_ADDR(base * 64);
+            uint16_t *c = &cram_copy[base * 64];
             c[0] = 0;
             for (int k = 0; k < t->npal; k++) {
                 uint16_t v = be16(t->pal + 2 * k);
@@ -331,6 +369,7 @@ static int cram_bank(RTex *t, uint8_t r, uint8_t g, uint8_t b)
                 }
                 c[k + 1] = v;
             }
+            cram_mark(base * 64, t->npal + 1);
             cram_uploads++;
             return base * 64;
         }
@@ -1228,11 +1267,12 @@ static void fog_colors(uint32_t haze)
         int h = (int)((haze >> (8 * k)) & 0xFFu);
         d[k] = h - fog_mean[k] > h / 4 ? h - fog_mean[k] : h / 4;
     }
-    volatile uint16_t *cram = (volatile uint16_t *)VDP2_CRAM_ADDR(FL_FOG_CRAM);
+    uint16_t *cram = &cram_copy[FL_FOG_CRAM];
     for (int n = 0; n < FL_FOG_LEVELS; n++) {
         int r = d[0] * n / (FL_FOG_LEVELS - 1) >> 3, g = d[1] * n / (FL_FOG_LEVELS - 1) >> 3, b = d[2] * n / (FL_FOG_LEVELS - 1) >> 3;
         cram[n] = (uint16_t)(b << 10 | g << 5 | r);
     }
+    cram_mark(FL_FOG_CRAM, FL_FOG_LEVELS);
 }
 
 /* the fog level (0..31) of a screen line whose floor is dist world units off, as the software floor fades that row
@@ -1533,8 +1573,8 @@ static bool floor_hw_setup(RFloor *f)
     if (!floor_prepare(f)) return false;
     rsat_cram_reserve_floor(FL_FOG_CRAM + FL_FOG_LEVELS);
     floor_cram_reserved = true;
-    volatile uint16_t *cram = (volatile uint16_t *)VDP2_CRAM_ADDR(0);
-    for (int i = 0; i < 256; i++) cram[i] = i < f->npal ? f->pal[i] : 0;
+    for (int i = 0; i < 256; i++) cram_copy[i] = i < f->npal ? f->pal[i] : 0;
+    cram_mark(0, 256);
     fog_mean_of(f);
     for (int p = 0; p < 2; p++) floor_put_single_chars(f, &f->map[p]);
     floor_reset_cells(f);
@@ -1717,7 +1757,9 @@ void rsat_init(void)
     vdp2_cram_mode_set(1);
     const char *tr = plat_getenv("SABER_RTRACE");
     trace_from = tr ? atoi(tr) : 0;
-    for (int i = 0; i < CRAM_GRAN; i++) cowner[i] = -1;
+    for (int i = 0; i < CRAM_GRAN; i++) cowner[i] = -1, cram_dirty[i] = 0;   /* (.uncached isn't cleared at start) */
+    memset(cram_copy, 0, sizeof cram_copy);
+    cram_ready = true;
     cmds = hw_memalign(32, sizeof(Cmd) * CMD_MAX);
     staging = hw_memalign(32, STAGING_SIZE);
     recbuf[0] = malloc(sizeof(Rec) * REC_MAX); recbuf[1] = malloc(sizeof(Rec) * REC_MAX);

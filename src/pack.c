@@ -87,7 +87,7 @@ bool pack_load(Pack *p, const char *path)
     /* the entry table runs from 0x10 to a zero id, the directory text follows it */
     if (dir_off <= 0x10 || dir_off > p->file_size) { fprintf(stderr, "pack: bad directory %s\n", path); return false; }
     uint8_t *tab = malloc(dir_off - 0x10);
-    if (!tab || !read_at(p->f, 0x10, tab, dir_off - 0x10)) { free(tab); return false; }
+    if (!tab || !read_at(p->f, 0x10, tab, dir_off - 0x10)) { fprintf(stderr, "pack: cannot read the entry table of %s\n", path); free(tab); return false; }
     int n = 0;
     for (const uint8_t *e = tab; e + 16 <= tab + (dir_off - 0x10); e += 16, n++) if (e[0] == 0) break;
     p->entries = calloc(n ? n : 1, sizeof(PackEntry));

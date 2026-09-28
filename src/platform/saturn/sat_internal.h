@@ -47,6 +47,8 @@ void rsat_stats(unsigned *parts_resident, unsigned *vram_used, unsigned *uploads
 /* for vdp2_planes.c: colour RAM entries [0, n) kept from VDP1's palette banks (0: none); an 8bpp texture's pixels at a
  * sprite priority register (0 the default, over the planes); textures drawn first every frame, under everything */
 void rsat_cram_reserve(int entries);
+void rsat_cram_put_be(int first, const uint8_t *be, int n);   /* n big-endian RGB555 colours from entry first, at the vblank */
+void rsat_cram_flush(void);                                   /* the vblank-in handler: the colours written since, into colour RAM */
 struct RTex;
 void rsat_tex_priority(struct RTex *t, int reg);
 void rsat_set_backdrops(struct RTex **t, const int *x, const int *y, int n, bool clear_framebuffer);
@@ -88,9 +90,11 @@ void sat_smpc_unlock(void);
 
 /* diag_sat.c (make DIAG=1): the log on screen until the main loop runs, and when it stalls */
 #ifdef SAT_DIAG
-void sat_diag_vblank(void);   /* from the vblank-out handler */
+void sat_diag_vblank(void);   /* from the vblank-in handler */
 void sat_diag_alive(void);    /* the main loop finished a frame */
+void sat_diag_stage(unsigned s);   /* a boot stage reached: its colour on the whole screen (diag_sat.c) */
 #else
+static inline void sat_diag_stage(unsigned s) { (void)s; }
 static inline void sat_diag_vblank(void) { }
 static inline void sat_diag_alive(void) { }
 #endif

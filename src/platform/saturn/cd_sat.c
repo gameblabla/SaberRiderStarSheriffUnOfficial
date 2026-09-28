@@ -2,7 +2,7 @@
  * Everything the disc builder writes sits in the ISO root under an 8.3 upper-case name, so a path is matched by its
  * last component, ignoring case (fopen("SaberRider/data/levels.pck") opens LEVELS.PCK).
  * Reads go sector by sector through the CD block: whole sectors straight into the caller's buffer when the file
- * position and the buffer allow it, the rest through a one-sector cache per open file.
+ * position and the buffer allow it, the rest through a read-ahead buffer shared by the open files (RA_SECTORS).
  * The music is CD-DA (cd_sat_cdda_*, plan 7.1), which needs the same drive: stages load everything up front, and a
  * read that happens anyway takes the drive and the music comes back where it was once the reads stop. */
 #include "sat_internal.h"
@@ -14,6 +14,13 @@
 
 static cdfs_filelist_t filelist;
 static bool fs_ready;
+/* The read-ahead: disc sectors ra_fad.. (ra_count of them), filled with as many as the CD block already holds. Every
+ * CD block command takes milliseconds on the real firmware (at once in mednafen and Ymir's HLE): one sector a read was
+ * ~60 sectors a second, the intro FMV (~88) starved and stalled on the console. */
+enum { RA_SECTORS = 16 };
+static uint8_t *ra_buf;
+static fad_t ra_fad;
+static uint32_t ra_count;
 static unsigned long reads_total, bytes_total, seeks_total;
 
 void cd_sat_init(void)
@@ -23,7 +30,8 @@ void cd_sat_init(void)
     cdfs_config_default_set();
     cdfs_filelist_init(&filelist, entries, MAX_FILES);
     cdfs_filelist_root_read(&filelist);
-    fs_ready = true;
+    ra_buf = lw_malloc(RA_SECTORS * 2048u);
+    fs_ready = ra_buf != NULL;
     printf("cd: %u files\n", (unsigned)filelist.entries_count);
 }
 
@@ -46,9 +54,7 @@ const cdfs_filelist_entry_t *cd_sat_entry(const char *name) { return find(name);
 typedef struct {
     fad_t fad, fad_end;       /* the file's first sector and the one after its last */
     uint32_t size, pos;
-    int32_t cached;           /* the sector in cache (relative to the file), -1 none */
     const char *name;
-    uint8_t cache[2048] __attribute__((aligned(4)));
 } CdFile;
 
 /* The drive streams from where the last read ended: a read that continues it takes the sectors the CD block already
@@ -67,8 +73,10 @@ extern int cd_block_cmd_execute(CdRegs *regs, CdRegs *status);
 #define HIRQ_DRDY   0x0002u
 #define HIRQ_CSCT   0x0004u
 #define HIRQ_PEND   0x0010u
+#define HIRQ_ESEL   0x0040u
 static void cdda_interrupt(void);
 static int cd_cmd(uint16_t hirq_mask, uint16_t cr1, uint16_t cr2, uint16_t cr3, uint16_t cr4);
+static int sel_cmd(uint16_t cr1, uint16_t cr2, uint16_t cr3, uint16_t cr4);
 static int32_t sectors_ready(void);
 static int32_t sector_fad(uint16_t pos);
 static bool sectors_drop(uint16_t sectors);
@@ -83,13 +91,16 @@ static bool stream_start(fad_t fad, uint32_t count)
 {
     cdda_interrupt();
     st_on = false;
-    if (cd_cmd(0, 0x4000 | (fad >> 16), (uint16_t)fad, (uint16_t)((count >> 16) & 0xFF), (uint16_t)count) ||   /* filter 0: FAD range */
-        cd_cmd(0, 0x4440, 0, 0, 0) ||                                  /* filter 0: range mode */
-        cd_cmd(0, 0x4603, 0x00FF, 0, 0) ||                             /* filter 0: true -> partition 0, false -> none */
-        cd_cmd(0x0200, 0x4800, 0, 0, 0) ||                             /* reset selector 0 (EFLS) */
-        cd_cmd(0x0040, 0x3000, 0, 0x0000, 0) ||                        /* the drive into filter 0 (ESEL) */
-        cd_cmd(HIRQ_PEND | HIRQ_CSCT, 0x1080 | (fad >> 16), (uint16_t)fad, (uint16_t)(0x0080 | ((count >> 16) & 0xFF)), (uint16_t)count))
+    int e, step = 0;
+    if ((++step, e = sel_cmd(0x4000 | (fad >> 16), (uint16_t)fad, (uint16_t)((count >> 16) & 0xFF), (uint16_t)count)) ||   /* filter 0: FAD range */
+        (++step, e = sel_cmd(0x4440, 0, 0, 0)) ||                                    /* filter 0: range mode */
+        (++step, e = sel_cmd(0x4603, 0x00FF, 0, 0)) ||                               /* filter 0: true -> partition 0, false -> none */
+        (++step, e = sel_cmd(0x4800, 0, 0, 0)) ||                                    /* reset selector 0: partition 0 emptied */
+        (++step, e = sel_cmd(0x3000, 0, 0x0000, 0)) ||                               /* the drive into filter 0 */
+        (++step, e = cd_cmd(HIRQ_PEND | HIRQ_CSCT, 0x1080 | (fad >> 16), (uint16_t)fad, (uint16_t)(0x0080 | ((count >> 16) & 0xFF)), (uint16_t)count))) {
+        printf("cd: stream start failed at command %d (%d), sector %u\n", step, e, (unsigned)fad);
         return false;
+    }
     st_next = fad; st_end = fad + count; st_on = true;
     seeks_total++;
     return true;
@@ -112,7 +123,7 @@ static bool read_sectors(fad_t fad, void *dst, uint32_t n, fad_t file_end)
         int32_t available;
         uint32_t spins = 0;
         while ((available = sectors_ready()) <= 0) {
-            if (available < 0 || ++spins > 2000000u) { st_on = false; goto done; }   /* error or stalled drive */
+            if (available < 0 || ++spins > 2000000u) { printf("cd: no sector (%d) reading %s, sector %u\n", (int)available, read_name ? read_name : "?", (unsigned)st_next); st_on = false; goto done; }   /* error or stalled drive */
         }
         uint32_t ready = (uint32_t)available;
         if (ready > n) ready = n;
@@ -120,14 +131,14 @@ static bool read_sectors(fad_t fad, void *dst, uint32_t n, fad_t file_end)
          * reading from its previous position in the same file pass it - SND.PCK's sector 203 taken for sector 80, a
          * sound sample read as garbage and stage 5 refused after stage 4. Stale ones come first; drop them. */
         int32_t got = sector_fad(0);
-        if (got < 0) { st_on = false; goto done; }
+        if (got < 0) { printf("cd: sector info failed reading %s\n", read_name ? read_name : "?"); st_on = false; goto done; }
         if ((fad_t)got != st_next) {
             if (!stale) printf("cd: stale sector %u dropped reading %s, sector %u\n", (unsigned)got, read_name ? read_name : "?", (unsigned)st_next);
-            if (++stale > 4096u || !sectors_drop(1)) { st_on = false; goto done; }
+            if (++stale > 4096u || !sectors_drop(1)) { printf("cd: drop failed (%u stale) reading %s\n", (unsigned)stale, read_name ? read_name : "?"); st_on = false; goto done; }
             continue;
         }
         if (ready > 1 && sector_fad((uint16_t)(ready - 1)) != (int32_t)(st_next + ready - 1)) ready = 1;
-        if (!sectors_take(p, ready)) { st_on = false; goto done; }
+        if (!sectors_take(p, ready)) { printf("cd: take failed reading %s, sector %u, %u\n", read_name ? read_name : "?", (unsigned)st_next, (unsigned)ready); st_on = false; goto done; }
         p += ready * 2048u; n -= ready; st_next += ready;
     }
     ok = true;
@@ -151,12 +162,17 @@ static size_t cd_read(FILE *f, unsigned char *dst, size_t n)
             done += whole; c->pos += whole;
             continue;
         }
-        if (c->cached != (int32_t)sec) {
-            if (!read_sectors(c->fad + sec, c->cache, 1, c->fad_end)) break;
-            c->cached = (int32_t)sec;
+        fad_t at = c->fad + sec;
+        if (at < ra_fad || at >= ra_fad + ra_count) {   /* the read-ahead: at least this sector, more if they are in */
+            uint32_t k = 1, most = c->fad_end - at < RA_SECTORS ? c->fad_end - at : RA_SECTORS;
+            if (st_on && at == st_next) { int32_t r = sectors_ready(); if (r > 1) k = (uint32_t)r < most ? (uint32_t)r : most; }
+            ra_count = 0;
+            if (!read_sectors(at, ra_buf, k, c->fad_end)) break;
+            ra_fad = at; ra_count = k;
         }
-        uint32_t k = 2048 - off; if (k > left) k = left;
-        memcpy(dst + done, c->cache + off, k);
+        uint32_t from = (at - ra_fad) * 2048u + off, k = ra_count * 2048u - from;
+        if (k > left) k = left;
+        memcpy(dst + done, ra_buf + from, k);
         done += k; c->pos += k;
     }
     return done;
@@ -186,7 +202,7 @@ FILE *fopen(const char *restrict path, const char *restrict mode)
     CdFile *c = lw_malloc(sizeof *c);
     if (!f || !c) { free(f); free(c); return NULL; }
     memset(f, 0, sizeof *f);
-    c->fad = e->starting_fad; c->size = (uint32_t)e->size; c->pos = 0; c->cached = -1; c->name = e->name;
+    c->fad = e->starting_fad; c->size = (uint32_t)e->size; c->pos = 0; c->name = e->name;
     c->fad_end = c->fad + (c->size + 2047u) / 2048u;
     f->fd = -1; f->cookie = c;
     f->read = cd_read; f->write = cd_write; f->seek = cd_seek; f->close = cd_close;
@@ -196,20 +212,20 @@ FILE *fopen(const char *restrict path, const char *restrict mode)
 void cd_sat_stats(unsigned long *reads, unsigned long *bytes, unsigned long *seeks) { *reads = reads_total; *bytes = bytes_total; if (seeks) *seeks = seeks_total; }
 
 /* how much a sequential read of f can take now without waiting for the drive (video_sat.c streams with it): the rest of
- * the sector in cache and the sectors the CD block holds; starts the stream at f's position when it isn't there */
+ * the read-ahead and the sectors the CD block holds; starts the stream at f's position when it isn't there */
 size_t cd_sat_available(FILE *f)
 {
     CdFile *c = f->cookie;
     if (c->pos >= c->size) return 0;
-    uint32_t sec = c->pos / 2048, off = c->pos % 2048;
+    uint32_t off = c->pos % 2048;
+    fad_t next = c->fad + c->pos / 2048;
     size_t avail = 0;
-    if (off && c->cached == (int32_t)sec) { avail = 2048 - off; sec++; }
-    fad_t next = c->fad + sec;
-    if (next >= c->fad_end) return avail;
+    if (next >= ra_fad && next < ra_fad + ra_count) { avail = (ra_fad + ra_count - next) * 2048u - off; next = ra_fad + ra_count; off = 0; }
+    if (next >= c->fad_end) return avail > c->size - c->pos ? c->size - c->pos : avail;
     if (!st_on || next != st_next) { if (!avail) stream_start(next, c->fad_end - next); return avail; }
     int32_t ready = sectors_ready();
     if (ready < 0) st_on = false;
-    else if (ready > 0) avail += (size_t)(uint32_t)ready * 2048u;
+    else if (ready > 0) avail += (size_t)(uint32_t)ready * 2048u - off;
     return avail > c->size - c->pos ? c->size - c->pos : avail;
 }
 
@@ -255,6 +271,20 @@ void cd_sat_cdda_track_length(int track, uint32_t sectors)
     if (track > 1 && track < 100) playable_sectors[track] = sectors;
 }
 
+/* A command the CD block cannot take yet comes back with WAIT (bit 7 of the status byte) and is not run: a selector
+ * still being set by the previous command, or the drive seeking. It is sent again, for up to 2 s. Mednafen and Ymir's
+ * HLE CD block never answer WAIT; the real firmware (and Ymir running its ROM) does - the pack reads failing on the
+ * console with a white screen at the diagnostic disc's boot stage 7. */
+static int cd_exec(CdRegs *r, CdRegs *st)
+{
+    for (uint32_t tries = 0; ; tries++) {
+        int err = cd_block_cmd_execute(r, st);
+        if (err <= 0 || err == 0xFF || !(err & 0x80)) return err;
+        if (tries >= 20000u) { printf("cd: command %04X still answered WAIT (%02X) after 2 s\n", (unsigned)r->cr1, (unsigned)err); return err; }
+        sat_busy_wait_us(100, false);
+    }
+}
+
 /* The CD block commands this file issues, not libyaul's cd_block_cmd_*: those check the response's low byte (flags and
  * CD-DA repeat count) against the status codes, so once a looping track has repeated an odd number of times (1 & ERROR)
  * every one of them "fails" - the next track's connection never set (the boss music never starting) and no data read
@@ -262,7 +292,7 @@ void cd_sat_cdda_track_length(int track, uint32_t sectors)
 static int cd_cmd_st(uint16_t hirq_mask, uint16_t cr1, uint16_t cr2, uint16_t cr3, uint16_t cr4, CdRegs *st)
 {
     CdRegs r = { .hirq_mask = hirq_mask, .cr1 = cr1, .cr2 = cr2, .cr3 = cr3, .cr4 = cr4 };
-    int err = cd_block_cmd_execute(&r, st);
+    int err = cd_exec(&r, st);
     if (err) return err;
     uint8_t code = (uint8_t)(st->cr1 >> 8) & 0x0F;
     return code == 0x06 || code == 0x07 || code == 0x09 || code == 0x0A ? -code : 0;   /* open, no disc, error, fatal */
@@ -271,6 +301,18 @@ static int cd_cmd(uint16_t hirq_mask, uint16_t cr1, uint16_t cr2, uint16_t cr3, 
 {
     CdRegs st;
     return cd_cmd_st(hirq_mask, cr1, cr2, cr3, cr4, &st);
+}
+/* a selector command (device connection, filter, reset): the CD block finishes it after the answer and raises ESEL;
+ * the next one waits for that (the real firmware answers WAIT to one sent before) */
+static int sel_cmd(uint16_t cr1, uint16_t cr2, uint16_t cr3, uint16_t cr4)
+{
+    int err = cd_cmd(HIRQ_ESEL, cr1, cr2, cr3, cr4);
+    if (err) return err;
+    for (uint32_t waits = 0; !(CD_HIRQ & HIRQ_ESEL); waits++) {
+        if (waits >= 20000u) return -1;   /* 2 s */
+        sat_busy_wait_us(100, false);
+    }
+    return 0;
 }
 
 /* partition 0's sector count (libyaul's cd_block_cmd_sector_number_get has the same status misread) */
@@ -299,24 +341,40 @@ static bool sectors_drop(uint16_t sectors)   /* partition 0's first sectors, unr
     for (uint32_t spins = 0; !(CD_HIRQ & HIRQ_EHST); ) if (++spins > 0x240000u) return false;
     return true;
 }
+/* The data is read only once DRDY says it is there: EHST alone (the command over without a transfer) used to be taken
+ * for it too, and the words read from the port then were not the sectors - the intro's stream garbage on the console,
+ * the decoder writing outside its picture. The CD block's own count of the words sent (end data transfer's answer)
+ * must be the sectors asked for; a short one fails the read and the stream starts again from the same sector. */
 static bool sectors_take(void *dst, uint32_t sectors)
 {
-    bool ok = !cd_cmd(HIRQ_EHST, 0x6300, 0, 0x0000, (uint16_t)sectors);
+    bool ok = !cd_cmd(HIRQ_EHST | HIRQ_DRDY, 0x6300, 0, 0x0000, (uint16_t)sectors);
     if (ok) {
         uint32_t spins = 0;
-        while (!(CD_HIRQ & (HIRQ_DRDY | HIRQ_EHST))) if (++spins > 0x240000u) { ok = false; break; }
+        while (!(CD_HIRQ & HIRQ_DRDY)) {
+            if ((CD_HIRQ & HIRQ_EHST) || ++spins > 0x240000u) {
+                printf("cd: no data for %u sectors (hirq %04X)\n", (unsigned)sectors, (unsigned)CD_HIRQ);
+                ok = false; break;
+            }
+        }
     }
     if (ok) { uint16_t *d = dst; for (uint32_t i = 0; i < sectors * 1024u; i++) d[i] = CD_DTR; }
-    CdRegs r = { .cr1 = 0x0600 }, st;   /* end data transfer */
-    cd_block_cmd_execute(&r, &st);
+    CdRegs r = { .cr1 = 0x0600 }, st;   /* end data transfer: the words sent */
+    int err = cd_exec(&r, &st);
     CD_HIRQ = (uint16_t)~HIRQ_DRDY;
+    if (ok) {
+        uint32_t words = (uint32_t)(st.cr1 & 0xFF) << 16 | st.cr2;
+        if (err || words != sectors * 1024u) {
+            printf("cd: transfer of %u sectors sent %u words (%d)\n", (unsigned)sectors, (unsigned)words, err);
+            ok = false;
+        }
+    }
     return ok;
 }
 
 static int play_cmd(uint16_t cr1, uint16_t cr2, uint16_t cr3, uint16_t cr4)
 {
     CdRegs r = { .hirq_mask = HIRQ_PEND | HIRQ_CSCT, .cr1 = cr1, .cr2 = cr2, .cr3 = cr3, .cr4 = cr4 }, st;
-    return cd_block_cmd_execute(&r, &st);
+    return cd_exec(&r, &st);
 }
 
 static bool cdda_start(void)
@@ -324,7 +382,7 @@ static bool cdda_start(void)
     if (!cdda.track || cdda.paused || !toc_ok) return false;
     cdda.owned = cdda.pending = false;
     st_on = false;
-    if (cd_cmd(0x0040, 0x3000, 0, 0xFF00, 0)) {   /* the drive to no filter: audio goes to the SCSP (ESEL) */
+    if (sel_cmd(0x3000, 0, 0xFF00, 0)) {   /* the drive to no filter: audio goes to the SCSP */
         cdda.owned = false; cdda.retry_at = sat_timer_us() + 250000u;
         if (cdda.failures < 3) cdda.failures++;
         printf("cd: CD-DA connection failed for track %d\n", cdda.track);

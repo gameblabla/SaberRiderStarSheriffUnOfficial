@@ -1,5 +1,6 @@
 #include "film_cvid.h"
 #include "film_snd.h"
+#include <stdio.h>
 
 #ifndef CLAMP
 #  define CLAMP(V) ((V) > (255) ? (255) : (V) < (0) ? (0) : (V))
@@ -718,15 +719,28 @@ void decodeIntra24(decode_work_t *work, strip_codebook_t *codebookPtr, uint16_t 
   work->stream.sampleCache.readPos += chunkDataLength;
 }
 
+/* Saber Rider: a frame whose data is damaged (a bad read) is dropped where it stops making sense, never drawn outside
+ * the picture. The strips' sizes and the chunks' lengths come from the data: a height from garbage walked the write
+ * pointer through VDP1's memory into VDP2's and the SCU's registers, and an unknown chunk cleared twice the picture and
+ * turned the back screen dark red (the console's intro, 2026-09-28). */
+static uint32_t badFrames;
+
+static void badFrame(decode_work_t *work, const char *why, int32_t value) {
+  if (badFrames++ < 16)
+    printf("video: sample %d damaged (%s %d), dropped\n",
+      (int) work->stream.sampleCache.currentSample - 1, why, (int) value);
+  work->stream.sampleCache.readPos = work->nextSample.offset + work->nextSample.length;
+}
+
 void parseVideo(decode_work_t *work) {
 
-  videoHeader *cvidHeader;
-  cvidHeader = work->stream.sampleCache.readPos;
+  const uint8_t *hdr = work->stream.sampleCache.readPos;
   work->stream.sampleCache.readPos += sizeof(videoHeader);
-  int16_t numStrips = cvidHeader->numStrips;
+  const int32_t numStrips = (int16_t) (hdr[8] << 8 | hdr[9]);   /* videoHeader.numStrips, bytewise */
   int16_t stripNum = 0;
-  const bool copyLastCodeBooks = !(cvidHeader->flagsAndCvidLength.b[0] & 0x1);
-  int16_t lastBottomY = 0;
+  const bool copyLastCodeBooks = !(hdr[0] & 0x1);
+  int32_t lastBottomY = 0;
+  const int32_t frameW = work->filmHeader.fdsc.width, frameH = work->filmHeader.fdsc.height;
 
   uint8_t *sampleEnd = work->nextSample.offset + work->nextSample.length;
 
@@ -745,6 +759,8 @@ void parseVideo(decode_work_t *work) {
     codebookRGB_new = &codebookRGB_15;
   }
 
+  if (numStrips < 0 || numStrips > 32) { badFrame(work, "strips", numStrips); return; }
+
   if (numStrips != 0) {
       do {
           work->stripData.strip = stripNum;
@@ -762,33 +778,35 @@ void parseVideo(decode_work_t *work) {
            * is not guaranteed to be 16-bit aligned.  SH-2 faults on an
            * unaligned uint16_t load: parse the 12-byte strip header bytewise. */
           const uint8_t *tmpStripBuffer = work->stream.sampleCache.readPos;
+          if (tmpStripBuffer + 12 > sampleEnd) { badFrame(work, "strip header", stripNum); return; }
           work->stream.sampleCache.readPos += 12;
 
           uint32_t stripDataLength = ((uint32_t)tmpStripBuffer[1] << 16) |
             ((uint32_t)tmpStripBuffer[2] << 8) | tmpStripBuffer[3];
+          const int32_t stripH = (int32_t)(((uint16_t)tmpStripBuffer[8] << 8) | tmpStripBuffer[9]);
+          const int32_t stripW = (int32_t)(((uint16_t)tmpStripBuffer[10] << 8) | tmpStripBuffer[11]);
 
-          work->stripData.topY = work->stripData.writeY =
-            (int32_t)(((uint16_t)tmpStripBuffer[4] << 8) | tmpStripBuffer[5]);
-          work->stripData.topX = work->stripData.writeX =
-            (int32_t)(((uint16_t)tmpStripBuffer[6] << 8) | tmpStripBuffer[7]);
-          work->stripData.bottomY =
-            (int32_t)(((uint16_t)tmpStripBuffer[8] << 8) | tmpStripBuffer[9]);
-          work->stripData.bottomX =
-            (int32_t)(((uint16_t)tmpStripBuffer[10] << 8) | tmpStripBuffer[11]);
+          if (tmpStripBuffer[0] != 0x10 && tmpStripBuffer[0] != 0x11) { badFrame(work, "strip id", tmpStripBuffer[0]); return; }
+          if (stripDataLength < 12 || tmpStripBuffer + stripDataLength > sampleEnd) { badFrame(work, "strip length", (int32_t) stripDataLength); return; }
+          if (stripH <= 0 || lastBottomY + stripH > frameH) { badFrame(work, "strip height", stripH); return; }
+          if (stripW <= 0 || stripW > frameW) { badFrame(work, "strip width", stripW); return; }
 
           work->stripData.topY = work->stripData.writeY = lastBottomY;
-          work->stripData.bottomY += lastBottomY;
+          work->stripData.topX = work->stripData.writeX =
+            (int32_t)(((uint16_t)tmpStripBuffer[6] << 8) | tmpStripBuffer[7]);
+          work->stripData.bottomY = lastBottomY + stripH;
+          work->stripData.bottomX = stripW;
 
-          int32_t quarterY = (work->stripData.bottomY - work->stripData.writeY) >> 2;
-          int32_t quarterX = work->stripData.bottomX >> 2;
+          int32_t quarterY = stripH >> 2;
+          int32_t quarterX = stripW >> 2;
 
           // Read the strip chunks
-          int32_t stripLimit =
-            work->stream.sampleCache.readPos + stripDataLength - 12;
+          const uint8_t *stripLimit = tmpStripBuffer + stripDataLength;
           lastBottomY = work->stripData.bottomY;
               do {
                   pollAudioConfirmTimer();
 
+                  if (work->stream.sampleCache.readPos + 4 > stripLimit) { badFrame(work, "chunk header", stripNum); return; }
                 int32_t chunkID = (work->stream.sampleCache.readPos[0] << 8) | work->stream.sampleCache.readPos[1];
                   work->stream.sampleCache.readPos += 2;
                   int32_t chunkDataLength =
@@ -796,6 +814,9 @@ void parseVideo(decode_work_t *work) {
                       work->stream.sampleCache.readPos[1]) - 4;
 
                   work->stream.sampleCache.readPos += 2;
+                  if (chunkDataLength < 0 || work->stream.sampleCache.readPos + chunkDataLength > stripLimit) {
+                    badFrame(work, "chunk length", chunkDataLength); return;
+                  }
                   //work->stream.sampleCache.readPos = readPtr;
                     bool isV4 = (chunkID == 0x2000 || chunkID == 0x2100);
                     switch (chunkID) {
@@ -811,11 +832,10 @@ void parseVideo(decode_work_t *work) {
                           codebookRGB_new(work, currentCodebook, isV4, chunkID, chunkDataLength);
                           work->stream.sampleCache.readPos += chunkDataLength;
                         } break;
-                        // 8 bit V4
+                        // 8 bit V4 / V1: not decoded, skipped
                         case 0x2400:
-                          break;
-                        // 8 bit V1
                         case 0x2600:
+                          work->stream.sampleCache.readPos += chunkDataLength;
                           break;
                         // vectors
                         case 0x3000:
@@ -828,30 +848,9 @@ void parseVideo(decode_work_t *work) {
                         case 0x3200:
                             decodeIntra(work, currentCodebook, chunkDataLength, true, quarterY, quarterX);
                           break;
-                        default: {
-                          const int32_t chunkIdPos =
-                            work->stream.sampleCache.readPos - 4;
-
-                          int16_t *vdp2Image15Ptr =
-                            work->decodeParams->vramBuffAddr;
-                          int32_t *vdp2ImagePtr = work->decodeParams->vramBuffAddr;
-                          if (work->filmHeader.fdsc.color_depth == COLOR_DEPTH_15) {
-                            memset(vdp2Image15Ptr, 0,
-                              work->decodeParams->vramBufferWidth *
-                                work->decodeParams->vramBufferHeight *
-                                sizeof(int32_t));
-                          } else {
-                            memset(vdp2ImagePtr, 0,
-                              work->decodeParams->vramBufferWidth *
-                                work->decodeParams->vramBufferHeight *
-                                sizeof(int32_t));
-                          }
-                          logMessage("Unknown chunk id 0x%X at offset 0x%X\n",
-                            chunkID, chunkIdPos);
-                          vdp2_scrn_back_color_set(VDP2_VRAM_ADDR(3, 0x01FFFE),
-                            RGB1555(1, 7, 0, 0));
-                          break;
-                        }
+                        default:
+                          badFrame(work, "chunk id", chunkID);
+                          return;
                     }
 
             } while (work->stream.sampleCache.readPos < stripLimit &&

@@ -24,21 +24,21 @@ bool app_init(Ren *ren, const char *data_dir, int start_level)
     /* blocks baked for the console that replace the demo's (the Saturn: a level without the tile maps its planes draw,
      * tools/saturn/build_disc.py): opened first, so a lookup finds them before the demo's */
     static const char *const over[] = { "stage.pck" };
-    if (!packs_open(data_dir, over, 1)) return false;
+    if (!packs_open(data_dir, over, 1)) { fprintf(stderr, "app_init: the stage pack\n"); return false; }
 #endif
     static const char *const base[] = { "pack.pck", "common.pck", "levels.pck", "menu.pck", "level1.pck", "video.pck" };
-    if (!packs_open(data_dir, base, 6)) return false;
+    if (!packs_open(data_dir, base, 6)) { fprintf(stderr, "app_init: the demo packs\n"); return false; }
 #ifdef PLAT_BAKED_ASSETS
     /* our assets and the packs' graphics and sounds, baked for the console by tools/dc/build_disc.py */
     static const char *const baked[] = { "tex.pck", "snd.pck", "files.pck" };
-    if (!packs_open(data_dir, baked, 3)) return false;
+    if (!packs_open(data_dir, baked, 3)) { fprintf(stderr, "app_init: the baked packs\n"); return false; }
 #endif
 #ifdef PLAT_SATURN
-    if (!audio_init()) return false; /* a failed resident bank must not enter gameplay */
+    if (!audio_init()) { fprintf(stderr, "app_init: audio_init\n"); return false; } /* a failed resident bank must not enter gameplay */
 #else
     audio_init();
 #endif
-    if (!game_init(&g, ren, APP_SCREEN_W, APP_SCREEN_H, start_level)) return false;
+    if (!game_init(&g, ren, APP_SCREEN_W, APP_SCREEN_H, start_level)) { fprintf(stderr, "app_init: game_init\n"); return false; }
     /* debug: SABER_SCRIPT="60:R,20:RJ,40:" drives the input for N fixed steps each (L R U D J S A P, X = power); a '*'
      * goes back to the step after the first (SABER_SCRIPT="120:,25:RS,5:RJ,*": a wait, then a loop) */
     script = plat_getenv("SABER_SCRIPT");

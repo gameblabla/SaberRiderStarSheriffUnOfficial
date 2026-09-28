@@ -88,8 +88,12 @@ diag-stage:
 	@[ -f build/saturn/stage/SND.PCK ] || { echo "no build/saturn/stage: make -f Makefile.saturn disc first"; exit 1; }
 	mkdir -p $(OUT)/stage
 	for f in build/saturn/stage/*; do [ "$${f##*/}" = 0.BIN ] || cp -lf "$$f" $(OUT)/stage/; done
-	rm -f $(OUT)/tracks; mkdir -p $(OUT)/tracks
+	[ ! -L $(OUT)/tracks ] || rm -f $(OUT)/tracks; mkdir -p $(OUT)/tracks
 	cp -lf build/saturn/tracks/* $(OUT)/tracks/
+# the IP turns the screen blue for a second before it jumps to the program (libyaul's rule runs this hook just
+# before make-iso reads IP.BIN)
+pre-build-iso:
+	python3 tools/saturn/diag_ip.py $(SH_BUILD_PATH)/IP.BIN
 endif
 $(SH_OUTPUT_PATH)/$(SH_PROGRAM).cue: $(SH_OUTPUT_PATH)/$(SH_PROGRAM).iso $(wildcard $(AUDIO_TRACKS_DIRECTORY)/*)
 

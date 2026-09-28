@@ -11,8 +11,9 @@
  * Video memory: the cells from 0 (banks A0, A1, B0), a 16 KB name page per NBG in B1 at 0x60000 + nbg * 0x4000,
  * the line scroll tables at 0x70000 (NBG0) and 0x70400 (NBG1), twice (0x70800 on: one shown, one written). The access
  * cycle patterns follow the layout: the name reads in B1 (NBGn at Tn), each plane's character reads at the same slot in
- * every bank its cells are in, the other slots CPU. mednafen only checks that a bank has a slot for what it reads; real hardware has placement rules
- * too (plan 11: check on a console). */
+ * every bank its cells are in, the other slots CPU (the slots follow Ymir's notes on the console's placement rules:
+ * docs/dev-notes/system-info/vdp2-vram-access-cycles.txt). The palettes go through render_sat.c's copy of colour RAM,
+ * written at the vblank: the console loses a colour RAM write made while the screen is drawn. */
 #include "../render.h"
 #include "../../pack.h"
 #include "lz40s.h"
@@ -109,6 +110,10 @@ static void set_cycle_patterns(void)
     }
 #undef SET
     vdp2_vram_cycp_set(&c);
+    /* in the registers now too (libyaul's copy goes at the next vblank's commit): the cells are uploaded next, and the
+     * pattern on until then (libyaul's all "no access" after the menus) gave the CPU no slot in any bank */
+    volatile uint32_t *cyc = (volatile uint32_t *)(VDP2_IOREG_BASE + 0x10u);
+    for (int b = 0; b < 4; b++) cyc[b] = c.pt[b].raw;
 }
 
 static void setup_screens(void)
@@ -149,8 +154,7 @@ static void load_palettes(void)
 {
     rsat_cram_reserve(P.h->npal * 16);
     const uint8_t *pal = P.spl + P.h->bands_off + sizeof(SplBand) * P.h->nbands;
-    volatile uint16_t *c = (volatile uint16_t *)VDP2_CRAM_ADDR(0);
-    for (int i = 0; i < P.h->npal * 16; i++) c[i] = (uint16_t)(pal[i * 2] << 8 | pal[i * 2 + 1]);
+    rsat_cram_put_be(0, pal, P.h->npal * 16);   /* at the next vblank (a write while the screen is drawn is lost) */
     P.palettes_in = true;
 }
 
@@ -180,6 +184,7 @@ static bool load(uint32_t level)
     P.chunks = (const uint32_t *)(e->data + h->names_off);
     for (int i = 0; i < h->nbands; i++) P.band[i].b = (const SplBand *)(e->data + h->bands_off) + i;
     vdp2_scrn_display_set(sat_floor_visible() ? VDP2_SCRN_DISPTP_RBG0 : VDP2_SCRN_DISP_NONE);
+    set_cycle_patterns();
     if (!load_cells(level, h->ncells)) { unload(); return false; }
     setup_screens();
     load_palettes();
