@@ -47,10 +47,23 @@ struct Video {
     decode_param_t params;
     uint8_t *sample_mem;
     bool done, surface;
+    bool keep_bufs;           /* a clip of the stage (video_open_file): its buffers go back to the spares */
 };
 
 static Video *prepared_video;
 static char prepared_name[16];
+/* A stage's clip (a power attack's) gives its decode buffers back here when it closes, for the next time it opens:
+ * freed, the 96 KB sample ring's room in low work RAM went to what the stage allocated next (Dark April's fight after
+ * a first FIREBALL.CPK), and the second power attack had no clip ("no RAM for Cinepak stream"). The stage's end
+ * releases them (video_preload_file(NULL): power_close). */
+static decode_work_t *spare_work;
+static uint8_t *spare_samples;
+
+static void spares_release(void)
+{
+    free(spare_work); spare_work = NULL;
+    free(spare_samples); spare_samples = NULL;
+}
 
 static void stop_sound(void) { film_audio_reset(); }
 
@@ -116,6 +129,7 @@ static void io_set(Video *v)
 static void video_free(Video *v)
 {
     if (v->stream) fclose(v->stream);
+    if (v->keep_bufs && !spare_work && !spare_samples) { spare_work = v->work; spare_samples = v->sample_mem; v->work = NULL; v->sample_mem = NULL; }
     free(v->ram); free(v->sample_mem); free(v->work); free(v);
 }
 
@@ -151,8 +165,9 @@ static Video *open_name(const char *name, bool activate)
     Video *v = lw_malloc(sizeof *v);
     if (!v) { fclose(stream); return NULL; }
     memset(v, 0, sizeof *v);
-    v->work = lw_memalign(4, sizeof *v->work);
-    v->sample_mem = lw_memalign(32, SAMPLE_BUFFER_BYTES);
+    v->work = spare_work ? spare_work : lw_memalign(4, sizeof *v->work);
+    v->sample_mem = spare_samples ? spare_samples : lw_memalign(32, SAMPLE_BUFFER_BYTES);
+    spare_work = NULL; spare_samples = NULL;
     if (!v->work || !v->sample_mem) {
         printf("video: %s: no RAM for Cinepak stream\n", name);
         free(v->sample_mem); free(v->work); fclose(stream); free(v); return NULL;
@@ -229,6 +244,7 @@ Video *video_open(Ren *r, uint32_t id)
 {
     (void)r;
     char name[16]; snprintf(name, sizeof name, "%08X.CPK", (unsigned)id);
+    spares_release();
     Video *v = open_name(name, true);
     /* The PC/Dreamcast briefing source is 768x312, but Saturn stores a
        256x104 CPK and lets VDP1 scale it.  menu.c intentionally draws this
@@ -251,9 +267,9 @@ void video_preload_file(const char *path, real fps)
         Video *old = prepared_video; prepared_video = NULL; prepared_name[0] = 0;
         video_close(old);
     }
-    if (!path) return;
+    if (!path) { spares_release(); return; }
     prepared_video = open_name(name, false);
-    if (prepared_video) snprintf(prepared_name, sizeof prepared_name, "%s", name);
+    if (prepared_video) { prepared_video->keep_bufs = true; snprintf(prepared_name, sizeof prepared_name, "%s", name); }
 }
 
 Video *video_open_file(Ren *r, const char *path, real fps)
@@ -268,7 +284,9 @@ Video *video_open_file(Ren *r, const char *path, real fps)
         return v;
     }
     if (prepared_video) video_preload_file(NULL, 0);
-    return open_name(name, true);
+    Video *v = open_name(name, true);
+    if (v) v->keep_bufs = true;
+    return v;
 }
 
 bool video_update(Video *v, real dt) { (void)dt; return v && !v->done; }

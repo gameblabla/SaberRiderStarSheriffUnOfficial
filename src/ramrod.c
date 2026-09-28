@@ -5,6 +5,7 @@
 #include "audio.h"
 #include "dialog.h"
 #include "heroes.h"
+#include "hud.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1075,7 +1076,7 @@ static void render_arm(Ramrod *r)
 static void bar(Ren *ren, real x, real y, real w, real h, real f, uint8_t cr, uint8_t cg, uint8_t cb)
 {
     r_set_draw_blend(ren, R_BLEND_BLEND);
-    r_set_draw_color(ren, 0, 0, 0, 170); RFRect bg = { x, y, w, h }; r_fill_rect(ren, &bg);
+    r_set_draw_color(ren, 0, 0, 0, HUD_ALPHA(170)); RFRect bg = { x, y, w, h }; r_fill_rect(ren, &bg);
     r_set_draw_color(ren, cr, cg, cb, 255); RFRect fg = { x, y, r_floorr(r_mul(w, clampf(f, 0, R(1)))), h }; r_fill_rect(ren, &fg);
 }
 

@@ -4,6 +4,7 @@
 #include "audio.h"
 #include "dialog.h"
 #include "heroes.h"
+#include "hud.h"
 #include "gfx.h"
 #include "namehash.h"
 #include "power.h"
@@ -1150,7 +1151,13 @@ static void render_boss(Space *s)
     rtex_set_color_mod(s->boss_tex, v, v, v);
     r_tex_rot(ren, s->boss_tex, NULL, &d, -b->tilt, &piv, R_FLIP_NONE);
     if (b->flash > 0) {
+#ifdef PLAT_SATURN
+        /* VDP1 has no additive blending: its stand-in, half-transparency, is meshed over the starfield planes and the
+         * hull went see-through when hit. The flash is the hull drawn again solid, in a red tint */
+        rtex_set_color_mod(s->boss_tex, 255, 150, 120);
+#else
         rtex_set_blend(s->boss_tex, R_BLEND_ADD); rtex_set_color_mod(s->boss_tex, 120, 90, 70);
+#endif
         r_tex_rot(ren, s->boss_tex, NULL, &d, -b->tilt, &piv, R_FLIP_NONE);
         rtex_set_blend(s->boss_tex, R_BLEND_BLEND);
     }
@@ -1246,13 +1253,24 @@ static void render_player(Space *s)
     if (s->hurt_t > R(0.3f)) draw_add(s, A_PLAYER, 0, s->px, s->py, R(1), 255, 120, 120, 200);
 }
 
+/* the hero's shots: additive, but solid on the Saturn (VDP1's stand-in for additive blending, half-transparency, is
+ * meshed over the starfield planes: the bolts were a dither of dots), as stage 6's first phase draws Ramrod's */
+static void draw_shot(Space *s, int a, int fr, real x, real y)
+{
+#ifdef PLAT_SATURN
+    draw_frame(s, a, fr, x, y, R(1), false, 255, 255, 255, 255);
+#else
+    draw_add(s, a, fr, x, y, R(1), 255, 255, 255, 255);
+#endif
+}
+
 static void render_shots(Space *s)
 {
     for (int i = 0; i < MAX_SHOT; i++) {
         Shot *sh = &s->shot[i]; if (!sh->on) continue;
         switch (sh->kind) {
-        case S_BOLT: draw_add(s, A_BOLT, sh->vy != 0, sh->x, sh->y, R(1), 255, 255, 255, 255); break;
-        case S_TORPEDO: draw_add(s, A_TORPEDO, r_trunc(s->total_t * 20) & 1, sh->x, sh->y, R(1), 255, 255, 255, 255); rect(s->ren, sh->x - R(12), sh->y - R(1), R(8), R(2), 255, 200, 90, 200); break;
+        case S_BOLT: draw_shot(s, A_BOLT, sh->vy != 0, sh->x, sh->y); break;
+        case S_TORPEDO: draw_shot(s, A_TORPEDO, r_trunc(s->total_t * 20) & 1, sh->x, sh->y); rect(s->ren, sh->x - R(12), sh->y - R(1), R(8), R(2), 255, 200, 90, 200); break;
         case S_ORB: draw_frame(s, A_ORB, r_trunc(s->total_t * 12 + r_int(i)) & 1, sh->x, sh->y, R(1), false, 255, 255, 255, 255); break;
         case S_MLASER: draw_frame(s, A_MLASER, 0, sh->x, sh->y, R(1), false, 255, 255, 255, 255); break;
         }
@@ -1305,7 +1323,7 @@ static void render_hud(Space *s, Font *small)
 {
     Ren *ren = s->ren;
     r_set_draw_blend(ren, R_BLEND_BLEND);
-    rect(ren, R(3), R(3), R(82), r_max(R(58), R(12) + s->hp_max * R(9.0f)), 0, 0, 20, 140);
+    rect(ren, R(3), R(3), R(82), r_max(R(58), R(12) + s->hp_max * R(9.0f)), 0, 0, 20, HUD_ALPHA(140));
     static const uint8_t CELL[5][3] = { { 90, 220, 60 }, { 170, 225, 50 }, { 250, 210, 40 }, { 250, 140, 30 }, { 230, 30, 30 } };
     static const int MAP[6][5] = { { 0 }, { 0 }, { 0, 4 }, { 0, 2, 4 }, { 0, 2, 3, 4 }, { 0, 1, 2, 3, 4 } };   /* green at the bottom, red on top */
     for (int i = 0; i < s->hp_max && i < 5; i++) {
@@ -1314,7 +1332,7 @@ static void render_hud(Space *s, Font *small)
         bool on = i < s->hp;
         bool blink = s->hp == 1 && i == 0 && (r_trunc(s->total_t * 4) & 1);
         rect(ren, R(7), y, R(7), R(7), 10, 10, 20, 255);
-        if (on && !blink) { rect(ren, R(7), y, R(7), R(7), CELL[c][0], CELL[c][1], CELL[c][2], 255); rect(ren, R(8), y + R(1), R(2), R(2), 255, 255, 255, 140); }
+        if (on && !blink) { rect(ren, R(7), y, R(7), R(7), CELL[c][0], CELL[c][1], CELL[c][2], 255); rect(ren, R(8), y + R(1), R(2), R(2), 255, 255, 255, HUD_ALPHA(140)); }
         else rect(ren, R(8), y + R(1), R(5), R(5), CELL[c][0] / 5, CELL[c][1] / 5, CELL[c][2] / 5, 255);
     }
     if (small) {

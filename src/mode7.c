@@ -5,6 +5,7 @@
 #include "audio.h"
 #include "dialog.h"
 #include "heroes.h"
+#include "hud.h"
 #include "namehash.h"
 #include "pack.h"
 #include <stdio.h>
@@ -1199,7 +1200,7 @@ static void render_player(Mode7 *m)
 static void bar(Ren *r, real x, real y, real w, real h, real f, uint8_t cr, uint8_t cg, uint8_t cb)
 {
     r_set_draw_blend(r, R_BLEND_BLEND);
-    r_set_draw_color(r, 0, 0, 0, 160); RFRect bg = { x - R(1), y - R(1), w + R(2), h + R(2) }; r_fill_rect(r, &bg);
+    r_set_draw_color(r, 0, 0, 0, HUD_ALPHA(160)); RFRect bg = { x - R(1), y - R(1), w + R(2), h + R(2) }; r_fill_rect(r, &bg);
     r_set_draw_color(r, cr, cg, cb, 255); RFRect fg = { x, y, r_mul(w, clampf(f, 0, R(1))), h }; r_fill_rect(r, &fg);
 }
 

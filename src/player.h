@@ -14,7 +14,7 @@ typedef struct {
     bool locked;             /* +0xc08: controls disabled (cutscene/death) */
     bool fire_hold;          /* set through a dialogue: no shot until the shoot button (used to page it) is let go */
     bool quiet;              /* no jump grunt (stage 5's Dark April runs on player_control too) */
-    int hp, max_hp;          /* hearts: 4 / 2 / 0 by difficulty (DAT_00ac9be0[1]) */
+    int hp, max_hp;          /* hearts: 3 / 2 / 1 by difficulty (DAT_00ac9be0[1]; game.c hearts_for) */
 } Player;
 void player_spawn(Player *p, uint32_t crhc_id, real x, real y);
 void player_control(Player *p, const Input *in, real dt);   /* FUN_00422d10 input part */

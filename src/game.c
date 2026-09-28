@@ -16,7 +16,8 @@ static const uint32_t HERO_CRHC[3] = { 0x9C8F9A9E, 0x79260A58, 0x26818B85 };
 
 static bool level_start(Game *g);
 static void title_start(Game *g);
-static int hearts_for(int difficulty) { return difficulty == 0 ? 4 : difficulty == 1 ? 2 : 0; }   /* FUN_00422d10 / FUN_00428840 */
+/* the hits a life takes are the hearts + 1: EASY 4, NORMAL 3, HARD 2 (the original's FUN_00422d10 / FUN_00428840: 4 / 2 / 0 hearts) */
+static int hearts_for(int difficulty) { return difficulty == 0 ? 3 : difficulty == 1 ? 2 : 1; }
 
 bool game_init(Game *g, Ren *ren, int sw, int sh, int start_level)
 {
@@ -756,7 +757,7 @@ void game_draw(Game *g)
     if (g->forest_on && !hero_drawn && g->state != 0xb) draw_hero(g);
     r_set_depth(g->ren, -1);
     g->cam_y = saved;
-    hud_draw(g->ren, g->menu.character, g->menu.difficulty, g->player.lives, g->player.hp, g->power.items);   /* the item count = power attacks left */
+    hud_draw(g->ren, g->menu.character, g->player.max_hp, g->player.lives, g->player.hp, g->power.items);   /* the item count = power attacks left */
     power_draw_hud(&g->power, g->ren, R(0x2c), R(0x17), R(0x1a));
     if (g->state == 0xd) dialog_draw(&g->dialog, g->ren, g->sw, g->sh);
     if (g->night_on || g->forest_on) night_draw_hud(&g->night, g->ren, g->sw, g->sh);
