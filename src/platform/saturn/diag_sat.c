@@ -65,8 +65,11 @@ static void wait_blank(void)
 static void setup(void)
 {
     REG(0x00E) = 0x1300;                        /* RAMCTL: colour RAM mode 1, banks A and B split */
-    REG(0x010) = REG(0x012) = REG(0x014) = REG(0x016) = REG(0x018) = REG(0x01A) = 0xEEEE;   /* A0, A1, B0: CPU */
-    REG(0x01C) = 0xEEE4; REG(0x01E) = 0xEEE0;   /* B1: NBG0 characters at T3, names at T7 (libyaul's dbgio layout) */
+    /* the access patterns by the console's rules (vdp2_planes.c set_cycle_patterns): a CPU slot in both halves of a
+     * chip, "no access" before a run of them */
+    REG(0x010) = REG(0x014) = 0xFEEE; REG(0x012) = REG(0x016) = 0xEEEE;   /* A0, A1: CPU from T1 */
+    REG(0x018) = 0xFFFE; REG(0x01A) = 0xEEEE;   /* B0: CPU from T3 */
+    REG(0x01C) = 0x04FE; REG(0x01E) = 0xEEEE;   /* B1: NBG0's names at T0, characters at T1, CPU from T3 */
     REG(0x020) = 0x0001;                        /* BGON: NBG0 alone, colour 0 transparent */
     REG(0x022) = 0;                             /* no mosaic */
     REG(0x028) = 0;                             /* CHCTLA: NBG0 cells, 16 colours, 1x1 */

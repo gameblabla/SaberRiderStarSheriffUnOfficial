@@ -10,10 +10,9 @@
  *
  * Video memory: the cells from 0 (banks A0, A1, B0), a 16 KB name page per NBG in B1 at 0x60000 + nbg * 0x4000,
  * the line scroll tables at 0x70000 (NBG0) and 0x70400 (NBG1), twice (0x70800 on: one shown, one written). The access
- * cycle patterns follow the layout: the name reads in B1 (NBGn at Tn), each plane's character reads at the same slot in
- * every bank its cells are in, the other slots CPU (the slots follow Ymir's notes on the console's placement rules:
- * docs/dev-notes/system-info/vdp2-vram-access-cycles.txt). The palettes go through render_sat.c's copy of colour RAM,
- * written at the vblank: the console loses a colour RAM write made while the screen is drawn. */
+ * cycle patterns follow the layout and the console's rules (set_cycle_patterns). While a level plays, video memory and
+ * colour RAM are written in the vertical blank only: the name table columns and line scroll tables from here
+ * (sat_planes_shown), the palettes through render_sat.c's copy of colour RAM. */
 #include "../render.h"
 #include "../../pack.h"
 #include "lz40s.h"
@@ -67,8 +66,8 @@ static struct {
 /* The scroll of a frame's planes goes on screen with that frame's sprites (the store's camera prop on its wall, in the
  * shake). VDP1 changes framebuffers at the first vblank after it has drawn the list (variable mode), a field after
  * VDP2's registers would take a value set with the list when the list runs past its field. sat_planes_frame leaves
- * the scroll here and the line scroll table in the one not shown; sat_planes_shown puts them in the registers at the
- * vblank VDP1's frame changes. */
+ * the scroll here, the line scroll tables in ls_ram and the new columns in the queue; sat_planes_shown puts them in
+ * video memory (the line scroll table not shown) and the registers at the vblank VDP1's frame changes. */
 static struct { fix16_t x[4], y[4]; bool ls[4]; } latch;
 static volatile bool latch_ready;
 static int ls_shown;            /* the line scroll tables on screen (0, 1) */
@@ -94,12 +93,37 @@ static bool load_cells(uint32_t level, uint32_t ncells)
     return true;
 }
 
+/* The access cycle patterns follow the VDP2 manual (ST-058-R2 3.3, "Read/Write Access by the CPU") and Sega's bulletin
+ * on them (SOA #6, Sattechs.pdf): VRAM is split in two halves per chip, and a CPU slot must be a CPU slot in both
+ * halves of the chip (A0 and A1, B0 and B1), with "no access" in both at the slot before a run of CPU slots; a slot
+ * one half can't give the CPU is "no access", not CPU. Mednafen and Ymir take any pattern. The patterns this file had
+ * gave the CPU T4-T7 after a name / character read, and a CPU slot in one half across a read in the other: on the
+ * console level 1's far plane (NBG0, its characters read in A0 at T0 against A1's CPU slot) came out black, and name
+ * table writes made while the screen was drawn went missing (cells of the rocks black or showing another tile).
+ *   loading (nothing shown):  every bank F E E E E E E E (the bulletin's pattern for a bank no screen reads)
+ *   shown:  T0-T3 NBGn's reads at Tn (names in B1, characters in each bank its cells are in; a character read at its
+ *           name read's slot is always a legal one), else F; T4 F; T5-T7 CPU */
+static void put_cycle_patterns(const vdp2_vram_cycp_t *c)
+{
+    vdp2_vram_cycp_set(c);
+    /* in the registers now too (libyaul's copy goes at the next vblank's commit): cells and names are written next */
+    volatile uint32_t *cyc = (volatile uint32_t *)(VDP2_IOREG_BASE + 0x10u);
+    for (int b = 0; b < 4; b++) cyc[b] = c->pt[b].raw;
+}
+
+static void set_upload_patterns(void)
+{
+    vdp2_vram_cycp_t c;
+    for (int b = 0; b < 4; b++) c.pt[b].raw = 0xFEEEEEEEu;
+    put_cycle_patterns(&c);
+}
+
 static void set_cycle_patterns(void)
 {
     vdp2_vram_cycp_t c;
-    for (int b = 0; b < 4; b++) c.pt[b].raw = 0xEEEEEEEEu;   /* CPU everywhere */
+    for (int b = 0; b < 4; b++) c.pt[b].raw = 0xFFFFFEEEu;
     uint8_t *slot[4];
-    for (int b = 0; b < 4; b++) slot[b] = (uint8_t *)&c.pt[b].raw;
+    for (int b = 0; b < 4; b++) slot[b] = (uint8_t *)&c.pt[b].raw;   /* big-endian: T0 in the top nibble */
 #define SET(bank, t, v) (slot[bank][(t) >> 1] = (uint8_t)(((t) & 1) ? (slot[bank][(t) >> 1] & 0xF0) | (v) : (slot[bank][(t) >> 1] & 0x0F) | (v) << 4))
     for (int i = 0; i < P.h->nplanes; i++) {
         const SplPlane *pl = &P.planes[i];
@@ -109,11 +133,45 @@ static void set_cycle_patterns(void)
         for (int b = (int)(a >> 17); b <= (int)((z - 1) >> 17) && b < 3; b++) SET(b, n, VDP2_VRAM_CYCP_CHPNDR(n));
     }
 #undef SET
-    vdp2_vram_cycp_set(&c);
-    /* in the registers now too (libyaul's copy goes at the next vblank's commit): the cells are uploaded next, and the
-     * pattern on until then (libyaul's all "no access" after the menus) gave the CPU no slot in any bank */
-    volatile uint32_t *cyc = (volatile uint32_t *)(VDP2_IOREG_BASE + 0x10u);
-    for (int b = 0; b < 4; b++) cyc[b] = c.pt[b].raw;
+    put_cycle_patterns(&c);
+}
+
+/* ---------------------------------------------------------------- name table writes, in the vertical blank
+ * The columns that come into view go into this queue (sat_planes_frame, while the screen is drawn) and into the name
+ * tables at the vblank that shows their frame (sat_planes_shown), before the scroll that shows them. A frame that
+ * writes more (a level's first frame: the whole view) writes the queue itself in the vblanks as it fills. */
+enum { NQ_MAX = 2048 };
+static uint32_t nq_val[NQ_MAX];
+static uint16_t nq_at[NQ_MAX];     /* the entry's long word from PAGE(0) (NBGn's page at n * 4096) */
+static int nq_n;
+static uint32_t ls_ram[2][SAT_SCREEN_H];   /* NBG0-1's line scroll table of the frame, for the vblank */
+
+#define TVSTAT_VBLANK() ((*(volatile uint16_t *)0x25F80004u & 0x0008u) != 0)
+
+/* the queue into video memory now (the vblank-in handler, or the main loop in a vblank) */
+static void nq_write(void)
+{
+    volatile uint32_t *pg = VRAM(PAGE(0));
+    for (int i = 0; i < nq_n; i++) pg[nq_at[i]] = nq_val[i];
+    nq_n = 0;
+}
+
+/* a full queue from the main loop (latch_ready is off: the handler leaves the queue alone) */
+static void nq_drain(void)
+{
+    volatile uint32_t *pg = VRAM(PAGE(0));
+    int i = 0;
+    while (i < nq_n) {
+        for (uint32_t spins = 0; !TVSTAT_VBLANK() && spins < 400000u; spins++) { }   /* (~20 ms at most) */
+        do pg[nq_at[i]] = nq_val[i]; while (++i < nq_n && TVSTAT_VBLANK());
+    }
+    nq_n = 0;
+}
+
+static void nq_put(int nbg, int k, uint32_t v)
+{
+    if (nq_n == NQ_MAX) nq_drain();
+    nq_at[nq_n] = (uint16_t)(nbg * 4096 + k); nq_val[nq_n++] = v;
 }
 
 static void setup_screens(void)
@@ -128,7 +186,7 @@ static void setup_screens(void)
      * (level 1's NBG0, then level 3's) read the old level's table: its page scrolled wrong, the ring's empty columns
      * a hole in the far mountains that crept across the screen */
     regs->scrctl = (uint16_t)(regs->scrctl & ~0x3E3Eu);
-    set_cycle_patterns();
+    nq_n = 0;   /* (the last level's columns, never shown) */
     for (int i = 0; i < P.h->nplanes; i++) {
         const SplPlane *pl = &P.planes[i];
         vdp2_scrn_cell_format_t f = {
@@ -145,7 +203,7 @@ static void setup_screens(void)
             vdp2_scrn_ls_set(&ls);
         }
         volatile uint32_t *pg = VRAM(PAGE(pl->nbg));
-        for (int k = 0; k < 64 * 64; k++) pg[k] = 0;   /* char 0 = plane 0's empty cell: transparent */
+        for (int k = 0; k < 64 * 64; k++) pg[k] = 0;   /* char 0 = plane 0's empty cell: transparent (the upload patterns) */
     }
     for (int i = 0; i < P.h->nbands && i < MAX_BANDS; i++) { P.band[i].lo = P.band[i].hi = -1; P.band[i].chunk = -1; }
 }
@@ -183,10 +241,14 @@ static bool load(uint32_t level)
     P.cellpal = e->data + h->cellpal_off;
     P.chunks = (const uint32_t *)(e->data + h->names_off);
     for (int i = 0; i < h->nbands; i++) P.band[i].b = (const SplBand *)(e->data + h->bands_off) + i;
+    /* the planes off (in the register too: the display may still show the last level's) while their video memory is
+     * written through the loading patterns, then the patterns that show them */
     vdp2_scrn_display_set(sat_floor_visible() ? VDP2_SCRN_DISPTP_RBG0 : VDP2_SCRN_DISP_NONE);
-    set_cycle_patterns();
-    if (!load_cells(level, h->ncells)) { unload(); return false; }
+    *(volatile uint16_t *)(VDP2_IOREG_BASE + 0x20u) = vdp2_regs_get()->bgon;
+    set_upload_patterns();
+    if (!load_cells(level, h->ncells)) { set_cycle_patterns(); unload(); return false; }
     setup_screens();
+    set_cycle_patterns();
     load_palettes();
     const SplBackdrop *bd = (const SplBackdrop *)(e->data + h->backdrops_off);
     P.nbackdrops = 0;
@@ -284,17 +346,16 @@ static void write_column(BandRt *br, int col)
 {
     const SplBand *b = br->b;
     const SplPlane *pl = &P.planes[b->plane];
-    volatile uint32_t *pg = VRAM(PAGE(pl->nbg));
     int rows = b->row1 - b->row0, pc = col & 63;
     int src = b->wrap ? col % (int)b->wrap : col;
     if (src < 0 || src >= (int)b->cols) {   /* beyond the band: empty */
-        for (int r = 0; r < rows; r++) pg[(b->row0 + r) * 64 + pc] = 0;
+        for (int r = 0; r < rows; r++) nq_put(pl->nbg, (b->row0 + r) * 64 + pc, 0);
         return;
     }
     const uint16_t *n = column(br, src);
     for (int r = 0; r < rows; r++) {
         uint32_t cell = pl->first_cell + (n[r] & 0x3FFFu);
-        pg[(b->row0 + r) * 64 + pc] = (uint32_t)(n[r] & 0xC000u) << 16 | (uint32_t)P.cellpal[cell] << 16 | cell;
+        nq_put(pl->nbg, (b->row0 + r) * 64 + pc, (uint32_t)(n[r] & 0xC000u) << 16 | (uint32_t)P.cellpal[cell] << 16 | cell);
     }
 }
 
@@ -342,7 +403,7 @@ void sat_planes_frame(int sw)
         }
         latch.x[pl->nbg] = 0;
         latch.ls[pl->nbg] = true;
-        volatile uint32_t *t = VRAM(LS_TABLE(pl->nbg, ls_shown ^ 1));   /* per screen line: the scroll of the band at that plane row */
+        uint32_t *t = ls_ram[pl->nbg];   /* per screen line: the scroll of the band at that plane row (the vblank writes it) */
         for (int y = 0; y < SAT_SCREEN_H; y++) {
             int row = (y + oy) >> 3, sc = 0;
             for (int k = 0; k < pl->nbands; k++) {
@@ -369,6 +430,7 @@ void sat_planes_shown(void)
 {
     if (!latch_ready || !P.h) return;
     latch_ready = false;
+    nq_write();   /* the columns this frame's scroll brings into view */
     vdp2_ioregs_t *sh = vdp2_regs_get();
     volatile vdp2_ioregs_t *hw = (volatile vdp2_ioregs_t *)VDP2_IOREG_BASE;
     bool flip = false;
@@ -378,6 +440,8 @@ void sat_planes_shown(void)
         vdp2_scrn_scroll_y_set(scrn_of(n), latch.y[n]);
         if (latch.ls[n]) {
             flip = true;
+            volatile uint32_t *t = VRAM(LS_TABLE(n, ls_shown ^ 1));
+            for (int y = 0; y < SAT_SCREEN_H; y++) t[y] = ls_ram[n][y];
             uint32_t a = VDP2_VRAM_ADDR(0, LS_TABLE(n, ls_shown ^ 1));
             uint16_t u = (uint16_t)VDP2_VRAM_BANK(a), l = (uint16_t)((a >> 1) & 0xFFFF);
             if (n == 0) { sh->lsta0u = u; sh->lsta0l = l; hw->lsta0u = u; hw->lsta0l = l; }

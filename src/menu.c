@@ -142,7 +142,11 @@ void menu_enter(Menu *m, int state)
 {
     if (m->video) { video_close(m->video); m->video = NULL; }
     int prev = m->state;
+#ifdef PLAT_SATURN
+    fprintf(stderr, "menu %d -> %d\n", prev, state);   /* the diagnostic disc's log shows where a console hang starts */
+#else
     if (plat_getenv("SABER_TRACE")) fprintf(stderr, "menu %d -> %d\n", prev, state);
+#endif
     m->state = state; m->t = 0; m->dur = MENU_PERIOD; m->idle_frames = 0; m->loading = 0; m->drawn = 0;
     switch (state) {
     case MS_SPLASH0: case MS_SPLASH1: case MS_SPLASH2: case MS_SPLASH3: case MS_INTRO:
@@ -156,6 +160,12 @@ void menu_enter(Menu *m, int state)
         music_play(0, true); break;
     case MS_OPTIONS:
         m->sel = prev == MS_CONTROLS ? OPT_CONTROLS : 1; m->music_track = 0;
+        /* draw_options' art read now, before its music (a read stops CD-DA on the Saturn): read on its first frame, it
+         * took the drive back from the track just started while the drive still sought to it, and the screen stayed on
+         * the title on the console */
+        { static const uint32_t ART[] = { 0x92702CF3, 0x2178AD91, 0xE740F153, 0xF8F9017C, 0x94C9A3DA };
+          for (size_t i = 0; i < sizeof ART / sizeof *ART; i++) warm(sprite_get(ART[i])); }
+        font_get(0x4058897F);
         if (prev != MS_CREDITS && prev != MS_CONTROLS) music_play(3, true);
         break;
     case MS_CONTROLS: m->bind_row = CR_BUTTON0; m->bind_col = 0; m->bind_wait = true; break;
