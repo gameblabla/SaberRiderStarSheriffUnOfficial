@@ -118,7 +118,7 @@ function loadConfig() {
     keys: structuredClone(DEFAULT_KEYS),
     pad: structuredClone(DEFAULT_PAD),
     level: 0,               // which stage the page boots into, and what "Soft reset" returns to
-    scaleMode: 'fit',
+    scaleMode: REDIST ? 'integer' : 'fit',   // a distributable build shows the game at whole game pixels (1:1)
     screenMode: 0,
     pixelPerfect: true,
     volume: 0.8,
@@ -903,18 +903,14 @@ function layout() {
   const pad = REDIST ? 0 : (full ? 0 : 16);   /* windowed keeps a margin; fullscreen goes edge to edge */
   const stage = { width: box.width, height: box.height };
   let w, h;
-  if (REDIST) {
-    // 1:1, and the whole picture: the canvas is scaled by the largest whole number of game pixels that fits
-    // the page, so a game pixel is exactly that many square screen pixels and nothing is cut off. A page that
-    // is not an exact multiple of 426x240 keeps black bars on the axis that does not divide - and the page is
-    // black, so what is either side of the game is the same black as its own dark edges, not a window.
-    const mult = Math.max(1, Math.floor(Math.min((stage.width - pad) / W, (stage.height - pad) / H)));
-    w = W * mult;
-    h = H * mult;
-  } else if (config.scaleMode === 'stretch') {
+  if (config.scaleMode === 'stretch') {
     w = stage.width - pad;
     h = stage.height - pad;
   } else if (config.scaleMode === 'integer' || config.screenMode > 0) {
+    // integer scale, the default on a redistributable build: the largest whole number of game pixels that
+    // fits, so a game pixel is exactly that many square screen pixels and the whole picture is there. A page
+    // that is not an exact multiple of 426x240 keeps black bars on the axis that does not divide - and the
+    // page is black, so what is either side of the game is the same black as its own dark edges, not a window.
     const mult = config.screenMode > 0 ? config.screenMode : Math.max(1, Math.floor(Math.min((stage.width - pad) / W, (stage.height - pad) / H)));
     w = W * mult;
     h = H * mult;
