@@ -25,6 +25,7 @@ bool game_init(Game *g, Ren *ren, int sw, int sh, int start_level)
     g->carry_lives = -1;
     g->ren = ren; g->sw = sw; g->sh = sh;
     g->menu.difficulty = 1; g->menu.lives = 2; g->menu.continues = 3; g->menu.character = 1; g->menu.sensitivity = 5;   /* option defaults: NORMAL, 02, 03; Fireball */
+    g->menu.intro_have = -1;   /* whether the intro clip is there is not known until the title asks (menu.c) */
     if (plat_getenv("SABER_HERO")) g->menu.character = atoi(plat_getenv("SABER_HERO")) & 3;   /* debug: 0 Saber 1 Fireball 2 April 3 Colt */
     if (plat_getenv("SABER_LIVES")) g->menu.lives = atoi(plat_getenv("SABER_LIVES"));   /* debug: starting lives */
     g->menu.ratio = plat_default_ratio();

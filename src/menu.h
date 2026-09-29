@@ -40,6 +40,7 @@ typedef struct {
     bool ending;               /* the last stage is won: MISSION ACCOMPLISHED rolls the credits, then the splash */
     int cleared_stage;         /* the stage MISSION ACCOMPLISHED celebrates (1-4): picks its art (assets/victory) */
     int idle_frames;           /* title attract timer */
+    signed char intro_have;    /* whether the intro clip is there: -1 not looked for yet, then 0 / 1 */
     real angle;               /* rotating background (DAT_00ac9a88 / DAT_00ac9a8c) */
     int credits_page; real credits_t;
     int bind_dev, bind_row, bind_col;   /* CONTROLS cursor */

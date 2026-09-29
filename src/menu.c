@@ -198,6 +198,21 @@ void menu_enter(Menu *m, int state)
     }
 }
 
+/* Is the intro clip there to replay? Probed once, the first time the title would fade out for it: a build with
+ * no video at all (the WASM page) cannot open it, and the demo's attract mode asks for the intro every 30 s of
+ * idling. Without this the title's music would be faded out, nothing would play, and the title would come back
+ * with the music starting over from the top - looping, but never uninterrupted. So where there is no intro the
+ * fade never starts and the music is left to loop as it is. */
+static bool intro_have(Menu *m, Ren *r)
+{
+    if (m->intro_have < 0) {
+        Video *v = video_open(r, 0xE46721E5);
+        m->intro_have = v ? 1 : 0;
+        if (v) video_close(v);
+    }
+    return m->intro_have != 0;
+}
+
 void menu_update(Menu *m, const Input *in, real dt, int sw, Ren *r)
 {
     (void)sw;
@@ -233,10 +248,12 @@ void menu_update(Menu *m, const Input *in, real dt, int sw, Ren *r)
             break;
         }
         m->idle_frames = any ? 0 : m->idle_frames + 1;
-        if (m->idle_frames > ATTRACT_FRAMES) {   /* attract: fade out and replay the intro */
+        /* attract: fade out and replay the intro - where there is one. With no intro to replay the title just
+         * sits on its music: the timer is put back so the look is asked for once every 30 s, not every frame */
+        if (m->idle_frames > ATTRACT_FRAMES && intro_have(m, r)) {
             m->t += dt;
             if (m->t >= m->dur / 2 + R(1.0f)) menu_enter(m, MS_INTRO);
-        } else m->t = m->dur / 2;
+        } else { if (m->idle_frames > ATTRACT_FRAMES) m->idle_frames = ATTRACT_FRAMES; m->t = m->dur / 2; }
         break; }
     case MS_OPTIONS: {
         int maxl, maxc;
