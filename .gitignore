@@ -9,3 +9,4 @@ release/
 !/SaberRider/data/
 /obj-saturn/
 /obj-saturn-diag/
+/obj-wasm/

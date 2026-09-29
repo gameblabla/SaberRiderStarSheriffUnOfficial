@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Saber Rider and the Star Sheriffs &mdash; WebAssembly</title>
+<link rel="icon" href="favicon.png" type="image/png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+
+  <!-- the game window: the canvas is the fixed 426x240 internal framebuffer, CSS-scaled to whatever fits -->
+  <main class="stage" id="stage">
+    <div class="screen-wrap" id="screenWrap" tabindex="0" aria-label="Saber Rider game screen">
+      <canvas id="screen" width="426" height="240"></canvas>
+
+      <!-- the touch overlay, shown on a touch device or forced from the panel -->
+      <div id="touch" class="touch" hidden aria-hidden="true">
+        <div class="touch-dpad" id="touchDpad" aria-label="Direction pad">
+          <span class="dpad-arrow up"    data-dir="up"></span>
+          <span class="dpad-arrow right" data-dir="right"></span>
+          <span class="dpad-arrow down"  data-dir="down"></span>
+          <span class="dpad-arrow left"  data-dir="left"></span>
+          <div class="dpad-knob" id="dpadKnob"></div>
+        </div>
+        <div class="touch-actions">
+          <button type="button" class="tbtn tbtn-shoulder" data-btn="shoulderL">L</button>
+          <button type="button" class="tbtn tbtn-shoulder" data-btn="shoulderR">R</button>
+          <button type="button" class="tbtn tbtn-power"    data-btn="POWER">PWR</button>
+          <button type="button" class="tbtn tbtn-aim"      data-btn="AIM">AIM</button>
+          <button type="button" class="tbtn tbtn-shoot"    data-btn="SHOOT">FIRE</button>
+          <button type="button" class="tbtn tbtn-jump"     data-btn="JUMP">JUMP</button>
+        </div>
+      </div>
+
+      <!-- the on-canvas messages: loading progress, the paused card, the touch hint -->
+      <div class="overlay" id="overlay">
+        <div class="card" id="loadingCard">
+          <h1>Saber Rider<span>and the Star Sheriffs</span></h1>
+          <div class="bar"><div class="bar-fill" id="loadBar"></div></div>
+          <p class="status" id="loadStatus">fetching the module&hellip;</p>
+          <p class="hint" id="loadHint"></p>
+        </div>
+        <div class="card hidden" id="pausedCard">
+          <h2>Paused</h2>
+          <p class="status">press <kbd>P</kbd> or tap Resume</p>
+          <button type="button" class="primary" id="resumeBtn">Resume</button>
+        </div>
+        <div class="card hidden" id="errorCard">
+          <h2>Could not start</h2>
+          <p class="status" id="errorText"></p>
+          <pre class="log" id="errorLog"></pre>
+        </div>
+      </div>
+
+      <button type="button" class="icon-btn fullscreen" id="fullscreenBtn" title="Fullscreen" aria-label="Fullscreen"></button>
+      <button type="button" class="icon-btn panel-toggle" id="panelBtn" title="Panel" aria-label="Open the panel">&#9776;</button>
+    </div>
+  </main>
+
+  <!-- the side panel: video, audio, the controls (the game's buttons, keyboard and gamepad, here rather than in
+       the in-game menu), touch controls, and the status read-outs -->
+  <aside class="panel" id="panel">
+    <header class="panel-head">
+      <div>
+        <h1>Saber Rider <small>WebAssembly</small></h1>
+        <p>The demo reconstruction on a 426&times;240 software-rendered canvas.</p>
+      </div>
+      <button type="button" class="icon-btn close" id="panelClose" aria-label="Close the panel">&times;</button>
+    </header>
+
+    <section>
+      <h2>Level</h2>
+      <label class="field">Start in
+        <select id="levelSelect"></select>
+      </label>
+      <div class="row">
+        <button type="button" id="levelGo">Go</button>
+      </div>
+      <p class="hint">Go restarts the game in the picked stage, the same as opening the page with
+        <code>?level=3</code> (which wins over the choice below). The stage is remembered, so a reload and
+        <em>Soft reset</em> both come back to it; pick <em>Front end</em> to play from the title.</p>
+    </section>
+
+    <section>
+      <h2>Screen</h2>
+      <div class="row">
+        <button type="button" id="pauseBtn">Pause</button>
+        <button type="button" id="resetBtn">Soft reset</button>
+      </div>
+      <label class="field">Scaling
+        <select id="scaleMode">
+          <option value="fit">Fit the window</option>
+          <option value="integer">Integer scale</option>
+          <option value="stretch">Stretch</option>
+        </select>
+      </label>
+      <label class="field">Size
+        <select id="screenMode">
+          <option value="0">Full</option>
+          <option value="1">1&times;</option>
+          <option value="2">2&times;</option>
+          <option value="3">3&times;</option>
+          <option value="4">4&times;</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="pixelPerfect" checked> Crisp pixels (no smoothing)</label>
+    </section>
+
+    <section>
+      <h2>Audio</h2>
+      <label class="field">Volume <input type="range" id="volume" min="0" max="100" value="80"></label>
+      <p class="hint" id="audioState">Audio starts on the first click (browsers require it).</p>
+    </section>
+
+    <section>
+      <h2>Controls</h2>
+      <p class="hint">Click a button's key or pad cell, then press it. <kbd>Esc</kbd> cancels, <kbd>Del</kbd> clears.
+        A key belongs to one button at a time: binding it somewhere else releases it where it was.</p>
+      <p class="hint"><b>STRAFE_L</b> / <b>STRAFE_R</b> are the pad's two triggers, which are also <b>AIM</b>.
+        On stage 6 phase 1 they strafe on their own (<b>AIM</b> on its own turns).</p>
+      <div class="bindings" id="bindings"></div>
+      <div class="row">
+        <button type="button" id="resetKeys">Reset keys</button>
+        <button type="button" id="resetPad">Reset pad</button>
+      </div>
+      <label class="field">Analog stick dead zone <input type="range" id="sens" min="1" max="10" value="5"></label>
+      <p class="hint" id="padState">No gamepad seen yet.</p>
+    </section>
+
+    <section>
+      <h2>Touch controls</h2>
+      <label class="check"><input type="checkbox" id="touchEnabled"> Show the touch overlay</label>
+      <label class="field">Opacity <input type="range" id="touchOpacity" min="20" max="100" value="70"></label>
+      <label class="field">Size <input type="range" id="touchSize" min="60" max="160" value="100"></label>
+      <label class="check"><input type="checkbox" id="touchLandscape"> Landscape layout (d-pad left, buttons right)</label>
+    </section>
+
+    <section>
+      <h2>Status</h2>
+      <dl class="stats">
+        <dt>FPS</dt><dd id="statFps">0</dd>
+        <dt>Frame</dt><dd id="statFrame">0.0 ms</dd>
+        <dt>Draws</dt><dd id="statDraws">0</dd>
+        <dt>Floor</dt><dd id="statFloor">0.0 ms</dd>
+        <dt>Audio</dt><dd id="statAudio">&mdash;</dd>
+        <dt>Heap free</dt><dd id="statHeap">0 MB</dd>
+        <dt>Memory</dt><dd id="statMem">0 MB</dd>
+        <dt>Gamepad</dt><dd id="statPad">none</dd>
+      </dl>
+      <label class="check"><input type="checkbox" id="showFps"> Show the FPS on the canvas</label>
+      <details class="dev">
+        <summary>Debug switches (SABER_*)</summary>
+        <div class="dev-body">
+          <p class="hint">Read by the core through plat_getenv, the same as a console's saber.env. Applied at the
+             next soft reset. <code>SABER_LEVEL</code> 1&ndash;6 skips the front end, <code>SABER_PERF</code> prints a
+             per-second report to the console.</p>
+          <textarea id="devText" rows="6" spellcheck="false" placeholder="SABER_LEVEL=1&#10;SABER_PERF=1"></textarea>
+          <div class="row"><button type="button" id="devApply">Apply</button></div>
+        </div>
+      </details>
+      <pre class="log" id="log"></pre>
+    </section>
+  </aside>
+</div>
+<script type="module" src="saber-wasm.js"></script>
+</body>
+</html>

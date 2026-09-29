@@ -1,0 +1,101 @@
+# The WebAssembly port: the core game (src/*.c, src/platform/common) plus this directory's platform, built
+# freestanding for wasm32-unknown-unknown with clang and wasm-ld. No emscripten, no SDL, no WASI: the C library
+# is src/platform/wasm/libc_wasm.c + libm_wasm.c, and the page (web/) provides the few imports the module needs
+# (the clock, the console) and everything else through exports.
+#
+#   make -f Makefile.wasm                 -> build/wasm/saber_rider.wasm
+#   make -f Makefile.wasm serve           -> build it, stage the data and assets, and serve the page on :8009
+#   make -f Makefile.wasm ASSETS=0        -> skip the 21 MB of assets/ (a bring-up build: only the packs)
+#   make -f Makefile.wasm clean
+#
+# The data packs are the demo's own, not in the repository, so they are staged rather than copied:
+# SABER_DATA ?= SaberRider/data. The result is build/wasm/web/, a plain static directory any http server can
+# serve (the reference port's `serve` target does the same).
+
+CC        ?= clang
+WASM_CC   ?= clang
+WASM_LD   ?= wasm-ld
+LLVM_AR   ?= llvm-ar
+PYTHON    ?= python3
+
+# the demo's data packs, and our own assets/ (PNGs and wavs the page decodes and hands over)
+SABER_DATA ?= SaberRider/data
+ASSETS     ?= 1
+PORT       ?= 8009
+
+OUT        := build/wasm
+OBJ        := obj-wasm
+WEB        := $(OUT)/web
+WASM       := $(OUT)/saber_rider.wasm
+
+# the core (src/*.c) and the parts of src/platform/common that are not a backend: sfx_decode (the packs' Yamaha
+# ADPCM) and mups (the MUPS -> Ogg header fixup) feed the mixer. floor_soft is the Mode 7 rasteriser, which
+# render_wasm.c drives. audio.c itself is core, so it comes with src/*.c.
+CORE_SRC   := $(wildcard src/*.c) \
+              src/platform/common/sfx_decode.c \
+              src/platform/common/mups.c \
+              src/platform/common/floor_soft.c
+EXTRA_CFLAGS  ?=
+EXTRA_EXPORTS ?=
+# the heap stress test (src/platform/wasm/heap_test.c) is built only on request: make -f Makefile.wasm check
+ifdef SELFTEST
+EXTRA_CFLAGS  += -DSABER_WASM_SELFTEST
+EXTRA_EXPORTS += --export=wasm_heap_stress --export=wasm_heap_stress_stats --export=wasm_heap_stress_msg \
+	--export=wasm_heap_free_ptr --export=wasm_heap_list_ok_ --export=wasm_heap_is_ours_
+endif
+WASM_SRC   := $(filter-out src/platform/wasm/heap_test.c,$(wildcard src/platform/wasm/*.c))
+ifdef SELFTEST
+WASM_SRC += src/platform/wasm/heap_test.c
+endif
+SRC        := $(CORE_SRC) $(WASM_SRC)
+OBJ_FILES  := $(patsubst %.c,$(OBJ)/%.o,$(SRC))
+
+# freestanding: no hosted libc to pull in, and the headers the platform's own include/ directory has to come first
+# so <string.h> and friends are ours (src/platform/wasm/include) while <stdint.h>, <stddef.h>, <stdarg.h>,
+# <limits.h> and <stdbool.h> come from clang's own freestanding set.
+WASM_CFLAGS := --target=wasm32-unknown-unknown -std=gnu11 -O3 -g0 \
+  -DPLAT_WASM \
+  -ffreestanding -fno-stack-protector \
+  -Isrc/platform/wasm/include -Isrc -I. \
+  -Wall -Wextra -Wno-unused-parameter -Wno-implicit-function-declaration \
+  -ffunction-sections -fdata-sections $(EXTRA_CFLAGS)
+# --no-entry: there is no main(), the page calls the exports. The memory is exported (the page reads the
+# framebuffer and the audio ring out of it) and grows on demand from the heap.
+WASM_LDFLAGS := --no-entry --export-memory --strip-debug --gc-sections \
+  --initial-memory=33554432 --max-memory=1073741824 --stack-first
+WASM_EXPORTS := \
+  --export=wasm_boot --export=wasm_frame --export=wasm_shutdown \
+  --export=wasm_frame_ptr --export=wasm_frame_w --export=wasm_frame_h --export=wasm_prims --export=wasm_floor_us \
+  --export=wasm_heap_free --export=wasm_mem_used --export=wasm_mem_total \
+  --export=wasm_vfs_add --export=wasm_vfs_add_image --export=wasm_vfs_count --export=wasm_vfs_bytes \
+  --export=wasm_alloc --export=wasm_error_msg --export=wasm_build_id $(EXTRA_EXPORTS) \
+  --export=wasm_audio_ready --export=wasm_audio_get_ptr --export=wasm_audio_contig --export=wasm_audio_take --export=wasm_audio_set_volume \
+  --export=wasm_input_push --export=wasm_input_key --export=wasm_input_sens \
+  --export=wasm_env_put --export=wasm_env_get_ptr --export=wasm_state
+
+.PHONY: all build clean serve stage
+all: build
+build: $(WASM)
+
+$(WASM): $(OBJ_FILES)
+	@mkdir -p $(OUT)
+	$(WASM_LD) $(WASM_LDFLAGS) $(WASM_EXPORTS) -o $@ $(OBJ_FILES)
+
+# stb_vorbis.c is included by aud_wasm.c (STB_VORBIS_HEADER_ONLY), so it must not be compiled on its own
+$(OBJ)/src/third_party/wasm/stb_vorbis.o:
+	@:
+
+$(OBJ)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(WASM_CC) $(WASM_CFLAGS) -c $< -o $@
+
+# ---- staging: the page, the module, the data packs and our assets ----
+stage: $(WASM)
+	$(PYTHON) tools/wasm/build_web.py --wasm $(WASM) --out $(WEB) --data $(SABER_DATA) --assets $(ASSETS)
+
+serve: stage
+	@echo "Serving $(WEB) at http://127.0.0.1:$(PORT)/"
+	$(PYTHON) -m http.server $(PORT) --directory $(WEB)
+
+clean:
+	rm -rf $(OBJ) $(OUT)

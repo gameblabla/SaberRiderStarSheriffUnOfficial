@@ -1,0 +1,349 @@
+/* Saber Rider and the Star Sheriffs — the WebAssembly port's page.
+ * Dark, so the canvas is the only bright thing, and the panel is a column beside it on a wide screen and a drawer
+  * over it on a narrow one. The canvas keeps its 426x240 backing store at all times (the module renders into it);
+ * only its CSS size changes, with image-rendering: pixelated so the upscale stays crisp. */
+
+:root {
+  --bg: #0b0d12;
+  --panel: #151a24;
+  --panel-2: #1d2430;
+  --line: #2a3342;
+  --text: #dfe6f0;
+  --dim: #8d9bb0;
+  --accent: #ff7a3d;          /* the hero's orange */
+  --accent-2: #46d7ff;
+  --ok: #57d38c;
+  --warn: #ffc857;
+  --err: #ff6b6b;
+  --panel-w: 340px;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.app { display: flex; height: 100%; }
+
+/* ------------------------------------------------------------------ the stage */
+.stage {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background:
+    radial-gradient(120% 90% at 50% 0%, #131826 0%, #0b0d12 70%);
+}
+
+.screen-wrap {
+  position: relative;
+  line-height: 0;
+  outline: none;
+  border-radius: var(--radius);
+  box-shadow: 0 0 0 1px var(--line), 0 18px 50px -12px #000c;
+  touch-action: none;
+}
+.screen-wrap:focus-visible { box-shadow: 0 0 0 2px var(--accent-2), 0 18px 50px -12px #000c; }
+
+/* fullscreen (the page puts .screen-wrap itself fullscreen): fill the screen, centre the canvas on black, and
+ * drop the window decorations. layout() sizes the canvas from the fullscreen box (see saber-wasm.js). */
+.screen-wrap:fullscreen {
+  width: 100vw; height: 100vh;
+  display: flex; align-items: center; justify-content: center;
+  background: #000;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
+}
+.screen-wrap:fullscreen #screen { border-radius: 0; }
+.screen-wrap:fullscreen .overlay { border-radius: 0; }
+
+#screen {
+  display: block;
+  image-rendering: pixelated;      /* the whole point: the module already renders at 426x240 */
+  background: #000;
+  border-radius: var(--radius);
+}
+#screen.smooth { image-rendering: auto; }
+
+/* the corner buttons over the screen */
+.icon-btn {
+  position: absolute;
+  z-index: 6;
+  width: 34px; height: 34px;
+  display: grid; place-items: center;
+  border: 1px solid #ffffff26;
+  border-radius: 8px;
+  background: #0d1119cc;
+  color: var(--text);
+  font-size: 17px; line-height: 1;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+}
+.icon-btn:hover { background: #1a2130ee; }
+.fullscreen { top: 8px; right: 8px; }
+.fullscreen::before {
+  content: ""; width: 14px; height: 14px;
+  border: 2px solid currentColor; border-radius: 2px;
+  box-shadow: inset 0 0 0 2px #0d1119;
+}
+.panel-toggle { top: 8px; right: 50px; }
+.icon-btn.close { position: static; width: 30px; height: 30px; font-size: 20px; }
+
+/* ------------------------------------------------------------------ overlays */
+.overlay {
+  position: absolute; inset: 0; z-index: 5;
+  display: grid; place-items: center;
+  padding: 16px;
+  background: #060810e6;
+  border-radius: var(--radius);
+  line-height: 1.45;
+}
+.overlay[hidden] { display: none; }
+
+.card { width: min(420px, 100%); text-align: center; }
+.card.hidden, .hidden { display: none !important; }
+.card h1 { margin: 0 0 4px; font-size: 24px; letter-spacing: 0.5px; }
+.card h1 span { display: block; font-size: 13px; font-weight: 400; color: var(--dim); letter-spacing: 2px; text-transform: uppercase; }
+.card h2 { margin: 0 0 8px; font-size: 20px; }
+.card .status { margin: 8px 0 0; color: var(--dim); font-size: 13px; }
+.card .hint { margin: 6px 0 0; color: var(--dim); font-size: 12px; }
+.card .log { text-align: left; }
+
+.bar {
+  height: 8px; margin-top: 14px;
+  background: #ffffff14; border-radius: 99px; overflow: hidden;
+}
+.bar-fill {
+  height: 100%; width: 0%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 0.15s linear;
+}
+
+button.primary, .row button {
+  margin-top: 12px;
+  padding: 7px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit; font-size: 13px;
+  cursor: pointer;
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: #1a0d05; font-weight: 600; }
+button:hover { border-color: var(--accent-2); }
+button:active { transform: translateY(1px); }
+/* nothing to apply: the level select already sits where the game is (the Go button lights up when it does not) */
+button:disabled { opacity: 0.45; cursor: default; }
+button:disabled:hover { border-color: var(--line); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--line); border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+code { font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent-2); }
+
+/* ------------------------------------------------------------------ touch controls */
+.touch {
+  position: absolute; inset: 0; z-index: 4;
+  pointer-events: none;
+  line-height: 1;
+}
+.touch[hidden] { display: none; }
+
+.touch-dpad {
+  position: absolute; left: 4%; bottom: 6%;
+  width: 132px; height: 132px;
+  pointer-events: auto;
+  touch-action: none;
+}
+.dpad-arrow {
+  position: absolute;
+  width: 44px; height: 44px;
+  background: #ffffff1c;
+  border: 1px solid #ffffff2e;
+  border-radius: 8px;
+}
+.dpad-arrow::after {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  color: #ffffffcc; font-size: 20px;
+}
+.dpad-arrow.up    { left: 44px; top: 0; }
+.dpad-arrow.down  { left: 44px; bottom: 0; }
+.dpad-arrow.left  { top: 44px; left: 0; }
+.dpad-arrow.right { top: 44px; right: 0; }
+.dpad-arrow.up::after    { content: "\25B2"; }
+.dpad-arrow.down::after  { content: "\25BC"; }
+.dpad-arrow.left::after  { content: "\25C0"; }
+.dpad-arrow.right::after { content: "\25B6"; }
+.dpad-arrow.on { background: #ffffff3a; }
+.dpad-knob {
+  position: absolute; left: 50%; top: 50%;
+  width: 40px; height: 40px; margin: -20px 0 0 -20px;
+  border-radius: 50%;
+  background: #ffffff26;
+  border: 1px solid #ffffff40;
+  transition: transform 0.05s linear;
+}
+
+.touch-actions {
+  position: absolute; right: 4%; bottom: 6%;
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  gap: 10px;
+  pointer-events: auto;
+}
+.tbtn {
+  width: 62px; height: 62px;
+  border-radius: 50%;
+  border: 1px solid #ffffff33;
+  background: #ffffff1c;
+  color: #fff;
+  font: 600 12px/1 system-ui, sans-serif;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+.tbtn.on { background: var(--accent); border-color: var(--accent); color: #1a0d05; }
+.tbtn-jump  { width: 76px; height: 76px; background: #ffffff2c; }
+.tbtn-shoot { background: #ffffff2c; }
+.tbtn-power { background: #ff7a3d33; }
+.tbtn-aim   { background: #46d7ff2e; }
+
+.touch.tiny .tbtn { width: 48px; height: 48px; font-size: 10px; }
+.touch.tiny .tbtn-jump { width: 58px; height: 58px; }
+.touch.tiny .touch-dpad { width: 104px; height: 104px; }
+.touch.tiny .dpad-arrow { width: 34px; height: 34px; }
+.touch.tiny .dpad-arrow.up, .touch.tiny .dpad-arrow.down { left: 35px; }
+.touch.tiny .dpad-arrow.left, .touch.tiny .dpad-arrow.right { top: 35px; }
+.touch.tiny .dpad-knob { width: 32px; height: 32px; margin: -16px 0 0 -16px; }
+
+/* portrait: the d-pad and the buttons side by side already; a wide short window flips them */
+.touch.landscape .touch-dpad { left: 2%; bottom: 8%; }
+.touch.landscape .touch-actions { right: 2%; bottom: 8%; }
+
+/* ------------------------------------------------------------------ the panel */
+.panel {
+  flex: 0 0 var(--panel-w);
+  width: var(--panel-w);
+  height: 100%;
+  overflow-y: auto;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  padding: 14px 14px 28px;
+  scrollbar-width: thin;
+}
+.panel.hidden { display: none; }
+
+.panel-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
+.panel-head h1 { margin: 0; font-size: 16px; }
+.panel-head h1 small { color: var(--accent); font-weight: 500; }
+.panel-head p { margin: 2px 0 0; color: var(--dim); font-size: 12px; }
+
+.panel section { border-top: 1px solid var(--line); padding: 12px 0 4px; }
+.panel h2 { margin: 0 0 8px; font-size: 12px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--dim); }
+
+.field {
+  display: flex; align-items: center; gap: 8px;
+  margin: 8px 0;
+  color: var(--dim); font-size: 13px;
+}
+.field > select, .field > input[type=range] { flex: 1 1 auto; min-width: 0; }
+.field select, .field textarea {
+  padding: 5px 7px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel-2); color: var(--text);
+  font: inherit; font-size: 13px;
+}
+.field input[type=range] { accent-color: var(--accent); }
+.check { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 13px; color: var(--dim); }
+.check input { accent-color: var(--accent); }
+.hint { margin: 6px 0; color: var(--dim); font-size: 12px; }
+
+/* the controls table: one row per game button, a key cell and a pad cell */
+.bindings { display: grid; gap: 4px; margin: 8px 0; }
+.bind-row {
+  display: grid;
+  grid-template-columns: 88px 1fr 1fr;
+  gap: 6px; align-items: center;
+}
+.bind-name { font-size: 12px; color: var(--dim); letter-spacing: 0.6px; }
+.bind-cell {
+  padding: 5px 6px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: center;
+  cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bind-cell:hover { border-color: var(--accent-2); }
+.bind-cell.listening { border-color: var(--accent); color: var(--accent); animation: pulse 1s infinite; }
+.bind-cell.unbound { color: var(--dim); }
+/* a cell the page does not let you rebind (the shoulders' pad cell: the triggers, read straight off the pad) */
+.bind-cell.fixed {
+  cursor: default; color: var(--dim);
+  background: transparent; border-style: dashed;
+}
+.bind-cell.fixed:hover { border-color: var(--line); }
+@keyframes pulse { 50% { opacity: 0.55; } }
+
+.stats { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 8px 0; font-size: 12px; }
+.stats dt { color: var(--dim); }
+.stats dd { margin: 0; text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.dev { margin-top: 10px; }
+.dev summary { cursor: pointer; color: var(--dim); font-size: 12px; }
+.dev-body { padding-top: 6px; }
+.dev textarea {
+  width: 100%; margin-top: 6px;
+  padding: 7px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel-2); color: var(--text);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  resize: vertical;
+}
+
+.log {
+  max-height: 130px; overflow: auto; margin: 8px 0 0;
+  padding: 7px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: #0a0d13;
+  color: var(--dim);
+  font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap; word-break: break-word;
+}
+.log:empty { display: none; }
+
+/* ------------------------------------------------------------------ narrow screens: the panel is a drawer */
+@media (max-width: 820px) {
+  .stage { padding: 8px; }
+  .panel {
+    position: fixed; inset: 0 0 0 auto;
+    z-index: 20;
+    width: min(360px, 92vw);
+    box-shadow: -18px 0 50px -20px #000d;
+  }
+  .panel-toggle { display: grid; }
+}
+@media (min-width: 821px) {
+  .panel-toggle { display: none; }
+  .icon-btn.close { display: none; }
+}
