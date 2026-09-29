@@ -737,13 +737,9 @@ function bindPanel() {
     el.levelSelect.addEventListener('change', updateLevelGo);
   }
 
-  // the scaling controls are the developer's: a redistributable build sizes the canvas itself (layout(): whole
-  // game pixels, the whole picture, no smoothing) whatever these say, so the elements are not in that page
-  if (el.scaleMode) {
-    el.scaleMode.addEventListener('change', () => { config.scaleMode = el.scaleMode.value; saveConfig(); layout(); });
-    el.screenMode.addEventListener('change', () => { config.screenMode = +el.screenMode.value; saveConfig(); layout(); });
-    el.pixelPerfect.addEventListener('change', () => { config.pixelPerfect = el.pixelPerfect.checked; saveConfig(); layout(); });
-  }
+  el.scaleMode.addEventListener('change', () => { config.scaleMode = el.scaleMode.value; saveConfig(); layout(); });
+  el.screenMode.addEventListener('change', () => { config.screenMode = +el.screenMode.value; saveConfig(); layout(); });
+  el.pixelPerfect.addEventListener('change', () => { config.pixelPerfect = el.pixelPerfect.checked; saveConfig(); layout(); });
 
   el.volume.addEventListener('input', () => { config.volume = el.volume.value / 100; saveConfig(); exp.wasm_audio_set_volume(config.volume); });
   el.sens.addEventListener('input', () => { config.sens = +el.sens.value; saveConfig(); exp.wasm_input_sens(config.sens); });
@@ -760,7 +756,9 @@ function bindPanel() {
   if (el.devApply) el.devApply.addEventListener('click', applyDevSwitches);
 
   // reflect the stored config
-  if (el.scaleMode) { el.scaleMode.value = config.scaleMode; el.screenMode.value = String(config.screenMode); el.pixelPerfect.checked = config.pixelPerfect; }
+  el.scaleMode.value = config.scaleMode;
+  el.screenMode.value = String(config.screenMode);
+  el.pixelPerfect.checked = config.pixelPerfect;
   el.volume.value = Math.round(config.volume * 100);
   el.sens.value = config.sens;
   el.touchEnabled.checked = touchShouldBeOn();
