@@ -703,11 +703,14 @@ function setPanelOpen(open) {
  * window changes shape or the game goes fullscreen, both of which move the button. */
 function placePanel() {
   const b = el.panelBtn.getBoundingClientRect();
-  const w = el.panel.offsetWidth || 340, gap = 6, edge = 8;
+  const w = el.panel.offsetWidth || 340, gap = 6, edge = 8, min = 140;
   const left = Math.max(edge, Math.min(b.right - w, innerWidth - w - edge));
-  const top = Math.min(b.bottom + gap, innerHeight - 20);
+  // the game window is centred, so on a short window the button can be low down: the menu goes under it, and
+  // its height is what is left, or the bottom of the bindings table ends up off the screen
+  const top = Math.max(edge, Math.min(b.bottom + gap, innerHeight - min - gap));
   el.panel.style.left = `${Math.round(left)}px`;
   el.panel.style.top = `${Math.round(top)}px`;
+  el.panel.style.maxHeight = `${Math.round(Math.max(160, innerHeight - top - edge))}px`;
 }
 function bindPanel() {
   el.panelBtn.addEventListener('click', () => setPanelOpen(el.panel.classList.contains('hidden')));
@@ -1012,6 +1015,8 @@ async function boot() {
     // a redist build's menu is a dropdown from the top-right button rather than a side panel, and the panel's
     // subtitle says what the build is instead of claiming to be a developer one
     document.body.classList.toggle('redist', REDIST);
+    // on a redist build the fullscreen and settings buttons come up with the game, not over the loading card
+    document.body.classList.toggle('booting', REDIST);
     const sub = document.querySelector('.panel-head small');
     if (sub && BUILD.label) sub.textContent = BUILD.label;
     bindPanel();
@@ -1060,6 +1065,7 @@ async function boot() {
 
     layout();
     el.overlay.hidden = true;
+    document.body.classList.remove('booting');
     running = true;
     lastT = performance.now();
     requestAnimationFrame(frame);

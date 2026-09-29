@@ -378,3 +378,15 @@ body.redist .app { display: block; }
 body.redist .stage { height: 100%; }
 /* the top-right button would sit under the fullscreen one, so the fullscreen glyph moves left of it */
 body.redist .fullscreen { right: 50px; }
+
+/* no frame round the game: a distributable build is the picture, not the picture in a window. The 1 px ring, the
+ * drop shadow and the rounded corners all go, and with nothing between them the game sits on the page's own
+ * background. The developer's build keeps them - there the frame is what shows the 426x240 box's extent. */
+body.redist .screen-wrap,
+body.redist .screen-wrap:focus-visible { box-shadow: none; border-radius: 0; }
+body.redist #screen { border-radius: 0; }
+
+/* nothing over the game until it is up: the loading card is the whole window while the packs and the assets
+   arrive, and the fullscreen and settings buttons sat on top of it. They appear with the game. */
+body.redist.booting .fullscreen,
+body.redist.booting .panel-toggle { display: none; }
