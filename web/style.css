@@ -419,3 +419,9 @@ body.redist .card button.primary { margin-top: 16px; }
    arrive, and the fullscreen and settings buttons sat on top of it. They appear with the game. */
 body.redist.booting .fullscreen,
 body.redist.booting .panel-toggle { display: none; }
+
+/* on a redistributable build the page is what goes fullscreen (see toggleFullscreen), so the root element is
+ * the fullscreen box: black to the edges, the full height of the screen, and nothing to scroll. The stage is
+ * the whole of it, and the canvas covers that. */
+html:fullscreen { background: #000; }
+html:fullscreen, html:fullscreen body { width: 100%; height: 100%; overflow: hidden; }

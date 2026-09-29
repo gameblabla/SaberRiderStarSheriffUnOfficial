@@ -790,10 +790,16 @@ function applyDevSwitches() {
 const enc = new TextEncoder();
 const decoder = new TextDecoder();
 
-/* ------------------------------------------------------------------ the window */
+/* ---- the window ----
+ * What goes fullscreen is the game window, so the page's frame and the developer panel stay out of it. On a
+ * redistributable build that is wrong: the settings menu is a box hung under the top-right button, and the
+ * panel it is in lives in the page beside the stage rather than inside the game window. If the game window
+ * alone went fullscreen the menu would be in a part of the document the browser is no longer showing, and
+ * the button would open nothing at all. So there the page itself is what goes fullscreen - the stage is the
+ * whole viewport, and the menu comes with it. */
 function toggleFullscreen() {
   if (document.fullscreenElement) document.exitFullscreen();
-  else el.wrap.requestFullscreen?.().catch(() => {});
+  else (REDIST ? document.documentElement : el.wrap).requestFullscreen?.().catch(() => {});
 }
 function togglePause() {
   if (!booted) return;
@@ -889,8 +895,8 @@ function layout() {
   imageData = null;
   ctx2d.imageSmoothingEnabled = !config.pixelPerfect;
 
-  // in fullscreen the stage is behind the fullscreen element (often collapsed), so the canvas is sized from
-  // the fullscreen box instead - which is the wrap itself, i.e. the screen
+  // the stage is behind the fullscreen element (on the dev build the game window, on a redist build the page),
+  // so in fullscreen the canvas is sized from the fullscreen box instead of from the stage
   const full = !!document.fullscreenElement;
   const box = (document.fullscreenElement || el.stage).getBoundingClientRect();
   // a redistributable build has no margin to keep: the page is black and the picture goes to the edges of it
