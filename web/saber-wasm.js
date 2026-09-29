@@ -893,10 +893,32 @@ function layout() {
   // the fullscreen box instead - which is the wrap itself, i.e. the screen
   const full = !!document.fullscreenElement;
   const box = (document.fullscreenElement || el.stage).getBoundingClientRect();
-  const pad = full ? 0 : 16;   /* windowed keeps a margin; fullscreen goes edge to edge */
+  // a redistributable build has no margin to keep: the page is black and the picture goes to the edges of it
+  const pad = REDIST ? 0 : (full ? 0 : 16);   /* windowed keeps a margin; fullscreen goes edge to edge */
   const stage = { width: box.width, height: box.height };
   let w, h;
-  if (config.scaleMode === 'stretch') {
+  if (REDIST) {
+    // cover, not fit: a distributable build is not a picture in a window, it is the window. So the canvas is
+    // scaled up by whole pixels until it covers the page in both axes and the page clips the overflow (the
+    // stage is overflow: hidden), which is what leaves no black round the game. The scale is still a whole
+    // number, so every game pixel is still the same square block of screen pixels - 1:1, just cropped.
+    const cover = Math.max((stage.width - pad) / W, (stage.height - pad) / H);
+    const mult = Math.max(1, Math.ceil(cover - 1e-6));   /* the epsilon: an exact 4 must not ask for 5 */
+    // ...except when the page is nothing like 16:9. A phone held upright is 390x844: covering that at 4x would
+    // crop 77% of the width and leave a stamp of the game in the middle. Past this much crop (the canvas more
+    // than 1.5x the page on an axis) it falls back to fitting inside whole, which letterboxes - two black bars
+    // on a shape where a picture that small needs them.
+    const tooTall = mult * W > (stage.width - pad) * 1.5;
+    const tooWide = mult * H > (stage.height - pad) * 1.5;
+    if (tooTall || tooWide) {
+      const fit = Math.max(1, Math.floor(Math.min((stage.width - pad) / W, (stage.height - pad) / H)));
+      w = W * fit;
+      h = H * fit;
+    } else {
+      w = W * mult;
+      h = H * mult;
+    }
+  } else if (config.scaleMode === 'stretch') {
     w = stage.width - pad;
     h = stage.height - pad;
   } else if (config.scaleMode === 'integer' || config.screenMode > 0) {

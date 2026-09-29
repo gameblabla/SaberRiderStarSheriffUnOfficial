@@ -380,14 +380,27 @@ body.redist .stage { height: 100%; }
 body.redist .fullscreen { right: 50px; }
 
 /* no frame round the game: a distributable build is the picture, not the picture in a window. The 1 px ring, the
- * drop shadow and the rounded corners all go, and the page behind it goes to plain black, so the letterbox a
- * wide window leaves is the same black as the game's own dark edges instead of a surround that reads as a
- * border. The developer's build keeps the frame - there the box is what shows the 426x240 extent. */
+ * drop shadow and the rounded corners all go, and the page behind it goes to plain black. The developer's build
+ * keeps the frame - there the box is what shows the 426x240 extent. */
 body.redist, body.redist .app { background: #000; }
-body.redist .stage { background: #000; padding: 0; }
+body.redist .stage { background: #000; padding: 0; overflow: hidden; }
 body.redist .screen-wrap,
 body.redist .screen-wrap:focus-visible { box-shadow: none; border-radius: 0; }
 body.redist #screen { border-radius: 0; }
+
+/* no black window round the game: layout() scales the canvas up by whole pixels until it covers the page in
+ * both axes, and the stage clips what runs past the edge. So the picture reaches every side of the window, and
+ * on a window that is not an exact multiple of 426x240 what is cut is the canvas's edge rather than a bar of
+ * black beside it. The dev build keeps fitting inside - there the frame is the point, and the picture is not
+ * expected to reach the edges.
+ *
+ * The chrome follows the window, not the canvas: at that scale the canvas is wider than the page, so a button
+ * pinned to its top right would be cropped out of reach. The two buttons and the touch controls are positioned
+ * in the viewport's corners instead - fixed, so they hold still in fullscreen too, where the viewport is the
+ * fullscreen element. */
+body.redist .fullscreen,
+body.redist .panel-toggle,
+body.redist .touch { position: fixed; }
 
 /* the loading card is not in a frame either. It is the whole window, opaque black, so nothing of the page shows
  * through it and nothing of it is left behind: the title, a bar that runs the width of the card, and what it is
