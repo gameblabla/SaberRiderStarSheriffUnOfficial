@@ -45,17 +45,23 @@ const BTN_MASK = (1 << BTN_NAME.length) - 1;
 
 const CONFIG_KEY = 'saber.wasm.config.v1';
 
-// the demo's keyboard layout, the same one the PC build starts with (input_sdl.c's defaults)
+/* The demo's keyboard layout, the same one the PC build starts with (input_sdl.c's defaults), and one key per
+ * action: the second key the demo allowed is dropped rather than shown as a pair. Bindings are KeyboardEvent
+ * codes - the physical key - so a QWERTY and an AZERTY keyboard (or Dvorak, or anything else) press the same
+ * keys for the same actions; only the name printed on a key changes with the layout, and keyLabel() asks the
+ * browser what this layout calls it. */
 const DEFAULT_KEYS = {
   LEFT: ['ArrowLeft'], RIGHT: ['ArrowRight'], UP: ['ArrowUp'], DOWN: ['ArrowDown'],
-  JUMP: ['KeyW', 'KeyA'], SHOOT: ['KeyS', 'KeyD'], AIM: ['KeyQ', 'KeyE'],
-  PAUSE: ['Enter'], POWER: ['KeyX', 'KeyF'],
+  JUMP: ['KeyW'], SHOOT: ['KeyS'], AIM: ['KeyQ'],
+  PAUSE: ['Enter'], POWER: ['KeyX'],
   STRAFE_L: ['KeyZ'], STRAFE_R: ['KeyC'],
 };
-// and its pad layout: the d-pad, south jump, east/west shoot, shoulders aim, start pause, north power
+/* and its pad layout: the d-pad moves, south jump, east shoot, left shoulder aim, start pause, north power.
+ * The two triggers are not here: they are AIM's, and they are also the two strafe shoulders (AIM doubles as
+ * STRAFE_L / STRAFE_R), which is how they work on the console. */
 const DEFAULT_PAD = {
   LEFT: [12], RIGHT: [13], UP: [14], DOWN: [15],
-  JUMP: [0], SHOOT: [2, 1], AIM: [6, 7], PAUSE: [9], POWER: [3],
+  JUMP: [0], SHOOT: [2], AIM: [6], PAUSE: [9], POWER: [3],
 };
 const PAD_NAMES = ['A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'BACK', 'START', 'L3', 'R3', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'GUIDE'];
 
@@ -149,18 +155,19 @@ function mergeBindings(defs, saved) {
   const out = {};
   for (const name of new Set([...Object.keys(defs), ...Object.keys(saved || {})])) {
     const have = saved && Array.isArray(saved[name]) ? saved[name] : null;
-    out[name] = have ? have.slice(0, 2) : (defs[name] ? defs[name].slice() : []);
+    out[name] = have ? have.slice(0, 1) : (defs[name] ? defs[name].slice(0, 1) : []);
   }
   return out;
 }
-/* one key (one pad button) belongs to one control at a time, so a config that was hand-edited or written by an
- * older build cannot leave the same key on two rows and have both of them fire */
+/* one key (one pad button) belongs to one control at a time, and one control has one key (one button), so a
+ * config written by an older build - or by hand - cannot leave a pair on a row, or the same key on two rows
+ */
 function dedupeBindings(table, names) {
   const seen = new Set();
   for (const name of names) {
     const list = (table[name] || []).filter((v) => v != null && !seen.has(v));
     for (const v of list) seen.add(v);
-    table[name] = list.slice(0, 2);
+    table[name] = list.slice(0, 1);
   }
 }
 function saveConfig() {
@@ -493,13 +500,35 @@ function pushInput() {
   exp.wasm_input_push(mask, l ? 1 : 0, r ? 1 : 0, pad.ax, pad.ay, pad.active ? 1 : 0);
 }
 
-/* ---- keyboard ---- */
+/* ---- keyboard ----
+ * The bindings are codes, which is what makes one set of defaults work on any layout; the names are the other
+ * way round. KeyW is the key above S on a QWERTY and the one printed Z on an AZERTY, so a label built from the
+ * code ("W") would be a lie on half the keyboards. The browser's layout map says what this layout calls each
+ * key - Keyboard.getLayoutMap(), where it exists - and follows a layout change (a second keyboard plugged in,
+ * the user switching the layout) by itself. Without it the code-derived name stands, which is right on QWERTY
+ * and on anything that does not move the letters. */
+let keyNames = null;   /* code -> the key this layout calls it */
+async function loadKeyNames() {
+  try {
+    if (!navigator.keyboard || !navigator.keyboard.getLayoutMap) return;
+    keyNames = new Map(await navigator.keyboard.getLayoutMap());
+    if (el.bindings) renderBindings();
+  } catch (e) { /* no layout map (or refused): the code-derived names stand */ }
+}
 function keyLabel(code) {
   if (!code) return '-';
+  if (code.startsWith('Arrow')) return { Up: '↑', Down: '↓', Left: '←', Right: '→' }[code.slice(5)] || code;
+  const named = { Enter: 'ENTER', Space: 'SPACE', ShiftLeft: 'L-SHIFT', ShiftRight: 'R-SHIFT', ControlLeft: 'L-CTRL',
+    ControlRight: 'R-CTRL', AltLeft: 'L-ALT', AltRight: 'R-ALT', Escape: 'ESC', Tab: 'TAB', Backquote: '`',
+    Backslash: '\\', BracketLeft: '[', BracketRight: ']', Semicolon: ';', Quote: "'", Comma: ',', Period: '.',
+    Slash: '/', Minus: '-', Equal: '=', Backspace: 'BKSP', Delete: 'DEL' }[code];
+  if (named) return named;
+  // a letter or a digit: the layout knows what this key is called
+  const fromLayout = keyNames && keyNames.get(code);
+  if (fromLayout && fromLayout.length === 1 && fromLayout !== ' ') return fromLayout.toUpperCase();
   if (code.startsWith('Key')) return code.slice(3);
   if (code.startsWith('Digit')) return code.slice(5);
-  if (code.startsWith('Arrow')) return { Up: '↑', Down: '↓', Left: '←', Right: '→' }[code.slice(5)] || code;
-  return { Enter: 'ENTER', Space: 'SPACE', ShiftLeft: 'L-SHIFT', ShiftRight: 'R-SHIFT', ControlLeft: 'L-CTRL', Escape: 'ESC', Tab: 'TAB', Backspace: 'BKSP', Delete: 'DEL' }[code] || code.toUpperCase();
+  return code.toUpperCase();
 }
 function padLabel(i) { return PAD_NAMES[i] !== undefined ? PAD_NAMES[i] : `#${i}`; }
 
@@ -515,6 +544,11 @@ function onKeyDown(e) {
     listening = null; saveConfig(); renderBindings();
     return;
   }
+  // the menu is over a game that keeps running: while it is up the keys belong to the menu, not to the hero, so
+  // the arrows on a focused dropdown move the dropdown and the bindings table can be read without walking off.
+  // (Rebinding is handled above, so a cell waiting for a key still takes it.) The developer's panel is beside
+  // the game rather than over it, and none of this is on that build.
+  if (REDIST && !el.panel.classList.contains('hidden')) return;
   // the debug keys (game.h's DBG_KEY_*): the collision overlay, the free camera, the camera arrows and the
   // fast-forward. The PC build feeds these and the game input from the same key events, so this does both too:
   // arrows bound to LEFT/RIGHT still move the character (they used to return here and never reach the game,
@@ -536,19 +570,18 @@ function isBound(code) {
   for (const b of ALL_BIND_NAMES) for (const c of keyBindingsFor(b)) if (c === code) return true;
   return false;
 }
-/* a key or a pad button sits on one control at a time: binding it here takes it off every other row, so a
- * control can never be triggered by a key another control also owns. The PC build swaps the displaced code into
- * the slot it came from (input_sdl.c assign()); with a list per control there is no slot to put it in, so it is
- * simply released - the row shows as unbound rather than lying about what it does. */
+/* A key or a pad button sits on one control at a time, and a control has one of each: binding a key here takes
+ * it off every other row and replaces whatever this row had, so the menu shows one key per action and never a
+ * pair. The PC build swaps the displaced code into the slot it came from (input_sdl.c assign()); with one value
+ * per control there is no slot to put it in, so it is simply released - the row shows as unbound rather than
+ * lying about what it does. */
 function assignBinding(dev, btn, value) {
   const table = dev === 'key' ? config.keys : config.pad;
   for (const name of Object.keys(table)) {
     if (name === btn || !Array.isArray(table[name])) continue;
-    const at = table[name].indexOf(value);
-    if (at >= 0) table[name] = table[name].filter((v) => v !== value);
+    if (table[name].includes(value)) table[name] = [];
   }
-  const list = (table[btn] || []).filter((v) => v !== value);
-  table[btn] = [value, ...list].slice(0, 2);
+  table[btn] = [value];
 }
 
 /* ---- the touch overlay ---- */
@@ -696,7 +729,13 @@ function pollGamepadCapture() {
 function setPanelOpen(open) {
   el.panel.classList.toggle('hidden', !open);
   el.panelBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
-  if (open && REDIST) placePanel();
+  if (open) {
+    // the menu is over a game that keeps running, and the keys that drive it are the same ones: without this the
+    // hero walks off while the player is reading the bindings table, and a key held when the menu opened stays
+    // held after it closes
+    keyHeld.clear();
+    if (REDIST) placePanel();
+  }
 }
 /* the redist menu is a fixed box hung under the top-right button. The button lives inside the game window, which
  * is padded and centred, so its position is measured rather than assumed - and the menu is re-placed when the
@@ -713,9 +752,13 @@ function placePanel() {
   el.panel.style.maxHeight = `${Math.round(Math.max(160, innerHeight - top - edge))}px`;
 }
 function bindPanel() {
-  el.panelBtn.addEventListener('click', () => setPanelOpen(el.panel.classList.contains('hidden')));
-  el.panelClose.addEventListener('click', () => setPanelOpen(false));
-  el.fullscreenBtn.addEventListener('click', toggleFullscreen);
+  // a click on a button leaves it focused, and a focused button answers Enter and Space by itself: with PAUSE on
+  // Enter by default, one press would both press the button and pause the game. So the button lets go of the
+  // focus once it has done its job, and the game's own keys go to the game.
+  const click = (el_, fn) => el_.addEventListener('click', (e) => { fn(e); el_.blur(); el.wrap.focus(); });
+  click(el.panelBtn, () => setPanelOpen(el.panel.classList.contains('hidden')));
+  click(el.panelClose, () => setPanelOpen(false));
+  click(el.fullscreenBtn, toggleFullscreen);
   if (REDIST) {
     setPanelOpen(false);
     // the game is behind the menu, so a click on the game closes it rather than going through to a sprite
@@ -1034,6 +1077,8 @@ async function boot() {
     renderBindings();
     applyTouch();
     setupTouch();
+    loadKeyNames();   // what this keyboard's layout calls each key; the table is redrawn when it arrives
+    if (navigator.keyboard) navigator.keyboard.addEventListener?.('layoutchange', loadKeyNames);
     addEventListener('keydown', onKeyDown);
     addEventListener('keyup', onKeyUp);
     addEventListener('blur', () => keyHeld.clear());
