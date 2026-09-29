@@ -27,6 +27,16 @@ static unsigned frame_prims;
 const char *wasm_error_text(void) { return error_text; }
 
 #define EXPORT(name) __attribute__((export_name(#name)))
+/* The developer's half of the boundary. wasm_env_put / wasm_env_get_ptr are how the core's SABER_* switches are
+ * set - the level select's ?level=, the debug box, the collision overlay, the free camera - and wasm_input_key is
+ * the debug-key path (F1, F2, the camera arrows, fast forward). A distributable build is compiled with
+ * SABER_WASM_REDIST and leaves them out of the export list, so they are not merely hidden by the page: nothing
+ * outside the module can reach them, and with them unreferenced --gc-sections drops their code. */
+#ifdef SABER_WASM_REDIST
+#define EXPORT_DEBUG(name)
+#else
+#define EXPORT_DEBUG(name) __attribute__((export_name(#name)))
+#endif
 
 /* stamped at compile time, so a bug report can say which module it ran (the page logs it at boot) */
 static const char build_id[] = "saber-wasm " __DATE__ " " __TIME__;
@@ -111,11 +121,11 @@ EXPORT(wasm_input_push) void wasm_input_push(uint32_t buttons, int sh_l, int sh_
 {
     input_set(buttons, sh_l != 0, sh_r != 0, sx, sy, active != 0);
 }
-EXPORT(wasm_input_key) void wasm_input_key(int key, int down) { input_debug_key(key, down != 0); }
+EXPORT_DEBUG(wasm_input_key) void wasm_input_key(int key, int down) { input_debug_key(key, down != 0); }
 EXPORT(wasm_input_sens) void wasm_input_sens(int s) { input_set_sensitivity(s); }   /* input.h: the core's own, so the in-game SENSITIVITY option and the page agree */
 
 /* ---- the SABER_* switches (the sidebar's developer box and the URL's query string) ---- */
-EXPORT(wasm_env_put) int wasm_env_put(unsigned name_ptr, unsigned name_len, unsigned value_ptr, unsigned value_len)
+EXPORT_DEBUG(wasm_env_put) int wasm_env_put(unsigned name_ptr, unsigned name_len, unsigned value_ptr, unsigned value_len)
 {
     char name[64], value[256];
     if (name_len >= sizeof name || value_len >= sizeof value) return 0;
@@ -125,7 +135,7 @@ EXPORT(wasm_env_put) int wasm_env_put(unsigned name_ptr, unsigned name_len, unsi
     value[value_len] = 0;
     return env_set(name, value);
 }
-EXPORT(wasm_env_get_ptr) unsigned wasm_env_get_ptr(unsigned name_ptr, unsigned name_len, unsigned buf_ptr, unsigned buf_cap)
+EXPORT_DEBUG(wasm_env_get_ptr) unsigned wasm_env_get_ptr(unsigned name_ptr, unsigned name_len, unsigned buf_ptr, unsigned buf_cap)
 {
     char name[64];
     if (name_len >= sizeof name) return 0;

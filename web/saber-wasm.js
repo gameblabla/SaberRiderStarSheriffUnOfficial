@@ -22,6 +22,15 @@
 const BTN = { LEFT: 0, RIGHT: 1, UP: 2, DOWN: 3, JUMP: 4, SHOOT: 5, AIM: 6, PAUSE: 7, POWER: 8 };
 const BTN_NAME = ['LEFT', 'RIGHT', 'UP', 'DOWN', 'JUMP', 'SHOOT', 'AIM', 'PAUSE', 'POWER'];
 const DBG_KEY = { F1: 0, F2: 1, LEFT: 2, RIGHT: 3, FAST: 4 };
+const DBG_CODES = { F1: DBG_KEY.F1, F2: DBG_KEY.F2, ArrowLeft: DBG_KEY.LEFT, ArrowRight: DBG_KEY.RIGHT, ShiftLeft: DBG_KEY.FAST, ShiftRight: DBG_KEY.FAST };
+
+// which build this is, from the file build_web.py writes next to the page (web/build-flags.js holds the
+// developer build's). On a redistributable build the page offers a player what a player needs and nothing else:
+// a top-right button opening the controls menu, and no level select, no debug switches, no log console and no
+// scripting hook. The matching module is built without the SABER_* environment and debug-key exports, so what
+// is removed is removed from the binary as well and not just hidden here.
+const BUILD = Object.assign({ redist: false, label: 'developer build' }, window.SABER_BUILD || {});
+const REDIST = !!BUILD.redist;
 
 // the pad's two shoulders. They are not buttons (Input.shoulder in input.h, not a BTN_*), and stage 6 phase 1
 // strafes on them alone - ramrod.c player_control(): the triggers are AIM as well, so AIM on its own walks and
@@ -158,11 +167,16 @@ function saveConfig() {
   try { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); } catch (e) { /* ignore */ }
 }
 
-/* ------------------------------------------------------------------ logging */
+/* ------------------------------------------------------------------ logging
+ * The panel's log panel is a console, and a redist build has no console: there the element is not in the page and
+ * the module's own output goes to the browser's devtools as usual. The error card is not a console - it only
+ * ever appears when the game could not start - so it is written either way. */
 function log(msg) {
-  const line = `${new Date().toLocaleTimeString()}  ${msg}`;
-  el.log.textContent = (el.log.textContent + '\n' + line).split('\n').slice(-40).join('\n');
-  el.log.scrollTop = el.log.scrollHeight;
+  if (el.log) {
+    const line = `${new Date().toLocaleTimeString()}  ${msg}`;
+    el.log.textContent = (el.log.textContent + '\n' + line).split('\n').slice(-40).join('\n');
+    el.log.scrollTop = el.log.scrollHeight;
+  }
   if (!el.errorCard.classList.contains('hidden') && el.errorCard.offsetParent) el.errorLog.textContent += msg + '\n';
 }
 
@@ -170,7 +184,7 @@ function log(msg) {
 const jsLog = (isError, ptr, len) => {
   const s = decoder.decode(new Uint8Array(memory.buffer, ptr, len));
   if (isError) console.warn('[saber]', s); else console.log('[saber]', s);
-  if (el.log.textContent.length < 4000) log(s);
+  if (el.log && el.log.textContent.length < 4000) log(s);
 };
 const jsNowMs = () => performance.now();
 
@@ -440,7 +454,7 @@ function gamepadState() {
   let pad = null;
   for (const p of pads) if (p && p.connected) { pad = p; break; }
   if (!pad) { padIndex = -1; return { mask: 0, l: false, r: false, ax: 0, ay: 0, active: false }; }
-  if (pad.index !== padIndex) { padIndex = pad.index; el.padState.textContent = pad.id; el.statPad.textContent = pad.id.slice(0, 22); }
+  if (pad.index !== padIndex) { padIndex = pad.index; el.padState.textContent = pad.id; if (el.statPad) el.statPad.textContent = pad.id.slice(0, 22); }
   let mask = 0;
   for (let b = 0; b < BTN_NAME.length; b++) {
     for (const idx of padBindingsFor(BTN_NAME[b])) {
@@ -501,10 +515,12 @@ function onKeyDown(e) {
     listening = null; saveConfig(); renderBindings();
     return;
   }
-  // the debug keys (game.h's DBG_KEY_*), a keyboard-only feature. The PC build feeds these and the game
-  // input from the same key events, so this does both too: arrows bound to LEFT/RIGHT still move the character
-  // (they used to return here and never reach the game, which is why remapping to arrows changed nothing)
-  const dbg = { F1: DBG_KEY.F1, F2: DBG_KEY.F2, ArrowLeft: DBG_KEY.LEFT, ArrowRight: DBG_KEY.RIGHT, ShiftLeft: DBG_KEY.FAST, ShiftRight: DBG_KEY.FAST }[e.code];
+  // the debug keys (game.h's DBG_KEY_*): the collision overlay, the free camera, the camera arrows and the
+  // fast-forward. The PC build feeds these and the game input from the same key events, so this does both too:
+  // arrows bound to LEFT/RIGHT still move the character (they used to return here and never reach the game,
+  // which is why remapping to arrows changed nothing). A redist build has no debug keys at all, and its
+  // module is built without wasm_input_key, so there is nothing to push them to.
+  const dbg = REDIST ? undefined : DBG_CODES[e.code];
   if (dbg !== undefined) exp.wasm_input_key(dbg, 1);
   if (e.code === 'KeyP' && !e.repeat) { togglePause(); e.preventDefault(); return; }
   if (e.code === 'F11' || (e.code === 'Enter' && e.altKey)) { toggleFullscreen(); e.preventDefault(); return; }
@@ -512,7 +528,7 @@ function onKeyDown(e) {
   if (dbg !== undefined) e.preventDefault();
 }
 function onKeyUp(e) {
-  const dbg = { F1: DBG_KEY.F1, F2: DBG_KEY.F2, ArrowLeft: DBG_KEY.LEFT, ArrowRight: DBG_KEY.RIGHT, ShiftLeft: DBG_KEY.FAST, ShiftRight: DBG_KEY.FAST }[e.code];
+  const dbg = REDIST ? undefined : DBG_CODES[e.code];
   if (dbg !== undefined) exp.wasm_input_key(dbg, 0);
   keyHeld.delete(e.code);
 }
@@ -673,20 +689,50 @@ function pollGamepadCapture() {
   }
 }
 
-/* ------------------------------------------------------------------ the panel */
+/* ------------------------------------------------------------------ the panel
+ * On the developer build this is the side panel: a column beside the game on a wide window, a drawer behind the
+ * hamburger on a narrow one. On a redist build it is a menu that drops from the button at the top right, closed
+ * until asked for, so nothing of the page sits over the game until the player wants it. */
+function setPanelOpen(open) {
+  el.panel.classList.toggle('hidden', !open);
+  el.panelBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open && REDIST) placePanel();
+}
+/* the redist menu is a fixed box hung under the top-right button. The button lives inside the game window, which
+ * is padded and centred, so its position is measured rather than assumed - and the menu is re-placed when the
+ * window changes shape or the game goes fullscreen, both of which move the button. */
+function placePanel() {
+  const b = el.panelBtn.getBoundingClientRect();
+  const w = el.panel.offsetWidth || 340, gap = 6, edge = 8;
+  const left = Math.max(edge, Math.min(b.right - w, innerWidth - w - edge));
+  const top = Math.min(b.bottom + gap, innerHeight - 20);
+  el.panel.style.left = `${Math.round(left)}px`;
+  el.panel.style.top = `${Math.round(top)}px`;
+}
 function bindPanel() {
-  el.panelBtn.addEventListener('click', () => el.panel.classList.toggle('hidden'));
-  el.panelClose.addEventListener('click', () => el.panel.classList.add('hidden'));
+  el.panelBtn.addEventListener('click', () => setPanelOpen(el.panel.classList.contains('hidden')));
+  el.panelClose.addEventListener('click', () => setPanelOpen(false));
   el.fullscreenBtn.addEventListener('click', toggleFullscreen);
+  if (REDIST) {
+    setPanelOpen(false);
+    // the game is behind the menu, so a click on the game closes it rather than going through to a sprite
+    el.stage.addEventListener('pointerdown', (e) => { if (!el.panel.contains(e.target)) setPanelOpen(false); });
+    addEventListener('keydown', (e) => { if (e.key === 'Escape' && !el.panel.classList.contains('hidden')) setPanelOpen(false); });
+    addEventListener('resize', () => { if (!el.panel.classList.contains('hidden')) placePanel(); });
+    addEventListener('orientationchange', () => { if (!el.panel.classList.contains('hidden')) placePanel(); });
+    document.addEventListener('fullscreenchange', () => { if (!el.panel.classList.contains('hidden')) placePanel(); });
+  }
 
   el.pauseBtn.addEventListener('click', togglePause);
   el.resumeBtn.addEventListener('click', togglePause);
   el.resetBtn.addEventListener('click', softReset);
 
   // the dropdown only picks; "Go" applies it. Changing stage restarts the game, and a stray arrow key on a
-  // focused <select> would otherwise throw away the run in progress.
-  el.levelGo.addEventListener('click', () => goToLevel(el.levelSelect.value));
-  el.levelSelect.addEventListener('change', updateLevelGo);
+  // focused <select> would otherwise throw away the run in progress. Neither is in a redist build.
+  if (el.levelGo) {
+    el.levelGo.addEventListener('click', () => goToLevel(el.levelSelect.value));
+    el.levelSelect.addEventListener('change', updateLevelGo);
+  }
 
   el.scaleMode.addEventListener('change', () => { config.scaleMode = el.scaleMode.value; saveConfig(); layout(); });
   el.screenMode.addEventListener('change', () => { config.screenMode = +el.screenMode.value; saveConfig(); layout(); });
@@ -701,9 +747,10 @@ function bindPanel() {
   el.touchOpacity.addEventListener('input', () => { config.touchOpacity = +el.touchOpacity.value; saveConfig(); applyTouch(); });
   el.touchSize.addEventListener('input', () => { config.touchSize = +el.touchSize.value; saveConfig(); applyTouch(); });
   el.touchLandscape.addEventListener('change', () => { config.touchLandscape = el.touchLandscape.checked; saveConfig(); applyTouch(); });
-  el.showFps.addEventListener('change', () => { config.showFps = el.showFps.checked; saveConfig(); });
-
-  el.devApply.addEventListener('click', applyDevSwitches);
+  // the status read-outs, the on-canvas FPS and the debug switches are the developer's window onto the module,
+  // and none of them is in a redist build - the elements are not in the page there at all
+  if (el.showFps) el.showFps.addEventListener('change', () => { config.showFps = el.showFps.checked; saveConfig(); });
+  if (el.devApply) el.devApply.addEventListener('click', applyDevSwitches);
 
   // reflect the stored config
   el.scaleMode.value = config.scaleMode;
@@ -715,8 +762,8 @@ function bindPanel() {
   el.touchOpacity.value = config.touchOpacity;
   el.touchSize.value = config.touchSize;
   el.touchLandscape.checked = config.touchLandscape;
-  el.showFps.checked = config.showFps;
-  el.devText.value = config.dev;
+  if (el.showFps) el.showFps.checked = config.showFps;
+  if (el.devText) el.devText.value = config.dev;
 }
 
 function applyDevSwitches() {
@@ -894,6 +941,7 @@ function frame(now) {
 
 let statTick = 0;
 function updateStats() {
+  if (!el.statFps) return;   /* a redist build has no status read-outs */
   el.statFps.textContent = fps.toFixed(0);
   el.statFrame.textContent = `${frameMs.toFixed(1)} ms`;
   el.statDraws.textContent = drawCount;
@@ -909,8 +957,15 @@ function updateStats() {
 /* ------------------------------------------------------------------ the page's state, for a harness
  * tools/wasm/browser_check.js drives the staged page over the DevTools protocol and reads this: booted, the error
  * if it did not boot, and the per-frame numbers the status panel shows. A hook like this is also what makes the
- * page scriptable from the console (window.__saber.press('ArrowRight', true)). */
-window.__saber = {
+ * page scriptable from the console (window.__saber.press('ArrowRight', true)).
+ *
+ * A redist build keeps only the two fields a host page needs to know whether the game came up. Everything below
+ * them is a developer surface - it can drive the game, jump stages and read the module's internals - so it is
+ * left out rather than merely undocumented. */
+window.__saber = REDIST ? {
+  booted: false,
+  error: '',
+} : {
   booted: false,
   error: '',
   keyHeld,
@@ -954,6 +1009,11 @@ window.__saber = {
 /* ------------------------------------------------------------------ boot */
 async function boot() {
   try {
+    // a redist build's menu is a dropdown from the top-right button rather than a side panel, and the panel's
+    // subtitle says what the build is instead of claiming to be a developer one
+    document.body.classList.toggle('redist', REDIST);
+    const sub = document.querySelector('.panel-head small');
+    if (sub && BUILD.label) sub.textContent = BUILD.label;
     bindPanel();
     renderBindings();
     applyTouch();
@@ -967,18 +1027,24 @@ async function boot() {
     await loadModule();
     await loadData();
 
-    // the URL's query string: ?level=3, and any SABER_* switch. ?level wins over the remembered stage, and 0
-    // (or nothing) is the front end. The clamp used to stop at 6, which left stage 7 unreachable from the page.
-    const q = new URLSearchParams(location.search);
-    const asked = q.get('level');
-    startLevel = asked === null ? clampLevel(config.level) : clampLevel(+asked);
-    config.level = startLevel;
-    renderLevelSelect();
-    for (const [k, v] of q) {
-      if (k.toUpperCase().startsWith('SABER_')) {
-        const np = writeString(k), vp = writeString(v);
-        exp.wasm_env_put(np, enc.encode(k).length, vp, enc.encode(v).length);
-        if (!el.devText.value.includes(k)) el.devText.value += (el.devText.value ? '\n' : '') + `${k}=${v}`;
+    // A redist build reads no query string: ?level= is a stage select by another door and ?SABER_* are the
+    // debug switches, and its module is built without wasm_env_put, so neither could be applied anyway.
+    if (REDIST) {
+      startLevel = 0;   /* the front end: the only way in */
+    } else {
+      // the URL's query string: ?level=3, and any SABER_* switch. ?level wins over the remembered stage, and 0
+      // (or nothing) is the front end. The clamp used to stop at 6, which left stage 7 unreachable from the page.
+      const q = new URLSearchParams(location.search);
+      const asked = q.get('level');
+      startLevel = asked === null ? clampLevel(config.level) : clampLevel(+asked);
+      config.level = startLevel;
+      renderLevelSelect();
+      for (const [k, v] of q) {
+        if (k.toUpperCase().startsWith('SABER_')) {
+          const np = writeString(k), vp = writeString(v);
+          exp.wasm_env_put(np, enc.encode(k).length, vp, enc.encode(v).length);
+          if (el.devText && !el.devText.value.includes(k)) el.devText.value += (el.devText.value ? '\n' : '') + `${k}=${v}`;
+        }
       }
     }
 

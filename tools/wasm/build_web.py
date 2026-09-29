@@ -16,12 +16,26 @@ a CDN) is worth the 21 MB, and it keeps the page free of any build-time path ass
 
 The page decodes the PNGs itself (the browser has a decoder, and a from-scratch inflate in the module would be
 another thousand lines to get wrong), so the PNGs are staged as they are and turned into RGBA on the way in.
+
+Two builds come out of the same sources:
+
+  (default)          the developer build: a side panel with the level select, the SABER_* debug switches, the
+                      status read-outs and the log, served on a port.
+  --redist           a distributable one: a top-right button opening a controls menu, and none of the above.
+                      Everything between <!-- redist-off --> and <!-- redist-on --> is deleted from index.html,
+                      build-flags.js says so, and the module is expected to be the redist build (make -f
+                      Makefile.wasm redist), which is compiled without the debug exports as well.
+
+--zip writes the staged directory as one archive, which is what a download page wants: everything the game
+reads is inside it and nothing is fetched from anywhere else.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,6 +47,26 @@ PACKS = ('pack.pck', 'common.pck', 'levels.pck', 'menu.pck', 'level1.pck')
 # the load order that gets to a title screen soonest: the font and the menu art are in pack.pck / menu.pck, and
 # the rest fills in behind the first frames
 ASSET_LATE = ('forest/', 'lab/', 'power/', 'stage3/')
+
+
+# the blocks in index.html that only the developer build has. Anything between a redist-off marker and the
+# matching redist-on marker is removed for a redist build, so the level select, the status read-outs, the FPS
+# option, the debug switches and the log console are not shipped as dead markup.
+REDIST_BLOCK = re.compile(r'[ \t]*<!--\s*redist-off[^>]*-->.*?<!--\s*redist-on[^>]*-->\n?', re.S)
+
+
+def strip_redist(html: str) -> str:
+    out, n = REDIST_BLOCK.subn('', html)
+    return out
+
+
+def write_build_flags(out: Path, redist: bool, port: int) -> None:
+    label = 'redistributable build' if redist else 'developer build'
+    (out / 'build-flags.js').write_text(
+        '/* Written by tools/wasm/build_web.py for this build. The page reads window.SABER_BUILD.redist and lays\n'
+        ' * itself out from it: on a redistributable build the settings are a menu under the top-right button and\n'
+        ' * there is no level select, no debug switches and no log console. */\n'
+        f'window.SABER_BUILD = {{ redist: {"true" if redist else "false"}, label: {label!r}, port: {port} }};\n')
 
 
 def copy_tree(src: Path, dst: Path) -> tuple[int, int]:
@@ -64,14 +98,22 @@ def main() -> int:
     ap.add_argument('--data', default='SaberRider/data', type=Path, help="the demo's data packs")
     ap.add_argument('--assets', default=1, type=int, help='stage assets/ too (0 for a bring-up build: packs only)')
     ap.add_argument('--port', type=int, default=8009, help='recorded in the manifest for the dev server')
+    ap.add_argument('--redist', action='store_true',
+                    help='stage a redistributable build: the controls menu only, no level select, no debug switches, no log')
+    ap.add_argument('--zip', type=Path, help='also write the staged directory as this zip archive')
     args = ap.parse_args()
 
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
 
-    # the page
-    for name in ('index.html', 'style.css', 'saber-wasm.js', 'saber-audio-worklet.js'):
+    # the page. index.html is rewritten for a redist build; the rest is the same file in both.
+    for name in ('style.css', 'saber-wasm.js', 'saber-audio-worklet.js'):
         shutil.copy2(ROOT / 'web' / name, out / name)
+    html = (ROOT / 'web' / 'index.html').read_text()
+    if args.redist:
+        html = strip_redist(html)
+    (out / 'index.html').write_text(html)
+    write_build_flags(out, args.redist, args.port)
     shutil.copy2(args.wasm, out / 'saber_rider.wasm')
 
     # the data packs
@@ -129,7 +171,7 @@ def main() -> int:
     }
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=1))
 
-    print(f'staged {out}')
+    print(f'staged {out} ({"redistributable" if args.redist else "developer"} build)')
     print(f'  {len([e for e in entries if e["kind"] == "pack"])} packs, '
           f'{len([e for e in entries if e["kind"] == "image"])} images, '
           f'{len([e for e in entries if e["kind"] == "sound"])} sounds, '
@@ -137,6 +179,17 @@ def main() -> int:
     print(f'  {total / 1e6:.1f} MB total')
     if missing:
         print(f'  MISSING packs: {", ".join(missing)}  (the game will not start)')
+
+    if args.zip:
+        args.zip.parent.mkdir(parents=True, exist_ok=True)
+        # the archive root is the site root: index.html has to be at the top of it, or a static host serves a
+        # directory listing instead of the page
+        with zipfile.ZipFile(args.zip, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+            for path in sorted(out.rglob('*')):
+                if path.is_file():
+                    z.write(path, path.relative_to(out).as_posix())
+        size = args.zip.stat().st_size
+        print(f'  {args.zip}  {size / 1e6:.1f} MB')
     return 0
 
 

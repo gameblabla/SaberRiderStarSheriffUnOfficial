@@ -347,3 +347,34 @@ code { font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var
   .panel-toggle { display: none; }
   .icon-btn.close { display: none; }
 }
+
+/* ------------------------------------------------------------------ the redist build's menu
+ * A distributable build is not a development page with the developer bits taken out: the settings are a menu
+ * that drops from the button at the top right of the game window, which is where a player looks for it, and the
+ * side panel and its hamburger-on-a-narrow-window drawer are not used at all. The panel starts closed. */
+/* fixed, and placed by placePanel() from the button's own rectangle: the button sits inside the game window,
+   which is padded and centred, so no static top/right can track it - and a menu that lands over the button it
+   came from is a menu you cannot close */
+body.redist .panel {
+  position: fixed;
+  top: 0; left: 0;   /* placePanel() sets both from the button */
+  z-index: 20;
+  width: min(340px, calc(100vw - 16px));
+  max-height: calc(100vh - 74px);
+  height: auto;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 18px 50px -18px #000e;
+  padding: 12px 12px 20px;
+}
+body.redist .panel.hidden { display: none; }
+body.redist .panel-toggle { display: grid; right: 8px; }
+body.redist .panel-toggle[aria-expanded="true"] { background: var(--accent); border-color: var(--accent); color: #1a0d05; }
+body.redist .icon-btn.close { display: grid; }
+/* the panel is no longer a column, so the game window gets the whole width back */
+body.redist .app { display: block; }
+body.redist .stage { height: 100%; }
+/* the top-right button would sit under the fullscreen one, so the fullscreen glyph moves left of it */
+body.redist .fullscreen { right: 50px; }

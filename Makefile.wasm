@@ -70,10 +70,17 @@ WASM_EXPORTS := \
   --export=wasm_vfs_add --export=wasm_vfs_add_image --export=wasm_vfs_count --export=wasm_vfs_bytes \
   --export=wasm_alloc --export=wasm_error_msg --export=wasm_build_id $(EXTRA_EXPORTS) \
   --export=wasm_audio_ready --export=wasm_audio_get_ptr --export=wasm_audio_contig --export=wasm_audio_take --export=wasm_audio_set_volume \
-  --export=wasm_input_push --export=wasm_input_key --export=wasm_input_sens \
-  --export=wasm_env_put --export=wasm_env_get_ptr --export=wasm_state
+  --export=wasm_input_push --export=wasm_input_sens \
+  --export=wasm_state
 
-.PHONY: all build clean serve stage
+# A redistributable build (make -f Makefile.wasm redist) drops the developer's exports - the SABER_* environment
+# and the debug keys - at the source, in wasm_main.c's EXPORT_DEBUG, which is what the attribute would otherwise
+# force back in. All that has to be said here is the flag it tests.
+ifdef REDIST
+WASM_CFLAGS += -DSABER_WASM_REDIST
+endif
+
+.PHONY: all build clean serve stage redist
 all: build
 build: $(WASM)
 
@@ -96,6 +103,20 @@ stage: $(WASM)
 serve: stage
 	@echo "Serving $(WEB) at http://127.0.0.1:$(PORT)/"
 	$(PYTHON) -m http.server $(PORT) --directory $(WEB)
+
+# ---- the redistributable build ----
+# Its own object directory and module, because REDIST changes the C flags and the export list: the developer
+# build must not inherit a module without the debug exports, or the reverse. The staged directory and the zip
+# are separate too, so the developer server keeps serving the developer page.
+REDIST_OUT  ?= build/wasm-redist
+REDIST_WEB  := $(REDIST_OUT)/web
+REDIST_ZIP  ?= $(REDIST_OUT)/saber-rider-wasm-$(VERSION).zip
+VERSION     ?= 1.0
+
+redist:
+	$(MAKE) -f Makefile.wasm OUT=$(REDIST_OUT) OBJ=$(REDIST_OUT)/obj REDIST=1 SABER_DATA=$(SABER_DATA) ASSETS=$(ASSETS) build
+	$(PYTHON) tools/wasm/build_web.py --wasm $(REDIST_OUT)/saber_rider.wasm --out $(REDIST_WEB) \
+		--data $(SABER_DATA) --assets $(ASSETS) --redist --port 0 --zip $(REDIST_ZIP)
 
 clean:
 	rm -rf $(OBJ) $(OUT)

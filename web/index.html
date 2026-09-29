@@ -4,7 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <title>Saber Rider and the Star Sheriffs &mdash; WebAssembly</title>
-<link rel="icon" href="favicon.png" type="image/png">
+<!-- the icon is inline so a build is one directory and nothing is fetched for it: a dark rounded square with the
+     page's amber, standing in until there is real art. Drop a favicon.png next to this file and point here. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1119'/%3E%3Cpath d='M6 24 L13 8 L16 8 L16 24 Z' fill='%23ffb200'/%3E%3Cpath d='M17 24 L24 8 L27 8 L27 24 Z' fill='%23e8663a'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -55,12 +57,16 @@
       </div>
 
       <button type="button" class="icon-btn fullscreen" id="fullscreenBtn" title="Fullscreen" aria-label="Fullscreen"></button>
-      <button type="button" class="icon-btn panel-toggle" id="panelBtn" title="Panel" aria-label="Open the panel">&#9776;</button>
+      <!-- the settings menu. On the developer build this is the side panel (a hamburger on a narrow window, always
+           open on a wide one); on a redist build it is this top-right button and the panel is a menu that drops
+           from it, since that is all a player is offered. -->
+      <button type="button" class="icon-btn panel-toggle" id="panelBtn" title="Controls and settings" aria-label="Open the menu">&#9776;</button>
     </div>
   </main>
 
   <!-- the side panel: video, audio, the controls (the game's buttons, keyboard and gamepad, here rather than in
-       the in-game menu), touch controls, and the status read-outs -->
+       the in-game menu), touch controls, and the status read-outs. build_web.py deletes everything between
+       redist-off and redist-on for a redist build, so nothing here has to survive as dead markup. -->
   <aside class="panel" id="panel">
     <header class="panel-head">
       <div>
@@ -70,6 +76,7 @@
       <button type="button" class="icon-btn close" id="panelClose" aria-label="Close the panel">&times;</button>
     </header>
 
+    <!-- redist-off: the level select is a developer convenience, not something a player is offered -->
     <section>
       <h2>Level</h2>
       <label class="field">Start in
@@ -82,6 +89,7 @@
         <code>?level=3</code> (which wins over the choice below). The stage is remembered, so a reload and
         <em>Soft reset</em> both come back to it; pick <em>Front end</em> to play from the title.</p>
     </section>
+    <!-- redist-on -->
 
     <section>
       <h2>Screen</h2>
@@ -137,6 +145,8 @@
       <label class="check"><input type="checkbox" id="touchLandscape"> Landscape layout (d-pad left, buttons right)</label>
     </section>
 
+    <!-- redist-off: the status read-outs, the on-canvas FPS and the debug switches are a developer's window onto
+         the module, and the log below it is a console. A redist build offers none of them. -->
     <section>
       <h2>Status</h2>
       <dl class="stats">
@@ -162,8 +172,12 @@
       </details>
       <pre class="log" id="log"></pre>
     </section>
+    <!-- redist-on -->
   </aside>
 </div>
+<!-- written by tools/wasm/build_web.py for the build being staged; the copy in the source tree is the developer
+     build, so serving web/ straight off disk still works -->
+<script src="build-flags.js"></script>
 <script type="module" src="saber-wasm.js"></script>
 </body>
 </html>
