@@ -904,26 +904,13 @@ function layout() {
   const stage = { width: box.width, height: box.height };
   let w, h;
   if (REDIST) {
-    // cover, not fit: a distributable build is not a picture in a window, it is the window. So the canvas is
-    // scaled up by whole pixels until it covers the page in both axes and the page clips the overflow (the
-    // stage is overflow: hidden), which is what leaves no black round the game. The scale is still a whole
-    // number, so every game pixel is still the same square block of screen pixels - 1:1, just cropped.
-    const cover = Math.max((stage.width - pad) / W, (stage.height - pad) / H);
-    const mult = Math.max(1, Math.ceil(cover - 1e-6));   /* the epsilon: an exact 4 must not ask for 5 */
-    // ...except when the page is nothing like 16:9. A phone held upright is 390x844: covering that at 4x would
-    // crop 77% of the width and leave a stamp of the game in the middle. Past this much crop (the canvas more
-    // than 1.5x the page on an axis) it falls back to fitting inside whole, which letterboxes - two black bars
-    // on a shape where a picture that small needs them.
-    const tooTall = mult * W > (stage.width - pad) * 1.5;
-    const tooWide = mult * H > (stage.height - pad) * 1.5;
-    if (tooTall || tooWide) {
-      const fit = Math.max(1, Math.floor(Math.min((stage.width - pad) / W, (stage.height - pad) / H)));
-      w = W * fit;
-      h = H * fit;
-    } else {
-      w = W * mult;
-      h = H * mult;
-    }
+    // 1:1, and the whole picture: the canvas is scaled by the largest whole number of game pixels that fits
+    // the page, so a game pixel is exactly that many square screen pixels and nothing is cut off. A page that
+    // is not an exact multiple of 426x240 keeps black bars on the axis that does not divide - and the page is
+    // black, so what is either side of the game is the same black as its own dark edges, not a window.
+    const mult = Math.max(1, Math.floor(Math.min((stage.width - pad) / W, (stage.height - pad) / H)));
+    w = W * mult;
+    h = H * mult;
   } else if (config.scaleMode === 'stretch') {
     w = stage.width - pad;
     h = stage.height - pad;
