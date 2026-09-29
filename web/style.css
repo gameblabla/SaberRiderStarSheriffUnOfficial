@@ -380,11 +380,27 @@ body.redist .stage { height: 100%; }
 body.redist .fullscreen { right: 50px; }
 
 /* no frame round the game: a distributable build is the picture, not the picture in a window. The 1 px ring, the
- * drop shadow and the rounded corners all go, and with nothing between them the game sits on the page's own
- * background. The developer's build keeps them - there the frame is what shows the 426x240 box's extent. */
+ * drop shadow and the rounded corners all go, and the page behind it goes to plain black, so the letterbox a
+ * wide window leaves is the same black as the game's own dark edges instead of a surround that reads as a
+ * border. The developer's build keeps the frame - there the box is what shows the 426x240 extent. */
+body.redist, body.redist .app { background: #000; }
+body.redist .stage { background: #000; padding: 0; }
 body.redist .screen-wrap,
 body.redist .screen-wrap:focus-visible { box-shadow: none; border-radius: 0; }
 body.redist #screen { border-radius: 0; }
+
+/* the loading card is not in a frame either. It is the whole window, opaque black, so nothing of the page shows
+ * through it and nothing of it is left behind: the title, a bar that runs the width of the card, and what it is
+ * doing. The dev build keeps its translucent rounded panel - over a framed game it reads as a card. */
+body.redist .overlay { background: #000; border-radius: 0; padding: 24px; }
+body.redist .card { width: min(340px, 100%); }
+body.redist .card h1 { font-size: 21px; }
+body.redist .card h1 span { font-size: 11px; letter-spacing: 2.5px; }
+body.redist .bar { height: 3px; margin-top: 18px; background: #ffffff1f; border-radius: 0; }
+body.redist .bar-fill { background: var(--accent); }
+body.redist .card .status { margin-top: 10px; font-size: 12px; }
+body.redist .card .hint:empty { display: none; }
+body.redist .card button.primary { margin-top: 16px; }
 
 /* nothing over the game until it is up: the loading card is the whole window while the packs and the assets
    arrive, and the fullscreen and settings buttons sat on top of it. They appear with the game. */
