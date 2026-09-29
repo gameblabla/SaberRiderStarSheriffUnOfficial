@@ -14,6 +14,7 @@ void *lw_memalign(size_t align, size_t n);
 
 void cd_sat_init(void);
 void cd_sat_stats(unsigned long *reads, unsigned long *bytes, unsigned long *seeks);
+unsigned long cd_sat_failed_reads(void);
 void cd_sat_stream_stop(void);   /* the data stream gives the drive up (CD-DA takes it) */
 /* CD-DA music on the same drive: a disc track (2..), looped or once; update once a frame (it resumes the music after
  * data reads took the drive) */
