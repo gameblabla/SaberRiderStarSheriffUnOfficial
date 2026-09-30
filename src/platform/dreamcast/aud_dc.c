@@ -6,8 +6,9 @@
  * 0, the data): one read from the disc, no header parsing. Pack sfx are under their id, our files under asset_key.
  * A sample that fits the AICA's 16-bit channel length (65534 samples) goes to sound RAM once and is fired with
  * snd_sfx; a longer one (dialog lines, the power-attack speeches) or a loop stays in main RAM (its block) and plays
- * through one of two ADPCM streams, which also carry a volume we can change while it plays.
- * Music is the packs' tracks as ADX files, streamed from the disc by libADX in its own thread. */
+ * through one of two KOS streams, which also carry a volume we can change while it plays.
+ * Loops are decoded once to PCM16 so repeating them cannot carry an ADPCM predictor into a fresh encoded sample.
+ * Music is ADX, decoded by music_adx.c; only our music worker owns its KOS stream. */
 #include "../aud.h"
 #include "../plat.h"
 #include "../../pack.h"
@@ -16,8 +17,7 @@
 #include <dc/sound/sound.h>
 #include <dc/sound/sfxmgr.h>
 #include <dc/sound/stream.h>
-#include <adx/adx.h>
-#include <adx/snddrv.h>
+#include "music_adx.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +27,8 @@
 #define LONG_CACHE (768 * 1024)   /* main RAM kept for long samples (least recently used ones go first) */
 #define NSTREAM 2
 #define STREAM_BUF 16384          /* ADPCM bytes per stream buffer (0.74 s at 44.1 kHz) */
+#define VOICE_BUF SND_STREAM_BUFFER_MAX_ADPCM /* PCM turbo ring: ~0.74 s at 22.05 kHz; ADPCM still fits 16-bit positions */
+#define MUSIC_BUF SND_STREAM_BUFFER_MAX
 
 struct AudSample {
     uint32_t key;                 /* its snd.pck block: a pack sfx id or asset_key */
@@ -34,6 +36,7 @@ struct AudSample {
     int rate, samples;
     sfxhnd_t sfx;                 /* short: in sound RAM */
     const uint8_t *adpcm; size_t bytes; /* long: its block in main RAM (NULL until needed); bytes: whole 32-byte units */
+    int16_t *loop_pcm;            /* a loop decoded with its own initial predictor, retained in main RAM */
     uint32_t last_use;
     bool kept;                    /* long, loaded for good (aud_keep) */
 };
@@ -43,6 +46,7 @@ static uint32_t use_clock;
 static size_t long_bytes;
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
+static bool prepare_loop(AudSample *s);
 
 /* a long sample's block stays in main RAM (s->adpcm points into it); the least recently used ones not playing go when
  * the cache would pass LONG_CACHE */
@@ -71,6 +75,10 @@ static AudSample *load(AudSample *s)
     const PackEntry *e = packs_find_type(s->key, RES_SAMPLE);
     if (!e || e->size < 32 || memcmp(e->data, "SMPL", 4)) { printf("snd: sample %08lX missing\n", (unsigned long)s->key); s->missing = true; return NULL; }
     s->rate = (int)rd32(e->data + 4); s->samples = (int)rd32(e->data + 8); s->bytes = rd32(e->data + 12);
+    if (s->rate <= 0 || s->samples <= 0 || !s->bytes || (s->bytes & 31) ||
+        s->bytes > e->size - 32 || s->bytes != (size_t)s->samples / 2 || (s->samples & 1)) {
+        printf("snd: sample %08lX invalid\n", (unsigned long)s->key); s->missing = true; return NULL;
+    }
     if (s->samples <= AICA_MAX_LEN) {   /* to sound RAM; the block goes */
         s->sfx = snd_sfx_load_raw_buf((char *)e->data + 32, s->bytes, (uint32_t)s->rate, 4, 1);
         packs_release_type(s->key, RES_SAMPLE);
@@ -95,6 +103,7 @@ AudSample *aud_sample_pack(uint32_t id) { return find(id); }
 void aud_prefetch(AudSample *s) { if (s && !s->sfx && !s->adpcm) { s->last_use = ++use_clock; load_long(s); } }
 void aud_keep(AudSample *s, bool loop)
 {
+    if (s && loop && !prepare_loop(s)) return;
     if (!s || (s->sfx && !loop) || s->kept) return;   /* short one-shots are in sound RAM already; loops stream from main RAM */
     if (s->adpcm || load_long(s)) { s->kept = true; long_bytes -= s->bytes; }   /* outside the LRU budget */
 }
@@ -103,47 +112,69 @@ AudSample *aud_sample_file(const char *path) { return path ? find(asset_key(path
 
 /* ---- streams for long samples and loops ---- */
 static uint8_t silence[STREAM_BUF] __attribute__((aligned(32)));
-#ifdef AUD_UNPADDED_SAMPLES
-static uint8_t pad[NSTREAM][STREAM_BUF] __attribute__((aligned(32)));   /* a sample's padded last chunk */
-#endif
+/* KOS starts DMA after the callback returns. Alternate scratch buffers so a
+ * later callback cannot overwrite the source of the preceding DMA. */
+static uint8_t pad[NSTREAM][2][VOICE_BUF] __attribute__((aligned(32)));
 static struct {
-    snd_stream_hnd_t h; AudSample *smp; size_t pos; bool loop, active, draining; uint64_t end_ms; unsigned gen; int vol;
+    snd_stream_hnd_t h; AudSample *smp; size_t pos; bool loop, active, draining; uint64_t end_ms; unsigned gen, pad_index; int vol;
 } strm[NSTREAM];
+
+static bool prepare_loop(AudSample *s)
+{
+    if (s->loop_pcm) return true;
+    if (!s->adpcm && !load_long(s)) return false;
+    int16_t *pcm = memalign(32, s->bytes * 4);
+    if (!pcm) return false;
+    /* KOS wav2adpcm's public-domain YMZ decoder: low nibble first, with
+     * history 0 and step 127 at the beginning of each encoded sample. */
+    static const int step_table[8] = { 230, 230, 230, 230, 307, 409, 512, 614 };
+    int history = 0, step = 127;
+    for (int i = 0; i < s->samples; i++) {
+        unsigned nibble = (s->adpcm[i / 2] >> ((i & 1) * 4)) & 15;
+        int delta = (int)(nibble & 7);
+        int diff = ((1 + delta * 2) * step) >> 3;
+        if (diff > 32767) diff = 32767;
+        history = history * 254 / 256;
+        history += (nibble & 8) ? -diff : diff;
+        if (history > 32767) history = 32767;
+        if (history < -32768) history = -32768;
+        pcm[i] = (int16_t)history;
+        step = (step_table[delta] * step) >> 8;
+        if (step < 127) step = 127;
+        if (step > 24576) step = 24576;
+    }
+    s->loop_pcm = pcm;
+    return true;
+}
 
 static void *stream_cb(snd_stream_hnd_t hnd, int req, int *got)
 {
     for (int i = 0; i < NSTREAM; i++) {
         if (strm[i].h != hnd) continue;
-        if (!strm[i].active || strm[i].draining || !strm[i].smp || !strm[i].smp->adpcm || !strm[i].smp->bytes) { *got = req; return silence; }
+        size_t want = (size_t)req < VOICE_BUF ? (size_t)req : VOICE_BUF;
+        uint8_t *out = pad[i][strm[i].pad_index++ & 1];
+        memset(out, strm[i].loop ? 0 : 0x80, want);
+        *got = (int)want;
+        if (!strm[i].active || strm[i].draining || !strm[i].smp) return out;
         AudSample *s = strm[i].smp;
-        if (strm[i].pos >= s->bytes) {
+        const uint8_t *data = strm[i].loop ? (const uint8_t *)s->loop_pcm : s->adpcm;
+        size_t bytes = strm[i].loop ? (size_t)s->samples * 2 : s->bytes;
+        if (!data || !bytes) return out;
+        size_t done = 0;
+        while (done < want) {
+            size_t n = bytes - strm[i].pos;
+            if (n > want - done) n = want - done;
+            memcpy(out + done, data + strm[i].pos, n);
+            done += n; strm[i].pos += n;
+            if (strm[i].pos != bytes) continue;
             if (strm[i].loop) strm[i].pos = 0;
-            else {   /* ran out: let what is queued play, then stop (aud_update) */
+            else {   /* the tail and silence fill the complete KOS request */
                 strm[i].draining = true;
-                strm[i].end_ms = timer_ms_gettime64() + (uint64_t)STREAM_BUF * 2 * 1000 / (uint64_t)s->rate + 50;
-                *got = req; return silence;
+                strm[i].end_ms = timer_ms_gettime64() + (uint64_t)VOICE_BUF * 2 * 1000 / (uint64_t)s->rate + 50;
+                break;
             }
         }
-        size_t n = s->bytes - strm[i].pos;
-        if (n >= (size_t)req) { const void *p = s->adpcm + strm[i].pos; strm[i].pos += (size_t)req; *got = req; return (void *)p; }
-#ifndef AUD_UNPADDED_SAMPLES
-        /* the tail: KOS writes each chunk at the running offset in sound RAM, so a chunk that is not whole 32-byte units
-         * would misalign every later DMA of the stream (g2_dma refuses them and it goes silent for good). The samples are
-         * baked as whole 32-byte units, so the tail goes as it is; the next request loops or drains */
-        { const void *p = s->adpcm + strm[i].pos; strm[i].pos = s->bytes; *got = (int)n; return (void *)p; }
-#else
-        /* unpadded samples: always fill the request, a loop carrying on from its start, a one-shot with silence */
-        size_t want = (size_t)req < STREAM_BUF ? (size_t)req : STREAM_BUF, done = 0;
-        while (done < want) {
-            size_t k = s->bytes - strm[i].pos; if (k > want - done) k = want - done;
-            memcpy(pad[i] + done, s->adpcm + strm[i].pos, k); done += k; strm[i].pos += k;
-            if (strm[i].pos < s->bytes) continue;
-            if (!strm[i].loop) { memset(pad[i] + done, 0, want - done); done = want; }
-            else strm[i].pos = 0;
-        }
-        *got = (int)want;
-        return pad[i];
-#endif
+        return out;
     }
     *got = 0; return NULL;
 }
@@ -166,7 +197,7 @@ int aud_play(AudSample *s, float gain, bool loop)
         int ch = snd_sfx_play_ex(&pd);
         return ch >= 0 ? ch : -1;
     }
-    if (!s->adpcm && !load_long(s)) return -1;
+    if (loop ? !prepare_loop(s) : (!s->adpcm && !load_long(s))) return -1;
     int best = -1;
     for (int i = 0; i < NSTREAM; i++) if (!strm[i].active) { best = i; break; }
     if (best < 0) {   /* both busy: take the one that is not looping, else the first */
@@ -176,8 +207,14 @@ int aud_play(AudSample *s, float gain, bool loop)
     }
     strm[best].smp = s; strm[best].pos = 0; strm[best].loop = loop; strm[best].draining = false;
     strm[best].active = true; strm[best].gen++; strm[best].vol = vol_of(gain);
-    snd_stream_start_adpcm(strm[best].h, s->rate, 0);
+    /* Queue the mono start and its initial volume together. Turbo starts at
+     * gain 0; KOS's default volume of 255 must not leak out before its fade. */
+    snd_stream_queue_enable(strm[best].h);
+    if (loop) snd_stream_start(strm[best].h, s->rate, 0);
+    else snd_stream_start_adpcm(strm[best].h, s->rate, 0);
     snd_stream_volume(strm[best].h, strm[best].vol);
+    snd_stream_queue_go(strm[best].h);
+    snd_stream_queue_disable(strm[best].h);
     return 64 + best + (int)(strm[best].gen << 8);
 }
 
@@ -197,109 +234,110 @@ void aud_stop(int voice)
 }
 bool aud_playing(int voice) { return voice >= 64 ? stream_of(voice) >= 0 : voice >= 0; }
 
-/* ---- music: ADX from the disc, switched by a thread of its own ----
- * A switch stops the old track (letting libADX's driver thread come up, then waiting for it to go) and opens the new
- * file on the disc: the game loop used to stand still for all of that at every change in a level (the boss's arrival,
- * the mission jingle, Dark April's fight). The game only posts what it wants now; the worker carries it out. */
-extern snd_stream_hnd_t shnd;   /* libADX's stream (its snddrv.c) */
-static bool music_on, music_paused; static float music_gain = 1.0f; static int music_vol = -1;   /* the worker's */
-static struct { uint32_t id; bool loop, paused; unsigned seq; } want;   /* the game's wish, under music_mx */
-static unsigned done_seq;                                                /* the last wish carried out */
-static bool music_idle = true;                                           /* under music_mx */
+/* ---- music: one worker owns a persistent PCM16 KOS stream ----
+ * Track switches, decoding, polling, gain, and EOF all happen on this worker.
+ * There is no detached libADX driver to reuse a handle or destroy other streams.
+ * music_adx.c retains small tracks and reads larger tracks ahead on a separate
+ * thread; only that reader touches its file descriptor. */
+static snd_stream_hnd_t music_h = SND_STREAM_INVALID;
+static DcAdx *music_adx;
+static bool music_on, music_paused, music_draining;   /* worker-owned */
+static uint64_t music_end_ms, music_pause_ms;
+static int music_vol = -1;
+static uint8_t music_pcm[2][MUSIC_BUF] __attribute__((aligned(32)));
+static unsigned music_pcm_index;
+static struct { uint32_t id; bool loop, paused; unsigned seq; int volume; } want = { .volume = 255 };
+static unsigned done_seq;
+static bool music_idle = true;
 static mutex_t music_mx = MUTEX_INITIALIZER;
-static mutex_t switch_mx = MUTEX_INITIALIZER;   /* held by the worker while libADX's stream comes and goes */
 static semaphore_t music_sem;
-static kthread_t *music_thd; static volatile bool music_quit;
+static kthread_t *music_thd;
+static bool music_quit;                              /* under music_mx */
 
-static void apply_music_vol(void)
+static void *music_cb(snd_stream_hnd_t hnd, int req, int *got)
 {
-    /* the handle is valid once libADX's driver thread streams (a fresh track resets its volume); not while the
-     * worker switches tracks: the next frame will do */
-    if (mutex_trylock(&switch_mx) != 0) return;
-    if (!music_on || snddrv.drv_status != SNDDRV_STATUS_STREAMING) music_vol = -1;
-    else {
-        int v = vol_of(music_gain);
-        if (v != music_vol) { snd_stream_volume(shnd, v); music_vol = v; }
+    (void)hnd;
+    uint8_t *out = music_pcm[music_pcm_index++ & 1];
+    size_t bytes = (size_t)req < MUSIC_BUF ? (size_t)req : MUSIC_BUF;
+    memset(out, 0, bytes);
+    *got = (int)bytes;
+    if (!music_adx || music_paused || music_draining) return out;
+    unsigned channels = dc_adx_channels(music_adx);
+    dc_adx_read(music_adx, (int16_t *)out, bytes / (channels * 2));
+    if (dc_adx_done(music_adx)) {
+        /* The last partial PCM block is followed by zeros, never old samples.
+         * Give the whole AICA ring time to play before stopping the channel. */
+        music_draining = true;
+        music_end_ms = timer_ms_gettime64() + (uint64_t)MUSIC_BUF * 1000 /
+                       (2 * dc_adx_rate(music_adx)) + 50;
     }
-    mutex_unlock(&switch_mx);
-}
-/* libADX's driver thread ends with snd_stream_shutdown(), which would destroy every stream (our two, a video's) and
- * hand their handles to the next track; the link wraps it (Makefile.dc: --wrap) so it only tells us the thread is done.
- * The stream system lives from aud_init to aud_shutdown. */
-static volatile unsigned adx_drv_exits;
-void __real_snd_stream_shutdown(void);
-void __wrap_snd_stream_shutdown(void) { adx_drv_exits++; }
-
-/* KOS starts every stream at full volume, and libADX starts its own from its driver thread some time after adx_dec:
- * the volume the game had set (0 under a stage's title card) came a frame or more later, so each stage opened with a
- * burst of its music. libADX is the only caller of snd_stream_start (ours and the videos' streams are ADPCM): its
- * stream gets the music's volume right behind the start command. */
-void __real_snd_stream_start(snd_stream_hnd_t hnd, uint32_t freq, int st);
-void __wrap_snd_stream_start(snd_stream_hnd_t hnd, uint32_t freq, int st)
-{
-    __real_snd_stream_start(hnd, freq, st);
-    if (hnd == shnd && snddrv.drv_status == SNDDRV_STATUS_INITIALIZING) snd_stream_volume(hnd, vol_of(music_gain));
-}
-/* Once libADX winds down (a stop, or a one-shot track's end) its callback hands the AICA its old buffer again until the
- * driver thread gets round to stopping the channel: a stutter of the last bit of music. Muted from then on. */
-void __real_snd_stream_poll(snd_stream_hnd_t hnd);
-void __wrap_snd_stream_poll(snd_stream_hnd_t hnd)
-{
-    if (hnd == shnd && snddrv.drv_status == SNDDRV_STATUS_DONE) snd_stream_volume(hnd, 0);
-    __real_snd_stream_poll(hnd);
+    return out;
 }
 
-/* wait (up to ms) for cond, letting libADX's threads run */
-#define WAIT_FOR(cond, ms) do { uint64_t t_end_ = timer_ms_gettime64() + (ms); \
-                                while (!(cond) && timer_ms_gettime64() < t_end_) thd_sleep(1); } while (0)
-#define ADX_UP (snddrv.dec_status == SNDDEC_STATUS_STREAMING && snddrv.drv_status == SNDDRV_STATUS_STREAMING)
-
-/* worker: the track that plays now goes */
 static void music_stop_now(void)
 {
-    if (!music_on) return;
-    music_on = false;
-    /* a stop right after a start (the briefing's music, then its video) raced libADX: its driver thread, still starting
-     * its stream, set STREAMING over the stop's DONE and adx_stop spun forever. So let the driver come up first, and
-     * after the stop wait for it to release its stream before anyone allocates another */
-    if (music_paused) { adx_resume(); music_paused = false; }
-    WAIT_FOR(ADX_UP, 1000);
-    if (snddrv.drv_status == SNDDRV_STATUS_STREAMING) snd_stream_volume(shnd, 0);   /* what is still queued plays out silent */
+    if (music_on) snd_stream_stop(music_h);
+    music_on = music_paused = music_draining = false;
     music_vol = -1;
-    unsigned exits = adx_drv_exits;
-    bool driver = snddrv.drv_status != SNDDRV_STATUS_NULL;
-    adx_stop();
-    if (driver) WAIT_FOR(adx_drv_exits != exits, 500);
+    dc_adx_close(music_adx); music_adx = NULL;
 }
 
 static void *music_worker(void *arg)
 {
     (void)arg;
-    while (!music_quit) {
-        sem_wait(&music_sem);
-        for (;;) {
-            mutex_lock(&music_mx);
-            bool track = want.seq != done_seq, pause = !track && music_on && want.paused != music_paused;
-            if (!track && !pause) { music_idle = true; mutex_unlock(&music_mx); break; }
-            uint32_t id = want.id; bool loop = want.loop, paused = want.paused; unsigned seq = want.seq;
-            mutex_unlock(&music_mx);
-            mutex_lock(&switch_mx);
-            if (track) {
-                music_stop_now();
-                if (id) {
-                    char path[64]; snprintf(path, sizeof path, "/cd/music/%08lX.adx", (unsigned long)id);
-                    if (adx_dec(path, loop ? 1 : 0)) { music_on = true; music_paused = false; music_vol = -1; }
-                    else printf("music: %s failed\n", path);
-                }
-                done_seq = seq;
-            } else {
-                WAIT_FOR(ADX_UP, 1000);   /* libADX pauses a stream that is running */
-                if (paused) adx_pause(); else adx_resume();
+    for (;;) {
+        mutex_lock(&music_mx);
+        uint32_t id = want.id;
+        bool loop = want.loop, paused = want.paused, quit = music_quit;
+        unsigned seq = want.seq;
+        int volume = want.volume;
+        mutex_unlock(&music_mx);
+        if (quit) break;
+        if (seq != done_seq) {
+            music_stop_now();
+            if (id) {
+                char path[64]; snprintf(path, sizeof path, "/cd/music/%08lX.adx", (unsigned long)id);
+                music_adx = dc_adx_open(path, loop);
+                /* A stop or another track can arrive while disc I/O is in
+                 * flight. Discard that obsolete open before starting it. */
+                mutex_lock(&music_mx);
+                bool stale = want.seq != seq;
+                volume = want.volume; paused = want.paused;
+                mutex_unlock(&music_mx);
+                if (stale) { music_stop_now(); continue; }
+                if (music_adx) {
+                    music_paused = paused;
+                    music_pause_ms = timer_ms_gettime64();
+                    snd_stream_start(music_h, dc_adx_rate(music_adx), dc_adx_channels(music_adx) == 2);
+                    music_on = true;
+                    music_vol = paused ? 0 : volume;
+                    snd_stream_volume(music_h, music_vol);
+                } else printf("music: %s failed\n", path);
+            }
+            done_seq = seq;
+        }
+        if (music_on) {
+            uint64_t now = timer_ms_gettime64();
+            if (paused != music_paused) {
+                if (paused) music_pause_ms = now;
+                else if (music_draining) music_end_ms += now - music_pause_ms;
                 music_paused = paused;
             }
-            mutex_unlock(&switch_mx);
+            int v = paused ? 0 : volume;
+            if (v != music_vol) { snd_stream_volume(music_h, v); music_vol = v; }
+            if (music_draining && !paused && now >= music_end_ms) music_stop_now();
+            else snd_stream_poll(music_h);
         }
+        mutex_lock(&music_mx);
+        music_idle = done_seq == want.seq && (!music_on ||
+                     (music_paused == want.paused && music_vol == (want.paused ? 0 : want.volume)));
+        bool idle = music_idle;
+        mutex_unlock(&music_mx);
+        if (!idle) continue;
+        if (music_on) sem_wait_timed(&music_sem, 10);
+        else sem_wait(&music_sem);
     }
+    music_stop_now();
     return NULL;
 }
 
@@ -313,7 +351,7 @@ static void music_post(void (*edit)(uint32_t, bool), uint32_t id, bool loop)
 static void want_track(uint32_t id, bool loop) { want.id = id; want.loop = loop; want.paused = false; want.seq++; }
 static void want_pause(uint32_t id, bool pause) { (void)id; want.paused = pause; }
 
-/* until the worker has done everything asked of it (a video about to take a stream of its own, the shutdown) */
+/* Wait for a requested stop before video disc reads or audio shutdown. */
 void aud_music_settle(void)
 {
     for (;;) {
@@ -325,7 +363,16 @@ void aud_music_settle(void)
 
 bool aud_music_play(uint32_t id, bool loop) { music_post(want_track, id, loop); return true; }
 void aud_music_stop(void) { music_post(want_track, 0, false); }
-void aud_music_gain(float g) { music_gain = g; }
+void aud_music_gain(float g)
+{
+    int v = vol_of(g);
+    mutex_lock(&music_mx);
+    bool changed = want.volume != v;
+    want.volume = v;
+    if (changed) music_idle = false;
+    mutex_unlock(&music_mx);
+    if (changed) sem_signal(&music_sem);
+}
 void aud_music_pause(bool pause) { music_post(want_pause, 0, pause); }
 
 /* ---- video soundtrack: whole ADPCM body preloaded to RAM (a .vsnd sidecar next to the .zamv, the same "SMPL" +
@@ -419,29 +466,37 @@ void aud_update(void)
         snd_stream_poll(strm[i].h);
     }
     if (vaud_data) snd_stream_poll(vaud_h);
-    apply_music_vol();
 }
 
 bool aud_init(void)
 {
-    snd_stream_init();
-    sem_init(&music_sem, 0);
-    music_thd = thd_create(false, music_worker, NULL);
+    if (snd_stream_init() < 0) return false;
     memset(silence, 0x80, sizeof silence);   /* +step/8, -step/8, ...: holds the level (ADPCM has no zero code) */
     for (int i = 0; i < NSTREAM; i++) {
-        strm[i].h = snd_stream_alloc(stream_cb, STREAM_BUF);
-        if (strm[i].h == SND_STREAM_INVALID) { printf("snd: no stream %d\n", i); return false; }
+        strm[i].h = snd_stream_alloc(stream_cb, VOICE_BUF);
+        if (strm[i].h == SND_STREAM_INVALID) {
+            printf("snd: no stream %d\n", i); snd_stream_shutdown(); return false;
+        }
     }
+    music_h = snd_stream_alloc(music_cb, MUSIC_BUF);
+    if (music_h == SND_STREAM_INVALID) { snd_stream_shutdown(); return false; }
+    sem_init(&music_sem, 0);
+    music_thd = thd_create(false, music_worker, NULL);
+    if (!music_thd) { sem_destroy(&music_sem); snd_stream_shutdown(); return false; }
     return true;
 }
 
 void aud_shutdown(void)
 {
     aud_music_stop(); aud_music_settle();
-    music_quit = true; sem_signal(&music_sem); thd_join(music_thd, NULL);
+    mutex_lock(&music_mx); music_quit = true; mutex_unlock(&music_mx);
+    sem_signal(&music_sem); thd_join(music_thd, NULL); music_thd = NULL;
+    sem_destroy(&music_sem);
     for (int i = 0; i < NSTREAM; i++) if (strm[i].h != SND_STREAM_INVALID) { snd_stream_stop(strm[i].h); snd_stream_destroy(strm[i].h); }
     aud_video_audio_close();
     if (vaud_h != SND_STREAM_INVALID) { snd_stream_destroy(vaud_h); vaud_h = SND_STREAM_INVALID; }
+    snd_stream_destroy(music_h); music_h = SND_STREAM_INVALID;
+    for (int i = 0; i < nsamples; i++) free(samples[i].loop_pcm);
     snd_sfx_unload_all();
-    __real_snd_stream_shutdown();
+    snd_stream_shutdown();
 }

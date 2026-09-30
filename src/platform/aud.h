@@ -2,7 +2,7 @@
 /* Platform sound backend under the core's audio.c (which keeps all game logic: the sfx table and its random
  * variants, retrigger windows, delays, hero overrides, the voice slot, the loop's fades and the music fade/duck).
  *   platform/sdl3/aud_sdl.c        SDL3 audio streams + libvorbisfile, a limiter on the mix
- *   platform/dreamcast/aud_dc.c    AICA: snd_sfx samples (ADPCM), long ones through snd_stream, libADX music
+ *   platform/dreamcast/aud_dc.c    AICA: snd_sfx samples (ADPCM), snd_stream voices and ADX music
  * Gains are linear 0..1 (the core applies its bus levels). */
 #include <stdint.h>
 #include <stdbool.h>

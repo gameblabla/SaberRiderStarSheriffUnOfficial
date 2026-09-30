@@ -47,7 +47,7 @@ $(OBJDIR)/zamv/%.o: CFLAGS += -fno-fast-math -ffp-contract=off -fno-strict-alias
 # ZAMV5 decoder's own hot loops (qpel MC, residual/bitstream parsing) are a different shape (small fixed-trip-count
 # loops, no resident-XMTRX inline asm) and get real throughput back from GCC's normal unrolling.
 $(OBJDIR)/platform/dreamcast/render_pvr.o: CFLAGS += -fno-unroll-loops
-LIBS    := -lADX -lsh4zam -lm -Wl,--wrap=snd_stream_shutdown -Wl,--wrap=snd_stream_start -Wl,--wrap=snd_stream_poll   # see aud_dc.c
+LIBS    := -lsh4zam -lm   # ADX decoding/read-ahead and KOS stream lifetime are owned by aud_dc.c + music_adx.c
 DATA    ?= SaberRider/data
 
 .PHONY: all clean disc rebake repack

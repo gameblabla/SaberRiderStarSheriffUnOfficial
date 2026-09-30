@@ -36,13 +36,13 @@ The Windows icon comes from `tools/win/` (the demo's own `icon.png`).
 ## Dreamcast build
 
 The Dreamcast target uses KallistiOS, the native PowerVR renderer, AICA ADPCM
-samples, libADX music streaming, and the DCMV player. It shares gameplay,
+samples, ADX music streaming, and the ZAMV5 player. It shares gameplay,
 collision, levels, and menus with the SDL3 build through `src/platform/`.
 It reads the demo's packs from `SaberRider/data` (override with `DATA=`).
 
 KOS, its kos-ports and the game must share one SH4 float ABI. The build expects
 `export KOS_SH4_PRECISION="-m4-single-only"` (32-bit `double`) in `environ.sh`,
-with KOS and the ports (libADX, sh4zam) rebuilt after changing it.
+with KOS and the ports (sh4zam) rebuilt after changing it.
 Mixing `-m4-single` code with the `-m4-single-only` newlib breaks libm and printf
 (`floorf(96)` returned 0).
 
@@ -84,13 +84,20 @@ aligned and padded, so it takes one read and goes on by DMA:
   kept (5 KB instead of 860 KB). Reading the whole image took 7 s of stage 2's
   load in Flycast.
 
-Music goes to ADX files, and the pack videos and power-attack clips to DCMV
+Music goes to ADX files, and the pack videos and power-attack clips to ZAMV5
 files. Those stream. Do not copy `video.pck` to the disc: the runtime opens the
 converted files in `/cd/video` instead. Stages load what they use when they
 start: the level's graphics, and every enemy, shot and effect its triggers can
 spawn. The sfx table and the stage's own sounds load too, so nothing is read
 from the disc mid-level. A music change (the boss's arrival, the mission jingle) is handed to a thread
-of its own, which stops libADX and opens the next track while the game runs on. `SABER_READLOG=1` logs every pack read, and
+of its own, which owns one persistent KOS PCM stream and opens the next track
+while the game runs on. ADX tracks up to 512 KiB (including the mission jingle
+and victory screen music) are loaded completely before playback; larger tracks
+have two aligned 64 KiB buffers of compressed read-ahead. The final PCM tail is
+padded with silence and drained before stopping. Repeating effects such as turbo
+are decoded once to PCM so their ADPCM predictor cannot drift across repeats.
+See [the audio fix notes](docs/DREAMCAST_AUDIO_FIX.md) for the source review.
+`SABER_READLOG=1` logs every pack read, and
 `SABER_VRAMLOG=1` logs every texture with the VRAM and palette use.
 
 A CD-R is read at constant linear velocity. The image is padded to 650 MiB
