@@ -196,19 +196,11 @@ void character_animate(Character *c, real dt)
             target = c->jump_shadow_x[c->facing ? 1 : 0];
         else if (c->anim == 48 || c->anim == 49)
             target = c->fall_shadow_x[c->facing ? 1 : 0];
-#ifdef PLAT_SATURN
         if (c->state == CS_CROUCH)
             target = c->crouch_shadow_x[c->facing ? 1 : 0];
-        /* VDP1 displays whole pixels: easing a pose offset makes the planted
+        /* Easing a pose offset makes the planted
          * shadow visibly step sideways after starting a run or turning. */
         c->shadow_x = target;
-#else
-        real delta = target - c->shadow_x;
-        /* Ease only the pose offset (about 0.08 s to settle), never the character's world position. The
-         * bounded time-based blend stays smooth on both fixed-point and variable-rate platforms. */
-        if (r_abs(delta) < R(0.05f)) c->shadow_x = target;
-        else c->shadow_x += r_mul(delta, r_div(dt, R(0.02f) + dt));
-#endif
     }
     if (c->anim >= CHAR_MAX_ANIMS) return;
     const AnimDef *a = &c->def->anims[c->anim];
@@ -341,11 +333,11 @@ void character_draw(const Character *c, real cam_x, real cam_y)
 /* A small oval projected onto the nearest collision surface below the feet. Three disjoint bands avoid alpha
  * accumulating inside the oval, and need no additional texture or disc asset on the consoles. */
 static void draw_shadow(const Body *b, const Level *L, real cam_x, real cam_y, int sw, int sh,
-                        real cx, real half)
+                        real screen_cx, real half)
 {
     if (!L->collision || L->cellw <= 0 || L->cellh <= 0) return;
     real feet = b->y + b->oy + b->hy;
-    if (cx + half < cam_x || cx - half >= cam_x + r_int(sw)) return;
+    if (screen_cx + half < 0 || screen_cx - half >= r_int(sw)) return;
     /* Find support under the physical feet even when the running art leans beyond a platform edge. */
     int col = r_floor(r_div(b->x + b->ox, r_int(L->cellw)));
     int row = r_floor(r_div(feet - R(1), r_int(L->cellh)));
@@ -383,14 +375,10 @@ static void draw_shadow(const Body *b, const Level *L, real cam_x, real cam_y, i
 #endif
         for (int band = 0; band < 3; band++) {
             real hw = band == 1 ? half : r_mul(half, R(0.7f));
-            real x0 = r_max(cx - hw, r_int(left * L->cellw) - R(3));
-            real x1 = r_min(cx + hw, r_int((right + 1) * L->cellw) + R(3));
-            RFRect q = { r_floorr(x0 - cam_x), r_floorr(y) - R(2) + r_int(band * 2),
-#ifdef PLAT_SATURN
-                         r_floorr(x1 - cam_x) - r_floorr(x0 - cam_x), R(2) };
-#else
+            real x0 = r_max(screen_cx - hw, r_int(left * L->cellw) - cam_x - R(3));
+            real x1 = r_min(screen_cx + hw, r_int((right + 1) * L->cellw) - cam_x + R(3));
+            RFRect q = { r_floorr(x0), r_floorr(y) - R(2) + r_int(band * 2),
                          r_floorr(x1) - r_floorr(x0), R(2) };
-#endif
             if (q.w > 0) r_fill_rect(ren, &q);
         }
         r_set_draw_blend(ren, R_BLEND_BLEND);
@@ -401,18 +389,16 @@ static void draw_shadow(const Body *b, const Level *L, real cam_x, real cam_y, i
 
 void body_draw_shadow(const Body *b, const Level *L, real cam_x, real cam_y, int sw, int sh)
 {
-    draw_shadow(b, L, cam_x, cam_y, sw, sh, b->x + b->ox, r_min(R(40), r_max(R(10), b->hx + R(4))));
+    draw_shadow(b, L, cam_x, cam_y, sw, sh, b->x + b->ox - cam_x, r_min(R(40), r_max(R(10), b->hx + R(4))));
 }
 
 void character_draw_shadow(const Character *c, const Level *L, real cam_x, real cam_y, int sw, int sh)
 {
-    real cx = c->body.x + (c->shadow_half > 0 ? c->shadow_x : c->body.ox);
-#ifdef PLAT_SATURN
     /* Use character_draw's pixel anchor before adding the fixed pose offset.
-     * Fractional body/camera motion must not shift the shadow relative to it. */
-    cx = cam_x + r_floorr(c->body.x - c->origin_x - cam_x) + c->origin_x +
+     * Keep it in screen coordinates: adding and subtracting a fractional camera
+     * can introduce float rounding that shifts an endpoint by one pixel. */
+    real cx = r_floorr(c->body.x - c->origin_x - cam_x) + c->origin_x +
          (c->shadow_half > 0 ? c->shadow_x : c->body.ox);
-#endif
     real half = c->shadow_half > 0 ? c->shadow_half : r_min(R(40), r_max(R(10), c->body.hx + R(4)));
     /* Every pose uses the same footprint at its current art offset. */
     draw_shadow(&c->body, L, cam_x, cam_y, sw, sh, cx, half);

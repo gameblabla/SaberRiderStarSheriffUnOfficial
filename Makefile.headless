@@ -36,6 +36,15 @@ $(OUT)/hero_poses_test: tools/hero_poses_test.c $(OBJ) $(OUT)/obj/hero_test_plat
 check-heroes: $(OUT)/hero_poses_test
 	python3 tools/check_hero_poses.py $(OUT)/hero_poses_test
 
+# Capture shadow geometry from the shared code in either arithmetic mode.
+$(OUT)/hero_shadows_test: tools/saturn/tests/hero_shadows.c src/character.c src/heroes.c src/fx.c $(wildcard src/*.h) $(wildcard src/platform/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections $(filter %.c,$^) -Wl,--gc-sections -o $@ $(LDLIBS)
+
+.PHONY: check-shadows
+check-shadows: $(OUT)/hero_shadows_test
+	$(OUT)/hero_shadows_test
+
 .PHONY: clean
 clean:
 	rm -rf $(OUT)

@@ -1,4 +1,6 @@
-/* Host regression for the Saturn character code and emitted shadow geometry.
+/* Host regression for shared character code and emitted shadow geometry.
+ * make -f Makefile.headless check-shadows (also FIXED=1)
+ * To exercise the Saturn configuration explicitly:
  * cc -std=gnu11 -O2 -ffunction-sections -fdata-sections -DPLAT_SATURN -DFX_NO_FLOAT
  *    -Isrc tools/saturn/tests/hero_shadows.c src/character.c src/heroes.c src/fx.c
  *    -Wl,--gc-sections -o /tmp/hero_shadows && /tmp/hero_shadows
@@ -32,27 +34,34 @@ static void check(uint32_t id, real crouch_l, real crouch_r)
 {
     Character c = {0}; CharDef def = {0};
     c.crhc_id = id; c.def = &def; c.origin_x = R(32);
-    for (int a = 36; a <= 43; a++)
+    for (int a = 1; a < CHAR_MAX_ANIMS; a++)
         def.anims[a] = (AnimDef){0, 0, 5, 0, R(0.1f), 0};
     hero_quiet(true); assert(hero_apply(&c));
     Level l = {0}; l.cols = 100; l.rows = 8; l.cellw = l.cellh = 16;
     static const uint8_t collision = 4; l.collision = &collision;
     c.body.y = R(64); c.body.x = R(500);
+    const real steps[] = {R_DT, R(1.0f / 30), R(1.0f / 144)};
+    for (int rate = 0; rate < 3; rate++)
     for (int side = 0; side < 2; side++) {
         c.facing = side;
-        for (int pose = 0; pose < 3; pose++) {
-            c.state = pose == 0 ? CS_WALK : CS_CROUCH;
-            c.anim = pose == 0 ? (side ? 37 : 36) : (side ? 41 : 40) + (pose == 2 ? 2 : 0);
-            real expected = pose == 0 ? c.run_shadow_x[side] : (side ? crouch_r : crouch_l);
+        for (int pose = 0; pose < 6; pose++) {
+            static const int states[] = {CS_WALK, CS_CROUCH, CS_CROUCH, CS_IDLE, CS_JUMP, CS_FALL};
+            static const int anims[] = {36, 40, 42, 1, 46, 48};
+            c.state = states[pose]; c.anim = anims[pose] + side;
+            real expected = pose == 0 ? c.run_shadow_x[side] :
+                            pose < 3 ? (side ? crouch_r : crouch_l) :
+                            pose == 3 ? c.idle_shadow_x[side] :
+                            pose == 4 ? c.jump_shadow_x[side] : c.fall_shadow_x[side];
             c.shadow_x = R(100); /* transition from any preceding pose */
-            character_animate(&c, R_DT); assert(c.shadow_x == expected);
+            character_animate(&c, steps[rate]); assert(c.shadow_x == expected);
             real relative[3] = {0}, width[3] = {0};
             for (int frame = 0; frame < 120; frame++) {
                 /* Sweep independent fractional world/camera positions across
                  * repeated animation cycles. */
                 c.body.x = R(500) + frame * R(0.37f);
-                real cam = R(400) + frame * R(0.23f);
-                nbands = 0; character_animate(&c, R_DT);
+                /* Include negative screen coordinates near the left edge. */
+                real cam = R(400) + pose * R(20) + frame * R(0.23f);
+                nbands = 0; character_animate(&c, steps[rate]);
                 assert(c.shadow_x == expected);
                 character_draw_shadow(&c, &l, cam, 0, 352, 224);
                 assert(nbands == 3);
@@ -71,6 +80,6 @@ int main(void)
 {
     check(0x8403195A, R(2), 0);
     check(0x79260A58, R(2), R(-1));
-    puts("Saturn shadows: running and crouching both ways stay anchored through fractional motion");
+    puts("Hero shadows: running, crouching, idle, jumping and falling stay anchored in both directions at 30/60/144 Hz");
     return 0;
 }
