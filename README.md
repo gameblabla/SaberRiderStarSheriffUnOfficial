@@ -162,7 +162,8 @@ game's own sprites under the sheet's exact bicubic downscale, then a joint palet
 Saber Rider and Colt also use reconstructed sheets. Saber's normal idle breathes with his gun lowered;
 after 10 s of standing idle he salutes once, then resumes breathing. These frames come from the green-screen
 tweet clip, extracted at its native 10 fps by `tools/build_saber_idle.py` and appended to `assets/saber.png`.
-His alert and aim poses retain the gun-ready art. Assets are looked up in
+Breathing begins immediately on standing still, including after landing or releasing aim; holding aim
+still selects his gun-ready art. Assets are looked up in
 `$SABER_ASSETS`, `./assets` and next to the executable.
 
 ## Stage 2 — "The All Galaxy Grand Prix" (Mode-7)

@@ -34,6 +34,8 @@ for name, script, idle, bored, first in (
         ("right", "1500:", 2, 54, 200),
         ("left", "350:,1:AL,1200:", 1, 53, 184)):
     rows = run(name, script, 1500)
+    grounded_idle = next(row for row in rows if row[0] == 0 and row[1] not in (12, 15))
+    assert grounded_idle[1] == 2, (name, "first standing frame must breathe", grounded_idle)
     start = next(i for i, row in enumerate(rows) if row[1] == idle)
     salute = next(i for i, row in enumerate(rows) if row[1] == bored)
     assert 599 <= salute - start <= 601, (name, start, salute)
@@ -46,17 +48,26 @@ for name, script, idle, bored, first in (
 
 for name, keys, expected in (("move", "R", 37), ("aim", "AR", 7),
                               ("shoot", "S", 15), ("jump", "J", 47), ("crouch", "D", 41)):
-    rows = run(name, f"1205:,50:{keys},300:", 1210)
+    rows = run(name, f"905:,50:{keys},300:", 910)
     assert rows[-6][1] == 54, (name, rows[-6])
     assert rows[-1][1] == expected, (name, rows[-1])
     print(f"{name}: cancels salute immediately, animation {expected}")
 
 rows = run("aim-held", "1500:AR", 1500)
 assert all(row[1] != 54 for row in rows) and rows[-1][1] == 7
-rows = run("repeat", "2300:", 2300)
+for name, keys, idle in (("move-release", "R", 2), ("aim-release", "AR", 2),
+                         ("aim-left-release", "AL", 1), ("shoot-release", "S", 2),
+                         ("crouch-release", "D", 2), ("jump-land", "J", 2)):
+    rows = run(name, f"350:,20:{keys},200:", 550)
+    # Ignore any shot still finishing after release; every other standing frame
+    # must already be breathing, never the inherited five-second alert pose.
+    standing = [row for row in rows[112:] if row[0] == 0 and row[1] not in (12, 15)]
+    assert standing and all(row[1] == idle for row in standing), (name, standing[:3])
+    print(f"{name}: breathing on the first standing frame")
+rows = run("repeat", "2000:", 2000)
 assert sum(row[1] == 54 and (i == 0 or rows[i - 1][1] != 54) for i, row in enumerate(rows)) == 2
 print("Held aim stays gun-ready; continued idle repeats the salute after another ten seconds")
-run("breathing", "800:", 800)
-run("salute-right", "1300:", 1206)
-run("salute-left", "350:,1:AL,1000:", 1281)
+run("breathing", "800:", 300)
+run("salute-right", "1300:", 906)
+run("salute-left", "350:,1:AL,1000:", 981)
 print(f"PC screenshots and traces: {OUT}")

@@ -165,6 +165,9 @@ void hero_quiet(bool quiet) { g_quiet = quiet; }
 void hero_patch_def(CharDef *d)
 {
     if (d->crhc_id == CRHC_DEFAULT) {
+        /* Standing still must breathe immediately, including after landing or
+         * releasing input. Anims 4/7 remain gun-ready for explicit CS_AIM. */
+        d->alert_time = 0;
         for (size_t i = 0; i < sizeof SABER_ANIMS / sizeof *SABER_ANIMS; i++) {
             const AnimPatch *p = &SABER_ANIMS[i];
             AnimDef *a = &d->anims[p->anim];
