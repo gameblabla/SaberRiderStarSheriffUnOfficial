@@ -225,11 +225,12 @@ void character_animate(Character *c, real dt)
              * Keep both halves on the same pose throughout playback, including cycle wrap. */
             c->ov_frame = o->first + (c->frame - a->first);
             c->ov_t = c->anim_t;
-            return;
+        } else {
+            c->ov_t += dt;
+            while (c->ov_t >= o->frame_time) { c->ov_t -= o->frame_time; c->ov_frame = (c->ov_frame < o->last) ? c->ov_frame + 1 : o->loop; }
         }
-        c->ov_t += dt;
-        while (c->ov_t >= o->frame_time) { c->ov_t -= o->frame_time; c->ov_frame = (c->ov_frame < o->last) ? c->ov_frame + 1 : o->loop; }
     }
+    hero_align_muzzle(c);
 }
 
 /* FUN_0041bc40: state -> animation + horizontal velocity, drop-through handling */
@@ -455,7 +456,11 @@ void player_resolve(Character *c, real dt)
             else if (aim == 6) { DOWNBASE(); ov = shoot ? 0x23 : 0x1b; }
             else if (L) ov = shoot ? (aim == 1 ? 0x1d : aim == 7 ? 0x1e : 0x1c) : (aim == 1 ? 0x15 : aim == 7 ? 0x16 : 0x14);
             else ov = shoot ? (aim == 3 ? 0x20 : aim == 5 ? 0x21 : 0x1f) : (aim == 3 ? 0x18 : aim == 5 ? 0x19 : 0x17);
-            if (aim != AIM_U && aim != AIM_D) c->base_oy += c->fall_torso_y;
+            if (aim == AIM_U || aim == AIM_D) c->base_oy += c->fall_vertical_y[L ? 0 : 1];
+            else {
+                c->base_ox += c->fall_torso_x[L ? 0 : 1];
+                c->base_oy += c->fall_torso_y[L ? 0 : 1];
+            }
         }
         if (c->state == CS_AIR && (c->coll & (L ? COLL_LEFT : COLL_RIGHT))) c->state = CS_FALL;
         break; }
@@ -487,6 +492,7 @@ void player_resolve(Character *c, real dt)
     character_set_overlay(c, ov);
     /* walk cycle: legs cells 2 and 5 sit 1 px lower, the torso follows (set after the muzzle, so it only moves the art) */
     c->walk_bob = c->state == CS_WALK;
+    hero_align_muzzle(c);
     b->vx = vx;
 keep_vx:
     if (b->y < c->drop_target_y) { b->flags |= PHYS_IGNORE_DOWN; return; }

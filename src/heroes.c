@@ -218,7 +218,11 @@ bool hero_apply(Character *c)
         memcpy(c->torso_bob, saber_bob, sizeof c->torso_bob);
         c->ov_sync = true;
         c->walk_aim_ov = WALK_AIM_DIAG;   /* the native run already holds his gun level, including while firing */
-        c->fall_torso_y = R(1);   /* aim torso ends at row 37; fall legs start at 39 */
+        /* The fall pelvis sits 3 px toward the back from the torso's belt.
+         * Its top is row 39, so the belt's row 37 must move down one pixel. */
+        c->fall_torso_x[0] = R(3); c->fall_torso_x[1] = R(-3);
+        c->fall_torso_y[0] = c->fall_torso_y[1] = R(1);
+        c->fall_vertical_y[0] = c->fall_vertical_y[1] = R(4);
         c->run_shadow_x[0] = R(5); c->run_shadow_x[1] = R(-5); c->shadow_half = R(21);
         /* Idle feet occupy columns [17,45) / [19,47), with the sprite origin at 32. */
         c->idle_shadow_x[0] = R(-1); c->idle_shadow_x[1] = R(1);
@@ -245,6 +249,10 @@ bool hero_apply(Character *c)
     CBlock *cb = april_sheet();
     if (!cb) return false;
     c->cb = cb; c->spr = NULL;
+    /* Belt ends at row 39; fall pelvis starts at row 42 L / 41 R.
+     * The up/down torso's bottom is row 34 after UPBASE/DOWNBASE. */
+    c->fall_torso_y[0] = R(3); c->fall_torso_y[1] = R(2);
+    c->fall_vertical_y[0] = R(7); c->fall_vertical_y[1] = R(6);
     c->run_shadow_x[0] = R(5); c->run_shadow_x[1] = R(-4.5f); c->shadow_half = R(19);
     /* Both idle sways (also used for alert) plant the feet in columns [19,45), centered at the origin. */
     c->idle_shadow_x[0] = c->idle_shadow_x[1] = 0;
@@ -262,4 +270,36 @@ bool hero_apply(Character *c)
     c->bored_anim[0] = APRIL_BORED_L; c->bored_anim[1] = APRIL_BORED_R; c->bored_time = R(10.0f);
     if (plat_getenv("SABER_BORED")) c->bored_time = r_parse(plat_getenv("SABER_BORED"), NULL);   /* debug */
     return true;
+}
+
+void hero_align_muzzle(Character *c)
+{
+    if (c->crhc_id != CRHC_DEFAULT && c->crhc_id != CRHC_APRIL) return;
+    if (!(c->aim & 1)) return;   /* diagonal aims only */
+    /* Barrel-tip pixels in assets/saber.png and assets/april.png. Standing
+     * cells and split torsos differ, as do the aim and recoil frames. These
+     * are coordinates in the 64x64 cell, before its draw offset and run bob. */
+    static const struct { uint8_t cell, saber_x, saber_y, april_x, april_y; } tips[] = {
+        {18, 8,42, 13,46}, {19, 8,38, 14,44},
+        {20,12, 8, 15,13}, {21,17,12, 18,13},
+        {42,54,42, 46,47}, {43,52,39, 45,45},
+        {44,46,11, 44,13}, {45,44,12, 40,14},
+        {74, 9,41, 13,46}, {75,11,39, 14,44},
+        {76,16,14, 15,13}, {77,18,12, 18,13},
+        {98,54,41, 47,46}, {99,52,39, 46,44},
+        {100,47,14,44,13}, {101,45,12,40,14},
+    };
+    int frame = c->overlay ? c->ov_frame : c->frame;
+    for (size_t i = 0; i < sizeof tips / sizeof *tips; i++) {
+        if (tips[i].cell != frame) continue;
+        bool saber = c->crhc_id == CRHC_DEFAULT;
+        c->muzzle_x = r_int(saber ? tips[i].saber_x : tips[i].april_x) - c->origin_x;
+        c->muzzle_y = r_int(saber ? tips[i].saber_y : tips[i].april_y) - c->origin_y;
+        if (c->overlay) {
+            c->muzzle_x += c->base_ox; c->muzzle_y += c->base_oy;
+            int k = c->frame - c->def->anims[c->anim].first;
+            if (c->walk_bob && k >= 0 && k < 8) c->muzzle_y += r_int(c->torso_bob[k]);
+        }
+        return;
+    }
 }

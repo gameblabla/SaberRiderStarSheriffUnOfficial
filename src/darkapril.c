@@ -306,7 +306,7 @@ static void think(DarkApril *d, const Player *pl, const Bullets *pb, real dt)
 static void fire(DarkApril *d, Bullets *eb, Effects *fx, int layer)
 {
     Player *p = &d->p; Character *c = &p->ch;
-    if (!p->want_fire || p->fire_cooldown > R(0.0f)) return;
+    if (!p->want_fire || p->fire_cooldown > R(0.0f) || p->locked || c->state == CS_DEAD) return;
     static const real AIM_ANGLE[8] = { R(3.1415927f), R(2.3561945f), R(1.5707964f), R(0.7853982f), 0, R(5.4977871f), R(4.712389f), R(3.9269908f) };
     real x = c->body.x + c->muzzle_x, y = c->body.y + c->muzzle_y;
     AnimDef diag = { 0, 0, 4, 0, R(0.015f), 0 }, straight = { 0, 4, 8, 4, R(0.015f), 0 };
@@ -414,7 +414,6 @@ void dark_update(DarkApril *d, Player *pl, const Input *pin, const Level *L, con
         think(d, pl, pb, dt);
         make_input(d);
         player_control(&d->p, &d->in, dt);
-        fire(d, eb, fx, layer);
         /* the hero's shots */
         const HurtBox *h = hurt(c);
         for (int i = 0; i < pb->n; i++) {
@@ -430,6 +429,7 @@ void dark_update(DarkApril *d, Player *pl, const Input *pin, const Level *L, con
             else if (!(pl->ch.flags & CF_HIT) && !(pl->ch.state == CS_SLIDE && c->state == CS_SLIDE)) player_damage(pl, c->facing ? 4 : 0, 1);
         }
         body_step(d, L, W, dt);
+        fire(d, eb, fx, layer);
         player_frame_end(&d->p, dt);
         /* her afterimages while she moves fast (always in the second half) */
         bool fast = r_abs(c->body.vx) > R(150.0f) || !on_ground(c);

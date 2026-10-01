@@ -24,6 +24,18 @@ $(OUT)/obj/%.o: src/%.c
 
 -include $(OBJ:.o=.d)
 
+# Reuse the headless platform services with its entry point renamed; test the
+# actual packed character definitions and recreated PNGs in both arithmetics.
+$(OUT)/obj/hero_test_platform.o: src/platform/null/main_null.c
+	$(CC) $(CFLAGS) -Dmain=hero_test_unused_main -c $< -o $@
+
+$(OUT)/hero_poses_test: tools/hero_poses_test.c $(OBJ) $(OUT)/obj/hero_test_platform.o
+	$(CC) $(CFLAGS) $< $(filter-out $(OUT)/obj/platform/null/main_null.o,$(OBJ)) $(OUT)/obj/hero_test_platform.o -o $@ $(LDLIBS)
+
+.PHONY: check-heroes
+check-heroes: $(OUT)/hero_poses_test
+	python3 tools/check_hero_poses.py $(OUT)/hero_poses_test
+
 .PHONY: clean
 clean:
 	rm -rf $(OUT)

@@ -12,6 +12,8 @@ bool hero_available(int character);          /* selectable on the character sele
 bool hero_apply(Character *c);
 /* the animation table changes of a recreated hero, made once to the type's shared tables (character_init) */
 void hero_patch_def(CharDef *d);
+/* Align diagonal shots to the barrel in the current body/torso cell. */
+void hero_align_muzzle(Character *c);
 /* true while a hero's body is made for someone other than the player (stage 5's Dark April): hero_apply leaves the
  * player's grunt overrides alone */
 void hero_quiet(bool quiet);

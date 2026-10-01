@@ -55,7 +55,7 @@ static const real AIM_ANGLE[8] = { R(3.1415927f), R(2.3561945f), R(1.5707964f), 
 bool player_try_fire(Player *p, Bullets *bs, Effects *fx, int layer)
 {
     Character *c = &p->ch;
-    if (!p->want_fire || p->fire_cooldown > 0) return false;
+    if (!p->want_fire || p->fire_cooldown > 0 || p->locked || c->state == CS_DEAD) return false;
     real x = c->body.x + c->muzzle_x, y = c->body.y + c->muzzle_y;
     /* muzzle flash: strip 8623249C, frames 0..4 for diagonals, 4..8 straight, 15 ms/frame */
     AnimDef diag = { 0, 0, 4, 0, R(0.015), 0 }, straight = { 0, 4, 8, 4, R(0.015), 0 };

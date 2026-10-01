@@ -558,7 +558,6 @@ void game_update(Game *g, real dt)
         c->speed = r_mul(g->hero_speed, power_speed(&g->power) ? R(1.7f) : R(1.0f));   /* April's power: a burst of speed */
         player_control(p, g->walk_in ? &walk : &g->in, dt);
     }
-    if (player_try_fire(p, &g->player_bullets, &g->effects, g->player_layer) && power_rapid(&g->power)) p->fire_cooldown = R(0.07f);   /* Colt's power */
     player_check_enemy_bullets(p, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh);
     g->world.world_min_x = g->walk_in ? 0 : g->cam_x;   /* GameLevel::update: physics world min = camera left edge (not while walking in) */
     enemies_update(&g->enemies, p, &g->level, &g->world, &g->player_bullets, &g->enemy_bullets, &g->effects, g->cam_x, g->sw, g->sh, dt);
@@ -647,10 +646,13 @@ void game_update(Game *g, real dt)
     player_resolve(c, dt);
     if (g->cam_locked && c->body.vx > 0 && g->cam_x + r_int(g->sw) - c->body.hx < c->body.x) c->body.vx = 0;
     physics_step(&g->world, &g->level, &c->body, dt);
-    bullets_update(&g->player_bullets, &g->level, &g->effects, dt, g->cam_x, g->cam_y, g->sw, g->sh);
-    bullets_update(&g->enemy_bullets, &g->level, &g->effects, dt, g->cam_x, g->cam_y, g->sw, g->sh);
     character_animate(c, dt);
     if (power_speed(&g->power)) character_animate(c, r_mul(dt, R(0.7f)));   /* the legs keep up with April's burst */
+    /* Fire from this frame's resolved, animated gun after movement. Input can
+     * change the aim, facing and pose together; last frame's muzzle is stale. */
+    if (player_try_fire(p, &g->player_bullets, &g->effects, g->player_layer) && power_rapid(&g->power)) p->fire_cooldown = R(0.07f);   /* Colt's power */
+    bullets_update(&g->player_bullets, &g->level, &g->effects, dt, g->cam_x, g->cam_y, g->sw, g->sh);
+    bullets_update(&g->enemy_bullets, &g->level, &g->effects, dt, g->cam_x, g->cam_y, g->sw, g->sh);
     power_update(&g->power, &g->in, dt);
     power_trail_update(&g->power, c, dt);
     effects_update(&g->effects, dt);
