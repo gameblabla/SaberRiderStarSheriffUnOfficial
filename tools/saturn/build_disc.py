@@ -137,7 +137,7 @@ def atlas_rects(rel: str) -> list[tuple[int, int, int, int]] | None:
 
 
 def hero_pixels(rel: str, px: np.ndarray) -> np.ndarray:
-    """Normalize Saber's split run and crouch cells in the Saturn import."""
+    """Crop Saber's split run legs; preserve the source sheet's pose alignment."""
     if rel == 'saber.png':
         px = px.copy()
         # The run torso is drawn separately. Stray pixels above the hip in a
@@ -146,14 +146,8 @@ def hero_pixels(rel: str, px: np.ndarray) -> np.ndarray:
             for k, bob in enumerate((0, 1, 2, 0, 1, 2)):
                 y, x = divmod(first + k, 8)
                 px[y * 64:y * 64 + 38 + bob, x * 64:(x + 1) * 64] = 0
-        # Left crouch shooting (113) was placed one row below crouch (112).
-        # Its boot's final row spilled into right crouch shooting (121).
-        # Restore the planted feet while retaining the shooting arm and gun.
-        left = px[14 * 64:15 * 64, :64]
-        shot = px[14 * 64:15 * 64, 64:128]
-        shot[:-1] = shot[1:].copy()
-        shot[-1] = left[-1]
-        px[15 * 64, 64:128] = 0
+        # Crouch cells 112/113 are already aligned in saber.png. Moving the
+        # shooting cell up here would reintroduce a one-pixel vertical shift.
     return px
 
 

@@ -28,12 +28,10 @@ for name in ('saber.png', 'april.png', 'colt.png'):
             for k, bob in enumerate((0, 1, 2, 0, 1, 2)):
                 y, x = divmod(first + k, 8)
                 expected[y * 64:y * 64 + 38 + bob, x * 64:(x + 1) * 64] = 0
-        expected[14 * 64:15 * 64 - 1, 64:128] = original[14 * 64 + 1:15 * 64, 64:128]
-        expected[15 * 64 - 1, 64:128] = original[15 * 64 - 1, :64]
-        expected[15 * 64, 64:128] = 0
-        assert np.array_equal(px, expected), 'import changed pixels outside the run/crouch corrections'
-        # Both left crouch frames must plant the same boots, including the row
-        # formerly clipped off the shooting frame and drawn above right crouch.
+        assert np.array_equal(px, expected), 'import changed pixels outside the run crop'
+        # The source sheet already aligns crouch and crouch-shooting. Preserve
+        # every crouch pixel and their shared planted boots through the bake.
+        assert np.array_equal(px[14 * 64:16 * 64], original[14 * 64:16 * 64])
         assert np.array_equal(px[14 * 64 + 48:15 * 64, :64],
                               px[14 * 64 + 48:15 * 64, 64:128])
         assert not px[15 * 64:15 * 64 + 30, 64:128, 3].any()
