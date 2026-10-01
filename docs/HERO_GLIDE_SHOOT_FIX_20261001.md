@@ -43,3 +43,17 @@ rendered pose sheet and fresh Linux gameplay screenshots of both heroes falling
 and shooting diagonally were reviewed visually. Linux, Windows, WebAssembly,
 Dreamcast ELF and Saturn BIN/CUE builds completed. Console hardware/emulator
 playthroughs were not performed for this change.
+
+## Follow-up: left-running sprite fragments
+
+Some PNG revisions retain unrelated pixels above the hip in Saber's left run
+leg cells 80/81. Saturn's importer cleared them, but the other renderers drew
+the whole cell. The shared character renderer now draws only the leg rows
+below `38 + torso_bob[frame]`, preserving the feet's anchor in both directions.
+This works with PNGs and baked console textures without changing the source art.
+
+The regression suite now checks the actual emitted texture rectangles and
+includes level running/shooting: 4,368 poses pass in both arithmetic modes.
+The previous renderer fails the new run-crop assertion. Six matching Linux
+left-run screenshots confirm the fragments disappear while the normal sprite
+pixels stay in place. All five platform builds passed.

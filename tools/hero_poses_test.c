@@ -7,6 +7,7 @@
 #include <stdlib.h>
 
 Ren *rnull_renderer(void);
+void rnull_frame_end(unsigned frame);
 
 int main(int argc, char **argv)
 {
@@ -40,6 +41,7 @@ int main(int argc, char **argv)
         assert(r_abs(b->x + (left ? step : -step) - c->body.x - c->muzzle_x) < R(0.01f));
         assert(r_abs(b->y + (up ? step : -step) - c->body.y - c->muzzle_y) < R(0.01f));
     }
+    unsigned draw_frame = 0;
     for (int h = 0; h < 2; h++) {
         Character c;
         assert(character_init(&c, ids[h], false));
@@ -61,9 +63,10 @@ int main(int argc, char **argv)
                 for (int aim = 0; aim < 8; aim++) {
                     if ((aim == AIM_L || aim == AIM_UL || aim == AIM_DL) && side) continue;
                     if ((aim == AIM_R || aim == AIM_UR || aim == AIM_DR) && !side) continue;
-                    if (pose == 1 && !(aim & 1)) continue;
+                    if (pose == 1 && (aim == AIM_U || aim == AIM_D)) continue;
                     for (int shoot = 0; shoot < 2; shoot++) {
                         character_reset(&c, false);
+                        c.body.x = c.body.y = 0;
                         c.facing = side; c.aim = aim;
                         c.flags = shoot ? CF_SHOOT : 0;
                         c.state = pose == 0 ? CS_AIM : pose == 1 ? CS_WALK : CS_FALL;
@@ -71,6 +74,8 @@ int main(int argc, char **argv)
                         player_resolve(&c, R_DT);
                         for (int tick = 0; tick < 42; tick++) {
                             character_animate(&c, R_DT);
+                            character_draw(&c, 0, 0);
+                            rnull_frame_end(draw_frame++);
                             int k = c.frame - c.def->anims[c.anim].first;
                             real bob = c.walk_bob && k >= 0 && k < 8 ? r_int(c.torso_bob[k]) : 0;
                             printf("%d %d %d %d %d %d %d %d %d %d %d %d\n", h, side, pose, aim, shoot,

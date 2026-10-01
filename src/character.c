@@ -313,6 +313,16 @@ static void draw_cell(const Character *c, int idx, int aflags, real x, real y)
     if (idx < 0 || idx >= cblock_ncells(c->cb)) return;
     uint16_t t = c->cb->cells[idx];
     if (t == 0xFFFF) return;
+    if (c->crhc_id == 0x8403195A && !c->cb->from_pack && c->cb->tw == 64 && c->cb->th == 64 &&
+        ((idx >= 80 && idx < 86) || (idx >= 104 && idx < 110))) {
+        /* Reconstructed run cells contain legs only. Some sheet revisions
+         * retain unrelated fragments above the hip in left cells 80/81.
+         * Crop at the native split, just as the Saturn importer does, on every
+         * renderer (including already baked Dreamcast sheets). */
+        int k = idx < 86 ? idx - 80 : idx - 104;
+        cblock_draw_tile_rows(c->cb, t, x, y, flip, 38 + c->torso_bob[k]);
+        return;
+    }
     cblock_draw_tile(c->cb, t, x, y, flip);
 }
 

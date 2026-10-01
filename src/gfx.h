@@ -80,6 +80,8 @@ int   cblock_ncells(const CBlock *c);
 void  cblock_tint(const CBlock *c, uint8_t r, uint8_t g, uint8_t b);
 /* draw tile t at x,y (screen space, integer) */
 void  cblock_draw_tile(const CBlock *c, int t, real x, real y, bool flip);
+/* Draw from first_row to the bottom, retaining the cell's original anchor. */
+void  cblock_draw_tile_rows(const CBlock *c, int t, real x, real y, bool flip, int first_row);
 /* many tiles of one bank in one draw call: begin, a tile at a time (screen space, integer), end. Nothing else may be
  * drawn in between. */
 void  cblock_batch_begin(const CBlock *c);

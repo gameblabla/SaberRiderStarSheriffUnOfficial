@@ -9,6 +9,7 @@ import argparse
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 from PIL import Image, ImageDraw
 
 
@@ -19,8 +20,21 @@ def main():
     parser.add_argument('--assets', default='assets')
     args = parser.parse_args()
     assets = Path(args.assets).resolve()
-    run = subprocess.run([args.binary], capture_output=True, text=True,
-                         env={**os.environ, 'SABER_ASSETS': str(assets)})
+    with tempfile.TemporaryDirectory() as tmp:
+        drawlog = Path(tmp) / 'draw.log'
+        run = subprocess.run([args.binary], capture_output=True, text=True,
+                             env={**os.environ, 'SABER_ASSETS': str(assets),
+                                  'SABER_DRAWLOG': str(drawlog), 'SABER_DRAWLOG_EVERY': '1'})
+        draw_frames = []
+        draws = []
+        if drawlog.exists():
+            for line in drawlog.read_text().splitlines():
+                fields = line.split()
+                if fields[0] == 'F':
+                    draw_frames.append(draws)
+                    draws = []
+                elif fields[0] in ('tex', 'rot') and fields[1] in ('53414245', '79260A58'):
+                    draws.append((tuple(map(float, fields[3:7])), tuple(map(float, fields[8:12]))))
     if run.returncode:
         raise RuntimeError(run.stderr)
     sheets = [Image.open(assets / f'{name}.png').convert('RGBA') for name in ('saber', 'april')]
@@ -35,6 +49,22 @@ def main():
         torso = cell(overlay) if overlay >= 0 else legs
         tx, ty = (ox, oy) if overlay >= 0 else (0, 0)
         label = (h, side, pose, aim, shoot, frame, overlay)
+        # Inspect the actual render calls, rather than assuming each cell is
+        # drawn whole. The top of a run legs cell must never emit stray art;
+        # cropping its source must preserve the feet's destination anchor.
+        rendered = draw_frames[checked]
+        assert len(rendered) == (2 if overlay >= 0 else 1), (label, rendered)
+        source, destination = rendered[0]
+        first_row = round(source[1]) - frame // 8 * 64
+        assert source[0] == frame % 8 * 64 and source[2] == 64, (label, source)
+        assert first_row + source[3] == 64 and destination[3] == source[3], (label, rendered)
+        assert destination[1] == -32 + first_row, (label, rendered)
+        if h == 0 and pose == 1:
+            assert first_row >= 38, (label, 'run legs include unrelated upper art', source)
+        else:
+            assert first_row == 0, (label, 'unexpected crop', source)
+        if first_row:
+            legs.paste((0, 0, 0, 0), (0, 0, 64, first_row))
         if aim & 1:
             dx = -1 if aim in (1, 7) else 1
             dy = -1 if aim in (1, 3) else 1
@@ -82,7 +112,8 @@ def main():
             h, side, pose, aim, shoot = key
             draw.text((x + 4, y + 4), f'{("Saber", "April")[h]} {("stand", "run", "fall")[pose]} aim={aim} shoot={shoot}', fill='white')
         out.save(args.sheet)
-    print(f'{checked} poses passed: connected falling hips, animated diagonal barrel origins, roof drops and first shots')
+    assert len(draw_frames) == checked
+    print(f'{checked} poses passed: cropped run legs, connected falling hips, diagonal barrel origins, roof drops and first shots')
 
 
 if __name__ == '__main__':

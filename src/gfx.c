@@ -280,10 +280,15 @@ void cblock_tint(const CBlock *c, uint8_t r, uint8_t g, uint8_t b)
 
 void cblock_draw_tile(const CBlock *c, int t, real x, real y, bool flip)
 {
-    if (t < 0 || t >= c->ntiles) return;
+    cblock_draw_tile_rows(c, t, x, y, flip, 0);
+}
+
+void cblock_draw_tile_rows(const CBlock *c, int t, real x, real y, bool flip, int first_row)
+{
+    if (t < 0 || t >= c->ntiles || first_row < 0 || first_row >= c->th) return;
     RTex *tex = cblock_tex(c);
-    RFRect src = { r_int((t % c->sheet_cols) * c->tw), r_int((t / c->sheet_cols) * c->th), r_int(c->tw), r_int(c->th) };
-    RFRect dst = { x, y, r_int(c->tw), r_int(c->th) };
+    RFRect src = { r_int((t % c->sheet_cols) * c->tw), r_int((t / c->sheet_cols) * c->th + first_row), r_int(c->tw), r_int(c->th - first_row) };
+    RFRect dst = { x, y + r_int(first_row), r_int(c->tw), r_int(c->th - first_row) };
     if (flip) r_tex_rot(R, tex, &src, &dst, 0, NULL, R_FLIP_H);
     else r_tex(R, tex, &src, &dst);
 }
