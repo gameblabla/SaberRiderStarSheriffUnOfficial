@@ -25,7 +25,8 @@ static CBlock *april_sheet(void)
 }
 
 /* Saber's CRHC (0x8403195A, the game's "default" player id) ships Fireball's animation table. His sheet fills
- * its fixed 8x19 layout; hero_patch_def selects his separate falling aim torsos (../heroes/build_saber_engine_sheet.py). */
+ * its original 8x19 layout plus breathing / salute cells (tools/build_saber_idle.py);
+ * hero_patch_def selects his idle cycle and separate falling aim torsos. */
 static CBlock *saber_sheet(void)
 {
     static CBlock *cb; static bool tried;
@@ -76,6 +77,14 @@ const char *hero_name(int character)
 typedef struct { int anim, first, last, loop; real frame_time; } AnimPatch;
 #define APRIL_BORED_L 53
 #define APRIL_BORED_R 54
+/* Slots are per character definition, so Saber can share April's bored slots. */
+#define SABER_BORED_L 53
+#define SABER_BORED_R 54
+static const AnimPatch SABER_ANIMS[] = {
+    { 1, 152, 163, 152, R(0.10f) }, { 2, 168, 179, 168, R(0.10f) },
+    { SABER_BORED_L, 184, 196, 196, R(0.10f) },
+    { SABER_BORED_R, 200, 212, 212, R(0.10f) },
+};
 static const AnimPatch APRIL_ANIMS[] = {
     { 1, 168, 173, 168, R(0.10f) }, { 2, 176, 181, 176, R(0.10f) },     /* idle L / R */
     { 4, 168, 173, 168, R(0.10f) }, { 7, 176, 181, 176, R(0.10f) },     /* alert L / R = idle */
@@ -155,6 +164,14 @@ void hero_quiet(bool quiet) { g_quiet = quiet; }
 
 void hero_patch_def(CharDef *d)
 {
+    if (d->crhc_id == CRHC_DEFAULT) {
+        for (size_t i = 0; i < sizeof SABER_ANIMS / sizeof *SABER_ANIMS; i++) {
+            const AnimPatch *p = &SABER_ANIMS[i];
+            AnimDef *a = &d->anims[p->anim];
+            a->first = p->first; a->last = p->last; a->loop = p->loop; a->frame_time = p->frame_time;
+        }
+        d->hurt[SABER_BORED_L] = d->hurt[1]; d->hurt[SABER_BORED_R] = d->hurt[2];
+    }
     if (d->crhc_id == CRHC_APRIL || d->crhc_id == CRHC_DEFAULT) {
         /* Falling needs the aim torso that fits the fall legs, rather than the first running torso. Fireball's
          * original art reuses that run cell, but the reconstructed sheets have different hip positions. */
@@ -197,6 +214,8 @@ bool hero_apply(Character *c)
         c->run_shadow_x[0] = R(5); c->run_shadow_x[1] = R(-5); c->shadow_half = R(21);
         /* Idle feet occupy columns [17,45) / [19,47), with the sprite origin at 32. */
         c->idle_shadow_x[0] = R(-1); c->idle_shadow_x[1] = R(1);
+        c->bored_anim[0] = SABER_BORED_L; c->bored_anim[1] = SABER_BORED_R; c->bored_time = R(10.0f);
+        if (plat_getenv("SABER_BORED")) c->bored_time = r_parse(plat_getenv("SABER_BORED"), NULL);
         /* Jump-cycle union: [16,47) / [15,47); falling legs: [24,40) in both directions. */
         c->jump_shadow_x[0] = R(-0.5f); c->jump_shadow_x[1] = R(-1);
         c->fall_shadow_x[0] = c->fall_shadow_x[1] = 0;

@@ -411,7 +411,9 @@ void player_resolve(Character *c, real dt)
             c->idle_t += dt;
             if (c->bored_anim[0] >= 0 && c->idle_t >= c->bored_time) {   /* play the bored animation once, then sway again */
                 int bored = c->bored_anim[L ? 0 : 1];
-                if (c->anim == bored && c->frame >= c->def->anims[bored].last) c->idle_t = 0;
+                const AnimDef *a = &c->def->anims[bored];
+                /* Let the final pose finish its frame time before returning to idle. */
+                if (c->anim == bored && c->frame >= a->last && c->anim_t + dt >= a->frame_time) c->idle_t = 0;
                 else body = bored;
             }
         }

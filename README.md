@@ -159,7 +159,10 @@ level shots on the move keep the clip pixels while the up / down diagonals draw 
 legs) and the jumping jacks + wave she plays after 10 s of standing still are the artist's own clip frames; the rest
 of the sheet is recovered from the archived 700 px sheet by `../heroes/learn_inverse.py` (a U-Net trained on the
 game's own sprites under the sheet's exact bicubic downscale, then a joint palette solve against the sheet).
-Saber Rider and Colt stay "not available". Assets are looked up in
+Saber Rider and Colt also use reconstructed sheets. Saber's normal idle breathes with his gun lowered;
+after 10 s of standing idle he salutes once, then resumes breathing. These frames come from the green-screen
+tweet clip, extracted at its native 10 fps by `tools/build_saber_idle.py` and appended to `assets/saber.png`.
+His alert and aim poses retain the gun-ready art. Assets are looked up in
 `$SABER_ASSETS`, `./assets` and next to the executable.
 
 ## Stage 2 — "The All Galaxy Grand Prix" (Mode-7)
@@ -441,7 +444,7 @@ moves. The Dreamcast pad layout stays fixed.
 `SABER_START=x` spawn at level x · `SABER_MENU=n` start in front-end state n · `SABER_SHOT=file.bmp,camx,steps`
 screenshot after N fixed steps and quit · `SABER_SCRIPT="60:R,3:RJ,40:"` scripted input (L R U D J S A P, X power) ·
 `SABER_TRACE=1` per-frame player trace (+ spawn triggers at start, convoy spawn / dying / stuck-enemy diagnostics, every humanoid once a second, boss state every 10 frames; `=2` also prints humanoids within 40 px of either screen edge every frame) · `SABER_FUZZ=1` random input ·
-`SABER_HERO=n` hero 0..3 for a direct level start · `SABER_LIVES=n` starting lives · `SABER_KILL=n` kill the player at step n · `SABER_BOSSHP=n` the horse boss's / Hyperjumper's HP · `SABER_BORED=s` seconds of idling before the bored animation (April) · `SABER_DEBUG=1` collision overlay from the start · `SABER_WINDOW=852x480` initial window size · **F1** collision overlay · **F2** free camera.
+`SABER_HERO=n` hero 0..3 for a direct level start · `SABER_LIVES=n` starting lives · `SABER_KILL=n` kill the player at step n · `SABER_BOSSHP=n` the horse boss's / Hyperjumper's HP · `SABER_BORED=s` seconds of idling before the bored animation (April / Saber) · `SABER_DEBUG=1` collision overlay from the start · `SABER_WINDOW=852x480` initial window size · **F1** collision overlay · **F2** free camera.
 `SABER_PERF=1` a line a second on stderr (the serial log on the Dreamcast): the camera, live enemies, update and draw
 time (average / worst), the worst frame, frames that ran no step or two and more, the Dreamcast's draw count, and pack reads
 (a read in the middle of a level is a stall).
