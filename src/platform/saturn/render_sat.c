@@ -729,9 +729,21 @@ static void polygon(const int32_t *xy, uint8_t R, uint8_t G, uint8_t B, uint8_t 
         if (v[i * 2 + 1] > maxy) maxy = v[i * 2 + 1];
     }
     if (maxx < c.x || maxy < c.y || minx >= c.x + c.w || miny >= c.y + c.h) return;
+    uint16_t color = rgb555(R, G, B);
+    if (depth_reg && bl == R_BLEND_NONE) {
+        /* Opaque world polygons (ground shadows) must share the actors' VDP2 priority. An RGB colour always
+         * takes the front priority, even when the polygon was submitted before a palette character. A single
+         * white palette entry tinted by the draw colour gives this polygon a normal palette sprite code. */
+        static const uint8_t white_pal[2] = { 0x7F, 0xFF };
+        static RTex solid = { .pal = white_pal, .npal = 1 };
+        int bank = cram_bank(&solid, R, G, B);
+        if (bank < 0) return;
+        color = (uint16_t)((bank + 1) | depth_reg << 12);
+        pal_drawn = true;
+    }
     pm |= clip_bits(&c, minx, miny, maxx, maxy);
     Cmd *k = cmd_new(); if (!k) return;
-    k->ctrl = C_POLYGON; k->pmod = pm; k->colr = rgb555(R, G, B);
+    k->ctrl = C_POLYGON; k->pmod = pm; k->colr = color;
     memcpy(&k->xa, v, sizeof v);
     ren.prims++;
 }

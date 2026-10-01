@@ -209,7 +209,8 @@ def cblock_frames(px: np.ndarray, meta: bytes) -> tuple[np.ndarray, list[tuple[i
 def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log, force8: set[int] = frozenset()) -> None:
     """every pack sprite / cblock / font through the game's own gfx.c (tools/dc/texprep.c), then our PNGs"""
     texprep = work / 'texprep'
-    subprocess.run(['cc', '-O2', '-std=gnu11', '-Isrc', 'tools/dc/texprep.c', 'src/gfx.c', 'src/font.c', 'src/pack.c',
+    # Saturn keeps the convoy horses' original opaque bitmap shadows, including the whole-frame baked variants.
+    subprocess.run(['cc', '-O2', '-std=gnu11', '-DGFX_KEEP_HORSE_SHADOWS=1', '-Isrc', 'tools/dc/texprep.c', 'src/gfx.c', 'src/font.c', 'src/pack.c',
                     'src/lzo1z.c', 'src/assets.c', 'src/namehash.c', '-o', str(texprep)], cwd=ROOT, check=True)
     dumps = work / 'srgb'
     fresh(dumps)

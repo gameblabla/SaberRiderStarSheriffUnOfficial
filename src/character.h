@@ -58,6 +58,9 @@ typedef struct {
     int8_t torso_bob[8];        /* px the hip drops on each run legs frame: every torso overlay rides it (Fireball's art: cells 2 and 5 sit 1 px lower) */
     uint8_t walk_aim_ov;        /* WALK_AIM_*: which aim / shoot torso overlays replace the run torso while walking */
     bool ov_sync;               /* a torso overlay with the legs' frame count and rate starts in phase with the legs (April: the run torso is the clip frames' upper half, so it must sit on its own legs frame) */
+    real fall_torso_y;          /* reconstructed sheet's hip alignment for level/diagonal falling torsos */
+    real run_shadow_x[2], shadow_half;   /* L/R stride centers; shadow radius shared by all poses */
+    real shadow_x;              /* smoothed pose offset; world movement follows the body immediately */
     int bored_anim[2];          /* L/R animation played once after idling for bored_time seconds (-1: none; April's stretch) */
     real bored_time, idle_t;
     real base_ox, base_oy;   /* +0x1c/+0x20 */
@@ -85,6 +88,8 @@ void character_set_overlay(Character *c, int anim);       /* FUN_0041b570 */
 void player_resolve(Character *c, real dt);              /* FUN_0041c530 */
 void character_animate(Character *c, real dt);           /* SpriteAnimation update */
 void character_draw(const Character *c, real cam_x, real cam_y);
+void body_draw_shadow(const Body *b, const Level *L, real cam_x, real cam_y, int sw, int sh);
+void character_draw_shadow(const Character *c, const Level *L, real cam_x, real cam_y, int sw, int sh);
 /* input helpers (FUN_0041d740..) */
 void character_move_left(Character *c, int vdir);
 void character_move_right(Character *c, int vdir);

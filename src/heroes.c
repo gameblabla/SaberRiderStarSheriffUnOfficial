@@ -24,9 +24,8 @@ static CBlock *april_sheet(void)
     return cb;
 }
 
-/* Saber's CRHC (0x8403195A, the game's "default" player id) already ships an animation table byte-identical to
- * Fireball's own (see hero_apply below), so his sheet only has to fill Fireball's fixed 8x19 layout - no
- * AnimPatch table, unlike April (../heroes/build_saber_engine_sheet.py). */
+/* Saber's CRHC (0x8403195A, the game's "default" player id) ships Fireball's animation table. His sheet fills
+ * its fixed 8x19 layout; hero_patch_def selects his separate falling aim torsos (../heroes/build_saber_engine_sheet.py). */
 static CBlock *saber_sheet(void)
 {
     static CBlock *cb; static bool tried;
@@ -71,7 +70,7 @@ const char *hero_name(int character)
 }
 
 /* animation table changes: April's clip has a 6-frame idle sway followed by a 20-frame crouch + jumping jacks + wave
- * (10 fps; played once after 10 s of idling), 7 run frames (legs + torso overlay cells, both from the clip) and 8
+ * (10 fps; played once after 10 s of idling), 6 run frames (legs + torso overlay cells, both from the clip) and 8
  * death frames.  The "alert" pose (anims 4/7, held for
  * alert_time after shooting / landing) is the sway itself: her sheet has no clean alert art. */
 typedef struct { int anim, first, last, loop; real frame_time; } AnimPatch;
@@ -81,8 +80,10 @@ static const AnimPatch APRIL_ANIMS[] = {
     { 1, 168, 173, 168, R(0.10f) }, { 2, 176, 181, 176, R(0.10f) },     /* idle L / R */
     { 4, 168, 173, 168, R(0.10f) }, { 7, 176, 181, 176, R(0.10f) },     /* alert L / R = idle */
     { APRIL_BORED_L, 184, 204, 204, R(0.10f) }, { APRIL_BORED_R, 208, 228, 228, R(0.10f) },   /* bored jump + wave L / R */
-    { 36, 80, 86, 80, R(0.10f) }, { 37, 104, 110, 104, R(0.10f) },      /* run legs L / R */
-    { 38, 64, 70, 64, R(0.10f) }, { 39, 88, 94, 88, R(0.10f) },         /* run torso overlays L / R (the clip frames' upper half + ponytail) */
+    /* The seventh recovered clip cell repeats the sixth pose with codec noise. Including it holds that stride
+     * twice before wrapping; the actual cycle is the first six poses. */
+    { 36, 80, 85, 80, R(0.10f) }, { 37, 104, 109, 104, R(0.10f) },      /* run legs L / R */
+    { 38, 64, 69, 64, R(0.10f) }, { 39, 88, 93, 88, R(0.10f) },         /* matching run torso overlays */
     { 50, 152, 159, 159, R(0.10f) }, { 51, 160, 167, 167, R(0.10f) },   /* death L / R */
     { 52, 168, 168, 168, R(4.0f) },
 };
@@ -154,6 +155,12 @@ void hero_quiet(bool quiet) { g_quiet = quiet; }
 
 void hero_patch_def(CharDef *d)
 {
+    if (d->crhc_id == CRHC_APRIL || d->crhc_id == CRHC_DEFAULT) {
+        /* Falling needs the aim torso that fits the fall legs, rather than the first running torso. Fireball's
+         * original art reuses that run cell, but the reconstructed sheets have different hip positions. */
+        d->anims[20].first = d->anims[20].last = d->anims[20].loop = 72;
+        d->anims[23].first = d->anims[23].last = d->anims[23].loop = 96;
+    }
     if (d->crhc_id != CRHC_APRIL) return;
     for (size_t i = 0; i < sizeof APRIL_ANIMS / sizeof *APRIL_ANIMS; i++) {
         const AnimPatch *p = &APRIL_ANIMS[i];
@@ -166,12 +173,16 @@ void hero_patch_def(CharDef *d)
 bool hero_apply(Character *c)
 {
     if (c->crhc_id != CRHC_APRIL && c->crhc_id != CRHC_FIREBALL && c->crhc_id != CRHC_COLT && c->crhc_id != CRHC_DEFAULT) return false;   /* enemies */
+    /* The full stride's leg span, measured across the six sheet cells: use one center per direction so the
+     * shadow follows the artwork without wobbling between poses. The stride width sets the footprint for every
+     * pose, including standing and crouching. Fireball and Colt share the same leg art. */
+    c->run_shadow_x[0] = R(9.5f); c->run_shadow_x[1] = R(-3.5f); c->shadow_half = R(17.5f);
     if (!g_quiet) sfx_clear_overrides();   /* the player is re-created on every level start; Fireball keeps the pack's samples */
     if (c->crhc_id == CRHC_DEFAULT) {
         if (!g_quiet) saber_sfx();
         CBlock *cb = saber_sheet();
         if (!cb) return false;
-        c->cb = cb; c->spr = NULL;   /* table is already Fireball's own layout: no anim/hurtbox patches needed */
+        c->cb = cb; c->spr = NULL;   /* inherited layout, with falling torso cells selected by hero_patch_def */
         /* but the run art is not Fireball's: the master's rows 10 / 11 are one figure cut at the hip per frame
          * (like April's clip halves), so torso frame k only fits on legs frame k; the figure bobs 0/2/4 px through
          * the stride (heroes/build_saber_engine_sheet.py prints it), which the packer takes out of the torso cells
@@ -179,6 +190,8 @@ bool hero_apply(Character *c)
         static const int8_t saber_bob[8] = { 0, 2, 4, 0, 2, 4 };
         memcpy(c->torso_bob, saber_bob, sizeof c->torso_bob);
         c->ov_sync = true;
+        c->fall_torso_y = R(1);   /* aim torso ends at row 37; fall legs start at 39 */
+        c->run_shadow_x[0] = R(5); c->run_shadow_x[1] = R(-5); c->shadow_half = R(21);
         return true;
     }
     if (c->crhc_id == CRHC_COLT) {
@@ -193,6 +206,7 @@ bool hero_apply(Character *c)
     CBlock *cb = april_sheet();
     if (!cb) return false;
     c->cb = cb; c->spr = NULL;
+    c->run_shadow_x[0] = R(5); c->run_shadow_x[1] = R(-4.5f); c->shadow_half = R(19);
     memset(c->torso_bob, 0, sizeof c->torso_bob);   /* Fireball's run legs bob 1 px on cells 2 and 5; April's do not */
     c->ov_sync = true;         /* run torso frame k belongs on run legs frame k */
     c->walk_aim_ov = WALK_AIM_DIAG;   /* the run torso (clip pixels, gun held level) stays for level shots; up / down diagonals use the sheet's aim torsos over the clip legs */

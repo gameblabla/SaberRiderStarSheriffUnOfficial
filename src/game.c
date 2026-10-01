@@ -731,6 +731,9 @@ void game_draw(Game *g)
     bool hero_drawn = false;
     const Body *hb = &g->player.ch.body;
     bool in_cabin = g->forest_on && forest_on_deck(L, hb->x, hb->y + hb->oy + hb->hy);
+    /* The foreground roof lip may cover a grounded character's feet. Once airborne, draw the entire composite
+     * after that layer so walking/jumping down from a roof cannot cut through the legs or torso. */
+    bool hero_in_front = !(hb->coll & COLL_DOWN) || (g->forest_on && !in_cabin);
     for (int i = 0; i < L->nlayers; i++) {
         r_set_depth(g->ren, i);   /* the sprites drawn now sit at this layer (render.h: for hardware planes) */
         if (L->layers[i].is_tilemap) {
@@ -744,12 +747,11 @@ void game_draw(Game *g)
             } else level_draw_layer(L, i, g->cam_x, g->cam_y, g->sw, g->sh);
             /* stage 4: Hyperjumper flies over the towers, not behind their walls */
             if (g->forest_on && i == g->enemies.front_layer) night_draw_layer(&g->night, g->ren, g->night.play_layer, g->cam_x, g->cam_y);
-            /* stage 4: the tower railings hide the gunmen in the cabins, and the hero too once he is up on a deck;
-               jumping up through one from below he stays in front (half a hero behind a plank, the rest in front
-               of the tower, read as the sprite being cut) */
-            if (g->forest_on && !hero_drawn && i > g->player_layer && !strcmp(L->layers[i].name, "ForegroundStuff")) {
+            if (hero_in_front && !hero_drawn && i > g->player_layer && !strcmp(L->layers[i].name, "ForegroundStuff")) {
+                r_set_depth(g->ren, i + 1);   /* above the roof even when it is a retained hardware plane */
                 if (g->state != 0xb) draw_hero(g);
                 hero_drawn = true;
+                r_set_depth(g->ren, i);
             }
             if (i == g->enemies.front_layer) {   /* stage 4: a tower sniper's rifle over his cabin wall, his shots and flash */
                 enemies_draw_front(&g->enemies, g->cam_x, g->cam_y);
@@ -758,18 +760,42 @@ void game_draw(Game *g)
             }
         }
         else {
+            /* Shadows precede every actor in the layer, so one actor's shadow cannot paint over another actor. */
+            for (int k = 0; k < MAX_ENEMIES; k++) {
+                const Enemy *e = &g->enemies.e[k];
+                /* Cutscene Outriders and end-of-level gunmen are visible characters too; only scenery props
+                 * are excluded from the actor shadow pass. */
+                if (!e->cls || e->layer != i || (e->cls >= EC_PROP && e->cls < EC_STAMPEDE) ||
+                    !e->ch.def || e->ch.anim >= CHAR_MAX_ANIMS) continue;
+#ifdef PLAT_SATURN
+                if (e->cls == EC_BUGGY) continue;   /* convoy horses retain their original bitmap shadows */
+#endif
+                character_draw_shadow(&e->ch, L, g->cam_x, g->cam_y, g->sw, g->sh);
+            }
+            if ((g->night_on || g->forest_on) && i == g->night.play_layer &&
+                g->night.state >= HJ_SIDE_IN && g->night.state < HJ_DONE) {
+                Body ship = { .x = g->night.bx, .y = g->night.by, .hx = R(28), .hy = R(24) };
+                body_draw_shadow(&ship, L, g->cam_x, g->cam_y, g->sw, g->sh);
+            }
+            if (i == g->player_layer && g->lab_on && g->dark.state >= DA_APPEAR &&
+                g->dark.state <= DA_DYING && g->dark.alpha > 0)
+                character_draw_shadow(&g->dark.p.ch, L, g->cam_x, g->cam_y, g->sw, g->sh);
+            if (i == g->player_layer && g->state != 0xb)
+                character_draw_shadow(&g->player.ch, L, g->cam_x, g->cam_y, g->sw, g->sh);
             enemies_draw(&g->enemies, i, g->cam_x, g->cam_y);
             if (g->night_on || (g->forest_on && (i != g->night.play_layer || g->enemies.front_layer < 0)))
                 night_draw_layer(&g->night, g->ren, i, g->cam_x, g->cam_y);   /* Hyperjumper's passes use the level-1 boss layers */
             if (i == g->player_layer && g->lab_on) dark_draw(&g->dark, g->cam_x, g->cam_y);   /* stage 5: Dark April, behind the hero */
-            if (i == g->player_layer && (!g->forest_on || in_cabin) && g->state != 0xb) draw_hero(g);
-            if (i == g->player_layer && in_cabin) hero_drawn = true;   /* the last life is gone: no respawned hero standing there during the fade */
+            if (i == g->player_layer && !hero_in_front) {
+                if (g->state != 0xb) draw_hero(g);
+                hero_drawn = true;   /* the last life is gone: no respawned hero during the fade */
+            }
             bullets_draw(&g->player_bullets, i, g->cam_x, g->cam_y);
             bullets_draw(&g->enemy_bullets, i, g->cam_x, g->cam_y);
             effects_draw(&g->effects, i, g->cam_x, g->cam_y);
         }
     }
-    if (g->forest_on && !hero_drawn && g->state != 0xb) draw_hero(g);
+    if (!hero_drawn && g->state != 0xb) { r_set_depth(g->ren, -1); draw_hero(g); }
     r_set_depth(g->ren, -1);
     g->cam_y = saved;
     hud_draw(g->ren, g->menu.character, g->player.max_hp, g->player.lives, g->player.hp, g->power.items);   /* the item count = power attacks left */

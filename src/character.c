@@ -95,6 +95,7 @@ void character_reset(Character *c, bool enemy)
     c->flags = enemy ? 0x102 : 0x002;
     c->alert_t = c->alert_time;
     c->hit_t = 0; c->base_ox = c->base_oy = 0; c->muzzle_x = c->muzzle_y = 0;
+    c->shadow_x = c->body.ox;
 }
 
 /* FUN_0041ba90: pull collision result from physics into the state machine */
@@ -184,6 +185,14 @@ void character_set_overlay(Character *c, int anim)
 /* SpriteAnimation::update for one entity */
 void character_animate(Character *c, real dt)
 {
+    if (c->shadow_half > 0 && dt > 0) {
+        real target = c->state == CS_WALK ? c->run_shadow_x[c->facing ? 1 : 0] : c->body.ox;
+        real delta = target - c->shadow_x;
+        /* Ease only the pose offset (about 0.08 s to settle), never the character's world position. The
+         * bounded time-based blend stays smooth on both fixed-point and variable-rate platforms. */
+        if (r_abs(delta) < R(0.05f)) c->shadow_x = target;
+        else c->shadow_x += r_mul(delta, r_div(dt, R(0.02f) + dt));
+    }
     if (c->anim >= CHAR_MAX_ANIMS) return;
     const AnimDef *a = &c->def->anims[c->anim];
     if (a->frame_time <= 0) return;
@@ -194,6 +203,13 @@ void character_animate(Character *c, real dt)
     }
     const AnimDef *o = &c->def->anims[c->overlay];
     if (o->frame_time > 0) {
+        if (c->ov_sync && o->last - o->first == a->last - a->first && o->frame_time == a->frame_time) {
+            /* The base can restart while the overlay id stays unchanged (landing or changing direction).
+             * Keep both halves on the same pose throughout playback, including cycle wrap. */
+            c->ov_frame = o->first + (c->frame - a->first);
+            c->ov_t = c->anim_t;
+            return;
+        }
         c->ov_t += dt;
         while (c->ov_t >= o->frame_time) { c->ov_t -= o->frame_time; c->ov_frame = (c->ov_frame < o->last) ? c->ov_frame + 1 : o->loop; }
     }
@@ -294,6 +310,76 @@ void character_draw(const Character *c, real cam_x, real cam_y)
     if (c->overlay) draw_cell(c, c->ov_frame, (int)(c->def->anims[c->overlay].flags & 0xff), x + c->base_ox, y + oy);
 }
 
+/* A small oval projected onto the nearest collision surface below the feet. Three disjoint bands avoid alpha
+ * accumulating inside the oval, and need no additional texture or disc asset on the consoles. */
+static void draw_shadow(const Body *b, const Level *L, real cam_x, real cam_y, int sw, int sh,
+                        real cx, real half)
+{
+    if (!L->collision || L->cellw <= 0 || L->cellh <= 0) return;
+    real feet = b->y + b->oy + b->hy;
+    if (cx + half < cam_x || cx - half >= cam_x + r_int(sw)) return;
+    /* Find support under the physical feet even when the running art leans beyond a platform edge. */
+    int col = r_floor(r_div(b->x + b->ox, r_int(L->cellw)));
+    int row = r_floor(r_div(feet - R(1), r_int(L->cellh)));
+    if (col < 0 || col >= L->cols) return;
+    if (row < 0) row = 0;
+    int last = r_floor(r_div(feet + R(192), r_int(L->cellh)));
+    if (last >= L->rows) last = L->rows - 1;
+    for (; row <= last; row++) {
+        if (!(level_cell(L, col, row) & 4)) continue;
+        /* Ignore a roof being dropped through and interior cells of a solid wall. Scripted horses ignore
+         * collision with all terrain, but still cast a shadow on the floor they gallop over. */
+        real surface = r_int(row * L->cellh);
+        if ((level_cell(L, col, row - 1) & 4) ||
+            ((b->flags & PHYS_IGNORE_DOWN) && !(b->flags & PHYS_NO_GRAVITY) && surface <= feet + R(1))) continue;
+        real altitude = r_max(0, surface - feet);
+        half = r_mul(half, R(1) - r_mul(r_min(altitude, R(192)), R(0.002f)));
+        real y = surface - cam_y;
+        if (y < R(-4) || y >= r_int(sh) + R(3)) return;
+        /* Limit the oval to the connected surface, with 3 px of overhang to keep edge clipping from pulling
+         * its apparent center sideways as the character runs past a roof edge or a ramp step. */
+        int left = col, right = col;
+        int reach = r_ceil(r_div(half, r_int(L->cellw))) + 1;
+        while (left > 0 && col - left < reach && (level_cell(L, left - 1, row) & 4) &&
+               !(level_cell(L, left - 1, row - 1) & 4)) left--;
+        while (right + 1 < L->cols && right - col < reach && (level_cell(L, right + 1, row) & 4) &&
+               !(level_cell(L, right + 1, row - 1) & 4)) right++;
+        Ren *ren = gfx_renderer();
+#ifdef PLAT_SATURN
+        /* Fully opaque VDP1 polygons: neither half transparency nor mesh mode. */
+        r_set_draw_blend(ren, R_BLEND_NONE);
+        r_set_draw_color(ren, 16, 16, 24, 255);
+#else
+        r_set_draw_blend(ren, R_BLEND_BLEND);
+        r_set_draw_color(ren, 0, 0, 0, (uint8_t)(96 - r_trunc(altitude / 4)));
+#endif
+        for (int band = 0; band < 3; band++) {
+            real hw = band == 1 ? half : r_mul(half, R(0.7f));
+            real x0 = r_max(cx - hw, r_int(left * L->cellw) - R(3));
+            real x1 = r_min(cx + hw, r_int((right + 1) * L->cellw) + R(3));
+            RFRect q = { r_floorr(x0 - cam_x), r_floorr(y) - R(2) + r_int(band * 2),
+                         r_floorr(x1) - r_floorr(x0), R(2) };
+            if (q.w > 0) r_fill_rect(ren, &q);
+        }
+        r_set_draw_blend(ren, R_BLEND_BLEND);
+        r_set_draw_color(ren, 255, 255, 255, 255);
+        return;
+    }
+}
+
+void body_draw_shadow(const Body *b, const Level *L, real cam_x, real cam_y, int sw, int sh)
+{
+    draw_shadow(b, L, cam_x, cam_y, sw, sh, b->x + b->ox, r_min(R(40), r_max(R(10), b->hx + R(4))));
+}
+
+void character_draw_shadow(const Character *c, const Level *L, real cam_x, real cam_y, int sw, int sh)
+{
+    real cx = c->body.x + (c->shadow_half > 0 ? c->shadow_x : c->body.ox);
+    real half = c->shadow_half > 0 ? c->shadow_half : r_min(R(40), r_max(R(10), c->body.hx + R(4)));
+    /* Every pose uses the same footprint; its center eases toward the current art offset. */
+    draw_shadow(&c->body, L, cam_x, cam_y, sw, sh, cx, half);
+}
+
 /* FUN_0041c530: player state -> legs anim, torso overlay anim, muzzle base offset, horizontal velocity */
 void player_resolve(Character *c, real dt)
 {
@@ -340,6 +426,7 @@ void player_resolve(Character *c, real dt)
             else if (aim == 6) { DOWNBASE(); ov = shoot ? 0x23 : 0x1b; }
             else if (L) ov = shoot ? (aim == 1 ? 0x1d : aim == 7 ? 0x1e : 0x1c) : (aim == 1 ? 0x15 : aim == 7 ? 0x16 : 0x14);
             else ov = shoot ? (aim == 3 ? 0x20 : aim == 5 ? 0x21 : 0x1f) : (aim == 3 ? 0x18 : aim == 5 ? 0x19 : 0x17);
+            if (aim != AIM_U && aim != AIM_D) c->base_oy += c->fall_torso_y;
         }
         if (c->state == CS_AIR && (c->coll & (L ? COLL_LEFT : COLL_RIGHT))) c->state = CS_FALL;
         break; }

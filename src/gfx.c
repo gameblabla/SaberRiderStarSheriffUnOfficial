@@ -130,7 +130,16 @@ static void sheet_rows(void *ud, int y0, int n, uint32_t *out)
             uint32_t *o = out + k * c->tw;
             if (t >= c->ntiles) { memset(o, 0, (size_t)c->tw * 4); continue; }
             const uint8_t *src = s->raw + ((size_t)t * c->tw * c->th + (size_t)py * c->tw) * 2;
-            for (int x = 0; x < c->tw; x++) o[x] = argb1555_to_rgba(rd16(src + x * 2));
+            for (int x = 0; x < c->tw; x++) {
+                uint16_t v = rd16(src + x * 2);
+#if !defined(PLAT_SATURN) && !defined(GFX_KEEP_HORSE_SHADOWS)
+                /* The convoy horse's five frames use this colour only for the opaque ground shadows
+                 * (rows 63..76). Replace them with the shared translucent actor shadow. texprep uses this
+                 * same decoder for Dreamcast; Saturn's texture baker explicitly preserves the original art. */
+                if (c->id == 0x8873D18Cu && v == 0x9065u) v = 0;
+#endif
+                o[x] = argb1555_to_rgba(v);
+            }
         }
     }
 }
