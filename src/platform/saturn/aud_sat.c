@@ -11,7 +11,7 @@
  * 0x2000 gives the driver a sample's address by id. Every sample is encoded looping at its start: the word at +2 (the
  * loop block) says whether it plays once (the block count: it then loops its silent tail) or loops (1).
  * Music: CD-DA through the DSP's CD input (cd_sat.c plays the tracks; MUSIC.TXT maps a music id to its track).
- * Movies: video_sat.c brackets a clip with aud_movie_begin / aud_movie_end. The 68000 is stopped and the film player
+ * Movies: video_sat.c brackets a clip with aud_movie_begin / aud_movie_end. The 68000 runs an idle program and the film player
  * drives slots 0-1 over its ring at MOVIE_OFF itself (film_pcm_*); the bank below it survives, so afterwards only the
  * 8 KB driver is copied in again. A clip played from RAM (the briefing) leaves the drive to the music: the CD input then
  * goes straight to the output (slots 16 / 17's EFSDL, the DSP is off) and the music plays on under it.
@@ -123,6 +123,19 @@ static void scsp_quiet(void)
         wait_samples(256);
     }
     SCSP_SCIRE = 0xFFFF; SCSP_MCIRE = 0xFFFF;
+}
+
+/* Sega Technical Bulletin #51: SNDOFF is only for loading a program; the
+ * sound CPU must run even when the SH-2 owns the SCSP. Keep it fetching an
+ * idle loop throughout a movie instead of holding it in reset for seconds.
+ * Only the driver's area is replaced; the resident sample bank survives.
+ * Reset starts with SR=$2700, so this program needs no interrupt vectors. */
+static void movie_cpu_start(void)
+{
+    SND16(0) = 0; SND16(2) = 0x80;   /* initial SSP */
+    SND16(4) = 0; SND16(6) = 8;      /* initial PC */
+    SND16(8) = 0x60FE;               /* BRA.S to itself */
+    snd_cpu(true);
 }
 
 static bool driver_start(void)
@@ -382,6 +395,7 @@ void aud_movie_begin(bool music)
     if (movie) return;
     for (int i = 0; i < CHANNELS; i++) { voice_release(&voices[i]); voices[i].action = 0; }
     scsp_quiet();
+    movie_cpu_start();   /* restart immediately after loading, before movie bookkeeping */
     for (int i = 0; i < CHANNELS; i++) {
         voices[i].hw_s = voices[i].pending_s = NULL;
         voices[i].pending_action = 0;

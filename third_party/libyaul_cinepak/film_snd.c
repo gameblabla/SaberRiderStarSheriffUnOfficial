@@ -4,6 +4,12 @@
 #define AUDIO_CONFIRM_TIMER_CYCLE      EverySamples4
 #define AUDIO_CONFIRM_SAMPLES_PER_TICK (256 * 4)
 #define AUDIO_CONFIRM_MASTER_RATE      (44100L)
+/* Sega SCSP manual 4.2.12: pending flags can be polled with interrupts
+ * disabled. Use word accesses and literal write-one-to-clear masks; C
+ * bitfields can read adjacent/write-only registers or clear other flags. */
+#define FILM_SCSP(off) (*(volatile uint16_t *)(SNDRAM + 0x00100000u + (off)))
+#define FILM_TIMER_C 0x0100u
+#define FILM_TIMER_C_RELOAD ((uint16_t)AUDIO_CONFIRM_TIMER_CYCLE << 8)
 
 static cpu_dmac_cfg_t pcm_cfg = {
   .channel = 0,
@@ -106,9 +112,9 @@ void readPcmBytesFromRingBuff(
 }
 
 void pollAudioConfirmTimer(void) {
-  if (SndCpuInterruptPending->timerC) {
-    SndCpuInterruptReset->timerC = 1;
-    SndTimerRegisterC->countData = 0;
+  if (FILM_SCSP(0x42C) & FILM_TIMER_C) {
+    FILM_SCSP(0x42E) = FILM_TIMER_C;
+    FILM_SCSP(0x41C) = FILM_TIMER_C_RELOAD;
 
     audioConfirmedConsumedBytes += audioBytesPerTimerTick;
   }
@@ -224,7 +230,7 @@ void film_audio_setup(decode_work_t *work, int16_t frequency,
   audioTotalWrittenBytes = 0;
 }
 
-/* The clip starts: its slots (the platform's film_pcm_*, the 68000 stopped) and SCSP timer C, which counts what the
+/* The clip starts: its slots (the platform's film_pcm_*, the 68000 in an idle loop) and SCSP timer C, which counts what the
    slots have played. */
 void film_audio_hw_begin(void) {
   if (!filmAudioChannels) return;
@@ -246,10 +252,8 @@ void film_audio_hw_begin(void) {
   cpu_divu_32_32_set((int32_t) filmAudioRate * bytesPerSample, 1000);
   audioExpectedBytesPerMs = cpu_divu_quotient_get();
 
-  setIncrement(SndTimerRegisterC, AUDIO_CONFIRM_TIMER_CYCLE);
-  SndTimerRegisterC->countData = 0;
-  SndCpuInterruptReset->timerC = 1;
-  SndCpuInterruptEnable->timerC = 1;
+  FILM_SCSP(0x41C) = FILM_TIMER_C_RELOAD;
+  FILM_SCSP(0x42E) = FILM_TIMER_C;
 }
 
 void film_audio_prepare_to_play() {}
@@ -258,7 +262,7 @@ void film_audio_reset() {
   /* Drain any final PCM copy before the movie buffer is freed or the game
      sound driver takes the SCSP back. */
   cpu_dmac_channel_wait(0);
-  SndCpuInterruptEnable->timerC = 0;
+  FILM_SCSP(0x42E) = FILM_TIMER_C;
   for (uint8_t i = 0; i < filmAudioChannels; i++) film_pcm_stop(i);
   filmAudioChannels = 0;
   baseSoundMemory = NULL;

@@ -6,4 +6,5 @@ The Saber Rider integration keeps Sega FILM/CPK Cinepak frames intact (including
 
 The movie audio no longer goes through pcmsys' 68000 driver: film_snd.c keeps pcmsys.h's SCSP register helpers but
 plays its ring on SCSP slots the game programs directly (film_pcm_* in src/platform/saturn/aud_sat.c, the 68000
-stopped for the clip, the game's adp68k driver started again after it), so `cd/SNDDRV.BIN` is not on the disc.
+running an idle loop for the clip per Sega Technical Bulletin #51, the game's adp68k driver started again after it),
+so `cd/SNDDRV.BIN` is not on the disc. Movie timer C is polled with 16-bit register accesses and no main-CPU interrupt.
