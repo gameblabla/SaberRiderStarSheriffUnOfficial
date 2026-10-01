@@ -269,7 +269,7 @@ bool hero_apply(Character *c)
 void hero_align_muzzle(Character *c)
 {
     if (c->crhc_id != CRHC_DEFAULT && c->crhc_id != CRHC_APRIL) return;
-    if (!(c->aim & 1)) return;   /* diagonal aims only */
+    if (!(c->aim & 1) && c->aim != AIM_D) return;
     /* Barrel-tip pixels in assets/saber.png and assets/april.png. Standing
      * cells and split torsos differ, as do the aim and recoil frames. These
      * are coordinates in the 64x64 cell, before its draw offset and run bob. */
@@ -278,6 +278,8 @@ void hero_align_muzzle(Character *c)
         {20,12, 8, 15,13}, {21,17,12, 18,13},
         {42,54,42, 46,47}, {43,52,39, 45,45},
         {44,46,11, 44,13}, {45,44,12, 40,14},
+        /* Hand-reconstructed straight-down torsos (tools/replace_down_aim.py). */
+        {46,32,57, 32,47}, {47,32,57, 32,47},
         {74, 9,41, 13,46}, {75,11,39, 14,44},
         {76,16,14, 15,13}, {77,18,12, 18,13},
         {98,54,41, 47,46}, {99,52,39, 46,44},

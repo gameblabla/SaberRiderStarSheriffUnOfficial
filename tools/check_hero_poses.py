@@ -76,6 +76,13 @@ def main():
                       and (dy < 0 or (x < 24 if dx < 0 else x > 41))]
             tip = max(points, key=lambda p: dx * p[0] + dy * p[1])
             assert (mx, my) == (tip[0] + tx, tip[1] + ty), (label, 'barrel', (mx, my), tip, (tx, ty))
+        elif aim == 6:
+            # The replacement down-aim gun extends past the waist. Its bottom
+            # pixel is the barrel endpoint, rather than the inherited muzzle.
+            points = [(x, y) for y in range(64) for x in range(64)
+                      if torso.getpixel((x, y))[3]]
+            tip = max(points, key=lambda p: p[1])
+            assert (mx, my) == (tip[0] + tx, tip[1] + ty), (label, 'down barrel', (mx, my), tip, (tx, ty))
         if pose == 2:
             # At least five adjacent columns must join belt to pelvis at the
             # hip. Restrict to the pelvis so hair or stray sheet pixels cannot
@@ -94,9 +101,9 @@ def main():
             image = legs.copy()
             if overlay >= 0:
                 image.alpha_composite(torso, (ox, oy))
-            if aim & 1:
+            if aim & 1 or aim == 6:
                 draw = ImageDraw.Draw(image)
-                dx = -1 if aim in (1, 7) else 1
+                dx = 0 if aim == 6 else -1 if aim in (1, 7) else 1
                 dy = -1 if aim in (1, 3) else 1
                 draw.line((mx, my, mx + dx * 12, my + dy * 12), fill=(0, 255, 255, 255))
             examples[h, side, pose, aim, shoot] = image
@@ -113,7 +120,7 @@ def main():
             draw.text((x + 4, y + 4), f'{("Saber", "April")[h]} {("stand", "run", "fall")[pose]} aim={aim} shoot={shoot}', fill='white')
         out.save(args.sheet)
     assert len(draw_frames) == checked
-    print(f'{checked} poses passed: cropped run legs, connected falling hips, diagonal barrel origins, roof drops and first shots')
+    print(f'{checked} poses passed: cropped run legs, connected falling hips, diagonal/down barrel origins, roof drops and first shots')
 
 
 if __name__ == '__main__':

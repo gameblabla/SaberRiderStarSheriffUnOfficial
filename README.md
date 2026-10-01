@@ -169,10 +169,20 @@ still selects his gun-ready art. Assets are looked up in
 Saber's six-frame run in both directions comes from `video.twimg.com_tweet_video_DVAP6WHVAAAZKD3.mp4`,
 recovered by `tools/build_saber_run.py` at 10 fps. The native torso and legs stay synchronized, with the clip's
 0/1/2 px body bob. Level shots keep the clip's gun-holding torso; diagonal shots use his aim/shoot overlays.
-All Saber poses share the run's near-black outlines and navy clothing colors. `tools/clean_saber_colors.py`
-removes the old reconstruction's neutral gray clothing speckles while preserving alpha, pose geometry,
-metal highlights and colored details. The video extractors use the same cleanup and fixed source palette
-from `tools/saber_art.py`, so rebuilding idle or run keeps their colors consistent with the other poses.
+All Saber poses use the run's near-black for both outlines and interior shadows. `tools/clean_saber_colors.py`
+also removes small isolated shade patches from reconstructed poses, retaining larger folds and all alpha;
+native idle and run frames are excluded from that filter. Teal guns and their cyan highlights become grey,
+while distant blue armor highlights are preserved. The two video extractors use separate source palettes
+from `tools/saber_art.py`, mapping black and both navy shades to the same colors measured in the run clip.
+Left-facing standing aim restores its chest and resting-arm colors from native idle. Level and diagonal
+aim/shot frames on both sides share their native idle feet, so angle and shot changes keep the feet consistent.
+When replacing sheets processed by the old neighbor-based cleanup, regenerate them from their source first;
+that cleanup erased shadow pixels by guessing navy, red, or silver from their neighbors.
+
+April and Saber's straight-down aiming torsos use the hand reconstructions in
+`april_downaiming.png` and `saber_downaiming.png`. Run `python3 tools/replace_down_aim.py`
+after regenerating or cleaning either sheet to restore cells 46/47 at native resolution.
+Standing and falling poses share these cells; their bullet origins follow the reconstructed barrel tips.
 
 ## Stage 2 — "The All Galaxy Grand Prix" (Mode-7)
 
