@@ -16,7 +16,7 @@ import tempfile
 import numpy as np
 from PIL import Image
 
-from saber_art import SOURCE_PALETTE, clean_colors
+from saber_art import recover_colors
 
 ROOT = Path(__file__).resolve().parent.parent
 BOB = (0, 1, 2, 0, 1, 2)  # must match heroes.c
@@ -26,7 +26,6 @@ def main():
     video = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "video.twimg.com_tweet_video_DVAP6WHVAAAZKD3.mp4"
     sheet_path = ROOT / "assets/saber.png"
     sheet = Image.open(sheet_path).convert("RGBA")
-    palette = SOURCE_PALETTE
     with tempfile.TemporaryDirectory() as tmp:
         subprocess.run(["ffmpeg", "-v", "error", "-i", str(video), "-fps_mode", "passthrough",
                         str(Path(tmp) / "%02d.png")], check=True)
@@ -38,13 +37,9 @@ def main():
             if rgb.shape != (512, 256, 3):
                 raise ValueError("Expected two 4x enlarged 64x64 canvases")
             rgb = np.median(rgb.reshape(128, 4, 64, 4, 3), axis=(1, 3))
-            green = (rgb[:, :, 1] > rgb[:, :, 0] * 1.35) & (rgb[:, :, 1] > rgb[:, :, 2] * 1.2)
-            nearest = ((rgb[:, :, None, :] - palette) ** 2).sum(axis=3).argmin(axis=2)
-            rgba = np.zeros((128, 64, 4), dtype=np.uint8)
-            rgba[~green, :3] = palette[nearest[~green]]
-            rgba[~green, 3] = 255
+            rgba = recover_colors(rgb)
             for side, torso_first, legs_first in ((0, 88, 104), (1, 64, 80)):
-                full = clean_colors(rgba[side * 64:(side + 1) * 64])
+                full = rgba[side * 64:(side + 1) * 64]
                 bob = BOB[index]
                 cut = 38 + bob
                 legs = full.copy()
