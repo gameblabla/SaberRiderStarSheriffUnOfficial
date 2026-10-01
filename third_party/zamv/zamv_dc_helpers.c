@@ -248,40 +248,63 @@ void zamv_dc_upload_row_direct_cb(void *user,const zamv_frame_t *frame,int my) {
    aperture offsets are otherwise never executed by any test: a bad gather
    writes stale bytes into some macroblocks of the texture and surfaces only as
    a small patch of wrong pixels, which is easy to mistake for codec noise.
-   Four macroblocks are gathered per call so the aperture reset between
-   macroblocks is covered too. Returns 0 on exact agreement. */
+   Returns 0 on exact agreement. */
 int zamv_dc_gather_selftest(void) {
 #ifdef __DREAMCAST__
-    enum { MBW=4, FW=MBW*16, FH=16, NBYTES=MBW*384 };
-    static uint8_t scratch[NBYTES] __attribute__((aligned(32)));
-    uint8_t expect[NBYTES] __attribute__((aligned(32)));
-    zamv_frame_t f;
-    int rc=-3;
-
-    if(zamv_frame_alloc(&f,FW,FH)) return -2;
-    for(int y=0;y<FH;y++)
-        for(int x=0;x<FW;x++)
-            f.y[y*FW+x]=(uint8_t)(x*7u+y*13u+(x*y));
-    for(int y=0;y<FH/2;y++)
-        for(int x=0;x<FW/2;x++) {
-            f.u[y*(FW/2)+x]=(uint8_t)(x*3u+y*5u+1u);
-            f.v[y*(FW/2)+x]=(uint8_t)(x*11u+y*2u+9u);
+    enum { MAX_MBW=4, MAX_FW=MAX_MBW*16, FH=16, MAX_BYTES=MAX_MBW*384 };
+    static uint8_t scratch[MAX_BYTES] __attribute__((aligned(32)));
+    uint8_t expect[MAX_BYTES] __attribute__((aligned(32)));
+    /* The PVR YUV converter is a FIFO aperture: every macroblock restarts at SQ
+       offset 0. A Store Queue gather aimed at real RAM therefore overwrites the
+       same 384 bytes once per macroblock instead of producing a linear MBW*384
+       stream, so comparing that RAM image against the linear normative packer
+       can never agree for MBW>1 even when the gather is exactly right for the
+       converter (it rewards a linear, converter-wrong gather and punishes the
+       correct reset, and the player then aborts before showing anything).
+       Test each width 1..4 macroblocks instead: the last macroblock's 384
+       bytes must match the corresponding slice of the linear pack, and everything
+       past the first 384 bytes must stay untouched, which proves the reset.
+       Together the four widths cover every mx offset (each mx appears as the
+       last macroblock once) and the reset itself. */
+    for(int mbw=1;mbw<=MAX_MBW;mbw++) {
+        int fw=mbw*16;
+        zamv_frame_t f;
+        int rc;
+        if(zamv_frame_alloc(&f,fw,FH)) return -2;
+        for(int y=0;y<FH;y++)
+            for(int x=0;x<fw;x++)
+                f.y[y*fw+x]=(uint8_t)(x*7u+y*13u+(x*y));
+        for(int y=0;y<FH/2;y++)
+            for(int x=0;x<fw/2;x++) {
+                f.u[y*(fw/2)+x]=(uint8_t)(x*3u+y*5u+1u);
+                f.v[y*(fw/2)+x]=(uint8_t)(x*11u+y*2u+9u);
+            }
+        if(zamv_dc_pack_mb_span(&f,0,0,mbw,expect)!=(size_t)mbw*384u) {
+            zamv_frame_free(&f);
+            return -3;
         }
-    if(zamv_dc_pack_mb_span(&f,0,0,MBW,expect)!=sizeof(expect)) goto done;
-    memset(scratch,0xA5,sizeof(scratch));
-    {
-        uint32_t *port=sq_lock(scratch);
-        if(!port){rc=-4;goto done;}
-        if(zamv_dc_sq_send_row_direct(port,&f,0)<0){sq_unlock();rc=-5;goto done;}
-        sq_wait();
-        sq_unlock();
+        memset(scratch,0xA5,sizeof(scratch));
+        {
+            uint32_t *port=sq_lock(scratch);
+            if(!port){zamv_frame_free(&f);return -4;}
+            rc=zamv_dc_sq_send_row_direct(port,&f,0);
+            sq_wait();
+            sq_unlock();
+            if(rc<0){zamv_frame_free(&f);return -5;}
+        }
+        /* Last macroblock must match its linear slice; a mismatch means the
+           converter aperture would be fed a macroblock it never asked for. */
+        if(memcmp(scratch,expect+(mbw-1)*384,384)) {
+            zamv_frame_free(&f);
+            return -1;
+        }
+        /* Bytes past the first aperture must stay untouched: a linear advance
+           (missing per-macroblock reset) would have written them. */
+        for(int i=384;i<MAX_BYTES;i++)
+            if(scratch[i]!=0xA5){zamv_frame_free(&f);return -1;}
+        zamv_frame_free(&f);
     }
-    /* Both paths must agree byte for byte; a mismatch means the converter
-       aperture would be fed a macroblock it never asked for. */
-    rc=memcmp(scratch,expect,sizeof(expect))?-1:0;
-done:
-    zamv_frame_free(&f);
-    return rc;
+    return 0;
 #else
     /* Host builds exercise the memcpy oracle through test_dc_helpers instead. */
     return -2;
