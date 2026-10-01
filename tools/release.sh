@@ -131,6 +131,7 @@ package_dc() {
     local stage="$OUT/dreamcast" dir="$OUT/dreamcast/SaberRider-Dreamcast"
     rm -rf "$stage"; mkdir -p "$dir"
     cp build/dc/saber_rider.cdi "$dir/"
+    cp build/dc/'Front Cover 256x256.png' "$dir/"
     cat > "$dir/README.txt" <<EOF
 Saber Rider and the Star Sheriffs - demo reconstruction, Sega Dreamcast ($VERSION)
 

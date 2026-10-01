@@ -61,6 +61,8 @@ IMAGES = {'mode7.png': mode7_floor, 'ramrod/floor.png': None, 'space/boss.png': 
 # our PNGs whose texture blocks are LZ40-compressed: stage 2's load read 330 KB of them off the disc (~3 s in Flycast)
 LZ4_TEX = ('mode7.png', 'sky_mode7.png')
 PAD_TO_MIB = 650   # the padded image size: an 80-minute CD-R holds ~700 MiB, less the second session's lead-in/out
+COVER_SOURCE = ROOT / 'dc_rider_cover.png'
+COVER_NAME = 'Front Cover 256x256.png'
 
 
 def namehash(name: str) -> int:
@@ -226,6 +228,8 @@ def boot_image(elf: Path, out: Path, stage: Path, pad_to: int = PAD_TO_MIB) -> N
     """Update the executable and disc image from an existing staged tree."""
     if not stage.is_dir() or not (stage / 'data').is_dir():
         raise FileNotFoundError(stage)
+    cover = Image.open(need(COVER_SOURCE)).convert('RGB')
+    cover.resize((256, 256), Image.Resampling.LANCZOS).save(out / COVER_NAME, optimize=True)
     raw = out / 'main.bin'
     run('sh-elf-objcopy', '-R', '.stack', '-O', 'binary', elf, raw)
     run(need(KOS / 'utils/scramble/scramble'), raw, stage / '1ST_READ.BIN')
@@ -236,12 +240,12 @@ def boot_image(elf: Path, out: Path, stage: Path, pad_to: int = PAD_TO_MIB) -> N
         'Device Info   : 0000 CD-ROM1/1\n'
         'Area Symbols  : JUE\n'
         'Peripherals   : E000F10\n'
-        'Product No    : SBRD0001\n'
+        'Product No    : GBB022\n'
         'Version       : V1.000\n'
         f'Release Date  : {datetime.date.today():%Y%m%d}\n'
         'Boot Filename : 1ST_READ.BIN\n'
-        'SW Maker Name : SABER RIDER\n'
-        'Game Title    : SABER RIDER STAR SHERIFFS\n')
+        'SW Maker Name : Gameblabla\n'
+        'Game Title    : Saber Rider & the Star Sheriffs\n')
     ip = out / 'IP.BIN'
     ip.unlink(missing_ok=True)  # makeip refuses to replace its own output
     run(need(KOS / 'utils/makeip/makeip'), ip_text, ip)

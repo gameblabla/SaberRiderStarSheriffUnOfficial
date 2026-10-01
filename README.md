@@ -138,8 +138,8 @@ The script writes two separate zips to `release/`:
   `saber_rider.sh`, which runs it with the bundled `lib/`. It also has `assets/`
   and all six demo packs in `data/`, including `video.pck`. glibc, X11/Wayland,
   GL and the sound server come from the user's system.
-- `saber_rider-dreamcast-<date>-<commit>.zip` has `saber_rider.cdi` and a
-  README.
+- `saber_rider-dreamcast-<date>-<commit>.zip` has `saber_rider.cdi`, the
+  256×256 front cover, and a README.
 
 The Dreamcast part sources `$KOS_ENV` (default
 `/opt/toolchains/dc/kos/environ.sh`). It repacks `build/dc` when that disc was
