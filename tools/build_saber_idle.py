@@ -5,7 +5,8 @@ Usage: python3 tools/build_saber_idle.py [video.mp4]
 Requires ffmpeg, Pillow and NumPy. The clip is 10 fps, with native pixels
 enlarged 4x. Decode every frame without frame-rate conversion, take the median
 of each 4x4 block to suppress H.264 noise, key the green background, and snap
-foreground colors to Saber's existing palette. Keep the full 64x64 canvas:
+foreground colors to Saber's shared source palette, then apply the same outline
+and clothing cleanup as the run and older poses. Keep the full 64x64 canvas:
 cropping/recentering each pose would erase the breathing motion and foot anchor.
 Cells 0..151 are preserved; left-facing cells mirror the native right footage.
 """
@@ -17,6 +18,8 @@ import tempfile
 import numpy as np
 from PIL import Image
 
+from saber_art import SOURCE_PALETTE, clean_colors
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -24,8 +27,7 @@ def main():
     video = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "video.twimg.com_tweet_video_DhBgC6xWsAAgACs.mp4"
     sheet_path = ROOT / "assets/saber.png"
     original = Image.open(sheet_path).convert("RGBA").crop((0, 0, 512, 1216))
-    pixels = np.asarray(original)
-    palette = np.unique(pixels[pixels[:, :, 3] != 0, :3], axis=0).astype(float)
+    palette = SOURCE_PALETTE
     sheet = Image.new("RGBA", (512, 27 * 64))
     sheet.paste(original, (0, 0))
     with tempfile.TemporaryDirectory() as tmp:
@@ -45,7 +47,7 @@ def main():
             rgba = np.zeros((64, 64, 4), dtype=np.uint8)
             rgba[~green, :3] = palette[nearest[~green]]
             rgba[~green, 3] = 255
-            recovered.append(Image.fromarray(rgba))
+            recovered.append(Image.fromarray(clean_colors(rgba)))
         # Frames 1..12 breathe; 13..25 raise the hand, salute, then lower it.
         # The remaining tail is another hold of the resting pose.
         for first, indices in ((152, range(12)), (184, range(12, 25))):

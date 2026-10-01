@@ -169,6 +169,10 @@ still selects his gun-ready art. Assets are looked up in
 Saber's six-frame run in both directions comes from `video.twimg.com_tweet_video_DVAP6WHVAAAZKD3.mp4`,
 recovered by `tools/build_saber_run.py` at 10 fps. The native torso and legs stay synchronized, with the clip's
 0/1/2 px body bob. Level shots keep the clip's gun-holding torso; diagonal shots use his aim/shoot overlays.
+All Saber poses share the run's near-black outlines and navy clothing colors. `tools/clean_saber_colors.py`
+removes the old reconstruction's neutral gray clothing speckles while preserving alpha, pose geometry,
+metal highlights and colored details. The video extractors use the same cleanup and fixed source palette
+from `tools/saber_art.py`, so rebuilding idle or run keeps their colors consistent with the other poses.
 
 ## Stage 2 — "The All Galaxy Grand Prix" (Mode-7)
 

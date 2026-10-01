@@ -16,6 +16,8 @@ import tempfile
 import numpy as np
 from PIL import Image
 
+from saber_art import SOURCE_PALETTE, clean_colors
+
 ROOT = Path(__file__).resolve().parent.parent
 BOB = (0, 1, 2, 0, 1, 2)  # must match heroes.c
 
@@ -24,8 +26,7 @@ def main():
     video = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "video.twimg.com_tweet_video_DVAP6WHVAAAZKD3.mp4"
     sheet_path = ROOT / "assets/saber.png"
     sheet = Image.open(sheet_path).convert("RGBA")
-    pixels = np.asarray(sheet)
-    palette = np.unique(pixels[pixels[:, :, 3] != 0, :3], axis=0).astype(float)
+    palette = SOURCE_PALETTE
     with tempfile.TemporaryDirectory() as tmp:
         subprocess.run(["ffmpeg", "-v", "error", "-i", str(video), "-fps_mode", "passthrough",
                         str(Path(tmp) / "%02d.png")], check=True)
@@ -43,7 +44,7 @@ def main():
             rgba[~green, :3] = palette[nearest[~green]]
             rgba[~green, 3] = 255
             for side, torso_first, legs_first in ((0, 88, 104), (1, 64, 80)):
-                full = rgba[side * 64:(side + 1) * 64]
+                full = clean_colors(rgba[side * 64:(side + 1) * 64])
                 bob = BOB[index]
                 cut = 38 + bob
                 legs = full.copy()
