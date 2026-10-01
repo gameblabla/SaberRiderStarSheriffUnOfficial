@@ -187,11 +187,15 @@ void character_animate(Character *c, real dt)
 {
     if (c->shadow_half > 0 && dt > 0) {
         real target = c->state == CS_WALK ? c->run_shadow_x[c->facing ? 1 : 0] : c->body.ox;
-        /* Recreated idle art need not share the collision box's center. Use a stable center across the
-         * sway / alert / bored cycle, while shooting and other poses keep their existing offsets. */
+        /* Recreated art need not share the collision box's center. Use stable cycle centers so
+         * animation frames and airborne torso aiming cannot make the shadow wobble. */
         if (c->anim == 1 || c->anim == 2 || c->anim == 4 || c->anim == 7 ||
             c->anim == c->bored_anim[0] || c->anim == c->bored_anim[1])
             target = c->idle_shadow_x[c->facing ? 1 : 0];
+        else if (c->anim == 46 || c->anim == 47)
+            target = c->jump_shadow_x[c->facing ? 1 : 0];
+        else if (c->anim == 48 || c->anim == 49)
+            target = c->fall_shadow_x[c->facing ? 1 : 0];
         real delta = target - c->shadow_x;
         /* Ease only the pose offset (about 0.08 s to settle), never the character's world position. The
          * bounded time-based blend stays smooth on both fixed-point and variable-rate platforms. */

@@ -60,6 +60,7 @@ typedef struct {
     bool ov_sync;               /* a torso overlay with the legs' frame count and rate starts in phase with the legs (April: the run torso is the clip frames' upper half, so it must sit on its own legs frame) */
     real fall_torso_y;          /* reconstructed sheet's hip alignment for level/diagonal falling torsos */
     real idle_shadow_x[2], run_shadow_x[2], shadow_half;   /* L/R artwork centers; radius shared by all poses */
+    real jump_shadow_x[2], fall_shadow_x[2];   /* stable airborne centers across the animation cycle */
     real shadow_x;              /* smoothed pose offset; world movement follows the body immediately */
     int bored_anim[2];          /* L/R animation played once after idling for bored_time seconds (-1: none; April's stretch) */
     real bored_time, idle_t;

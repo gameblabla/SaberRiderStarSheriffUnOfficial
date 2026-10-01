@@ -178,6 +178,8 @@ bool hero_apply(Character *c)
      * pose, including standing and crouching. Fireball and Colt share the same leg art. */
     c->run_shadow_x[0] = R(9.5f); c->run_shadow_x[1] = R(-3.5f); c->shadow_half = R(17.5f);
     c->idle_shadow_x[0] = c->idle_shadow_x[1] = c->box_ox;
+    c->jump_shadow_x[0] = c->jump_shadow_x[1] = c->box_ox;
+    c->fall_shadow_x[0] = c->fall_shadow_x[1] = c->box_ox;
     if (!g_quiet) sfx_clear_overrides();   /* the player is re-created on every level start; Fireball keeps the pack's samples */
     if (c->crhc_id == CRHC_DEFAULT) {
         if (!g_quiet) saber_sfx();
@@ -195,6 +197,9 @@ bool hero_apply(Character *c)
         c->run_shadow_x[0] = R(5); c->run_shadow_x[1] = R(-5); c->shadow_half = R(21);
         /* Idle feet occupy columns [17,45) / [19,47), with the sprite origin at 32. */
         c->idle_shadow_x[0] = R(-1); c->idle_shadow_x[1] = R(1);
+        /* Jump-cycle union: [16,47) / [15,47); falling legs: [24,40) in both directions. */
+        c->jump_shadow_x[0] = R(-0.5f); c->jump_shadow_x[1] = R(-1);
+        c->fall_shadow_x[0] = c->fall_shadow_x[1] = 0;
         return true;
     }
     if (c->crhc_id == CRHC_COLT) {
@@ -212,6 +217,10 @@ bool hero_apply(Character *c)
     c->run_shadow_x[0] = R(5); c->run_shadow_x[1] = R(-4.5f); c->shadow_half = R(19);
     /* Both idle sways (also used for alert) plant the feet in columns [19,45), centered at the origin. */
     c->idle_shadow_x[0] = c->idle_shadow_x[1] = 0;
+    /* Jump-cycle union: [17,48) / [16,47); falling legs: [25,39) / [25,40).
+     * Measure the legs, so aiming a gun does not pull the airborne shadow sideways. */
+    c->jump_shadow_x[0] = R(0.5f); c->jump_shadow_x[1] = R(-0.5f);
+    c->fall_shadow_x[0] = 0; c->fall_shadow_x[1] = R(0.5f);
     memset(c->torso_bob, 0, sizeof c->torso_bob);   /* Fireball's run legs bob 1 px on cells 2 and 5; April's do not */
     c->ov_sync = true;         /* run torso frame k belongs on run legs frame k */
     c->walk_aim_ov = WALK_AIM_DIAG;   /* the run torso (clip pixels, gun held level) stays for level shots; up / down diagonals use the sheet's aim torsos over the clip legs */
