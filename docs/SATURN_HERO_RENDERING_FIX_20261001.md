@@ -27,3 +27,9 @@ Ymir's software renderer captured 2,400 Saturn fields for the previous Saber bui
 The full `make -j8 -f Makefile.saturn disc` rebuild passed, including the no-soft-float link check. Output: `build/saturn/saber_rider.cue` and `.bin`. Build log: `artifacts/saturn-hero-fix/final-build.log`.
 
 Existing unrelated worktree changes, including the edited source PNGs and their authoring tools, are excluded from this commit.
+
+## Follow-up: Saber crouch frame offset
+
+Saber's left crouch shooting cell 113 sits one row below cell 112. Its missing bottom boot row is duplicated at the top of right crouch shooting cell 121. The Saturn import now moves 113 up one pixel, restores the bottom row from 112, and clears the spill in 121. The source PNG remains untouched.
+
+The cell regression now checks that left crouch and crouch shooting share identical planted boots and that the right frame has no pixels above its crouching artwork. All cell round-trip checks passed. Ymir captured cells 112, 113, 120 and 121; comparisons in `artifacts/saturn-crouch-offset/crouch-comparison.png` and `right-crouch-comparison.png` show the corrected alignment and removed strip. The full Saturn disc rebuild passed, and its Saber texture matches the verified import exactly.

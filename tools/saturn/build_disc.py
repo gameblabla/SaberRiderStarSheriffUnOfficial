@@ -137,7 +137,7 @@ def atlas_rects(rel: str) -> list[tuple[int, int, int, int]] | None:
 
 
 def hero_pixels(rel: str, px: np.ndarray) -> np.ndarray:
-    """Keep Saber's split run legs below the hip in the Saturn import."""
+    """Normalize Saber's split run and crouch cells in the Saturn import."""
     if rel == 'saber.png':
         px = px.copy()
         # The run torso is drawn separately. Stray pixels above the hip in a
@@ -146,6 +146,14 @@ def hero_pixels(rel: str, px: np.ndarray) -> np.ndarray:
             for k, bob in enumerate((0, 1, 2, 0, 1, 2)):
                 y, x = divmod(first + k, 8)
                 px[y * 64:y * 64 + 38 + bob, x * 64:(x + 1) * 64] = 0
+        # Left crouch shooting (113) was placed one row below crouch (112).
+        # Its boot's final row spilled into right crouch shooting (121).
+        # Restore the planted feet while retaining the shooting arm and gun.
+        left = px[14 * 64:15 * 64, :64]
+        shot = px[14 * 64:15 * 64, 64:128]
+        shot[:-1] = shot[1:].copy()
+        shot[-1] = left[-1]
+        px[15 * 64, 64:128] = 0
     return px
 
 
