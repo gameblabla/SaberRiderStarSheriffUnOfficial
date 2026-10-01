@@ -82,6 +82,8 @@ typedef struct { int anim, first, last, loop; real frame_time; } AnimPatch;
 #define SABER_BORED_R 54
 static const AnimPatch SABER_ANIMS[] = {
     { 1, 152, 163, 152, R(0.10f) }, { 2, 168, 179, 168, R(0.10f) },
+    { 36, 80, 85, 80, R(0.10f) }, { 37, 104, 109, 104, R(0.10f) },
+    { 38, 64, 69, 64, R(0.10f) }, { 39, 88, 93, 88, R(0.10f) },
     { SABER_BORED_L, 184, 196, 196, R(0.10f) },
     { SABER_BORED_R, 200, 212, 212, R(0.10f) },
 };
@@ -206,13 +208,13 @@ bool hero_apply(Character *c)
         CBlock *cb = saber_sheet();
         if (!cb) return false;
         c->cb = cb; c->spr = NULL;   /* inherited layout, with falling torso cells selected by hero_patch_def */
-        /* but the run art is not Fireball's: the master's rows 10 / 11 are one figure cut at the hip per frame
-         * (like April's clip halves), so torso frame k only fits on legs frame k; the figure bobs 0/2/4 px through
-         * the stride (heroes/build_saber_engine_sheet.py prints it), which the packer takes out of the torso cells
-         * so every torso overlay - run or aim / shot - follows the hip from here */
-        static const int8_t saber_bob[8] = { 0, 2, 4, 0, 2, 4 };
+        /* Native clip run (tools/build_saber_run.py): each torso belongs to its
+         * own legs frame. The extractor removes the 0/1/2 px bob from torsos;
+         * character_draw restores it for both native and diagonal aim torsos. */
+        static const int8_t saber_bob[8] = { 0, 1, 2, 0, 1, 2 };
         memcpy(c->torso_bob, saber_bob, sizeof c->torso_bob);
         c->ov_sync = true;
+        c->walk_aim_ov = WALK_AIM_DIAG;   /* the native run already holds his gun level, including while firing */
         c->fall_torso_y = R(1);   /* aim torso ends at row 37; fall legs start at 39 */
         c->run_shadow_x[0] = R(5); c->run_shadow_x[1] = R(-5); c->shadow_half = R(21);
         /* Idle feet occupy columns [17,45) / [19,47), with the sprite origin at 32. */

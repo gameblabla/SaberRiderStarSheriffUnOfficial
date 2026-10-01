@@ -166,6 +166,10 @@ Breathing begins immediately on standing still, including after landing or relea
 still selects his gun-ready art. Assets are looked up in
 `$SABER_ASSETS`, `./assets` and next to the executable.
 
+Saber's six-frame run in both directions comes from `video.twimg.com_tweet_video_DVAP6WHVAAAZKD3.mp4`,
+recovered by `tools/build_saber_run.py` at 10 fps. The native torso and legs stay synchronized, with the clip's
+0/1/2 px body bob. Level shots keep the clip's gun-holding torso; diagonal shots use his aim/shoot overlays.
+
 ## Stage 2 — "The All Galaxy Grand Prix" (Mode-7)
 
 After the frontier town's MISSION ACCOMPLISHED the game continues with a full-screen SNES-style Mode-7 stage built
