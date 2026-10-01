@@ -49,7 +49,7 @@ void rsat_stats(unsigned *parts_resident, unsigned *vram_used, unsigned *uploads
  * sprite priority register (0 the default, over the planes); textures drawn first every frame, under everything */
 void rsat_cram_reserve(int entries);
 void rsat_cram_put_be(int first, const uint8_t *be, int n);   /* n big-endian RGB555 colours from entry first, at the vblank */
-void rsat_cram_flush(void);                                   /* the vblank-in handler: the colours written since, into colour RAM */
+void rsat_cram_flush(void);                               /* vblank-in only: SCU DMA of the full cached palette to CRAM */
 struct RTex;
 void rsat_tex_priority(struct RTex *t, int reg);
 void rsat_set_backdrops(struct RTex **t, const int *x, const int *y, int n, bool clear_framebuffer);
