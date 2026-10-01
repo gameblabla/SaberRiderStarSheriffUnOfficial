@@ -55,7 +55,7 @@ def main() -> None:
 
     audio_tracks = sorted(tracks_dir.glob('T*.BIN'))
     if not audio_tracks:
-        raise SystemExit(f'no CD-DA tracks found in {tracks_dir}')
+        raise SystemExit(f'no CD-DA tracks found in {tracks_dir}; run `make -f Makefile.saturn disc` to bake the disc tree')
 
     cue_lines = [f'FILE "{bin_path.name}" BINARY', '  TRACK 01 MODE1/2352', '    INDEX 01 00:00:00']
     with open(bin_path, 'wb') as f:
@@ -74,7 +74,7 @@ def main() -> None:
 
     cue_path.write_text('\n'.join(cue_lines) + '\n')
     track01.unlink()
-    print(f'{bin_path} ({bin_path.stat().st_size} bytes), {cue_path} ({len(audio_tracks)} audio tracks)')
+    print(f'{bin_path} ({bin_path.stat().st_size} bytes), {cue_path} ({len(audio_tracks)} CD-DA tracks)')
 
 
 if __name__ == '__main__':
