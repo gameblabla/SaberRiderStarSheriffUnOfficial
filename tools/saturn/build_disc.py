@@ -116,6 +116,12 @@ def atlas_rects(rel: str) -> list[tuple[int, int, int, int]] | None:
     """the rectangles the game draws out of one of our atlases (its .txt layout), so each is stored drawable"""
     root = ROOT / 'assets'
     rects: list[tuple[int, int, int, int]] = []
+    if rel in ('saber.png', 'april.png', 'colt.png'):
+        # cblock_from_png draws individual 64x64 cells. A part spanning multiple
+        # cells cannot be safely sampled by VDP1, especially when mirrored.
+        with Image.open(root / rel) as image:
+            w, h = image.size
+        return [(x, y, 64, 64) for y in range(0, h, 64) for x in range(0, w, 64)]
     if rel == 'mode7.png':   # name x y w h frames: frames side by side
         for line in (root / 'mode7.txt').read_text().splitlines():
             f = line.split()
@@ -128,6 +134,19 @@ def atlas_rects(rel: str) -> list[tuple[int, int, int, int]] | None:
             if len(f) == 8:
                 rects.append(tuple(map(int, f[2:6])))
     return rects or None
+
+
+def hero_pixels(rel: str, px: np.ndarray) -> np.ndarray:
+    """Keep Saber's split run legs below the hip in the Saturn import."""
+    if rel == 'saber.png':
+        px = px.copy()
+        # The run torso is drawn separately. Stray pixels above the hip in a
+        # legs cell (notably cell 80) otherwise appear as unrelated sprite art.
+        for first in (80, 104):
+            for k, bob in enumerate((0, 1, 2, 0, 1, 2)):
+                y, x = divmod(first + k, 8)
+                px[y * 64:y * 64 + 38 + bob, x * 64:(x + 1) * 64] = 0
+    return px
 
 
 def bake_ramrod_arm(px: np.ndarray, tex: pckwrite.Pack, stats, log) -> np.ndarray:
@@ -232,6 +251,7 @@ def bake_textures(data: Path, work: Path, tex: pckwrite.Pack, log, force8: set[i
         if unused(rel):
             continue
         px = np.array(Image.open(source).convert('RGBA'))
+        px = hero_pixels(rel.as_posix(), px)
         if rel.as_posix() == 'ramrod/atlas.png':
             px = bake_ramrod_arm(px, tex, stats, log)
         block = satbake.bake(px, b'', stats, name=rel.as_posix(),

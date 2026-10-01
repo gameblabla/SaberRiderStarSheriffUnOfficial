@@ -61,7 +61,10 @@ typedef struct {
     real fall_torso_y;          /* reconstructed sheet's hip alignment for level/diagonal falling torsos */
     real idle_shadow_x[2], run_shadow_x[2], shadow_half;   /* L/R artwork centers; radius shared by all poses */
     real jump_shadow_x[2], fall_shadow_x[2];   /* stable airborne centers across the animation cycle */
-    real shadow_x;              /* smoothed pose offset; world movement follows the body immediately */
+#ifdef PLAT_SATURN
+    real crouch_shadow_x[2];    /* planted feet, shared by crouch and crouch shooting */
+#endif
+    real shadow_x;              /* pose offset (smoothed except on Saturn); world movement follows the body immediately */
     int bored_anim[2];          /* L/R animation played once after idling for bored_time seconds (-1: none; April's stretch) */
     real bored_time, idle_t;
     real base_ox, base_oy;   /* +0x1c/+0x20 */

@@ -196,11 +196,19 @@ void character_animate(Character *c, real dt)
             target = c->jump_shadow_x[c->facing ? 1 : 0];
         else if (c->anim == 48 || c->anim == 49)
             target = c->fall_shadow_x[c->facing ? 1 : 0];
+#ifdef PLAT_SATURN
+        if (c->state == CS_CROUCH)
+            target = c->crouch_shadow_x[c->facing ? 1 : 0];
+        /* VDP1 displays whole pixels: easing a pose offset makes the planted
+         * shadow visibly step sideways after starting a run or turning. */
+        c->shadow_x = target;
+#else
         real delta = target - c->shadow_x;
         /* Ease only the pose offset (about 0.08 s to settle), never the character's world position. The
          * bounded time-based blend stays smooth on both fixed-point and variable-rate platforms. */
         if (r_abs(delta) < R(0.05f)) c->shadow_x = target;
         else c->shadow_x += r_mul(delta, r_div(dt, R(0.02f) + dt));
+#endif
     }
     if (c->anim >= CHAR_MAX_ANIMS) return;
     const AnimDef *a = &c->def->anims[c->anim];
@@ -367,7 +375,11 @@ static void draw_shadow(const Body *b, const Level *L, real cam_x, real cam_y, i
             real x0 = r_max(cx - hw, r_int(left * L->cellw) - R(3));
             real x1 = r_min(cx + hw, r_int((right + 1) * L->cellw) + R(3));
             RFRect q = { r_floorr(x0 - cam_x), r_floorr(y) - R(2) + r_int(band * 2),
+#ifdef PLAT_SATURN
+                         r_floorr(x1 - cam_x) - r_floorr(x0 - cam_x), R(2) };
+#else
                          r_floorr(x1) - r_floorr(x0), R(2) };
+#endif
             if (q.w > 0) r_fill_rect(ren, &q);
         }
         r_set_draw_blend(ren, R_BLEND_BLEND);
@@ -384,8 +396,14 @@ void body_draw_shadow(const Body *b, const Level *L, real cam_x, real cam_y, int
 void character_draw_shadow(const Character *c, const Level *L, real cam_x, real cam_y, int sw, int sh)
 {
     real cx = c->body.x + (c->shadow_half > 0 ? c->shadow_x : c->body.ox);
+#ifdef PLAT_SATURN
+    /* Use character_draw's pixel anchor before adding the fixed pose offset.
+     * Fractional body/camera motion must not shift the shadow relative to it. */
+    cx = cam_x + r_floorr(c->body.x - c->origin_x - cam_x) + c->origin_x +
+         (c->shadow_half > 0 ? c->shadow_x : c->body.ox);
+#endif
     real half = c->shadow_half > 0 ? c->shadow_half : r_min(R(40), r_max(R(10), c->body.hx + R(4)));
-    /* Every pose uses the same footprint; its center eases toward the current art offset. */
+    /* Every pose uses the same footprint at its current art offset. */
     draw_shadow(&c->body, L, cam_x, cam_y, sw, sh, cx, half);
 }
 

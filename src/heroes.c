@@ -202,6 +202,9 @@ bool hero_apply(Character *c)
     c->idle_shadow_x[0] = c->idle_shadow_x[1] = c->box_ox;
     c->jump_shadow_x[0] = c->jump_shadow_x[1] = c->box_ox;
     c->fall_shadow_x[0] = c->fall_shadow_x[1] = c->box_ox;
+#ifdef PLAT_SATURN
+    c->crouch_shadow_x[0] = c->crouch_shadow_x[1] = c->box_ox;
+#endif
     if (!g_quiet) sfx_clear_overrides();   /* the player is re-created on every level start; Fireball keeps the pack's samples */
     if (c->crhc_id == CRHC_DEFAULT) {
         if (!g_quiet) saber_sfx();
@@ -219,6 +222,10 @@ bool hero_apply(Character *c)
         c->run_shadow_x[0] = R(5); c->run_shadow_x[1] = R(-5); c->shadow_half = R(21);
         /* Idle feet occupy columns [17,45) / [19,47), with the sprite origin at 32. */
         c->idle_shadow_x[0] = R(-1); c->idle_shadow_x[1] = R(1);
+#ifdef PLAT_SATURN
+        /* Crouch feet: [24,44) left, [21,43) right; origin column 32. */
+        c->crouch_shadow_x[0] = R(2); c->crouch_shadow_x[1] = 0;
+#endif
         c->bored_anim[0] = SABER_BORED_L; c->bored_anim[1] = SABER_BORED_R; c->bored_time = R(10.0f);
         if (plat_getenv("SABER_BORED")) c->bored_time = r_parse(plat_getenv("SABER_BORED"), NULL);
         /* Jump-cycle union: [16,47) / [15,47); falling legs: [24,40) in both directions. */
@@ -241,6 +248,10 @@ bool hero_apply(Character *c)
     c->run_shadow_x[0] = R(5); c->run_shadow_x[1] = R(-4.5f); c->shadow_half = R(19);
     /* Both idle sways (also used for alert) plant the feet in columns [19,45), centered at the origin. */
     c->idle_shadow_x[0] = c->idle_shadow_x[1] = 0;
+#ifdef PLAT_SATURN
+    /* Crouch feet: [24,44) left, [22,40) right; origin column 32. */
+    c->crouch_shadow_x[0] = R(2); c->crouch_shadow_x[1] = R(-1);
+#endif
     /* Jump-cycle union: [17,48) / [16,47); falling legs: [25,39) / [25,40).
      * Measure the legs, so aiming a gun does not pull the airborne shadow sideways. */
     c->jump_shadow_x[0] = R(0.5f); c->jump_shadow_x[1] = R(-0.5f);
