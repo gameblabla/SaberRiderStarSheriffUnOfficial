@@ -377,12 +377,15 @@ void menu_update(Menu *m, const Input *in, real dt, int sw, Ren *r)
         if (m->t > R(2.9f)) menu_enter(m, MS_SPLASH1);
         break;
     case MS_CONTINUE: {   /* the count runs 20 -> 0, one per second; START / an action button takes the continue, 0 = GAME OVER */
+        /* As on the title, wait for drawn frames rather than update steps: a console may catch up several steps
+         * before presenting anything. The loading screen must be visible before stage_start blocks on disc reads. */
+        if (m->loading) { if (m->loading > 3) m->continue_now = true; break; }
         real prev = m->t; m->t += dt;
         if (m->t < R(0.5f)) break;   /* the screen fades in first */
         int before = CONTINUE_FROM - r_trunc(prev - R(0.5f)), now = CONTINUE_FROM - r_trunc(m->t - R(0.5f));
         if (now != before && now >= 0) sfx_play(0, 0);
         if (now < 0) { menu_enter(m, MS_GAMEOVER); break; }
-        if (confirm(in)) { sfx_play(8, 0); m->continue_now = true; }
+        if (confirm(in)) { sfx_play(8, 0); m->loading = 1; }
         break; }
     case MS_ACCOMPLISHED:   /* FUN_00429de0: 4 s, then a 1 s countdown to the splash (or the next stage) */
         if (m->drawn < 2) break;   /* the steps catching up after the reads: the zoom starts once it is on screen */
@@ -643,6 +646,7 @@ static void draw_charsel(Menu *m, Ren *r, int sw, int sh)
  * under it. An optional assets/continue.png (any size, letterboxed to the screen) goes behind the text. */
 static void draw_continue(Menu *m, Ren *r, int sw, int sh)
 {
+    if (m->loading) { draw_loading(r, sw, sh); m->loading++; return; }
     fill(r, sw, sh, 0, 0, 0, 255);
     static Sprite *bg; static bool bg_tried;
     if (!bg_tried) {

@@ -28,7 +28,7 @@ typedef struct {
     int character;             /* 0 Saber, 1 Fireball, 2 April, 3 Colt (+0x5c) */
     Video *video;
     Dialog dlg;                /* briefing text */
-    int loading;               /* START on the title: 1 + the frames of black + LOADING drawn before the briefing loads */
+    int loading;               /* title / CONTINUE accepted: 1 + the black + LOADING frames drawn before blocking loads */
     int drawn;                 /* MISSION ACCOMPLISHED: its frames drawn (its clock waits for the first after the reads) */
     bool start_level;          /* set when character select finished -> game starts the level */
     int start_stage;           /* with start_level: the stage to start (0: stage 1), OPTIONS > STAGE */
