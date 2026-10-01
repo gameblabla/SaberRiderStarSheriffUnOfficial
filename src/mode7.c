@@ -1118,8 +1118,6 @@ static void render_horizon(Mode7 *m)
     }
 }
 
-/* the buggy's nozzles drift a few px sideways in the hard steering poses of the clip */
-static real steer_frame_shift(int frame) { return r_int(frame == 0 ? -3 : frame == 1 ? -1 : frame == 3 ? 1 : frame == 4 ? 3 : 0); }
 /* which of a car's three steering poses (left / straight / right) to show */
 static int steer_frame(real tilt) { return tilt < R(-0.5f) ? 0 : tilt > R(0.5f) ? 2 : 1; }
 
@@ -1185,12 +1183,14 @@ static void render_player(Mode7 *m)
     real ang = 0;
     if (m->spin_dur > 0) { real p = R(1) - r_div(m->spin_t, m->spin_dur); ang = r_mul(360 * p, R(2) - p); }   /* one whole turn, easing out: 0 and 360 are the same pose */
     draw_spr(m, S_BUGGY, frame, sx, sy, R(1), ang, r, g, b, 255);
-    if (m->turbo_on && ang == 0) {   /* the afterburner: a flame over each exhaust nozzle (10x10 at (23,21) and (60,21) of the sprite) */
+    if (m->turbo_on && ang == 0) {   /* the afterburner: a flame over each exhaust nozzle */
         Spr *bs = &m->spr[S_BUGGY]; real x0 = r_floorr(sx - r_int(bs->w) / 2), y0 = r_floorr(sy - r_int(bs->h));
         int fr = r_trunc(m->turbo_t * 18) & 3;
-        static const real NOZ[2][2] = { { R(23), R(21) }, { R(60), R(21) } };
+        /* Exhaust centres in each atlas pose, hard left through hard right.
+         * The two nozzles move by different amounts as the rear changes perspective. */
+        static const uint8_t NOZZLE_X[5][2] = { { 28, 63 }, { 25, 61 }, { 22, 59 }, { 20, 56 }, { 18, 53 } };
         for (int k = 0; k < 2; k++) {
-            real fx = x0 + NOZ[k][0] + R(5) + (steer_frame_shift(frame)) - R(6.0f), fy = y0 + NOZ[k][1] + R(10);   /* -6px: the flames sat right of the nozzles */
+            real fx = x0 + r_int(NOZZLE_X[frame][k]), fy = y0 + R(31);
             draw_spr(m, S_TURBO, fr, fx, fy, R(1), 0, 255, 255, 255, 255);
             draw_spr(m, S_TURBO, (fr + 2) & 3, fx, fy + R(1), R(1.4f), 0, 255, 255, 255, 110);   /* a soft halo behind it */
         }
