@@ -20,9 +20,16 @@ def source_script(path, name):
     if not match: raise ValueError(f'Missing story script {path}:{name}')
     return ''.join(ast.literal_eval(s) for s in re.findall(r'"(?:[^"\\]|\\.)*"',match[1]))
 
+COLOURS={'GREEN':0,'PURPLE':1,'RED':2,'BLUE':3}
+TEXT_COLUMNS=25     # BG text cells inside the dialogue box
+
 def pages(script,portraits):
     out=[]
+    colour=0
     for chunk in script.split('<<>>'):
+        # dialog.c keys on the first two letters; the colour persists until the next tag.
+        tag=re.search(r'<\|([A-Za-z]+)',chunk)
+        if tag:colour=next((v for k,v in COLOURS.items() if k[:2]==tag[1][:2].upper()),0)
         speaker=re.search(r'</dialog_avatar_([^/]+)/>',chunk)
         packed=re.search(r'<avatar:([0-9A-F]+)>',chunk)
         avatar=portraits.get(speaker[1] if speaker else packed[1] if packed else '',65535)
@@ -30,9 +37,9 @@ def pages(script,portraits):
         chunk=' '.join(chunk.split())
         # Text before the first color tag may be an SFX header.
         if not chunk or chunk.endswith('.wav'): continue
-        lines=textwrap.wrap(chunk,26)
+        lines=textwrap.wrap(chunk,TEXT_COLUMNS)
         for i in range(0,len(lines),4):
-            out.append(struct.pack('<H',avatar)+'\n'.join(lines[i:i+4]).encode('ascii','replace')+b'\0')
+            out.append(struct.pack('<HB',avatar,colour)+'\n'.join(lines[i:i+4]).encode('ascii','replace')+b'\0')
     return out
 
 def bake(root,work,stage,archive,portraits):

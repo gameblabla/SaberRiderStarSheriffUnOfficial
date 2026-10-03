@@ -11,3 +11,4 @@ extern Shot shots[24];
 extern const PceScene *play_scene;
 extern uint16_t camera,frame;
 extern uint8_t hero,facing,safe_timer;
+extern int16_t safe_x,safe_y;

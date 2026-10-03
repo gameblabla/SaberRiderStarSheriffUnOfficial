@@ -31,6 +31,19 @@ def add_foreground(image,sprites):
             entries.append((x,y,cache[key]))
     return entries
 
+# Dialogue box tilesets as the Saturn build picks them: green (default), purple, red, blue.
+BOX_TILESETS=(0x8D39AA67,0xA2122E71,0x1495B0AB,0x84652CBC)
+BOX_W,BOX_H=224,48
+
+def dialog_box(tiles):
+    """Nine-slice the source tileset exactly like dialog.c draw_box does."""
+    im=Image.new('RGBA',(BOX_W,BOX_H));cw=ch=16;mx=BOX_W-2*cw;my=BOX_H-2*ch
+    def put(n,x,y,w,h):im.alpha_composite(tiles[n].resize((w,h),Image.Resampling.NEAREST),(x,y))
+    put(0,0,0,cw,ch);put(1,cw,0,mx,ch);put(2,BOX_W-cw,0,cw,ch)
+    put(3,0,ch,cw,my);put(4,cw,ch,mx,my);put(5,BOX_W-cw,ch,cw,my)
+    put(6,0,BOX_H-ch,cw,ch);put(7,cw,BOX_H-ch,mx,ch);put(8,BOX_W-cw,BOX_H-ch,cw,ch)
+    return im
+
 def add_art(root,work,stage,sprites,frame):
     def get(rid,n=0):return frame(work/'srgb'/f'{rid:08X}.srgb',n)
     def add(name,im,anchor=(0,0)):
@@ -49,6 +62,13 @@ def add_art(root,work,stage,sprites,frame):
         im=get(rid).resize((32,32),Image.Resampling.NEAREST)
         portraits[name]=add('portrait_'+name,im)
         portraits[f'{rid:08X}']=portraits[name]
+    # Dialogue box: two halves per colour (a sprite object holds at most 32
+    # pieces). Ids are consecutive: base + colour*2 + half.
+    dialog=len(sprites)
+    for rid in BOX_TILESETS:
+        box=dialog_box([get(rid,n) for n in range(9)])
+        for half in range(2):
+            add(f'dialog_box{rid:08X}_{half}',box.crop((half*BOX_W//2,0,(half+1)*BOX_W//2,BOX_H)))
     hud=[];digits=[];aim=[];motion=[];pending=[]
     if stage in (1,3,4,5):
         def glyph(n):return get(0x87A5333C,n)
@@ -70,7 +90,7 @@ def add_art(root,work,stage,sprites,frame):
         for hero,filename in enumerate(('saber.png',None,'april.png','colt.png')):
             sheet=Image.open(root/'assets'/filename).convert('RGBA') if filename else None
             fid=struct.unpack_from('<I',(work/'9C8F9A9E.levl').read_bytes(),4)[0]
-            def cell(n):
+            def cell(n,sheet=sheet):    # bind now: the loop variable would otherwise leave every hero on Colt's sheet
                 if sheet:return sheet.crop((n%8*64,n//8*64,n%8*64+64,n//8*64+64))
                 return get(fid,n)
             # Canonical right-facing standing aim and recoil frames.
@@ -87,13 +107,14 @@ def add_art(root,work,stage,sprites,frame):
             aim.append(row)
             pending.append((hero,cell))
     # Motion poses follow every aim row, so each group has a constant stride
-    # per hero (aim: 14, motion: 5) from its base ID.
+    # per hero (aim: 14, motion: 2) from its base ID. Jumping reuses one frozen
+    # run frame (hero*9+7), so there are no airborne motion frames.
     for hero,cell in pending:
         row=[]
-        for name,n in [('shoot',40),('recoil',41),('jump0',132),('jump1',133),('jump2',134)]:
+        for name,n in [('shoot',40),('recoil',41)]:
             row.append(add(f'hero{hero}_{name}',cell(n),(32,32)))
         motion.append(row)
-    return dict(portraits=portraits,hud=hud,digits=digits,aim=aim,motion=motion)
+    return dict(portraits=portraits,dialog=dialog,hud=hud,digits=digits,aim=aim,motion=motion)
 
 def emit_tables(out,scenes,h,c):
     m=scenes[0]['presentation']
@@ -102,6 +123,8 @@ def emit_tables(out,scenes,h,c):
         h.append(f'extern const uint16_t pce_{name}_ids{shape};')
         c.append(f'const uint16_t pce_{name}_ids{shape}='+values(m[name])+';')
     # Actor inventories vary; presentation IDs use per-scene base addresses.
+    h.append('extern const uint16_t pce_dialog_base[7];')
+    c.append('const uint16_t pce_dialog_base[7]={'+','.join(str(m['presentation']['dialog']) for m in scenes)+'};')
     h.append('extern const uint16_t pce_motion_base[7];')
     c.append('const uint16_t pce_motion_base[7]={'+','.join(str(m['presentation']['motion'][0][0]) if m['presentation']['motion'] else '0' for m in scenes)+'};')
     h.append('extern const uint16_t pce_present_base[7][3];')

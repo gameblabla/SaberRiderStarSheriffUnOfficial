@@ -10,21 +10,39 @@ static char story_text[256];
 STORY_CODE static uint32_t pointer(uint32_t a) {
     uint32_t p;arcade_read(2,a,&p,4);return p;
 }
+extern vdc_sprite_t sat[2][64];
+extern uint8_t sat_page,sat_count;
+extern volatile uint16_t pce_scroll_x;
+/* Saturn-style dialogue: the box is two sprite halves in the page's colour,
+ * drawn behind the background layer; the BG cells under it are blank, so the
+ * Saturn-font text characters sit on top of the box. */
 STORY_CODE static void draw(void) {
     uint32_t a=pointer(story_address+1+(uint16_t)pce_campaign.page*4);
-    uint16_t avatar;arcade_read(2,a,&avatar,2);
-    arcade_read(2,a+2,story_text,sizeof story_text);story_text[255]=0;
+    uint16_t avatar;uint8_t colour;
+    arcade_read(2,a,&avatar,2);arcade_read(2,a+2,&colour,1);
+    arcade_read(2,a+3,story_text,sizeof story_text);story_text[255]=0;
     uint8_t y=pce_metrics.stage==2?5:20;
-    video_panel(4,y,27,6);
+    /* BG cells sit (scroll & 7) pixels left of their grid on a scrolling playfield. */
+    int16_t box_x=26-(pce_raster_enabled?0:(pce_scroll_x&7)),box_y=y*8-(pce_metrics.stage!=2&&pce_metrics.stage<6?16:0);   /* platform sprites are baked 16 lines low */
+    video_panel(3,y,29,6);
     video_sat_begin();
-    if(avatar!=65535)video_sprite(avatar,8,y*8-8,false,16);
+    if(avatar!=65535)video_sprite(avatar,box_x-26,box_y-8,false,16);
+    uint8_t first=sat_count;
+    uint16_t box=pce_dialog_base[pce_metrics.stage-1]+(colour&3)*2;
+    video_sprite(box,box_x,box_y,false,16);video_sprite(box+1,box_x+112,box_y,false,16);
+    for(uint8_t k=first;k<sat_count;++k)sat[sat_page][k].attr&=~VDC_SPRITE_FG;
     video_sat_end();
-    char *line=story_text;
-    for(uint8_t row=0;row<4&&*line;++row) {
+    char *line=story_text;uint8_t lines=0;
+    for(char *c=line;;++c){if(*c=='\n'||!*c){++lines;if(!*c)break;}}
+    /* One line sits mid-box; two lines get a blank row between them. */
+    uint8_t row=y+(lines==1?2:1),pitch=lines==2?2:1;
+    for(;lines&&*line;--lines,row+=pitch) {
         char *end=line;while(*end&&*end!='\n')++end;
-        bool more=*end!=0;*end=0;video_text(5,y+1+row,line);line=end+more;
+        bool more=*end!=0;*end=0;video_text(5,row,line);line=end+more;
     }
-    video_text(25,y+5,"I/II >");
+}
+STORY_CODE static void arrow(bool on) {
+    video_text(29,pce_metrics.stage==2?9:24,on?"\x7f":" ");
 }
 STORY_CODE void story_start(void) {
     uint32_t dir=pce_scenes[pce_metrics.stage-1].story;
@@ -37,6 +55,7 @@ STORY_CODE void story_start(void) {
 }
 STORY_CODE void story_step(void) {
     pce_campaign.timer+=pce_control.elapsed;
+    arrow(!(pce_campaign.timer&32));
     if(pce_campaign.timer<12||!(pce_control.pressed&(KEY_1|KEY_2)))return;
     pce_campaign.timer=0;
     if(++pce_campaign.page<page_count)draw();

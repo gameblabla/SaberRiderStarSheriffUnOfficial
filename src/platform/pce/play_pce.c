@@ -29,8 +29,9 @@ const PceScene *play_scene;
 #define scene play_scene
 uint16_t camera,frame;
 uint8_t hero,facing,safe_timer;
-static uint8_t fire_timer,crouch,slide_time,jump_time;
-static int16_t safe_x,safe_y,drop_y;
+static uint8_t fire_timer,crouch,slide_time,death_time;
+int16_t safe_x,safe_y;
+static int16_t drop_y;
 
 PCE_CODE static uint8_t cell(int16_t x,int16_t y) {
     if(x<0||(uint16_t)x>=scene->ccols||y<0||(uint16_t)y>=scene->crows) return 0;
@@ -89,7 +90,7 @@ PCE_CODE static void shoot(int16_t x,int16_t y,int16_t vx,int16_t vy,bool enemy)
 }
 PCE_CODE void play_init(uint8_t stage,uint8_t selected) {
     scene=&pce_scenes[stage-1];hero=selected;camera=frame=0;
-    facing=fire_timer=safe_timer=crouch=slide_time=jump_time=0;drop_y=-32767;
+    facing=fire_timer=safe_timer=crouch=slide_time=death_time=pce_death=0;drop_y=-32767;
     player=(Body){.x=scene->sx,.y=scene->sy};safe_x=player.x;safe_y=player.y;
     memset(actors,0,sizeof actors);memset(shots,0,sizeof shots);
     memset(column_tags,0xff,sizeof column_tags);
@@ -128,6 +129,18 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     if(!pce_campaign.diagnostic){overlay_call(0x70,combat_tick);
         if(pce_campaign.state!=CAM_PLAY||pce_campaign.event)return;}
     if(safe_timer)--safe_timer;if(fire_timer)--fire_timer;
+    if(pce_death) {
+        /* Like the main game: the hero hops and falls where it died, then
+         * stands up again at the last safe spot - no stage reload. */
+        keys=pressed=0;slide_time=0;
+        if(!death_time){player.vy=-1100;player.vx=0;safe_timer=255;}
+        if(++death_time>=70) {
+            death_time=0;pce_death=0;
+            if(!pce_campaign.lives){pce_campaign.state=CAM_OVER;pce_campaign.timer=0;return;}
+            --pce_campaign.lives;pce_metrics.hp=campaign_hearts();
+            player=(Body){.x=safe_x,.y=safe_y};safe_timer=120;
+        }
+    }
     player.vx=0;crouch=(keys&KEY_DOWN)&&(player.coll&4);
     if(!(keys&KEY_SELECT)&&!crouch) {
         if(keys&KEY_LEFT){player.vx=pce_campaign.boost&&hero==2?-726:-427;facing=1;}
@@ -136,7 +149,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     if((pressed&KEY_2)&&(player.coll&4)) {
         if(crouch&&player.ground==4)drop_y=player.y+20;
         else if(crouch)slide_time=24;
-        else {player.vy=-1237;jump_time=0;audio_effect(2);}
+        else {player.vy=-1237;audio_effect(2);}
     }
     if(keys&KEY_SELECT) {
         if(keys&KEY_LEFT)facing=1;
@@ -144,10 +157,12 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     }
     if(slide_time){crouch=1;player.vx=(int16_t)slide_time*43;if(facing)player.vx=-player.vx;--slide_time;}
     physics(&player);
-    if(!(player.coll&4))++jump_time;else jump_time=0;
     if(pce_campaign.boss_kind){if(player.x<(int16_t)camera+8)player.x=camera+8;if(player.x>(int16_t)camera+248)player.x=camera+248;}
-    if(player.coll&4){safe_x=player.x;safe_y=player.y;}
-    if(player.y>272){campaign_hurt();player=(Body){.x=safe_x,.y=safe_y};safe_timer=120;}
+    if((player.coll&4)&&!pce_death){safe_x=player.x;safe_y=player.y;}
+    if(player.y>272&&!pce_death) {
+        campaign_hurt();
+        if(!pce_death){player=(Body){.x=safe_x,.y=safe_y};safe_timer=120;}
+    }
     if((keys&KEY_1)&&!fire_timer) {
         int16_t vx=facing?-8:8,vy=0;
         if(keys&KEY_UP){vy=-8;if(!(keys&(KEY_RIGHT|KEY_LEFT)))vx=0;}
@@ -199,8 +214,7 @@ __attribute__((noinline)) void play_draw(void) {
     video_background(camera);video_sat_begin();foreground_prepare();presentation_draw();
     uint8_t pose=crouch?8:!(player.coll&4)?7:player.vx?1+(frame/6)%6:0;
     uint16_t id=hero*9+pose;
-    if(!(player.coll&4))id=pce_motion_base[pce_metrics.stage-1]+hero*5+2+(jump_time/3)%3;
-    else if(!crouch&&!player.vx&&fire_timer)id=pce_motion_base[pce_metrics.stage-1]+hero*5+(fire_timer>6);
+    if((player.coll&4)&&!crouch&&!player.vx&&fire_timer)id=pce_motion_base[pce_metrics.stage-1]+hero*2+(fire_timer>6);
     if((player.coll&4)&&((pce_control.keys&KEY_UP)||((pce_control.keys&KEY_DOWN)&&(!crouch||(pce_control.keys&(KEY_SELECT|KEY_LEFT|KEY_RIGHT)))))) {
         uint8_t direction=pce_control.keys&KEY_UP?0:1;
         id=pce_present_base[pce_metrics.stage-1][2]+hero*14+direction;

@@ -159,6 +159,8 @@ def add_sprites(archive, sprites, previews):
     table = archive.add('sprite_table', b''.join(struct.pack('<IIIHBB', *r) for r in rows))
     return table, rows, costs
 
+JUMP_RUN_FRAME = 1
+
 def heroes(work):
     out = []
     fire = (work / '9C8F9A9E.levl').read_bytes()
@@ -173,14 +175,16 @@ def heroes(work):
         # The right-facing idle and run source cells. Left is SAT X flip.
         idle = 168 if hero == 0 else 176 if hero == 2 else 4
         out.append((f'hero{hero}_idle', frame(idle), (32, 32)))
+        run_frames = []
         for k in range(6):
             legs = frame(104 + k)
             bob=(0,1,2,0,1,2)[k] if hero==0 else (1 if k in (2,5) else 0) if hero in (1,3) else 0
             a = np.asarray(legs).copy(); a[:38 + bob if hero==0 else 0] = 0
             merged = Image.fromarray(a)
             merged.alpha_composite(frame(88 + k), (0, bob))
-            out.append((f'hero{hero}_run{k}', merged, (32, 32)))
-        out.append((f'hero{hero}_jump', frame(132), (32, 32)))
+            out.append((f'hero{hero}_run{k}', merged, (32, 32))); run_frames.append(merged)
+        # Airborne = one run frame held (saves the somersault's sprite budget).
+        out.append((f'hero{hero}_jump', run_frames[JUMP_RUN_FRAME], (32, 32)))
         out.append((f'hero{hero}_crouch', frame(120), (32, 32)))
     # A native projectile and blast can coexist with every stage palette.
     for name, color, radius in [('shot', (255, 255, 180, 255), 2), ('enemy_shot', (255, 50, 50, 255), 3), ('blast', (255, 160, 30, 255), 7)]:
@@ -327,9 +331,10 @@ def make_scene(stage, work, previews, shared):
         # Platform playfields now include the source's top 16 lines. Gameplay
         # sprites passed in world-16 coordinates are baked 16 lines lower, so
         # the renderer needs no per-draw Y adjustment.
-        hud0=meta['presentation']['hud'][0][0];motion0=meta['presentation']['motion'][0][0]
+        hud0=meta['presentation']['hud'][0][0];aim0=meta['presentation']['aim'][0][0];motion0=meta['presentation']['motion'][0][0]
         for i,(name,im,(ax,ay)) in enumerate(sprites):
-            if i<hud0 or motion0<=i<motion0+20: sprites[i]=(name,im,(ax,ay-16))
+            if i<hud0 or aim0<=i<motion0+8:   # gameplay, aim and motion poses (not the HUD)
+                sprites[i]=(name,im,(ax,ay-16))
         entries=presentation.add_foreground(foreground,sprites)
         meta['foreground_offset']=a.add('foreground_sprites',b''.join(struct.pack('<hhH',*v) for v in entries))
         meta['foreground_count']=len(entries)
@@ -353,19 +358,13 @@ def main():
         data, meta = make_scene(stage, work, previews, shared)
         (out/f's{stage}.bin').write_bytes(data); scenes.append(meta)
     ui_h,ui_c,ui_bytes=frontend.bake(ROOT,work,out,previews,cblock_frame)
-    # 96 ASCII glyphs use background characters, palette 15.
+    # 96 ASCII glyphs use background characters, palette 15: the Saturn small
+    # font's 8x8 frames (frame = char - 0x21; 0x7f is its dialogue arrow).
     glyphs = []
-    font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf', 8)
+    font_path = work/'srgb'/'12072E60.srgb'
     for ch in range(32, 128):
-        im = Image.new('1', (8,8)); ImageDraw.Draw(im).text((0,-2), chr(ch), font=font, fill=1)
-        glyphs.append(planar_tile(np.asarray(im, np.uint8)*15))
-    # Four spare glyphs form the bordered dialogue panel in the BAT.
-    for k in range(4):
-        tile=np.zeros((8,8),np.uint8)
-        if k==1:tile[0:2,:]=15
-        if k==2:tile[:,0:2]=15
-        if k==3:tile[:,6:8]=15
-        glyphs[91+k]=planar_tile(tile)
+        px = np.asarray(cblock_frame(font_path, ch - 0x21)) if ch > 32 and ch - 0x21 < 106 else np.zeros((8,8,4), np.uint8)
+        glyphs.append(planar_tile(((px[..., 3] >= 64) * 15).astype(np.uint8)))
     (out/'font.bin').write_bytes(b''.join(glyphs))
     h = ['/* Generated: all offsets are Arcade RAM byte addresses. */', '#pragma once', '#include <stdint.h>',
          'typedef struct { uint32_t bytes, pal, tiles, map, collision, sprites, triggers, story, track, rules, occlusion, foreground; uint16_t cols, ccols, crows, nsprites, nforeground; int16_t sx, sy, width; uint8_t ntr, cw, ch; } PceScene;',

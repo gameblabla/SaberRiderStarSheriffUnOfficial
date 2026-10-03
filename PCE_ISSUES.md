@@ -49,6 +49,24 @@ Implementation status below does not replace the user's visual/audio acceptance.
       selected portrait as hardware sprites, silhouettes for the others.
 - [x] Fixed hero aim/motion sprite ID strides (heroes 1-3 showed the wrong pose).
 
+## Third pass (2026-10-04, playtest feedback)
+
+- [x] Death follows the main game on platform stages: the hero hops and falls
+      where it died, then stands up at the last safe spot (about 1.2 s, lives -1,
+      hearts refilled, 2 s of blinking invulnerability). No stage reload, no black
+      screen. A hit that zeroes hearts while `lives` is 0 still ends in the
+      continue / game-over screens. Falling into a pit and death zones kill too.
+      Race, Ramrod and space still restart their phase.
+- [x] April (and every hero) showed the wrong sprites while shooting/jumping:
+      `presentation.py` captured the loop's `cell()` closure late, so the
+      standing-shot and airborne poses were all cut from Colt's sheet. Fixed.
+- [x] Jumping holds a single running frame (`JUMP_RUN_FRAME`) instead of the
+      somersault cycle; the three airborne motion frames per hero are gone.
+- [x] Dialogue looks like Saturn's: the real nine-slice tileset box (green,
+      purple, red, blue per script tag) as two sprite halves behind the BG layer,
+      the Saturn small font on BG cells, the avatar overlapping the box corner
+      and a blinking arrow. See `story_pce.c`.
+
 Remaining integration/acceptance work:
 
 - [ ] Integrate the reference ROM's two-channel, scanline-delivered 2-bit ADPCM

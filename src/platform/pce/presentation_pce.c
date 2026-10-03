@@ -21,13 +21,13 @@ PRESENT static void panel_draw(void) {
     uint8_t x=panel_x,y=panel_y,w=panel_w,h=panel_h;
     extern volatile uint16_t pce_scroll_x;
     for(uint8_t row=0;row<h;++row)for(uint8_t col=0;col<w;++col) {
-        uint8_t tile=(row==0||row==h-1)?92:col==0?93:col==w-1?94:91;
         uint16_t address=pce_raster_enabled?(uint16_t)(48+y+row)*128+x+col:
             (uint16_t)(y+row)*64+(((pce_scroll_x>>3)+x+col)&63);
-        video_vdc(0,address);video_vdc(2,0xf000+(PCE_FONT_WORD>>4)+tile);
+        video_vdc(0,address);video_vdc(2,0xf000+(PCE_FONT_WORD>>4));
     }
 }
 
+/* Blank BG cells (the font's space glyph) where a sprite panel sits behind the text layer. */
 void video_panel(uint8_t x,uint8_t y,uint8_t w,uint8_t h) {
     panel_x=x;panel_y=y;panel_w=w;panel_h=h;overlay_call(0x74,panel_draw);
 }

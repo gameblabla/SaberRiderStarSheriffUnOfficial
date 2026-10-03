@@ -53,7 +53,9 @@ PCE_COMBAT void combat_tick(void) {
         dialogs_done|=1<<k;pce_campaign.story=k;pce_campaign.event=1;return;
     }
     for(uint8_t k=0;k<ndeath;++k)if(zone(death_zones[k])&&!safe_timer) {
-        campaign_hurt();player.x=death_zones[k][4];player.y=death_zones[k][5];safe_timer=120;
+        campaign_hurt();safe_timer=120;
+        if(pce_death){safe_x=death_zones[k][4];safe_y=death_zones[k][5];}
+        else{player.x=death_zones[k][4];player.y=death_zones[k][5];}
     }
     if(pce_metrics.stage==4&&pce_campaign.boss_round==2) {
         for(uint8_t k=0;k<8;++k)if(actors[k].active&&!(actors[k].type>=12&&actors[k].type<=28))return;
