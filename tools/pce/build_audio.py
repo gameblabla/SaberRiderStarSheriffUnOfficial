@@ -63,8 +63,9 @@ def build(out):
     voices=[];rows=[]
     for hero,name in enumerate(('saber','fireball','april','colt')):
         bank=bytearray();samples=[]
-        for event,rid in zip(('jump','hurt1','death1'),('9C7B3FD9','BF4917FF','89389611')):
-            src=sfx/f'{rid}.wav' if hero==1 else ROOT/f'assets/voice/{name}_{event}.wav'
+        # Events 3/4 are the enemies' hit and death yells (game sfx 5 and 6), shared by every hero bank.
+        for event,rid in zip(('jump','hurt1','death1','enemy_hit','enemy_death'),('9C7B3FD9','BF4917FF','89389611','BF5B14EA','8923950D')):
+            src=sfx/f'{rid}.wav' if hero==1 or event.startswith('enemy') else ROOT/f'assets/voice/{name}_{event}.wav'
             result=subprocess.run(['ffmpeg','-v','error','-i',str(src),'-ac','1','-ar','8000','-af','volume=0.65','-f','s16le','-'],check=True,capture_output=True)
             pcm=array.array('h');pcm.frombytes(result.stdout)
             data=encode([0]*32+list(pcm)+[0]*64)
@@ -74,7 +75,7 @@ def build(out):
         bank.extend(bytes(-len(bank)%2048));(out/f'voice{hero}.bin').write_bytes(bank)
         voices.append(dict(hero=hero,bytes=len(bank),samples=samples))
         rows.append('{'+','.join('{%d,%d}'%(s['address'],s['bytes']) for s in samples)+'}')
-    (out/'samples.h').write_text('/* Generated hardware ADPCM bank offsets. */\nstatic const uint16_t voice_samples[4][3][2]={'+','.join(rows)+'};\n')
+    (out/'samples.h').write_text('/* Generated hardware ADPCM bank offsets. */\nstatic const uint16_t voice_samples[4][5][2]={'+','.join(rows)+'};\n')
     (out/'audio.json').write_text(json.dumps(dict(tracks=tracks,end_track=20,volume_blocks=[2,21,40],voices=voices,dda=pcm_report),indent=2)+'\n')
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--out',type=Path,required=True);a=p.parse_args();build(a.out.resolve())

@@ -39,7 +39,7 @@ bool loader_voice(uint8_t hero) {
     uint32_t sector=hero==0?(uint32_t)__cd_voice0_bin__sector:hero==1?(uint32_t)__cd_voice1_bin__sector:
         hero==2?(uint32_t)__cd_voice2_bin__sector:(uint32_t)__cd_voice3_bin__sector;
     pce_sector_t s={.lo=sector,.md=sector>>8,.hi=sector>>16};
-    uint16_t bytes=voice_samples[hero][2][0]+voice_samples[hero][2][1];
+    uint16_t bytes=voice_samples[hero][4][0]+voice_samples[hero][4][1];
     pce_cdb_adpcm_reset();++pce_metrics.disc_reads;
     uint8_t error=pce_cdb_adpcm_read_from_cd(s,((uint32_t)bytes+2047)>>11,0);
     if(error){pce_metrics.load_error=error;return false;}
@@ -106,15 +106,16 @@ void audio_music(uint8_t track) {
     music_active = pce_music_status == 0;
 }
 void audio_effect(uint8_t tone) {
-    if(tone==2||tone==5||tone==6) {
-        uint8_t event=tone==2?0:tone==5?1:2,priority=event+1;
+    if(tone==2||tone==5||tone==6||tone==7||tone==8) {
+        /* 7/8: enemy hit / death yells share the hero's ADPCM bank and never cut a hero voice. */
+        uint8_t event=tone==2?0:tone==5?1:tone==6?2:tone==7?3:4,priority=event>2?1:event+1;
         if((pce_cdb_adpcm_status()&ADPCM_STOPPED)||priority>=voice_priority) {
             pce_cdb_adpcm_stop();
             pce_cdb_adpcm_play(voice_samples[voice_hero][event][0],voice_samples[voice_hero][event][1],12,PCE_CDB_ADPCM_ONE_SHOT);
             voice_priority=priority;
         }
     }
-    if(tone==2||tone==5||tone==6)return;
+    if(tone==2||tone==5||tone==6||tone==7||tone==8)return;
     audio_pcm_play(tone==1?0:tone==4?1:2);
 }
 void audio_tick(void) {}

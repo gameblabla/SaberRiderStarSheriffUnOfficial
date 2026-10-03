@@ -67,6 +67,25 @@ Implementation status below does not replace the user's visual/audio acceptance.
       the Saturn small font on BG cells, the avatar overlapping the box corner
       and a blinking arrow. See `story_pce.c`.
 
+## Fourth pass (2026-10-04, playtest feedback)
+
+- [x] Straight up / straight down aim poses for every hero (standing aim legs +
+      vertical torso); down + direction keeps running and aims down-diagonally
+      (crouch only when down is held alone). Aim poses also work in the air.
+- [x] Slide pose per hero (cell 149). A slide knocks enemies down.
+- [x] Enemies: 6-frame run cycles (walker, grunt), 6-frame death animations
+      (walker, grunt, sniper) and their hit / death yells (original sfx 5 and 6,
+      ADPCM events 3/4 in each hero bank, never cutting a hero voice).
+- [x] Walkers keep their heading and turn round at walls and cars; they only
+      fire when facing the hero.
+- [x] The camera never scrolls backwards and the left screen edge is a wall.
+- [x] Platform stages use the standard 224-line timing (was 240 lines).
+- [x] Dialogue box: BG cells under it are blanked except the four corner blocks,
+      which stay in front of the scenery, so no black margins show.
+- [ ] "Field / foreground glitches": not reproduced in scans of stage 1 (static
+      and scrolling); backward scrolling (now removed) was the suspect. Needs a
+      screenshot if it persists.
+
 Remaining integration/acceptance work:
 
 - [ ] Integrate the reference ROM's two-channel, scanline-delivered 2-bit ADPCM

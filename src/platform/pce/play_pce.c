@@ -29,7 +29,8 @@ const PceScene *play_scene;
 #define scene play_scene
 uint16_t camera,frame;
 uint8_t hero,facing,safe_timer;
-static uint8_t fire_timer,crouch,slide_time,death_time;
+uint8_t slide_time;
+static uint8_t fire_timer,crouch,death_time;
 int16_t safe_x,safe_y;
 static int16_t drop_y;
 
@@ -141,7 +142,8 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
             player=(Body){.x=safe_x,.y=safe_y};safe_timer=120;
         }
     }
-    player.vx=0;crouch=(keys&KEY_DOWN)&&(player.coll&4);
+    /* Down alone crouches; down with a direction keeps running while aiming down-diagonally. */
+    player.vx=0;crouch=(keys&KEY_DOWN)&&(player.coll&4)&&!(keys&(KEY_LEFT|KEY_RIGHT));
     if(!(keys&KEY_SELECT)&&!crouch) {
         if(keys&KEY_LEFT){player.vx=pce_campaign.boost&&hero==2?-726:-427;facing=1;}
         else if(keys&KEY_RIGHT){player.vx=pce_campaign.boost&&hero==2?726:427;facing=0;}
@@ -157,7 +159,9 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     }
     if(slide_time){crouch=1;player.vx=(int16_t)slide_time*43;if(facing)player.vx=-player.vx;--slide_time;}
     physics(&player);
-    if(pce_campaign.boss_kind){if(player.x<(int16_t)camera+8)player.x=camera+8;if(player.x>(int16_t)camera+248)player.x=camera+248;}
+    /* The screen only scrolls forwards: the left edge is a wall. */
+    if(player.x<(int16_t)camera+8){player.x=camera+8;if(player.vx<0)player.vx=0;}
+    if(pce_campaign.boss_kind&&player.x>(int16_t)camera+248)player.x=camera+248;
     if((player.coll&4)&&!pce_death){safe_x=player.x;safe_y=player.y;}
     if(player.y>272&&!pce_death) {
         campaign_hurt();
@@ -180,11 +184,15 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
         }
         if(a->type==11){advance(&a->b.x,&a->b.fx,a->flip?-640:640);continue;}
         if(a->type==28){if(a->timer)--a->timer;else a->b.x-=2;continue;}
-        a->flip=player.x<a->b.x;
+        if(a->dead){if(++a->dead>24)a->active=0;continue;}
+        /* Walkers keep the heading they spawned with and turn round at walls and cars; the rest face the hero. */
+        if(a->type>=6)a->flip=player.x<a->b.x;
         a->b.vx=a->type<6?(a->flip?-170:170):0;
         if(a->timer>45)a->b.vx=0;
         physics(&a->b);
-        if(a->timer)--a->timer;else if(a->type>=2&&(a->type!=31||pce_campaign.boss_kind)) {
+        if(a->b.coll&3)a->flip^=1;
+        if(a->b.vx)++a->anim;
+        if(a->timer)--a->timer;else if(a->type>=2&&(a->type!=31||pce_campaign.boss_kind)&&(a->flip==(player.x<a->b.x))) {
             shoot(a->b.x+(a->flip?-16:16),a->b.y-8,a->flip?-3:3,0,true);a->timer=pce_options.difficulty==0?120:pce_options.difficulty==1?90:62;
         }
     }
@@ -200,27 +208,37 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
             }
         } else for(uint8_t j=0;j<8;++j) {
             Actor *a=&actors[j];
-            if(a->active&&!(a->type>=12&&a->type<=28)&&s->x>a->b.x-10&&s->x<a->b.x+10&&s->y>a->b.y-18&&s->y<a->b.y+24) {
+            if(a->active&&!a->dead&&!(a->type>=12&&a->type<=28)&&s->x>a->b.x-10&&s->x<a->b.x+10&&s->y>a->b.y-18&&s->y<a->b.y+24) {
                 s->active=0;if(a->type>=30&&facing==a->flip)a->hp=1;
-                if(!--a->hp){a->active=0;++pce_campaign.score;}audio_effect(4);break;
+                if(!--a->hp)actor_kill(a);else audio_effect(7);
+                audio_effect(4);break;
             }
         }
     }
-    camera=pce_campaign.boss_kind?scene->width-256:player.x>120?player.x-120:0;
+    if(pce_campaign.boss_kind)camera=scene->width-256;
+    else if(player.x>120&&(uint16_t)(player.x-120)>camera)camera=player.x-120;
     if(camera>(uint16_t)(scene->width-256))camera=scene->width-256;
     pce_metrics.player_x=player.x;pce_metrics.player_y=player.y;pce_metrics.camera_x=camera;pce_metrics.hero=hero;
 }
 __attribute__((noinline)) void play_draw(void) {
     video_background(camera);video_sat_begin();foreground_prepare();presentation_draw();
-    uint8_t pose=crouch?8:!(player.coll&4)?7:player.vx?1+(frame/6)%6:0;
+    uint8_t keys=pce_control.keys,stage=pce_metrics.stage-1;
+    bool grounded=player.coll&4,side=keys&(KEY_LEFT|KEY_RIGHT);
+    uint8_t pose=crouch?8:!grounded?7:player.vx?1+(frame/6)%6:0;
     uint16_t id=hero*9+pose;
-    if((player.coll&4)&&!crouch&&!player.vx&&fire_timer)id=pce_motion_base[pce_metrics.stage-1]+hero*2+(fire_timer>6);
-    if((player.coll&4)&&((pce_control.keys&KEY_UP)||((pce_control.keys&KEY_DOWN)&&(!crouch||(pce_control.keys&(KEY_SELECT|KEY_LEFT|KEY_RIGHT)))))) {
-        uint8_t direction=pce_control.keys&KEY_UP?0:1;
-        id=pce_present_base[pce_metrics.stage-1][2]+hero*14+direction;
-        if(player.vx)id+=2+direction*5+(frame/6)%6;
-        if(pce_control.keys&KEY_LEFT)facing=1;
-        if(pce_control.keys&KEY_RIGHT)facing=0;
+    if(slide_time)id=pce_motion_base[stage]+hero*3+2;
+    else if(grounded&&!crouch&&!player.vx&&fire_timer)id=pce_motion_base[stage]+hero*3+(fire_timer>6);
+    /* Aim poses: up / down diagonals (running when moving), straight up, and straight down in the air. */
+    if(!slide_time&&((keys&KEY_UP)||((keys&KEY_DOWN)&&(side||!grounded)))) {
+        uint8_t direction=keys&KEY_UP?0:1;
+        id=pce_present_base[stage][2]+hero*16;
+        if(!side)id+=14+direction;
+        else {
+            id+=direction;
+            if(grounded&&player.vx)id+=2+direction*6+(frame/6)%6;
+        }
+        if(keys&KEY_LEFT)facing=1;
+        if(keys&KEY_RIGHT)facing=0;
     }
     if(!safe_timer||(frame&4))video_sprite(id,player.x-camera,player.y-16,facing,16);
     /* Essential projectiles precede optional distant enemies. */
@@ -230,6 +248,12 @@ __attribute__((noinline)) void play_draw(void) {
     for(uint8_t k=0;k<8;++k) if(actors[k].active) {
         Actor *a=&actors[k];uint16_t id=pce_actor_ids[a->type];
         if(id==255)continue;
+        if(id>=39&&id<=41) {
+            /* walker 0 / grunt 1 / sniper 2: run frames, then six death frames */
+            uint16_t base=pce_enemy_base[stage],kind=id-39;
+            if(a->dead)id=base+(kind==0?6:kind==1?18:24)+(a->dead-1)/4;
+            else if(a->b.vx&&kind<2)id=base+kind*12+(a->anim>>2)%6;
+        }
         if(!video_sprite_optional(id,a->b.x-camera,a->b.y-16,a->flip,16))a->active=0;
     }
     foreground_draw();video_sat_end();

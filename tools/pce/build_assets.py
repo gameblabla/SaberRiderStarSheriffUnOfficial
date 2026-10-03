@@ -333,7 +333,7 @@ def make_scene(stage, work, previews, shared):
         # the renderer needs no per-draw Y adjustment.
         hud0=meta['presentation']['hud'][0][0];aim0=meta['presentation']['aim'][0][0];motion0=meta['presentation']['motion'][0][0]
         for i,(name,im,(ax,ay)) in enumerate(sprites):
-            if i<hud0 or aim0<=i<motion0+8:   # gameplay, aim and motion poses (not the HUD)
+            if i<hud0 or aim0<=i<meta['presentation']['end']:   # gameplay, aim and motion poses (not the HUD)
                 sprites[i]=(name,im,(ax,ay-16))
         entries=presentation.add_foreground(foreground,sprites)
         meta['foreground_offset']=a.add('foreground_sprites',b''.join(struct.pack('<hhH',*v) for v in entries))

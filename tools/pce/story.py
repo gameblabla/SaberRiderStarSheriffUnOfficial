@@ -21,7 +21,7 @@ def source_script(path, name):
     return ''.join(ast.literal_eval(s) for s in re.findall(r'"(?:[^"\\]|\\.)*"',match[1]))
 
 COLOURS={'GREEN':0,'PURPLE':1,'RED':2,'BLUE':3}
-TEXT_COLUMNS=25     # BG text cells inside the dialogue box
+TEXT_COLUMNS=23     # BG text cells inside the dialogue box
 
 def pages(script,portraits):
     out=[]

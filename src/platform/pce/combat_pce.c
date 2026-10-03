@@ -123,8 +123,9 @@ PCE_COMBAT void combat_tick(void) {
             }
         }
     }
-    for(uint8_t k=0;k<8;++k)if(actors[k].active&&!(actors[k].type>=12&&actors[k].type<=28)&&!safe_timer&&distance(player.x,actors[k].b.x)<14&&distance(player.y,actors[k].b.y)<24) {
-        safe_timer=120;campaign_hurt();
+    for(uint8_t k=0;k<8;++k)if(actors[k].active&&!actors[k].dead&&!(actors[k].type>=12&&actors[k].type<=28)&&distance(player.x,actors[k].b.x)<14&&distance(player.y,actors[k].b.y)<24) {
+        if(slide_time)actor_kill(&actors[k]);      /* a slide knocks enemies down */
+        else if(!safe_timer){safe_timer=120;campaign_hurt();}
     }
 }
 PCE_COMBAT void combat_draw(void) {

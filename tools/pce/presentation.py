@@ -104,27 +104,42 @@ def add_art(root,work,stage,sprites,frame):
                     legs=np.asarray(cell(104+k)).copy();legs[:38+bob if hero==0 else 0]=0
                     im=Image.fromarray(legs);im.alpha_composite(cell(torso),(0,bob))
                     row.append(add(f'hero{hero}_aim{torso}_run{k}',im,(32,32)))
+            # Straight up / down (standing aim legs + the vertical torso, as player_resolve's CS_AIM).
+            for name,torso,dy in [('aimup',38,-30),('aimdown',46,-9)]:
+                im=Image.new('RGBA',(64,64));im.alpha_composite(cell(22));im.alpha_composite(cell(torso),(0,dy))
+                row.append(add(f'hero{hero}_{name}',im,(32,32)))
             aim.append(row)
             pending.append((hero,cell))
     # Motion poses follow every aim row, so each group has a constant stride
-    # per hero (aim: 14, motion: 2) from its base ID. Jumping reuses one frozen
+    # per hero (aim: 16, motion: 3) from its base ID. Jumping reuses one frozen
     # run frame (hero*9+7), so there are no airborne motion frames.
     for hero,cell in pending:
         row=[]
-        for name,n in [('shoot',40),('recoil',41)]:
+        for name,n in [('shoot',40),('recoil',41),('slide',149)]:
             row.append(add(f'hero{hero}_{name}',cell(n),(32,32)))
         motion.append(row)
-    return dict(portraits=portraits,dialog=dialog,hud=hud,digits=digits,aim=aim,motion=motion)
+    enemy=0
+    if stage in (1,3,4,5):
+        # Run (cells 0-5) and death frames of the three enemy bodies, right-facing; left is a flip.
+        enemy=len(sprites)
+        for name,crhc,run,death in [('walker','02A38AFB',range(6),range(18,24)),('grunt','112DF34C',range(6),range(54,60)),('sniper','D39700C4',(),range(54,60))]:
+            d=(work/f'{crhc}.levl').read_bytes();aid=struct.unpack_from('<I',d,4)[0];ox,oy=struct.unpack_from('<ff',d,8)
+            for kind,cells in (('run',run),('death',death)):
+                for k,n in enumerate(cells):
+                    add(f'{name}_{kind}{k}',frame(work/'srgb'/f'{aid:08X}.srgb',n),(round(ox),round(oy)))
+    return dict(portraits=portraits,dialog=dialog,hud=hud,digits=digits,aim=aim,motion=motion,enemy=enemy,end=len(sprites))
 
 def emit_tables(out,scenes,h,c):
     m=scenes[0]['presentation']
-    for name,shape in [('hud','[4][4]'),('digits','[10]'),('aim','[4][14]')]:
+    for name,shape in [('hud','[4][4]'),('digits','[10]'),('aim','[4][16]')]:
         def values(v):return '{'+','.join(values(x) if isinstance(x,list) else str(x) for x in v)+'}'
         h.append(f'extern const uint16_t pce_{name}_ids{shape};')
         c.append(f'const uint16_t pce_{name}_ids{shape}='+values(m[name])+';')
     # Actor inventories vary; presentation IDs use per-scene base addresses.
     h.append('extern const uint16_t pce_dialog_base[7];')
     c.append('const uint16_t pce_dialog_base[7]={'+','.join(str(m['presentation']['dialog']) for m in scenes)+'};')
+    h.append('extern const uint16_t pce_enemy_base[7];')
+    c.append('const uint16_t pce_enemy_base[7]={'+','.join(str(m['presentation']['enemy']) for m in scenes)+'};')
     h.append('extern const uint16_t pce_motion_base[7];')
     c.append('const uint16_t pce_motion_base[7]={'+','.join(str(m['presentation']['motion'][0][0]) if m['presentation']['motion'] else '0' for m in scenes)+'};')
     h.append('extern const uint16_t pce_present_base[7][3];')

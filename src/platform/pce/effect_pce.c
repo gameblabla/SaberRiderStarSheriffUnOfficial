@@ -2,7 +2,7 @@
 /* Frozen-scene feasibility test: a four-color prepared base remains in planes
  * 0/1, while only planes 2/3 change. Eight unique characters temporarily use
  * the font's final eight glyphs; a stage reload restores the complete font. */
-__attribute__((noinline)) void effect_init(void) {
+PCE_FLOW void effect_init(void) {
     video_scroll(0,0);video_sat_begin();video_sat_end();video_vdc(0,0);
     for(uint16_t k=0;k<2048;++k)video_vdc(2,0xf000|(PCE_FONT_WORD>>4));
     static const uint8_t base[4][3]={{0,0,0},{1,2,5},{4,2,0},{7,7,7}};
@@ -27,7 +27,7 @@ __attribute__((noinline)) void effect_init(void) {
         video_vdc(2,0xf000+(PCE_FONT_WORD>>4)+88+tile);
     }
 }
-__attribute__((noinline)) void effect_draw(uint8_t tick) {
+PCE_FLOW void effect_draw(uint8_t tick) {
     uint8_t cls=1+(tick/16)%3;
     for(uint8_t tile=0;tile<4;++tile) {
         video_vdc(0,PCE_FONT_WORD+(92+tile)*16+8);
