@@ -389,7 +389,7 @@ static void draw_shadow(const Body *b, const Level *L, real cam_x, real cam_y, i
 
 void body_draw_shadow(const Body *b, const Level *L, real cam_x, real cam_y, int sw, int sh)
 {
-    draw_shadow(b, L, cam_x, cam_y, sw, sh, b->x + b->ox - cam_x, r_min(R(40), r_max(R(10), b->hx + R(4))));
+    draw_shadow(b, L, cam_x, cam_y, sw, sh, b->x + b->ox - cam_x, r_min(R(60), r_max(R(10), b->hx + R(4))));
 }
 
 void character_draw_shadow(const Character *c, const Level *L, real cam_x, real cam_y, int sw, int sh)
@@ -397,11 +397,37 @@ void character_draw_shadow(const Character *c, const Level *L, real cam_x, real 
     /* Use character_draw's pixel anchor before adding the fixed pose offset.
      * Keep it in screen coordinates: adding and subtracting a fractional camera
      * can introduce float rounding that shifts an endpoint by one pixel. */
-    real cx = r_floorr(c->body.x - c->origin_x - cam_x) + c->origin_x +
-         (c->shadow_half > 0 ? c->shadow_x : c->body.ox);
-    real half = c->shadow_half > 0 ? c->shadow_half : r_min(R(40), r_max(R(10), c->body.hx + R(4)));
-    /* Every pose uses the same footprint at its current art offset. */
-    draw_shadow(&c->body, L, cam_x, cam_y, sw, sh, cx, half);
+    if (c->shadow_half > 0) {
+        real cx = r_floorr(c->body.x - c->origin_x - cam_x) + c->origin_x + c->shadow_x;
+        /* Every pose uses the same footprint at its current art offset. */
+        draw_shadow(&c->body, L, cam_x, cam_y, sw, sh, cx, c->shadow_half);
+        return;
+    }
+    /* Enemies have no per-pose tables: size the shadow from the collision box,
+     * falling back to the current hurtbox when the box is degenerate. The first
+     * boss (CRHC 2A02BD4F) ships a zero box, which clamped to the 10 px minimum
+     * while its hurtbox is 115 px wide; its feet then sat 35 px above the art's
+     * bottom, so high platforms nearby read as far away and drew tiny. */
+    const HurtBox *h = character_hurt(c);
+    real base = c->body.hx + R(4);
+    real half = base;
+    real ox = c->body.ox;
+    Body b = c->body;
+    if (h && h->hw > half) {
+        half = h->hw;
+        if (c->body.hx <= R(0)) ox = h->ox;
+    }
+    half = r_min(R(60), r_max(R(10), half));
+    if (h && h->hh > R(0) && c->body.hy <= R(0)) {
+        real hurt_feet = c->body.y + h->oy + h->hh;
+        real body_feet = c->body.y + c->body.oy + c->body.hy;
+        if (hurt_feet > body_feet) {
+            b.oy = 0;
+            b.hy = hurt_feet - b.y;
+        }
+    }
+    real cx = r_floorr(c->body.x - c->origin_x - cam_x) + c->origin_x + ox;
+    draw_shadow(&b, L, cam_x, cam_y, sw, sh, cx, half);
 }
 
 /* FUN_0041c530: player state -> legs anim, torso overlay anim, muzzle base offset, horizontal velocity */

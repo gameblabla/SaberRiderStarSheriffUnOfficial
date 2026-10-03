@@ -769,6 +769,9 @@ void game_draw(Game *g)
                  * are excluded from the actor shadow pass. */
                 if (!e->cls || e->layer != i || (e->cls >= EC_PROP && e->cls < EC_STAMPEDE) ||
                     !e->ch.def || e->ch.anim >= CHAR_MAX_ANIMS) continue;
+                /* The boss's rider clone copies the horse's body exactly: a second
+                 * shadow at the same spot would double-darken the oval. */
+                if (e->cls == EC_HORSEBOSS && e->variant == 99) continue;
 #ifdef PLAT_SATURN
                 if (e->cls == EC_BUGGY) continue;   /* convoy horses retain their original bitmap shadows */
 #endif
