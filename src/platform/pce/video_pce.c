@@ -1,6 +1,7 @@
 #include "video_pce.h"
 #include "arcade_pce.h"
 #include "sprite_cache_pce.h"
+#include "overlay_pce.h"
 #include <string.h>
 
 volatile PceTelemetry pce_metrics;
@@ -9,19 +10,29 @@ volatile uint8_t pce_vdc_index;
 volatile uint16_t pce_scroll_x, pce_scroll_y;
 volatile uint8_t pce_floor_pending;
 static const PceScene *scene;
+const PceScene *video_scene_ptr;
 static uint16_t cache_ids[PCE_BG_MAX_TILES] PCE_WORK;
 static uint16_t cache_refs[PCE_BG_MAX_TILES] PCE_WORK;
-static uint16_t columns[33][28] PCE_WORK;
+static uint16_t columns[33][30] PCE_WORK;
 static uint16_t first_column, last_column;
 static uint16_t free_cursor;
 static uint8_t buffer[2048] PCE_STAGE;
-static uint8_t occupancy[224], trial[224];
-static uint8_t clipped_pattern[128];
-static uint8_t clipped_count;
-static vdc_sprite_t sat[2][64];
-static uint8_t sat_page, sat_count,front_start,front_keep;
+uint8_t sprite_occupancy[240], sprite_line_lo, sprite_line_hi, sprite_line_ok, sprite_exact;
+extern void sprite_lines_reserve(void), sprite_lines_release(void);
+uint8_t clipped_pattern[128];
+uint8_t clipped_count;
+uint8_t sprite_screen_height=224;
+vdc_sprite_t sat[2][64];
+uint8_t sat_page, sat_count;
+uint16_t generic_id;int16_t generic_x,generic_y;uint8_t generic_flip,generic_scale,generic_count,generic_slot,generic_ok;
+static uint8_t front_start,front_keep,sat_previous=64;
+int16_t sprite_emit_x,sprite_emit_y;
+uint16_t sprite_emit_id,video_nsprites;
+uint8_t sprite_emit_flip,sprite_fast_miss,sprite_emit_ok;
+extern void sprite_fast(void);
+extern void sprite_generic(void);
 
-static uint8_t descriptor[384] PCE_STAGE;
+uint8_t descriptor[384] PCE_STAGE;
 
 PCE_RENDER void video_vdc(uint8_t index, uint16_t value) {
     pce_cpu_irq_disable();
@@ -34,6 +45,7 @@ PCE_RENDER void video_vdc(uint8_t index, uint16_t value) {
     pce_cpu_irq_enable();
 }
 PCE_RENDER void video_init(void) {
+    __attribute__((leaf)) asm volatile("csh" ::: "memory");
     pce_cpu_irq_disable();
     pce_vdc_set_resolution(256, 224, 0);
     pce_vdc_bg_set_size(VDC_BG_SIZE_64_32);
@@ -53,8 +65,8 @@ PCE_RENDER static void timing(bool wide) {
     video_vdc(VDC_REG_MEMORY, 0x0010);
     video_vdc(VDC_REG_TIMING_HSYNC, wide ? 0x0b02 : 0x0202);
     video_vdc(VDC_REG_TIMING_HDISP, wide ? 0x043f : 0x041f);
-    video_vdc(VDC_REG_TIMING_VSYNC, 0x1702);
-    video_vdc(VDC_REG_TIMING_VDISP, 223);
+    video_vdc(VDC_REG_TIMING_VSYNC, sprite_screen_height==240?0x0c02:0x1702);
+    video_vdc(VDC_REG_TIMING_VDISP, sprite_screen_height-1);
     video_vdc(VDC_REG_TIMING_VDISPEND, 12);
     video_vdc(VDC_REG_DMA_CONTROL, 0);
     pce_cpu_irq_enable();
@@ -69,8 +81,12 @@ PCE_RENDER void video_display(bool enable) {
               (enable ? VDC_CONTROL_ENABLE_BG | VDC_CONTROL_ENABLE_SPRITE : 0));
 }
 PCE_RENDER void video_scroll(uint16_t x, uint16_t y) { pce_scroll_x = x; pce_scroll_y = y; }
+extern void foreground_reset(void);
 PCE_RENDER void video_scene(const PceScene *s) {
-    scene = s;
+    foreground_reset();
+    scene = s;video_scene_ptr=s;sat_previous=64;video_nsprites=s->nsprites;
+    memset(sprite_slot_of,0xff,sizeof sprite_slot_of);
+    sprite_screen_height=s->collision?240:224;sprite_exact=!s->collision;
     timing(false);
     memset(cache_refs, 0, sizeof cache_refs);
     memset(cache_ids, 0xff, sizeof cache_ids);
@@ -87,13 +103,29 @@ PCE_RENDER void video_scene(const PceScene *s) {
     pce_vce_set_color(255, 0x1ff);
     pce_vdc_index = 0;
 }
+/* Tile directory (Arcade $1e0000, two bytes per tile id): port 3 base is the
+ * only register that changes between lookups. */
+static inline uint16_t directory_get(uint16_t id) {
+    volatile uint8_t *r=(volatile uint8_t*)0x1a30;
+    uint16_t a=id<<1;
+    r[2]=a;r[3]=a>>8;r[4]=30+(id>>15);
+    uint8_t lo=r[0];return lo|(uint16_t)r[0]<<8;
+}
+static inline void directory_set(uint16_t id,uint16_t slot) {
+    volatile uint8_t *r=(volatile uint8_t*)0x1a30;
+    uint16_t a=id<<1;
+    r[2]=a;r[3]=a>>8;r[4]=30+(id>>15);
+    r[0]=slot;r[0]=slot>>8;
+}
+/* A column's 30 BAT entries are written with the VDC address increment set to
+ * 64 words, so only one address is programmed. IRQs stay masked meanwhile. */
 PCE_RENDER static bool column_load(uint16_t world) {
-    if (!arcade_read(1, scene->map + (uint32_t)(world % scene->cols) * 84, buffer, 84)) return false;
+    if (!arcade_read(1, scene->map + (uint32_t)(world % scene->cols) * 90, buffer, 90)) return false;
     uint16_t *refs = columns[world % 33];
-    for (uint8_t y = 0; y < 28; ++y) {
+    arcade_seek(3,0x1e0000UL);
+    for (uint8_t y = 0; y < 30; ++y) {
         uint16_t id = buffer[y * 3] | (uint16_t)buffer[y * 3 + 1] << 8;
-        uint16_t slot;
-        arcade_read(3,0x1e0000UL+(uint32_t)id*2,&slot,2);
+        uint16_t slot=directory_get(id);
         if (slot == 0xffff) {
             slot=free_cursor;
             uint16_t checked=0;
@@ -102,21 +134,38 @@ PCE_RENDER static bool column_load(uint16_t world) {
                 if(++slot==PCE_BG_MAX_TILES)slot=0;
             }
             free_cursor=slot+1;if(free_cursor==PCE_BG_MAX_TILES)free_cursor=0;
-            if(cache_ids[slot]!=0xffff) {
-                uint16_t invalid=0xffff;
-                arcade_write(3,0x1e0000UL+(uint32_t)cache_ids[slot]*2,&invalid,2);
-            }
+            if(cache_ids[slot]!=0xffff)directory_set(cache_ids[slot],0xffff);
             pce_vdc_index = 2; *(volatile uint8_t *)0x20f7 = 2;
             if (!arcade_vram(scene->tiles + (uint32_t)id * 32,
                              PCE_BG_WORD + slot * 16, 32)) return false;
             cache_ids[slot] = id;
-            arcade_write(3,0x1e0000UL+(uint32_t)id*2,&slot,2);
+            directory_set(id,slot);
             pce_metrics.uploads += 32;
         }
         ++cache_refs[slot]; refs[y] = slot;
-        video_vdc(0, (uint16_t)y * 64 + (world & 63));
-        video_vdc(2, (PCE_BG_WORD >> 4) + slot + ((uint16_t)buffer[y * 3 + 2] << 12));
+        uint16_t word=(PCE_BG_WORD>>4)+slot+((uint16_t)buffer[y*3+2]<<12);
+        buffer[y*3]=word;buffer[y*3+1]=word>>8;
     }
+    uint16_t control=*(volatile uint16_t *)0x20f3;
+    pce_cpu_irq_disable();
+    *(volatile uint8_t *)0x20f7 = 5;
+    *IO_VDC_INDEX = 5;
+    *IO_VDC_DATA_LO = control;
+    *IO_VDC_DATA_HI = (control>>8)|0x10;
+    *(volatile uint8_t *)0x20f7 = 0;
+    *IO_VDC_INDEX = 0;
+    *IO_VDC_DATA_LO = world & 63;*IO_VDC_DATA_HI = 0;
+    *(volatile uint8_t *)0x20f7 = 2;
+    *IO_VDC_INDEX = 2;
+    for (uint8_t y = 0; y < 30; ++y) {
+        *IO_VDC_DATA_LO = buffer[y*3];
+        *IO_VDC_DATA_HI = buffer[y*3+1];
+    }
+    *(volatile uint8_t *)0x20f7 = 5;
+    *IO_VDC_INDEX = 5;
+    *IO_VDC_DATA_LO = control;
+    *IO_VDC_DATA_HI = control>>8;
+    pce_cpu_irq_enable();
     return true;
 }
 void video_restore(void) { first_column=last_column=0xffff; }
@@ -131,13 +180,13 @@ PCE_RENDER bool video_background(uint16_t camera) {
     } else {
         while (column < first_column) {
             uint16_t *refs = columns[last_column % 33];
-            for (uint8_t y = 0; y < 28; ++y) if (refs[y] != 0xffff) --cache_refs[refs[y]];
+            for (uint8_t y = 0; y < 30; ++y) if (refs[y] != 0xffff) --cache_refs[refs[y]];
             --first_column; --last_column;
             if (!column_load(first_column)) return false;
         }
         while (first_column < column) {
             uint16_t *refs = columns[first_column % 33];
-            for (uint8_t y = 0; y < 28; ++y) if (refs[y] != 0xffff) --cache_refs[refs[y]];
+            for (uint8_t y = 0; y < 30; ++y) if (refs[y] != 0xffff) --cache_refs[refs[y]];
             ++first_column; ++last_column;
             if (!column_load(last_column)) return false;
         }
@@ -162,9 +211,8 @@ __attribute__((noinline)) void video_number(uint8_t x, uint8_t y, uint16_t n) {
     text[5] = 0; video_text(x, y, text);
 }
 PCE_RENDER void video_sat_begin(void) {
-    sat_page ^= 1; sat_count = clipped_count = 0;front_start=64;front_keep=0;
-    memset(sat[sat_page], 0, sizeof sat[0]);
-    memset(occupancy, 0, sizeof occupancy);
+    sat_count = clipped_count = 0;front_start=64;front_keep=0;
+    memset(sprite_occupancy, 0, sprite_exact?240:32);
     for(uint8_t i=0;i<48;++i) {
         if(sprite_used[i])sprite_pinned[i]=2;
         else if(sprite_pinned[i])--sprite_pinned[i];
@@ -172,95 +220,81 @@ PCE_RENDER void video_sat_begin(void) {
     }
 }
 PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8_t scale) {
+    bool fast=scale==16&&pce_metrics.stage!=6;
+    if(fast) {
+        sprite_emit_id=id;sprite_emit_x=x;sprite_emit_y=y;sprite_emit_flip=flip?8:0;
+        overlay_call(0x74,sprite_fast);
+        if(!sprite_fast_miss) {
+            if(!sprite_emit_ok)++pce_metrics.essential_overflow;
+            return sprite_emit_ok;
+        }
+    }
     if (id >= scene->nsprites) return false;
-    uint8_t entry[32];
-    arcade_read(2, scene->sprites + (uint32_t)id * 16, entry, 16);
-    uint32_t pat = (uint32_t)entry[0] | (uint32_t)entry[1]<<8 | (uint32_t)entry[2]<<16 | (uint32_t)entry[3]<<24;
-    uint32_t parts = (uint32_t)entry[4] | (uint32_t)entry[5]<<8 | (uint32_t)entry[6]<<16 | (uint32_t)entry[7]<<24;
-    uint32_t pal = (uint32_t)entry[8] | (uint32_t)entry[9]<<8 | (uint32_t)entry[10]<<16 | (uint32_t)entry[11]<<24;
-    uint16_t count = entry[12] | (uint16_t)entry[13]<<8;
-    if (!count || count > 32) return false;
-    uint8_t slot=sprite_slot(id,count);
-    if(slot==48){++pce_metrics.essential_overflow;return false;}
-    if (sprite_ids[slot] != id) {
-        pce_vdc_index = 2; *(volatile uint8_t *)0x20f7 = 2;
-        arcade_vram(pat, sprite_words[slot], count * 128);
-        arcade_read(2, pal, entry, 32);
-        pce_vce_copy_palette(16 + (slot<15?slot:15), entry, 1);
-        sprite_ids[slot] = id;
-        pce_metrics.uploads += count * 128;
+    uint8_t slot=sprite_slot_of[id];
+    uint8_t count;
+    if(slot<48&&sprite_ids[slot]==id)count=sprite_count[slot];
+    else {
+        uint8_t entry[16],colors[32];
+        arcade_read(2, scene->sprites + (uint32_t)id * 16, entry, 16);
+        count = entry[12];
+        if (!count || count > 32 || entry[13]) return false;
+        slot=sprite_slot(id,count);
+        if(slot==48){++pce_metrics.essential_overflow;return false;}
+        if (sprite_ids[slot] != id) {
+            uint32_t pat = (uint32_t)entry[0] | (uint32_t)entry[1]<<8 | (uint32_t)entry[2]<<16 | (uint32_t)entry[3]<<24;
+            uint32_t pal = (uint32_t)entry[8] | (uint32_t)entry[9]<<8 | (uint32_t)entry[10]<<16 | (uint32_t)entry[11]<<24;
+            pce_vdc_index = 2; *(volatile uint8_t *)0x20f7 = 2;
+            arcade_vram(pat, sprite_words[slot], count * 128);
+            arcade_read(2, pal, colors, 32);
+            pce_vce_copy_palette(16 + (slot<15?slot:15), colors, 1);
+            sprite_ids[slot] = id;
+            pce_metrics.uploads += count * 128;
+        }
+        sprite_count[slot]=count;sprite_slot_of[id]=slot;
+        sprite_p0[slot]=entry[4];sprite_p1[slot]=entry[5];sprite_p2[slot]=entry[6];
+        sprite_len[slot]=count*6;
+        sprite_pb_lo[slot]=(sprite_words[slot]>>5);sprite_pb_hi[slot]=(sprite_words[slot]>>13);
+        sprite_attr[slot]=VDC_SPRITE_FG|(slot<15?slot:15);
+    }
+    if(fast) {
+        overlay_call(0x74,sprite_fast);
+        if(sprite_fast_miss)return false;
+        if(!sprite_emit_ok)++pce_metrics.essential_overflow;
+        return sprite_emit_ok;
     }
     sprite_used[slot] = 1;
-    arcade_read(2, parts, descriptor, count * 6);
-    for (uint8_t pass = 0; pass < 2; ++pass) {
-    uint8_t admitted = 0,clipped_admitted=0;
-    if (!pass) memcpy(trial, occupancy, sizeof trial);
-    for (uint8_t k = 0; k < count; ++k) {
-        const uint8_t *d = descriptor + k * 6;
-        int16_t dx = (int16_t)(d[0] | (uint16_t)d[1]<<8);
-        int16_t dy = (int16_t)(d[2] | (uint16_t)d[3]<<8);
-        if (flip) dx = -dx - 16;
-        if (scale != 16) { dx = (int32_t)dx * scale / 16; dy = (int32_t)dy * scale / 16; }
-        int16_t px = x + dx, py = y + dy;
-        if (px <= -16 || px >= (pce_raster_enabled ? 512 : 256) || py <= -16 || py >= 224) continue;
-        /* Cockpit viewing window: never draw a partial slice across its rim. */
-        if (pce_metrics.stage == 6 && id<99 && (px + 16 <= 16 || px >= 240 || py + 16 <= 20 || py >= 180)) continue;
-        int16_t lo = py < 0 ? 0 : py, hi = py + 16 > 224 ? 224 : py + 16;
-        if (!pass) {
-            bool fits = sat_count + ++admitted <= 64;
-            if(pce_metrics.stage==6&&id<99&&(px<16||px+16>240||py<20||py+16>180))
-                if(clipped_count+ ++clipped_admitted>28)fits=false;
-
-            for (int16_t line=lo; line<hi; ++line) if (++trial[line]>16) fits=false;
-            if (!fits) { ++pce_metrics.essential_overflow; return false; }
-            continue;
-        }
-        for (int16_t line=lo;line<hi;++line) {
-            uint8_t n=++occupancy[line];
-            if(n>pce_metrics.max_units) pce_metrics.max_units=n;
-        }
-        uint16_t pattern = d[4] | (uint16_t)d[5]<<8;
-        uint16_t vram_pattern=(sprite_words[slot]>>5)+pattern*2;
-        if (pce_metrics.stage==6 && id<99 && (px<16 || px+16>240 || py<20 || py+16>180)) {
-            if (clipped_count>=28) { ++pce_metrics.essential_overflow; return false; }
-            uint8_t left=px<16?16-px:0, right=px+16>240?240-px:16;
-            uint8_t top=py<20?20-py:0, bottom=py+16>180?180-py:16;
-            if(flip) { uint8_t t=left;left=16-right;right=16-t; }
-            uint16_t mask=(0xffffU>>left)&(0xffffU<<(16-right));
-            arcade_read(2,pat+(uint32_t)pattern*128,clipped_pattern,128);
-            for(uint8_t plane=0;plane<4;++plane) for(uint8_t row=0;row<16;++row) {
-                uint16_t bits=(row>=top&&row<bottom)?mask:0;
-                clipped_pattern[plane*32+row*2]&=bits;
-                clipped_pattern[plane*32+row*2+1]&=bits>>8;
-            }
-            uint16_t word=0x7800+(uint16_t)clipped_count++*64;
-            pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-            pce_vdc_copy_to_vram(word,clipped_pattern,128);
-            pce_metrics.uploads+=128;vram_pattern=word>>5;
-        }
-        sat[sat_page][sat_count++] = (vdc_sprite_t){py + 64, px + 32,
-            vram_pattern,
-            VDC_SPRITE_FG | (slot<15?slot:15) | (flip ? VDC_SPRITE_FLIP_X : 0)};
-    }
-    }
-    return true;
+    arcade_read(2, (uint32_t)sprite_p0[slot] | (uint32_t)sprite_p1[slot]<<8 | (uint32_t)sprite_p2[slot]<<16, descriptor, count * 6);
+    generic_id=id;generic_x=x;generic_y=y;generic_flip=flip;generic_scale=scale;generic_count=count;generic_slot=slot;
+    overlay_call(0x71,sprite_generic);
+    return generic_ok;
 }
 void video_front_mark(void) {front_keep=sat_count;}
 void video_front_begin(void) {front_start=sat_count;}
+/* HUD, then foreground occluders, then actors: lower SAT slots win. Segments
+ * are uploaded in that order straight from the build order, without moving
+ * entries in RAM. Slots left from the previous frame are hidden by Y=0. */
 PCE_RENDER void video_sat_end(void) {
-    if(front_start<sat_count) {
-        uint8_t count=sat_count-front_start;
-        memcpy(sat[sat_page^1],sat[sat_page]+front_start,(uint16_t)count*8);
-        memmove(sat[sat_page]+front_keep+count,sat[sat_page]+front_keep,(uint16_t)(front_start-front_keep)*8);
-        memcpy(sat[sat_page]+front_keep,sat[sat_page^1],(uint16_t)count*8);
-    }
+    vdc_sprite_t *s = sat[sat_page];
+    if(!(pce_metrics.frames&31)){uint8_t peak=0;for(uint8_t l=0,n=sprite_exact?224:30;l<n;++l)if(sprite_occupancy[l]>peak)peak=sprite_occupancy[l];
+        if(peak>pce_metrics.max_units)pce_metrics.max_units=peak;}
+    for(uint8_t k=sat_count;k<sat_previous;++k)s[k].y=0;
     pce_vdc_index = 2; *(volatile uint8_t *)0x20f7 = 2;
-    pce_vdc_copy_to_vram(PCE_SAT_WORD, sat[sat_page], 512);
+    if(front_start<sat_count) {
+        uint8_t fg=sat_count-front_start;
+        if(front_keep)pce_vdc_copy_to_vram(PCE_SAT_WORD,s,(uint16_t)front_keep*8);
+        pce_vdc_copy_to_vram(PCE_SAT_WORD+(uint16_t)front_keep*4,s+front_start,(uint16_t)fg*8);
+        if(front_start>front_keep)
+            pce_vdc_copy_to_vram(PCE_SAT_WORD+(uint16_t)(front_keep+fg)*4,s+front_keep,(uint16_t)(front_start-front_keep)*8);
+    } else if(sat_count)pce_vdc_copy_to_vram(PCE_SAT_WORD,s,(uint16_t)sat_count*8);
+    if(sat_previous>sat_count)
+        pce_vdc_copy_to_vram(PCE_SAT_WORD+(uint16_t)sat_count*4,s+sat_count,(uint16_t)(sat_previous-sat_count)*8);
+    sat_previous=sat_count;
     video_vdc(VDC_REG_SATB_START, PCE_SAT_WORD);
     pce_metrics.sat_count = sat_count;
 }
 PCE_RENDER void video_race_init(void) {
     pce_raster_enabled = 1;
+    sprite_screen_height=224;
     timing(true);
     video_vdc(VDC_REG_MEMORY, VDC_BG_SIZE_128_64);
     video_display(true);
@@ -276,17 +310,17 @@ PCE_RENDER void video_floor_row(uint8_t page, uint8_t row, const uint8_t *pairs)
         *IO_VDC_DATA_LO=pairs[x];*IO_VDC_DATA_HI=0xf2;
     }
 }
-PCE_RENDER bool video_race_sky(void) {
+__attribute__((noinline,section(".ram_bank116.text"))) static void race_sky_load(void) {
     uint16_t used=0;
     memset(cache_ids,0xff,sizeof cache_ids);
     for(uint8_t x=0;x<64;++x) {
-        arcade_read(1,scene->map+(uint32_t)x*84,buffer,84);
+        arcade_read(1,scene->map+(uint32_t)x*90,buffer,90);
         for(uint8_t y=0;y<16;++y) {
             uint16_t id=buffer[y*3]|(uint16_t)buffer[y*3+1]<<8;
             uint16_t slot;
             for(slot=0;slot<used&&cache_ids[slot]!=id;++slot) {}
             if(slot==used) {
-                if(used>=288) return false;
+                if(used>=288) {pce_control.ok=0;return;}
                 cache_ids[used++]=id;
                 uint16_t word=0x3000+slot*16;
                 pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
@@ -301,5 +335,7 @@ PCE_RENDER bool video_race_sky(void) {
     arcade_vram(PCE_RACE_PAIR_CHARACTERS,0x2000,8192);
     arcade_read(2,PCE_RACE_FLOOR_PALETTE,buffer,32);
     pce_vce_copy_palette(15,buffer,1);
-    return true;
+    pce_control.ok=1;
 }
+
+bool video_race_sky(void) {overlay_call(0x74,race_sky_load);return pce_control.ok;}

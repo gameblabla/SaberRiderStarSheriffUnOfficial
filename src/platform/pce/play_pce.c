@@ -24,11 +24,12 @@ static int8_t trigger_remaining[100];
 static uint8_t trigger_spawned[100];
 static Trigger trigger;
 static Trigger trigger_cache[60] PCE_STAGE;
+static int16_t trigger_lo[60] PCE_STAGE,trigger_hi[60] PCE_STAGE;
 const PceScene *play_scene;
 #define scene play_scene
 uint16_t camera,frame;
 uint8_t hero,facing,safe_timer;
-static uint8_t fire_timer,crouch,slide_time;
+static uint8_t fire_timer,crouch,slide_time,jump_time;
 static int16_t safe_x,safe_y,drop_y;
 
 PCE_CODE static uint8_t cell(int16_t x,int16_t y) {
@@ -88,27 +89,26 @@ PCE_CODE static void shoot(int16_t x,int16_t y,int16_t vx,int16_t vy,bool enemy)
 }
 PCE_CODE void play_init(uint8_t stage,uint8_t selected) {
     scene=&pce_scenes[stage-1];hero=selected;camera=frame=0;
-    facing=fire_timer=safe_timer=crouch=slide_time=0;drop_y=-32767;
+    facing=fire_timer=safe_timer=crouch=slide_time=jump_time=0;drop_y=-32767;
     player=(Body){.x=scene->sx,.y=scene->sy};safe_x=player.x;safe_y=player.y;
     memset(actors,0,sizeof actors);memset(shots,0,sizeof shots);
     memset(column_tags,0xff,sizeof column_tags);
     for(uint8_t k=0;k<scene->ntr;++k) {
         arcade_read(2,scene->triggers+(uint32_t)k*sizeof trigger,&trigger,sizeof trigger);
-        if(k<60) trigger_cache[k]=trigger;
+        if(k<60) {trigger_cache[k]=trigger;trigger_lo[k]=trigger.type==10?32767:trigger.cx-trigger.hx-8;trigger_hi[k]=trigger.cx+trigger.hx+8;}
         trigger_timers[k]=trigger.delay;trigger_remaining[k]=trigger.remaining;trigger_spawned[k]=0;
     }
     pce_metrics.hp=3;
     overlay_call(0x70,combat_start);
 }
 PCE_CODE static void encounters(void) {
-    if(pce_metrics.stage==4&&pce_campaign.boss_round==2)return;
+    if((pce_metrics.stage==4&&pce_campaign.boss_round==2)||(frame&3))return;
     uint8_t k=0;
+    int16_t px=player.x+4;
     for(const Trigger *t=trigger_cache;k<scene->ntr;++k,++t) {
-        if(!trigger_remaining[k]) continue;
-        if(t->type==10)continue;
-        if(player.x+4<t->cx-t->hx-8||player.x+4>t->cx+t->hx+8||
-           player.y+9<t->cy-t->hy-23||player.y+9>t->cy+t->hy+23) continue;
-        if(trigger_timers[k]) {--trigger_timers[k];continue;}
+        if(px<trigger_lo[k]||px>trigger_hi[k]||!trigger_remaining[k]) continue;
+        if(player.y+9<t->cy-t->hy-23||player.y+9>t->cy+t->hy+23) continue;
+        if(trigger_timers[k]) {trigger_timers[k]=trigger_timers[k]>4?trigger_timers[k]-4:0;continue;}
         /* Humanoid core first; the inventory retains other encounter recipes
          * for their stage-specific handlers rather than replacing their art. */
         for(uint8_t i=0;i<8;++i) if(!actors[i].active) {
@@ -136,7 +136,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     if((pressed&KEY_2)&&(player.coll&4)) {
         if(crouch&&player.ground==4)drop_y=player.y+20;
         else if(crouch)slide_time=24;
-        else {player.vy=-1237;audio_effect(2);}
+        else {player.vy=-1237;jump_time=0;audio_effect(2);}
     }
     if(keys&KEY_SELECT) {
         if(keys&KEY_LEFT)facing=1;
@@ -144,6 +144,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     }
     if(slide_time){crouch=1;player.vx=(int16_t)slide_time*43;if(facing)player.vx=-player.vx;--slide_time;}
     physics(&player);
+    if(!(player.coll&4))++jump_time;else jump_time=0;
     if(pce_campaign.boss_kind){if(player.x<(int16_t)camera+8)player.x=camera+8;if(player.x>(int16_t)camera+248)player.x=camera+248;}
     if(player.coll&4){safe_x=player.x;safe_y=player.y;}
     if(player.y>272){campaign_hurt();player=(Body){.x=safe_x,.y=safe_y};safe_timer=120;}
@@ -195,10 +196,12 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     pce_metrics.player_x=player.x;pce_metrics.player_y=player.y;pce_metrics.camera_x=camera;pce_metrics.hero=hero;
 }
 __attribute__((noinline)) void play_draw(void) {
-    video_background(camera);video_sat_begin();presentation_draw();
+    video_background(camera);video_sat_begin();foreground_prepare();presentation_draw();
     uint8_t pose=crouch?8:!(player.coll&4)?7:player.vx?1+(frame/6)%6:0;
     uint16_t id=hero*9+pose;
-    if((pce_control.keys&KEY_UP)||((pce_control.keys&KEY_DOWN)&&(!crouch||(pce_control.keys&(KEY_SELECT|KEY_LEFT|KEY_RIGHT))))) {
+    if(!(player.coll&4))id=pce_motion_base[pce_metrics.stage-1]+hero*5+2+(jump_time/3)%3;
+    else if(!crouch&&!player.vx&&fire_timer)id=pce_motion_base[pce_metrics.stage-1]+hero*5+(fire_timer>6);
+    if((player.coll&4)&&((pce_control.keys&KEY_UP)||((pce_control.keys&KEY_DOWN)&&(!crouch||(pce_control.keys&(KEY_SELECT|KEY_LEFT|KEY_RIGHT)))))) {
         uint8_t direction=pce_control.keys&KEY_UP?0:1;
         id=pce_present_base[pce_metrics.stage-1][2]+hero*14+direction;
         if(player.vx)id+=2+direction*5+(frame/6)%6;

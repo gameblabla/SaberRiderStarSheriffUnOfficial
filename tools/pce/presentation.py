@@ -13,7 +13,7 @@ def namehash(s):
     return h&0xffffffff
 
 def sky(stage,size):
-    top,bottom=((8,40,100),(80,150,215)) if stage==1 else ((14,8,34),(66,36,90))
+    top,bottom=((36,100,190),(116,190,250)) if stage==1 else ((14,8,34),(66,36,90))
     w,h=size;v=np.linspace(top,bottom,h).astype(np.uint8)
     a=np.zeros((h,w,4),np.uint8);a[:,:,:3]=v[:,None,:];a[:,:,3]=255
     return Image.fromarray(a)
@@ -22,7 +22,7 @@ def add_foreground(image,sprites):
     entries=[];cache={}
     # Sparse canonical 32x32 chunks share sprite patterns across repeated rails.
     for x in range(0,image.width,32):
-        for y in range(0,224,32):
+        for y in range(0,image.height,32):
             im=image.crop((x,y,x+32,y+32))
             if not im.getchannel('A').getbbox():continue
             key=im.tobytes()
@@ -49,7 +49,7 @@ def add_art(root,work,stage,sprites,frame):
         im=get(rid).resize((32,32),Image.Resampling.NEAREST)
         portraits[name]=add('portrait_'+name,im)
         portraits[f'{rid:08X}']=portraits[name]
-    hud=[];digits=[];aim=[]
+    hud=[];digits=[];aim=[];motion=[]
     if stage in (1,3,4,5):
         def glyph(n):return get(0x87A5333C,n)
         for hero in range(4):
@@ -85,7 +85,11 @@ def add_art(root,work,stage,sprites,frame):
                     im=Image.fromarray(legs);im.alpha_composite(cell(torso),(0,bob))
                     row.append(add(f'hero{hero}_aim{torso}_run{k}',im,(32,32)))
             aim.append(row)
-    return dict(portraits=portraits,hud=hud,digits=digits,aim=aim)
+            row=[]
+            for name,n in [('shoot',40),('recoil',41),('jump0',132),('jump1',133),('jump2',134)]:
+                row.append(add(f'hero{hero}_{name}',cell(n),(32,32)))
+            motion.append(row)
+    return dict(portraits=portraits,hud=hud,digits=digits,aim=aim,motion=motion)
 
 def emit_tables(out,scenes,h,c):
     m=scenes[0]['presentation']
@@ -94,6 +98,8 @@ def emit_tables(out,scenes,h,c):
         h.append(f'extern const uint16_t pce_{name}_ids{shape};')
         c.append(f'const uint16_t pce_{name}_ids{shape}='+values(m[name])+';')
     # Actor inventories vary; presentation IDs use per-scene base addresses.
+    h.append('extern const uint16_t pce_motion_base[7];')
+    c.append('const uint16_t pce_motion_base[7]={'+','.join(str(m['presentation']['motion'][0][0]) if m['presentation']['motion'] else '0' for m in scenes)+'};')
     h.append('extern const uint16_t pce_present_base[7][3];')
     c.append('const uint16_t pce_present_base[7][3]={'+','.join('{%d,%d,%d}'%(m['presentation']['hud'][0][0],m['presentation']['digits'][0],m['presentation']['aim'][0][0]) if m['presentation']['hud'] else '{0,0,0}' for m in scenes)+'};')
 

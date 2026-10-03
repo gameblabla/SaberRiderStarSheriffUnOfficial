@@ -1,0 +1,34 @@
+--- a/mednafen/src/pce/huc6280.cpp
++++ b/mednafen/src/pce/huc6280.cpp
+@@ namespace MDFN_IEN_PCE
+ {
++uint64 *PCE_CycleProf = nullptr;	// physical-address master-clock cycle counts (profiling extension)
+@@ NO_INLINE void HuC6280::RunSub(void)
+  do
+  {
++         if(MDFN_UNLIKELY(PCE_CycleProf))
++         {
++          static uint32 prof_pc = 0, prof_ts = 0;
++          uint32 d = timestamp - prof_ts;
++          if(d < 2000000) PCE_CycleProf[prof_pc] += d;
++          prof_ts = timestamp;
++          prof_pc = (((uint32)MPR[(PC >> 13) & 7]) << 13) | (PC & 0x1FFF);
++         }
+          if(DebugMode)
+           old_PC = PC;
+--- a/mednafen/src/drivers_libxxx/main.cpp
++++ b/mednafen/src/drivers_libxxx/main.cpp
+@@
++namespace MDFN_IEN_PCE { extern uint64 *PCE_CycleProf; }
+ #include <algorithm>
+@@ RPCLoop()
++   else if(op == "prof_start") { std::fill(g_prof.begin(), g_prof.end(), 0); MDFN_IEN_PCE::PCE_CycleProf = g_prof.data(); RPCReplyOK(); }
++   else if(op == "prof_dump")
++   {
++    if(a.size() != 2) throw std::runtime_error("prof_dump requires path");
++    MDFN_IEN_PCE::PCE_CycleProf = nullptr;
++    std::ofstream f(PercentDecode(a[1]));
++    for(unsigned i = 0; i < g_prof.size(); i++) if(g_prof[i]) f << std::hex << i << ' ' << std::dec << g_prof[i] << '\n';
++    RPCReplyOK();
++   }
++ // plus: static std::vector<uint64_t> g_prof(1 << 21); declared beside g_cov

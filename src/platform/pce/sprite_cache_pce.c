@@ -4,6 +4,8 @@
 #include "overlay_pce.h"
 uint16_t sprite_ids[48],sprite_words[48];
 uint8_t sprite_used[48],sprite_pinned[48],pattern_owner[48];
+uint8_t sprite_slot_of[320],sprite_count[48],sprite_len[48],sprite_p0[48],sprite_p1[48],sprite_p2[48];
+uint8_t sprite_pb_lo[48],sprite_pb_hi[48],sprite_attr[48];
 /* Resident allocator. A 512-byte page holds four 16x16 patterns. Keep the
  * last two displayed generations pinned through SAT DMA, including palettes.
  * Canonical left/right frames share their cache ID and patterns. */
@@ -12,11 +14,12 @@ static uint16_t cache_id;static uint8_t cache_count,cache_result;
 CACHE_CODE static void allocate(void) {
     uint16_t id=cache_id;uint8_t count=cache_count;
     const PceScene *s=&pce_scenes[pce_metrics.stage-1];
+    cache_result=48;
+    for(uint8_t i=0;i<48;++i)if(sprite_ids[i]==id){cache_result=i;return;}
     uint16_t first=65535;
     if(s->nforeground)arcade_read(2,s->foreground+4,&first,2);
     uint8_t low=id>=first?15:0,high=id>=first?48:15;
     cache_result=48;
-    for(uint8_t i=low;i<high;++i)if(sprite_ids[i]==id){cache_result=i;return;}
     uint8_t slot=low;
     while(slot<high&&(sprite_used[slot]||sprite_pinned[slot]))++slot;
     if(slot==high)return;

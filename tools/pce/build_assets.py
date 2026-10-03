@@ -70,15 +70,15 @@ def cblock_frame(path, frame):
 
 def native_background(image, archive, previews, name):
     w = (image.width + 7) // 8 * 8
-    canvas = Image.new('RGBA', (w, 224), (0, 0, 0, 255)); canvas.paste(image)
+    canvas = Image.new('RGBA', (w, 240), (0, 0, 0, 255)); canvas.paste(image)
     # Four vertical color bands, four palettes each. Group by per-cell mean
     # color; each group keeps 15 colors plus a common black backdrop.
     rgba = np.asarray(canvas)
-    cells = rgba.reshape(28, 8, w // 8, 8, 4).transpose(0, 2, 1, 3, 4).reshape(-1, 8, 8, 4)
+    cells = rgba.reshape(30, 8, w // 8, 8, 4).transpose(0, 2, 1, 3, 4).reshape(-1, 8, 8, 4)
     means = cells[..., :3].mean((1, 2))
     groups = np.zeros(len(cells), np.uint8)
     palette = []
-    row_band = np.repeat(np.arange(28) // 7, w // 8)
+    row_band = np.repeat(np.minimum(np.arange(30) // 8,3), w // 8)
     for band in range(0 if name=='stage2' else 4):
         select = np.nonzero(row_band == band)[0]
         m = means[select]
@@ -108,7 +108,7 @@ def native_background(image, archive, previews, name):
         preview[y * 8:y * 8 + 8, x * 8:x * 8 + 8, :3] = vce_rgb(palette[pal])[idx]
         preview[y * 8:y * 8 + 8, x * 8:x * 8 + 8, 3] = 255
     if len(tiles) > 65535: raise ValueError(f'{name}: too many background characters')
-    n = np.asarray(names, np.uint16).reshape(28, w // 8, 2).transpose(1, 0, 2)
+    n = np.asarray(names, np.uint16).reshape(30, w // 8, 2).transpose(1, 0, 2)
     mapping = b''.join(struct.pack('<HB', int(t), int(p)) for t, p in n.reshape(-1, 2))
     pal_off = archive.add('bg_palette', np.asarray(palette, '<u2').tobytes())
     tile_off = archive.add('bg_patterns', b''.join(tiles))
@@ -121,8 +121,8 @@ def platform_background(stage, work):
     banks = {i: levl.png_bank(path, i) if path else levl.load_bank(work / 'srgb' / f'{i:08X}.srgb')
              for i, path in files.items()}
     width = math.ceil(level.width / 256) * 256
-    out = Image.new('RGBA', (width, 224), (0, 0, 0, 255))
-    foreground = Image.new('RGBA',(width,224))
+    out = Image.new('RGBA', (width, 240), (0, 0, 0, 255))
+    foreground = Image.new('RGBA',(width,240))
     for x in range(0,width,256):
         pixels=np.zeros((240,256,4),np.uint8)
         front=np.zeros_like(pixels);after_player=False
@@ -134,11 +134,11 @@ def platform_background(stage, work):
             if stage in (1,3) and ly.name=='SkyBG':continue
             bank=banks[ly.cblock]
             if after_player:
-                front=levl.render_layer(ly,bank,levl.layer_offset(ly,x),256,240,front)
+                front=levl.render_layer(ly,bank,x,256,240,front)
             else:
                 pixels=levl.render_layer(ly,bank,levl.layer_offset(ly,x),256,240,pixels)
-        out.paste(Image.fromarray(pixels[16:240]),(x,0))
-        foreground.paste(Image.fromarray(front[16:240]),(x,0))
+        out.paste(Image.fromarray(pixels),(x,0))
+        foreground.paste(Image.fromarray(front),(x,0))
     return out,foreground
 
 def add_sprites(archive, sprites, previews):
@@ -323,6 +323,12 @@ def make_scene(stage, work, previews, shared):
     meta['presentation']=presentation.add_art(ROOT,work,stage,sprites,cblock_frame)
     meta['foreground_offset']=0;meta['foreground_count']=0
     if stage in (1,3,4,5):
+        # Platform playfields now include the source's top 16 lines. Gameplay
+        # sprites passed in world-16 coordinates are baked 16 lines lower, so
+        # the renderer needs no per-draw Y adjustment.
+        hud0=meta['presentation']['hud'][0][0];motion0=meta['presentation']['motion'][0][0]
+        for i,(name,im,(ax,ay)) in enumerate(sprites):
+            if i<hud0 or motion0<=i<motion0+20: sprites[i]=(name,im,(ax,ay-16))
         entries=presentation.add_foreground(foreground,sprites)
         meta['foreground_offset']=a.add('foreground_sprites',b''.join(struct.pack('<hhH',*v) for v in entries))
         meta['foreground_count']=len(entries)
@@ -386,7 +392,7 @@ def main():
                               clipped_sprites=3584, sat=512),
                     facing_policy='One canonical facing; mirror placement and SAT bit 0x0800 at runtime',
                     adaptations=['One baked background; source parallax anchored per 256-pixel sector',
-                                 'Top 16 source lines cropped; world and collision coordinates retained'])
+                                 'Platform playfields fill 240 lines; world and collision coordinates retained'])
     (out/'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
     digest = hashlib.sha256()
     for p in sorted((ROOT/'src').glob('*.[ch]')): digest.update(p.read_bytes())

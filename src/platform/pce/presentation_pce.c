@@ -63,24 +63,7 @@ PRESENT void presentation_frame(void) {
         video_sprite(base[0]+pce_control.hero*4+hp,0,0,false,16);
     }
 }
-PRESENT void presentation_foreground(void) {
-    const PceScene *s=&pce_scenes[pce_metrics.stage-1];
-    uint16_t lo=0,hi=s->nforeground;int16_t start=(int16_t)pce_metrics.camera_x-31;
-    int16_t entry[3];
-    while(lo<hi) {
-        uint16_t mid=lo+(hi-lo)/2;
-        arcade_read(2,s->foreground+(uint32_t)mid*6,entry,6);
-        if(entry[0]<start)lo=mid+1;else hi=mid;
-    }
-    for(uint16_t i=lo;i<s->nforeground;++i) {
-        arcade_read(2,s->foreground+(uint32_t)i*6,entry,6);
-        int16_t x=entry[0]-pce_metrics.camera_x;
-        if(x>=256)break;
-        video_sprite_optional(entry[2],x,entry[1],false,16);
-    }
-}
 void presentation_draw(void) {overlay_call(0x74,presentation_frame);video_front_mark();}
-void foreground_draw(void) {video_front_begin();overlay_call(0x74,presentation_foreground);}
 
 static uint8_t panel_x,panel_y,panel_w,panel_h;
 PRESENT static void panel_draw(void) {

@@ -59,7 +59,7 @@ class Test:
         d=dict(zip(FIELDS,struct.unpack('<4s4B8H4B4H',e.memory(self.address,36))))
         assert d['magic']==b'SRPC' and d['ports']==15 and d['load_error']==0
         assert d['max_units']<=16 and d['sat_count']<=64
-        assert d['essential_overflow']==0 and d['forbidden_reads']==0
+        assert d['essential_overflow']==0 and d['forbidden_reads']==0,d
         d.pop('magic');return d
     def press(self,e,key,n=30):
         e.input(key);e.run(n);e.input(0);e.run(n)
