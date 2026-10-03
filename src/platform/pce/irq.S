@@ -28,14 +28,16 @@ pce_vblank:
     bra .Ldone
 .Lnormal:
     st0 #7
+    lda pce_scroll_x
+    sta 2
+    lda pce_scroll_x+1
+    sta 3
+    st0 #8
     st1 #0
     st2 #0
-    st0 #8
-    st1 #224
-    st2 #0
     st0 #6
-    st1 #72
-    st2 #0
+    st1 #255
+    st2 #3
 .Ldone:
     pla
     sta 0

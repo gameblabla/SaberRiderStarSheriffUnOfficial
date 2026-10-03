@@ -20,26 +20,33 @@ def source_script(path, name):
     if not match: raise ValueError(f'Missing story script {path}:{name}')
     return ''.join(ast.literal_eval(s) for s in re.findall(r'"(?:[^"\\]|\\.)*"',match[1]))
 
-def pages(script):
+def pages(script,portraits):
     out=[]
     for chunk in script.split('<<>>'):
         speaker=re.search(r'</dialog_avatar_([^/]+)/>',chunk)
-        title=speaker[1].rstrip('12').replace('darkapril','DARK APRIL').upper() if speaker else 'RADIO'
+        packed=re.search(r'<avatar:([0-9A-F]+)>',chunk)
+        avatar=portraits.get(speaker[1] if speaker else packed[1] if packed else '',65535)
         chunk=re.sub(r'<[^>]*>','',chunk.replace('<r>','\n')).strip()
         chunk=' '.join(chunk.split())
         # Text before the first color tag may be an SFX header.
         if not chunk or chunk.endswith('.wav'): continue
-        lines=textwrap.wrap(chunk,30)
-        for i in range(0,len(lines),7):
-            out.append((title+'\n'+'\n'.join(lines[i:i+7])).encode('ascii','replace')+b'\0')
+        lines=textwrap.wrap(chunk,26)
+        for i in range(0,len(lines),4):
+            out.append(struct.pack('<H',avatar)+'\n'.join(lines[i:i+4]).encode('ascii','replace')+b'\0')
     return out
 
-def bake(root,work,stage,archive):
+def bake(root,work,stage,archive,portraits):
     if stage==1:
         scripts=[(work/f'dialog{k}.txt').read_text() for k in range(4)]
     else:
         filename,names=SCRIPTS[stage]
         scripts=[source_script(root/'src'/filename,name) for name in names]
+    from presentation import namehash
+    for j,script in enumerate(scripts):
+        for name in portraits:
+            if re.fullmatch('[0-9A-F]{8}',name):continue
+            script=script.replace(f'<avatar:{namehash("dialog_avatar_"+name):08X}>',f'</dialog_avatar_{name}/>')
+        scripts[j]=script
     offsets=[]
     for hero,name in enumerate(('Saber Rider','Fireball','April','Colt')):
         for i,script in enumerate(scripts):
@@ -49,7 +56,7 @@ def bake(root,work,stage,archive):
                 script=script.replace('dialog_avatar_'+avatar+'2','dialog_avatar_fireball1')
                 script=script.replace('__ACTIVE_HERO__','dialog_avatar_'+avatar+'2')
                 script=script.replace('Fireball',name)
-            chunks=pages(script)
+            chunks=pages(script,portraits)
             pointers=[archive.add(f'hero{hero}_story{i}_page{j}',p) for j,p in enumerate(chunks)]
             offsets.append(archive.add(f'hero{hero}_story{i}',bytes([len(pointers)])+b''.join(struct.pack('<I',p) for p in pointers)))
     return archive.add('story_directory',bytes([len(scripts)])+b''.join(struct.pack('<I',p) for p in offsets))

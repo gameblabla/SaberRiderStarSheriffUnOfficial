@@ -16,6 +16,7 @@ import subprocess
 import sys
 import story
 import timeline
+import presentation
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
@@ -38,14 +39,14 @@ def extract(work):
                if p.name != 'main_null.o' and p.name != 'hero_shadows_test.o']
     exe = work / 'export'
     run(['cc', '-std=gnu11', '-O2', '-Isrc', 'tools/pce/export.c', *objects, '-lpng', '-lm', '-o', exe])
-    env = dict(os.environ, SABER_ASSETS=str(ROOT / 'assets'), SABER_START='100')
+    env = dict(os.environ, SABER_ASSETS=str(ROOT / 'assets'), SABER_START='100', SABER_HERO='1')
     for stage in (1, 3, 4, 5): run([exe, ROOT / 'SaberRider/data', stage, work], env=env)
     exe = work / 'texprep'
     run(['cc', '-std=gnu11', '-O2', '-Isrc', 'tools/dc/texprep.c', 'src/gfx.c', 'src/font.c',
          'src/pack.c', 'src/lzo1z.c', 'src/assets.c', 'src/namehash.c', '-o', exe])
     run([exe, ROOT / 'SaberRider/data', srgb])
     # Definitions supply the same asset IDs/anchors as the gameplay sources.
-    ids = ['8403195A', '9C8F9A9E', '79260A58', '26818B85', '112DF34C', '02A38AFB', 'D39700C4', '2A02BD4F', 'FBFAF817', '4042CD71', '71887ECA', 'BFDAB70F', '1D724DD9', '211F5D78', '9393E59B', '20C6FAEF', 'ECC992CB', '72B53EF8', '925534E2', '916137ED', '906D3698', 'F5975DCF', 'F4A55EDE', 'F4A25ED9', 'F3B05E28', '0DB9F0E0']
+    ids = ['8403195A', '9C8F9A9E', '79260A58', '26818B85', '112DF34C', '02A38AFB', 'D39700C4', '2A02BD4F', 'FBFAF817', '4042CD71', '71887ECA', 'BFDAB70F', '1D724DD9', '211F5D78', '9393E59B', '20C6FAEF', 'ECC992CB', '72B53EF8', '925534E2', '916137ED', '906D3698', 'F5975DCF', 'F4A55EDE', 'F4A25ED9', 'F3B05E28', '0DB9F0E0', '29CAD5D3']
     exe = work / 'levprep'
     run(['cc', '-O2', '-std=gnu11', '-Isrc', 'tools/saturn/levprep.c', 'src/pack.c', 'src/lzo1z.c', '-o', exe])
     run([exe, ROOT / 'SaberRider/data', work, *ids])
@@ -121,38 +122,31 @@ def platform_background(stage, work):
              for i, path in files.items()}
     width = math.ceil(level.width / 256) * 256
     out = Image.new('RGBA', (width, 224), (0, 0, 0, 255))
-    occlusion=np.zeros((224,width),np.uint8)
-    # Bake all visible scenery once; playfield cells and collisions keep their
-    # world coordinates. Distant art is anchored at each 256-pixel sector.
-    for x in range(0, width, 256):
-        pixels = np.zeros((240, 256, 4), np.uint8)
-        front=np.zeros_like(pixels)
-        after_player=False
-        if stage == 3:
-            sky = Image.open(ROOT / 'assets/stage3/native/stage3_night_sky.png').convert('RGBA').resize((256, 240))
-            pixels[:] = np.asarray(sky)
+    foreground = Image.new('RGBA',(width,224))
+    for x in range(0,width,256):
+        pixels=np.zeros((240,256,4),np.uint8)
+        front=np.zeros_like(pixels);after_player=False
+        if stage in (1,3):
+            pixels[:]=np.asarray(presentation.sky(stage,(256,240)))
         for ly in level.layers:
             if ly.name=='PlayerSprites':after_player=True
-            if not ly.is_tilemap: continue
-            bank = banks[ly.cblock]
-            if stage == 3 and ly.name == 'SkyBG': continue
-            # Foreground rails and scenery are deliberately baked as well;
-            # interactive occlusion must use separate runtime descriptors.
-            pixels = levl.render_layer(ly, bank, levl.layer_offset(ly, x), 256, 240, pixels)
-            if after_player:front=levl.render_layer(ly,bank,levl.layer_offset(ly,x),256,240,front)
-        out.paste(Image.fromarray(pixels[16:240]), (x, 0))
-        occlusion[:,x:x+256]=(front[16:240,:,3]>=128)
-    columns=np.packbits(occlusion.reshape(224,width//8,8),axis=2).squeeze(2).T
-    bounds=[]
-    for column in columns:
-        rows=np.flatnonzero(column);bounds+= [int(rows[0]),int(rows[-1])] if len(rows) else [255,0]
-    mask=bytes(bounds)+columns.tobytes()
-    return out,mask if occlusion.any() else b''
+            if not ly.is_tilemap:continue
+            if stage in (1,3) and ly.name=='SkyBG':continue
+            bank=banks[ly.cblock]
+            if after_player:
+                front=levl.render_layer(ly,bank,levl.layer_offset(ly,x),256,240,front)
+            else:
+                pixels=levl.render_layer(ly,bank,levl.layer_offset(ly,x),256,240,pixels)
+        out.paste(Image.fromarray(pixels[16:240]),(x,0))
+        foreground.paste(Image.fromarray(front[16:240]),(x,0))
+    return out,foreground
 
 def add_sprites(archive, sprites, previews):
     rows, costs = [], []
+    fg=[im for name,im,_ in sprites if name.startswith('foreground_')]
+    fg_palette=palette_for(fg) if fg else None
     for name, im, anchor in sprites:
-        pat, parts, palette, line = pack_sprite(im, anchor)
+        pat, parts, palette, line = pack_sprite(im, anchor,fg_palette if name.startswith("foreground_") else None)
         if not parts or len(parts)>32:
             raise ValueError(f'{name}: expected 1..32 visible sprite pieces, got {len(parts)}')
         offset = archive.add(name + '_patterns', pat)
@@ -220,7 +214,7 @@ def make_scene(stage, work, previews, shared):
     meta = dict(stage=stage)
     if stage in (1, 3, 4, 5):
         meta.update(json.loads((work / f'stage{stage}.json').read_text()))
-        bg,mask = platform_background(stage, work)
+        bg,foreground = platform_background(stage, work)
         # Native collision matrix is column-major for a hot 32-column cache.
         raw = np.frombuffer((work / f'stage{stage}.collision').read_bytes(), np.uint8).reshape(meta['rows'], meta['cols'])
         collision = a.add('collision_columns', raw.T.tobytes())
@@ -241,7 +235,7 @@ def make_scene(stage, work, previews, shared):
         rules+=b''.join(struct.pack('<4h',*z['zone']) for z in zones)
         rules+=b''.join(struct.pack('<6h',*z) for z in deaths)
         meta['rules_offset']=a.add('flow_zones',rules)
-        meta['occlusion_offset']=a.add('foreground_masks',mask) if mask else 0
+
         sprites = list(shared)
         if stage in (1,5):
             d=(work/'2A02BD4F.levl').read_bytes();aid=struct.unpack_from('<I',d,4)[0]
@@ -325,7 +319,15 @@ def make_scene(stage, work, previews, shared):
         road = np.zeros(1024, np.uint8); road[496:528] = 7; road[498:526] = 2; road[511:513] = 3
         a.add('pursuit_row', road.tobytes())
         collision = 0
-    meta['story_offset']=story.bake(ROOT,work,stage,a)
+    # Append presentation art after fixed gameplay IDs to retain mission IDs.
+    meta['presentation']=presentation.add_art(ROOT,work,stage,sprites,cblock_frame)
+    meta['foreground_offset']=0;meta['foreground_count']=0
+    if stage in (1,3,4,5):
+        entries=presentation.add_foreground(foreground,sprites)
+        meta['foreground_offset']=a.add('foreground_sprites',b''.join(struct.pack('<hhH',*v) for v in entries))
+        meta['foreground_count']=len(entries)
+        foreground.crop((0,0,1024,224)).save(previews/f'foreground{stage}.png')
+    meta['story_offset']=story.bake(ROOT,work,stage,a,meta['presentation']['portraits'])
     meta.update(native_background(bg, a, previews, f'stage{stage}'))
     sprite_table, rows, costs = add_sprites(a, list(sprites), previews)
     meta.update(collision=collision, sprite_table=sprite_table, sprite_count=len(rows), sprites=costs,
@@ -343,23 +345,34 @@ def main():
         print(f'Baking PCE stage {stage}', flush=True)
         data, meta = make_scene(stage, work, previews, shared)
         (out/f's{stage}.bin').write_bytes(data); scenes.append(meta)
+    ui_values,briefing,ui_bytes=presentation.bake_frontend(ROOT,work,out,previews,native_background,cblock_frame)
     # 96 ASCII glyphs use background characters, palette 15.
     glyphs = []
     font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf', 8)
     for ch in range(32, 128):
         im = Image.new('1', (8,8)); ImageDraw.Draw(im).text((0,-2), chr(ch), font=font, fill=1)
         glyphs.append(planar_tile(np.asarray(im, np.uint8)*15))
+    # Four spare glyphs form the bordered dialogue panel in the BAT.
+    for k in range(4):
+        tile=np.zeros((8,8),np.uint8)
+        if k==1:tile[0:2,:]=15
+        if k==2:tile[:,0:2]=15
+        if k==3:tile[:,6:8]=15
+        glyphs[91+k]=planar_tile(tile)
     (out/'font.bin').write_bytes(b''.join(glyphs))
     h = ['/* Generated: all offsets are Arcade RAM byte addresses. */', '#pragma once', '#include <stdint.h>',
-         'typedef struct { uint32_t bytes, pal, tiles, map, collision, sprites, triggers, story, track, rules, occlusion; uint16_t cols, ccols, crows; int16_t sx, sy, width; uint8_t nsprites, ntr, cw, ch; } PceScene;',
+         'typedef struct { uint32_t bytes, pal, tiles, map, collision, sprites, triggers, story, track, rules, occlusion, foreground; uint16_t cols, ccols, crows, nsprites, nforeground; int16_t sx, sy, width; uint8_t ntr, cw, ch; } PceScene;',
          'extern const PceScene pce_scenes[7];','extern const uint8_t pce_actor_ids[33];']
     c=['#include "pce_config.h"','#include "assets.h"','const PceScene pce_scenes[7] = {']
     for m in scenes:
-        values = [m['bytes'],m['pal'],m['tiles'],m['map'],m['collision'],m['sprite_table'],m.get('trigger_offset',0),m['story_offset'],m.get('track_offset',0),m.get('rules_offset',0),m.get('occlusion_offset',0),m['cols'],m.get('cols',0) if 'cellw' not in m else m['width']//m['cellw'],m.get('rows',0),*m.get('start',(128,180)),m.get('width',m['cols']*8),m['sprite_count'],m.get('ntr',0),m.get('cellw',8),m.get('cellh',8)]
+        values = [m['bytes'],m['pal'],m['tiles'],m['map'],m['collision'],m['sprite_table'],m.get('trigger_offset',0),m['story_offset'],m.get('track_offset',0),m.get('rules_offset',0),0,m['foreground_offset'],m['cols'],m.get('cols',0) if 'cellw' not in m else m['width']//m['cellw'],m.get('rows',0),m['sprite_count'],m['foreground_count'],*m.get('start',(128,180)),m.get('width',m['cols']*8),m.get('ntr',0),m.get('cellw',8),m.get('cellh',8)]
         # Native map columns and collision columns are independent.
-        if 'cellw' in m: values[12] = json.loads((work/f"stage{m['stage']}.json").read_text())['cols']
+        if 'cellw' in m: values[13] = json.loads((work/f"stage{m['stage']}.json").read_text())['cols']
         c.append('    {' + ','.join(str(v) for v in values) + '},')
     c.append('};')
+    presentation.emit_tables(out,scenes,h,c)
+    h+=['extern const PceScene pce_ui_scenes[6];',f'#define PCE_UI_BYTES {ui_bytes}UL',f'#define PCE_BRIEFING_TEXT {briefing}UL']
+    c.append('const PceScene pce_ui_scenes[6]={'+','.join('{'+','.join(map(str,v))+'}' for v in ui_values)+'};')
     c.append('const uint8_t pce_actor_ids[33] = {'+','.join(map(str,scenes[0]['actor_ids']))+'};')
     (out/'assets.c').write_text('\n'.join(c)+'\n')
     h += ['#define PCE_HERO_FRAMES 9', '#define PCE_SHOT_ID 36', '#define PCE_ENEMY_SHOT_ID 37', '#define PCE_BLAST_ID 38']

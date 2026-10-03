@@ -1,4 +1,5 @@
 #include "play_internal.h"
+#include "presentation_pce.h"
 #include "campaign_pce.h"
 #include "overlay_pce.h"
 #include "video_pce.h"
@@ -137,6 +138,10 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
         else if(crouch)slide_time=24;
         else {player.vy=-1237;audio_effect(2);}
     }
+    if(keys&KEY_SELECT) {
+        if(keys&KEY_LEFT)facing=1;
+        if(keys&KEY_RIGHT)facing=0;
+    }
     if(slide_time){crouch=1;player.vx=(int16_t)slide_time*43;if(facing)player.vx=-player.vx;--slide_time;}
     physics(&player);
     if(pce_campaign.boss_kind){if(player.x<(int16_t)camera+8)player.x=camera+8;if(player.x>(int16_t)camera+248)player.x=camera+248;}
@@ -145,7 +150,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     if((keys&KEY_1)&&!fire_timer) {
         int16_t vx=facing?-8:8,vy=0;
         if(keys&KEY_UP){vy=-8;if(!(keys&(KEY_RIGHT|KEY_LEFT)))vx=0;}
-        if((keys&KEY_DOWN)&&(!crouch||(keys&(KEY_SELECT|KEY_LEFT|KEY_RIGHT)))){vy=8;if(keys&KEY_SELECT)vx=0;}
+        if((keys&KEY_DOWN)&&(!crouch||(keys&(KEY_SELECT|KEY_LEFT|KEY_RIGHT)))){vy=8;if(!(keys&(KEY_LEFT|KEY_RIGHT)))vx=0;}
         shoot(player.x+(facing?-18:18),player.y+(crouch?4:-8),vx,vy,false);fire_timer=pce_campaign.boost&&hero==3?4:12;audio_effect(1);
     }
     encounters();
@@ -189,10 +194,18 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     if(camera>(uint16_t)(scene->width-256))camera=scene->width-256;
     pce_metrics.player_x=player.x;pce_metrics.player_y=player.y;pce_metrics.camera_x=camera;pce_metrics.hero=hero;
 }
-PCE_CODE void play_draw(void) {
-    video_background(camera);video_sat_begin();
+__attribute__((noinline)) void play_draw(void) {
+    video_background(camera);video_sat_begin();presentation_draw();
     uint8_t pose=crouch?8:!(player.coll&4)?7:player.vx?1+(frame/6)%6:0;
-    if(!safe_timer||(frame&4))video_sprite(hero*9+pose,player.x-camera,player.y-16,facing,16);
+    uint16_t id=hero*9+pose;
+    if((pce_control.keys&KEY_UP)||((pce_control.keys&KEY_DOWN)&&(!crouch||(pce_control.keys&(KEY_SELECT|KEY_LEFT|KEY_RIGHT))))) {
+        uint8_t direction=pce_control.keys&KEY_UP?0:1;
+        id=pce_present_base[pce_metrics.stage-1][2]+hero*14+direction;
+        if(player.vx)id+=2+direction*5+(frame/6)%6;
+        if(pce_control.keys&KEY_LEFT)facing=1;
+        if(pce_control.keys&KEY_RIGHT)facing=0;
+    }
+    if(!safe_timer||(frame&4))video_sprite(id,player.x-camera,player.y-16,facing,16);
     /* Essential projectiles precede optional distant enemies. */
     for(uint8_t k=0;k<24;++k) if(shots[k].active)
         video_sprite(shots[k].enemy?37:36,shots[k].x-camera,shots[k].y-16,false,16);
@@ -202,5 +215,5 @@ PCE_CODE void play_draw(void) {
         if(id==255)continue;
         if(!video_sprite_optional(id,a->b.x-camera,a->b.y-16,a->flip,16))a->active=0;
     }
-    video_sat_end();video_text(1,0,"HP");video_number(4,0,pce_metrics.hp);
+    foreground_draw();video_sat_end();
 }

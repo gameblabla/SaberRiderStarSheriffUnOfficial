@@ -152,7 +152,13 @@ class Campaign(Test):
             e.write(symbol(self.out/'app.elf','shots'),struct.pack('<4h2B',px,py,0,0,1,1));e.run(120)
             assert self.state(e)['state']==3 and self.state(e)['lives']==0
             self.results['game_over']=self.state(e)
-            self.press(e,1);self.until(e,lambda:self.metrics(e)['stage']==1 and self.metrics(e)['ready'])
+            self.press(e,1)
+            ui=symbol(self.out/'app.elf','pce_ui_state')
+            for _ in range(30):
+                e.run(120)
+                if e.memory(ui,1)==b'\0':break
+                self.press(e,1)
+            self.until(e,lambda:self.metrics(e)['stage']==1 and self.metrics(e)['ready'])
             self.move(e,728,97);assert self.metrics(e)['player_y']==97
             self.press(e,66,8);e.run(60)
             assert self.metrics(e)['player_y']>117,'Down + II must drop through a one-way platform'

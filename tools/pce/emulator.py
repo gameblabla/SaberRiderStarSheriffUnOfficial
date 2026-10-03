@@ -13,6 +13,7 @@ class Emulator:
         base = Path(base).resolve(); base.mkdir(parents=True, exist_ok=True)
         # These are accurate-core hardware settings; never use unlimited SAT.
         (base/'pce.cfg').write_text(f'pce.arcadecard {int(arcade)}\npce.nospritelimit 0\n')
+        self.cue=Path(cue).resolve()
         self.log = open(base/'emulator.log', 'w')
         self.proc = subprocess.Popen([str(BINARY), '--rom', str(Path(cue).resolve()), '--bios', str(bios),
                                       '--base-dir', str(base), '--frames', '0', '--rpc'],
@@ -51,9 +52,19 @@ def symbol(elf, name):
 
 def boot(emu, address, limit=20000):
     emu.run(120); emu.input(8); emu.run(5); emu.input(0)
+    ui=symbol(Path(emu.cue).parent/'app.elf','pce_ui_state')
     for n in range(0,limit,120):
         emu.run(120)
         data=emu.memory(address,36)
         if data[:4]==b'SRPC' and data[5]: return data
+        state=emu.memory(ui,1)[0] if data[:4]==b'SRPC' else 0
+        if state:
+            # Menus are real user input paths; select resumes an existing save,
+            # otherwise start, select the default sheriff and page the briefing.
+            emu.run(240)
+            key=4 if state==1 else 1
+            emu.input(key);emu.run(30);emu.input(0);emu.run(30)
+            if state==1 and emu.memory(ui,1)[0]==1:
+                emu.input(1);emu.run(30);emu.input(0);emu.run(30)
         if data[:4]==b'SRPC' and int.from_bytes(data[22:24],'little'): raise RuntimeError(f'CD load error: {data.hex()}')
     raise RuntimeError(f'Boot timed out: {emu.memory(address,32).hex()}')

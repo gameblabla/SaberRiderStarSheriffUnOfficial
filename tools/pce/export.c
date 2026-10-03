@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
             if(dialog_open(&d,g->dialogs[k].text)) {
                 char scriptpath[1024];snprintf(scriptpath,sizeof scriptpath,"%s/dialog%d.txt",argv[3],k);
                 FILE *df=fopen(scriptpath,"w");if(!df)return 1;
-                for(int j=0;j<d.npages;++j)fprintf(df,"%s%s",j?"\n<<>>\n":"",d.pages[j].text);
+                for(int j=0;j<d.npages;++j)fprintf(df,"%s<avatar:%08X>%s",j?"\n<<>>\n":"",d.pages[j].avatar_id,d.pages[j].text);
                 fclose(df);
             }
         }

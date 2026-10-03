@@ -7,10 +7,13 @@
 #include "effect_pce.h"
 #include "overlay_pce.h"
 #include "campaign_pce.h"
+#include "audio_pcm.h"
+#include "presentation_pce.h"
 #ifndef PCE_START_STAGE
 #define PCE_START_STAGE 1
 #endif
-static uint8_t stage, hero, previous, selected, menu, heading, phase, scale=3;
+uint8_t previous;
+static uint8_t stage, hero, selected, menu, heading, phase, scale=3;
 static uint16_t race_x=4696,race_y=4096;
 static int16_t test_x=128,test_y=144;
 static uint8_t simulation_tick;
@@ -95,7 +98,7 @@ PCE_FLOW static void render_test(uint8_t keys,uint8_t pressed) {
 }
 PCE_FLOW void flow_main(void) {
     pce_metrics.magic[0]='S';pce_metrics.magic[1]='R';pce_metrics.magic[2]='P';pce_metrics.magic[3]='C';
-    pce_metrics.version=1;video_init();
+    pce_metrics.version=1;video_init();audio_pcm_init();
     if(!loader_font())for(;;){}
     if((pce_cdb_version()>>8)<3||!arcade_detect()) {
         video_vdc(VDC_REG_MEMORY,VDC_BG_SIZE_64_32);
@@ -110,8 +113,12 @@ PCE_FLOW void flow_main(void) {
     PceSave checkpoint;
     bool resumed=save_load(&checkpoint);
     if(resumed)hero=checkpoint.hero;
-    if(!change_stage(resumed?checkpoint.stage:PCE_START_STAGE))for(;;){}
-    if(resumed&&stage==2&&checkpoint.phase){
+    pce_control.stage=resumed?checkpoint.stage:0;pce_control.hero=hero;
+    overlay_call(0x74,frontend_start);if(!pce_control.ok)for(;;){};
+    hero=pce_control.hero;
+    uint8_t initial=pce_control.stage?pce_control.stage:PCE_START_STAGE;
+    if(!change_stage(initial))for(;;){}
+    if(resumed&&initial==checkpoint.stage&&stage==2&&checkpoint.phase){
         phase=1;pce_metrics.phase=1;race_x=4096;heading=8;
         if(!pce_campaign.diagnostic){pce_control.phase=1;overlay_call(0x6f,race_start);pce_campaign.state=CAM_PLAY;pce_campaign.timer=0;video_restore();}
     }
@@ -153,7 +160,7 @@ PCE_FLOW void flow_main(void) {
             if(pce_campaign.state==CAM_OVER||pce_campaign.state==CAM_END) {
                 video_text(3,10,pce_campaign.state==CAM_OVER?"GAME OVER":"FRONTIER SAFE - THANK YOU");
                 video_text(3,12,"I/II NEW GAME");
-                if(pressed&(KEY_1|KEY_2)){pce_campaign.lives=3;pce_campaign.powers=2;pce_campaign.score=0;if(!change_stage(1))for(;;){};save_store(1,hero,0);simulation_tick=pce_ticks;}
+                if(pressed&(KEY_1|KEY_2)){pce_campaign.lives=3;pce_campaign.powers=2;pce_campaign.score=0;pce_control.stage=0;pce_control.hero=hero;overlay_call(0x74,frontend_start);hero=pce_control.hero;if(!change_stage(1))for(;;){};save_store(1,hero,0);simulation_tick=pce_ticks;}
                 continue;
             }
             if(pce_campaign.state==CAM_CLEAR) {
@@ -166,7 +173,9 @@ PCE_FLOW void flow_main(void) {
                 }
                 continue;
             }
-            if(pce_campaign.result==2){uint8_t resume_phase=pce_metrics.phase,resume_wave=pce_campaign.wave;
+            if(pce_campaign.result==2){
+                if(!(pce_cdb_adpcm_status()&ADPCM_STOPPED)){video_sat_begin();video_sat_end();continue;}
+                uint8_t resume_phase=pce_metrics.phase,resume_wave=pce_campaign.wave;
                 pce_campaign.result=0;if(!change_stage(stage))for(;;){};
                 if(stage==2&&resume_phase){pce_control.phase=1;overlay_call(0x6f,race_start);pce_campaign.state=CAM_PLAY;pce_campaign.timer=0;}
                 if(stage==6){pce_control.phase=resume_wave;overlay_call(0x72,mech_start);pce_campaign.state=CAM_PLAY;}

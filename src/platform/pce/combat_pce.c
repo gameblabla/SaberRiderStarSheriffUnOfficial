@@ -135,6 +135,5 @@ PCE_COMBAT void combat_draw(void) {
     if(pce_campaign.boss_kind&&pce_campaign.boss_hp&&(!boss_flash||(frame&2)))
         video_sprite(pce_campaign.boss_kind==3?43:42,boss_x-camera,boss_y-16,player.x<boss_x,16);
     if(pce_campaign.boss_kind){video_text(1,1,"BOSS");video_number(6,1,pce_campaign.boss_hp);}
-    video_text(10,0,"L");video_number(12,0,pce_campaign.lives);
-    video_text(19,0,"P");video_number(21,0,pce_campaign.powers);
+
 }

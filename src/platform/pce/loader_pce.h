@@ -1,5 +1,6 @@
 #pragma once
 #include "pce_config.h"
+bool loader_ui(void);
 bool loader_scene(uint8_t stage);
 bool loader_font(void);
 bool loader_voice(uint8_t hero);

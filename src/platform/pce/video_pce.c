@@ -1,6 +1,6 @@
 #include "video_pce.h"
 #include "arcade_pce.h"
-#include "mask_pce.h"
+#include "sprite_cache_pce.h"
 #include <string.h>
 
 volatile PceTelemetry pce_metrics;
@@ -19,9 +19,8 @@ static uint8_t occupancy[224], trial[224];
 static uint8_t clipped_pattern[128];
 static uint8_t clipped_count;
 static vdc_sprite_t sat[2][64];
-static uint8_t sat_page, sat_count;
-static uint16_t sprite_ids[12],sprite_words[12];
-static uint8_t sprite_used[12],sprite_pinned[12],pattern_owner[48];
+static uint8_t sat_page, sat_count,front_start,front_keep;
+
 static uint8_t descriptor[384] PCE_STAGE;
 
 PCE_RENDER void video_vdc(uint8_t index, uint16_t value) {
@@ -148,11 +147,12 @@ PCE_RENDER bool video_background(uint16_t camera) {
 }
 PCE_RENDER void video_text(uint8_t x, uint8_t y, const char *text) {
     uint16_t dest = pce_raster_enabled ? (uint16_t)(48+y)*128+x :
-        y?(uint16_t)y*64+(((pce_scroll_x>>3)+x)&63):28*64+x;
+        (uint16_t)y*64+(((pce_scroll_x>>3)+x)&63);
     while (*text) {
         uint8_t c = *text++;
         if (c < 32 || c > 127) c = '?';
-        video_vdc(0, dest++);
+        video_vdc(0, dest);
+        dest=pce_raster_enabled?dest+1:(dest&~63U)|((dest+1)&63);
         video_vdc(2, 0xf000 | ((PCE_FONT_WORD >> 4) + c - 32));
     }
 }
@@ -162,44 +162,14 @@ __attribute__((noinline)) void video_number(uint8_t x, uint8_t y, uint16_t n) {
     text[5] = 0; video_text(x, y, text);
 }
 PCE_RENDER void video_sat_begin(void) {
-    sat_page ^= 1; sat_count = clipped_count = 0;
+    sat_page ^= 1; sat_count = clipped_count = 0;front_start=64;front_keep=0;
     memset(sat[sat_page], 0, sizeof sat[0]);
     memset(occupancy, 0, sizeof occupancy);
-    for(uint8_t i=0;i<12;++i) {
+    for(uint8_t i=0;i<48;++i) {
         if(sprite_used[i])sprite_pinned[i]=2;
         else if(sprite_pinned[i])--sprite_pinned[i];
         sprite_used[i]=0;
     }
-}
-/* Resident allocator. A 512-byte page holds four 16x16 patterns. Keep the
- * last two displayed generations pinned through SAT DMA, including palettes.
- * Canonical left/right frames share their cache ID and patterns. */
-__attribute__((noinline)) static uint8_t sprite_slot(uint16_t id,uint8_t count) {
-    for(uint8_t i=0;i<12;++i)if(sprite_ids[i]==id)return i;
-    uint8_t slot=0;
-    while(slot<12&&(sprite_used[slot]||sprite_pinned[slot]))++slot;
-    if(slot==12)return 12;
-    uint8_t pages=(count+3)>>2;
-    for(uint8_t base=0;base<=48-pages;++base) {
-        bool available=true;
-        for(uint8_t p=base;p<base+pages;++p) {
-            uint8_t owner=pattern_owner[p];
-            if(owner&&(sprite_used[owner-1]||sprite_pinned[owner-1])){available=false;break;}
-        }
-        if(!available)continue;
-        for(uint8_t p=base;p<base+pages;++p) {
-            uint8_t owner=pattern_owner[p];
-            if(owner) {
-                sprite_ids[owner-1]=0xffff;
-                for(uint8_t q=0;q<48;++q)if(pattern_owner[q]==owner)pattern_owner[q]=0;
-            }
-        }
-        for(uint8_t q=0;q<48;++q)if(pattern_owner[q]==slot+1)pattern_owner[q]=0;
-        for(uint8_t p=base;p<base+pages;++p)pattern_owner[p]=slot+1;
-        sprite_words[slot]=PCE_SPR_WORD+(uint16_t)base*256;
-        return slot;
-    }
-    return 12;
 }
 PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8_t scale) {
     if (id >= scene->nsprites) return false;
@@ -211,12 +181,12 @@ PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8
     uint16_t count = entry[12] | (uint16_t)entry[13]<<8;
     if (!count || count > 32) return false;
     uint8_t slot=sprite_slot(id,count);
-    if(slot==12){++pce_metrics.essential_overflow;return false;}
+    if(slot==48){++pce_metrics.essential_overflow;return false;}
     if (sprite_ids[slot] != id) {
         pce_vdc_index = 2; *(volatile uint8_t *)0x20f7 = 2;
         arcade_vram(pat, sprite_words[slot], count * 128);
         arcade_read(2, pal, entry, 32);
-        pce_vce_copy_palette(16 + slot, entry, 1);
+        pce_vce_copy_palette(16 + (slot<15?slot:15), entry, 1);
         sprite_ids[slot] = id;
         pce_metrics.uploads += count * 128;
     }
@@ -240,7 +210,7 @@ PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8
             bool fits = sat_count + ++admitted <= 64;
             if(pce_metrics.stage==6&&id<99&&(px<16||px+16>240||py<20||py+16>180))
                 if(clipped_count+ ++clipped_admitted>28)fits=false;
-            if(scene->occlusion&&clipped_count+ ++clipped_admitted>28)fits=false;
+
             for (int16_t line=lo; line<hi; ++line) if (++trial[line]>16) fits=false;
             if (!fits) { ++pce_metrics.essential_overflow; return false; }
             continue;
@@ -268,20 +238,22 @@ PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8
             pce_vdc_copy_to_vram(word,clipped_pattern,128);
             pce_metrics.uploads+=128;vram_pattern=word>>5;
         }
-        if(scene->occlusion&&mask_pattern(pat+(uint32_t)pattern*128,px,py,flip,clipped_pattern)) {
-            uint16_t word=0x7800+(uint16_t)clipped_count++*64;
-            pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-            pce_vdc_copy_to_vram(word,clipped_pattern,128);
-            pce_metrics.uploads+=128;vram_pattern=word>>5;
-        }
         sat[sat_page][sat_count++] = (vdc_sprite_t){py + 64, px + 32,
             vram_pattern,
-            VDC_SPRITE_FG | slot | (flip ? VDC_SPRITE_FLIP_X : 0)};
+            VDC_SPRITE_FG | (slot<15?slot:15) | (flip ? VDC_SPRITE_FLIP_X : 0)};
     }
     }
     return true;
 }
+void video_front_mark(void) {front_keep=sat_count;}
+void video_front_begin(void) {front_start=sat_count;}
 PCE_RENDER void video_sat_end(void) {
+    if(front_start<sat_count) {
+        uint8_t count=sat_count-front_start;
+        memcpy(sat[sat_page^1],sat[sat_page]+front_start,(uint16_t)count*8);
+        memmove(sat[sat_page]+front_keep+count,sat[sat_page]+front_keep,(uint16_t)(front_start-front_keep)*8);
+        memcpy(sat[sat_page]+front_keep,sat[sat_page^1],(uint16_t)count*8);
+    }
     pce_vdc_index = 2; *(volatile uint8_t *)0x20f7 = 2;
     pce_vdc_copy_to_vram(PCE_SAT_WORD, sat[sat_page], 512);
     video_vdc(VDC_REG_SATB_START, PCE_SAT_WORD);

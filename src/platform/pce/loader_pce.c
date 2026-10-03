@@ -2,15 +2,18 @@
 #include "arcade_pce.h"
 #include "video_pce.h"
 #include "samples.h"
+#include "pcm.h"
+#include "audio_pcm.h"
 
 static bool music_active;
 volatile uint8_t pce_music_status;
-static uint8_t effect_ticks;
+
 static uint8_t voice_hero,voice_priority;
 #define DISC_SECTOR(name) extern char __cd_##name##__sector[]
 DISC_SECTOR(s1_bin); DISC_SECTOR(s2_bin); DISC_SECTOR(s3_bin);
 DISC_SECTOR(s4_bin); DISC_SECTOR(s5_bin); DISC_SECTOR(s6_bin);
 DISC_SECTOR(s7_bin); DISC_SECTOR(font_bin);
+DISC_SECTOR(ui_bin);
 DISC_SECTOR(voice0_bin);DISC_SECTOR(voice1_bin);DISC_SECTOR(voice2_bin);DISC_SECTOR(voice3_bin);
 static uint32_t sector_of(uint8_t stage) {
     switch (stage) {
@@ -27,6 +30,7 @@ void audio_stop(void) {
     if (music_active) pce_cdb_cdda_pause();
     music_active = false;
     voice_priority=0;
+    audio_pcm_stop();
     pce_cdb_adpcm_stop();
 }
 bool loader_voice(uint8_t hero) {
@@ -49,12 +53,10 @@ bool loader_font(void) {
     if (error) { pce_metrics.load_error = error; return false; }
     return true;
 }
-bool loader_scene(uint8_t stage) {
-    if (!stage || stage > 7) return false;
+static bool loader_archive(uint32_t sector,uint32_t remaining) {
     audio_stop(); video_display(false); pce_raster_enabled = 0;
     pce_cdb_irq_disable(PCE_CDB_MASK_VBLANK_NO_BIOS | PCE_CDB_MASK_HBLANK_NO_BIOS);
-    uint32_t sector = sector_of(stage), address = 0;
-    uint32_t remaining = pce_scenes[stage-1].bytes;
+    uint32_t address=0;
     while (remaining) {
         /* $75-$7c are a 64 KiB CD transfer buffer. Only MPR6 changes;
          * code, IRQs, the stack and all live loader state remain mapped. */
@@ -75,6 +77,12 @@ bool loader_scene(uint8_t stage) {
         sector += sectors;
     }
     pce_cdb_irq_enable(PCE_CDB_MASK_VBLANK_NO_BIOS | PCE_CDB_MASK_HBLANK_NO_BIOS);
+    return true;
+}
+bool loader_ui(void) {return loader_archive((uint32_t)__cd_ui_bin__sector,PCE_UI_BYTES);}
+bool loader_scene(uint8_t stage) {
+    if(!stage||stage>7)return false;
+    if(!loader_archive(sector_of(stage),pce_scenes[stage-1].bytes))return false;
     pce_metrics.stage = stage;
     video_scene(&pce_scenes[stage-1]);
     return true;
@@ -100,18 +108,22 @@ void audio_effect(uint8_t tone) {
             voice_priority=priority;
         }
     }
-    /* Short synthesized effects never require disc access or a sample IRQ. */
-    *IO_PSG_CH_SELECT = 0;
-    *IO_PSG_VOLUME = 0xff;
-    *IO_PSG_CH_CONTROL = 0x40;
-    *IO_PSG_CH_VOLUME = 0xff;
-    *IO_PSG_CH_FREQ_FINE = 100 + tone * 12;
-    *IO_PSG_CH_FREQ_COARSE = 1;
-    *IO_PSG_CH_CONTROL = 0;
-    for (uint8_t i=0; i<32; ++i) *IO_PSG_CH_SAMPLE = i < 16 ? 31 : 0;
-    *IO_PSG_CH_CONTROL = 0x9f;
-    effect_ticks = 8;
+    if(tone==2||tone==5||tone==6)return;
+    audio_pcm_play(tone==1?0:tone==4?1:2);
 }
-void audio_tick(void) {
-    if (effect_ticks && !--effect_ticks) { *IO_PSG_CH_SELECT=0; *IO_PSG_CH_CONTROL=0; }
+void audio_tick(void) {}
+void audio_pcm_play(uint8_t sample) {
+    if(sample>2)return;
+    pce_cpu_irq_disable();
+    *IO_TIMER_CONTROL=0;
+    pce_pcm_left=pcm_samples[sample][1];
+    pce_pcm_bankid=pcm_samples[sample][0];
+    uint16_t address=0xc000;
+    pce_pcm_read[1]=address;pce_pcm_read[2]=address>>8;
+    *IO_PSG_VOLUME=0xff;*IO_PSG_CH_SELECT=0;
+    *IO_PSG_CH_CONTROL=0;*IO_PSG_CH_VOLUME=0xff;
+    *IO_PSG_CH_CONTROL=0xdf;*IO_PSG_CH_SAMPLE=16;
+    *IO_TIMER_COUNTER=0;*IO_IRQ_ACK=0;
+    pce_irq_enable(IRQ_TIMER);*IO_TIMER_CONTROL=1;
+    pce_cpu_irq_enable();
 }
