@@ -3,6 +3,8 @@
 #include "arcade_pce.h"
 #include "video_pce.h"
 #include "presentation_pce.h"
+#include "sprite_cache_pce.h"
+#include <string.h>
 #define STORY_CODE __attribute__((noinline,section(".ram_bank113.text")))
 static uint32_t story_address;
 static uint8_t page_count;
@@ -67,5 +69,11 @@ STORY_CODE void story_step(void) {
     if(pce_campaign.timer<12||!(pce_control.pressed&(KEY_1|KEY_2)))return;
     pce_campaign.timer=0;
     if(++pce_campaign.page<page_count)draw();
-    else {pce_campaign.state=CAM_PLAY;video_restore();}
+    else {
+        /* The box and avatar were cached over pattern pages that retained foreground chunks own;
+         * release them and make the foreground re-admit every chunk. */
+        memset(sprite_used,0,sizeof sprite_used);memset(sprite_pinned,0,sizeof sprite_pinned);
+        foreground_reset();
+        pce_campaign.state=CAM_PLAY;video_restore();
+    }
 }
