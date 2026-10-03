@@ -1,0 +1,13 @@
+#pragma once
+#include "play_pce.h"
+#include "video_pce.h"
+typedef struct { int16_t x,y,vx,vy; uint8_t fx,fy,coll,ground; } Body;
+typedef struct { int16_t x,y,vx,vy; uint8_t active,enemy; } Shot;
+typedef struct { Body b; uint8_t active,type,hp,timer,flip; } Actor;
+
+extern Body player;
+extern Actor actors[8];
+extern Shot shots[24];
+extern const PceScene *play_scene;
+extern uint16_t camera,frame;
+extern uint8_t hero,facing,safe_timer;

@@ -1,0 +1,140 @@
+#include "campaign_pce.h"
+#include "play_internal.h"
+#include "overlay_pce.h"
+#include "arcade_pce.h"
+#include "loader_pce.h"
+static uint8_t dialogs_done,ndialog,ndeath,boss_phase,boss_flash;
+static uint16_t boss_time,arena_time;
+static int16_t boss_x,boss_y;
+static int16_t dialog_zones[4][4],death_zones[8][6];
+PCE_COMBAT static int16_t distance(int16_t a,int16_t b) { int16_t n=a-b;return n<0?-n:n; }
+PCE_COMBAT static bool zone(const int16_t *z) {
+    return distance(player.x+4,z[0])<=z[2]+8&&distance(player.y+9,z[1])<=z[3]+23;
+}
+PCE_COMBAT static void bullet(int16_t x,int16_t y,int16_t vx,int16_t vy) {
+    for(uint8_t k=0;k<24;++k)if(!shots[k].active){shots[k]=(Shot){x,y,vx,vy,1,1};break;}
+}
+PCE_COMBAT void combat_start(void) {
+    boss_phase=boss_flash=dialogs_done=ndialog=ndeath=0;boss_time=arena_time=0;
+    pce_campaign.boss_kind=pce_campaign.boss_round=0;pce_campaign.boss_hp=0;
+    pce_campaign.result=pce_campaign.event=0;pce_campaign.boost=pce_campaign.power_cd=0;
+    uint8_t count[2];arcade_read(2,play_scene->rules,count,2);
+    ndialog=count[0]>4?4:count[0];ndeath=count[1]>8?8:count[1];
+    arcade_read(2,play_scene->rules+2,dialog_zones,(uint16_t)ndialog*8);
+    arcade_read(2,play_scene->rules+2+(uint16_t)ndialog*8,death_zones,(uint16_t)ndeath*12);
+}
+PCE_COMBAT static void boss_begin(uint8_t kind) {
+    camera=play_scene->width-256;pce_metrics.camera_x=camera;
+    pce_campaign.boss_kind=kind;
+    pce_campaign.boss_hp=kind==3?30:kind==1?66:60;
+    boss_time=0;boss_phase=kind==3?3:1;boss_x=camera+240;boss_y=80;
+    audio_music(8);
+}
+PCE_COMBAT static void power_strike(void) {
+    if(hero<2) {
+        for(uint8_t k=0;k<8;++k)if(actors[k].active&&!(actors[k].type>=12&&actors[k].type<=28)){actors[k].active=0;++pce_campaign.score;}
+        if(pce_campaign.boss_hp) {
+            uint16_t maximum=pce_campaign.boss_kind==3?30:pce_campaign.boss_kind==1?66:60;
+            uint16_t damage=(maximum*(hero?25:18)+99)/100;
+            pce_campaign.boss_hp=pce_campaign.boss_hp>damage?pce_campaign.boss_hp-damage:0;
+        }
+        if(!hero){for(uint8_t k=0;k<24;++k)if(shots[k].enemy)shots[k].active=0;safe_timer=150;}
+    } else pce_campaign.boost=hero==2?480:600;
+    pce_campaign.power_cd=1200;audio_effect(4);
+}
+PCE_COMBAT void combat_tick(void) {
+    if(pce_campaign.boost)--pce_campaign.boost;
+    if(pce_campaign.power_cd)--pce_campaign.power_cd;
+    if((pce_control.pressed&KEY_SELECT)&&(pce_control.keys&KEY_1)&&
+       pce_campaign.powers&&!pce_campaign.power_cd&&!pce_campaign.boost) {
+        --pce_campaign.powers;pce_campaign.state=CAM_POWER;pce_campaign.timer=0;return;
+    }
+    for(uint8_t k=0;k<ndialog;++k)if(!(dialogs_done&(1<<k))&&zone(dialog_zones[k])) {
+        dialogs_done|=1<<k;pce_campaign.story=k;pce_campaign.event=1;return;
+    }
+    for(uint8_t k=0;k<ndeath;++k)if(zone(death_zones[k])&&!safe_timer) {
+        campaign_hurt();player.x=death_zones[k][4];player.y=death_zones[k][5];safe_timer=120;
+    }
+    if(pce_metrics.stage==4&&pce_campaign.boss_round==2) {
+        for(uint8_t k=0;k<8;++k)if(actors[k].active&&!(actors[k].type>=12&&actors[k].type<=28))return;
+        pce_campaign.result=1;pce_campaign.story=2;pce_campaign.event=1;return;
+    }
+    if(!pce_campaign.boss_kind) {
+        uint8_t stage=pce_metrics.stage;
+        uint16_t start=stage==1?9791:stage==3?play_scene->width-136:stage==5?6558:play_scene->width-140;
+        if(stage==3&&player.x>=6480&&!(dialogs_done&16)){dialogs_done|=16;pce_campaign.story=1;pce_campaign.event=1;return;}
+        if(player.x>=(int16_t)start) {
+            if(stage==4&&++arena_time<1440) {
+                if(arena_time==1){pce_campaign.story=1;pce_campaign.event=1;}
+                if(!(arena_time%120))for(uint8_t k=0;k<8;++k)if(!actors[k].active) {
+                    actors[k]=(Actor){.b={.x=camera+240,.y=170},.active=1,.type=2,.hp=2,.timer=60};break;
+                }
+            } else {
+                boss_begin(stage==1||stage==5?1:2);
+                
+            }
+        }
+    } else {
+        ++boss_time;if(boss_flash)--boss_flash;
+        uint8_t kind=pce_campaign.boss_kind;
+        if(kind==3) {
+            boss_x+=player.x<boss_x?-1:1;
+            if(boss_x<(int16_t)camera+32)boss_x=camera+32;
+            if(boss_x>(int16_t)camera+224)boss_x=camera+224;
+            boss_y=player.y;
+            if(!(boss_time%45))bullet(boss_x,boss_y-8,player.x<boss_x?-4:4,0);
+        } else {
+            if(boss_phase<3) {
+                boss_x=camera+256-(boss_time*3);boss_y=boss_phase==1?48:72;
+                if(boss_time>=90){++boss_phase;boss_time=0;}
+            } else if(boss_phase==3) {
+                boss_x=camera+180+(int16_t)((boss_time/4)%32);boss_y=96;
+                if(!(boss_time%30))bullet(boss_x-28,boss_y+12,-3,2);
+                if(boss_time>=180){boss_phase=4;boss_time=0;}
+            } else if(boss_phase==4) {
+                boss_x=camera+288-(boss_time*4);boss_y=155;
+                if(boss_time>=80){boss_phase=5;boss_time=0;}
+            } else {
+                boss_x=camera+128;boss_y=62;
+                if(!(boss_time%24))bullet(camera+40+(boss_time%176),boss_y+24,0,4);
+                if(boss_time>=144){boss_phase=3;boss_time=0;}
+            }
+        }
+        if(!safe_timer&&distance(player.x,boss_x)<(kind==3?14:44)&&distance(player.y,boss_y)<(kind==3?28:25)) {
+            safe_timer=120;campaign_hurt();
+        }
+        for(uint8_t k=0;k<24;++k) {
+            Shot *s=&shots[k];if(!s->active||s->enemy||boss_phase<3)continue;
+            if(distance(s->x,boss_x)<(kind==3?12:44)&&distance(s->y,boss_y)<(kind==3?24:22)) {
+                s->active=0;if(pce_campaign.boss_hp)--pce_campaign.boss_hp;boss_flash=6;audio_effect(4);
+            }
+        }
+        if(!pce_campaign.boss_hp) {
+            if(pce_metrics.stage==4) {
+                ++pce_campaign.score;pce_campaign.boss_round=2;
+            } else if(pce_metrics.stage==5&&kind==1) {
+                pce_campaign.boss_round=1;boss_begin(3);
+                pce_campaign.story=hero==2?5:2;pce_campaign.event=1;
+            } else {
+                ++pce_campaign.score;pce_campaign.result=1;
+                if(pce_metrics.stage!=1){pce_campaign.story=pce_metrics.stage==5?(hero==2?6:3):2;pce_campaign.event=1;}
+            }
+        }
+    }
+    for(uint8_t k=0;k<8;++k)if(actors[k].active&&!(actors[k].type>=12&&actors[k].type<=28)&&!safe_timer&&distance(player.x,actors[k].b.x)<14&&distance(player.y,actors[k].b.y)<24) {
+        safe_timer=120;campaign_hurt();
+    }
+}
+PCE_COMBAT void combat_draw(void) {
+    if(pce_campaign.state==CAM_POWER) {
+        const char *name=hero==0?"SABER SLASH":hero==1?"FIREBALL BLAST":hero==2?"APRIL OVERDRIVE":"COLT RAPID FIRE";
+        video_text(6,12,name);
+        pce_campaign.timer+=pce_control.elapsed;
+        if(pce_campaign.timer>=114){power_strike();pce_campaign.state=CAM_PLAY;video_restore();}
+    }
+    if(pce_campaign.boss_kind&&pce_campaign.boss_hp&&(!boss_flash||(frame&2)))
+        video_sprite(pce_campaign.boss_kind==3?43:42,boss_x-camera,boss_y-16,player.x<boss_x,16);
+    if(pce_campaign.boss_kind){video_text(1,1,"BOSS");video_number(6,1,pce_campaign.boss_hp);}
+    video_text(10,0,"L");video_number(12,0,pce_campaign.lives);
+    video_text(19,0,"P");video_number(21,0,pce_campaign.powers);
+}
