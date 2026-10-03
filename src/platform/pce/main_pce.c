@@ -9,6 +9,7 @@
 #include "campaign_pce.h"
 #include "audio_pcm.h"
 #include "presentation_pce.h"
+#include "frontend_pce.h"
 #ifndef PCE_START_STAGE
 #define PCE_START_STAGE 1
 #endif
@@ -114,7 +115,8 @@ PCE_FLOW void flow_main(void) {
     bool resumed=save_load(&checkpoint);
     if(resumed)hero=checkpoint.hero;
     pce_control.stage=resumed?checkpoint.stage:0;pce_control.hero=hero;
-    overlay_call(0x74,frontend_start);if(!pce_control.ok)for(;;){};
+    overlay_call(0x72,frontend_start);if(!pce_control.ok)for(;;){};
+    if(!loader_font())for(;;){}
     hero=pce_control.hero;
     uint8_t initial=pce_control.stage?pce_control.stage:PCE_START_STAGE;
     if(!change_stage(initial))for(;;){}
@@ -158,9 +160,23 @@ PCE_FLOW void flow_main(void) {
             if(pce_campaign.state==CAM_STORY){overlay_call(0x71,story_step);simulation_tick=pce_ticks;continue;}
             if(pce_campaign.state==CAM_POWER){overlay_call(0x69,play_present);continue;}
             if(pce_campaign.state==CAM_OVER||pce_campaign.state==CAM_END) {
-                video_text(3,10,pce_campaign.state==CAM_OVER?"GAME OVER":"FRONTIER SAFE - THANK YOU");
-                video_text(3,12,"I/II NEW GAME");
-                if(pressed&(KEY_1|KEY_2)){pce_campaign.lives=3;pce_campaign.powers=2;pce_campaign.score=0;pce_control.stage=0;pce_control.hero=hero;overlay_call(0x74,frontend_start);hero=pce_control.hero;if(!change_stage(1))for(;;){};save_store(1,hero,0);simulation_tick=pce_ticks;}
+                if(pce_campaign.state==CAM_OVER) {
+                    pce_control.ok=0;
+                    if(pce_continues)overlay_call(0x71,frontend_continue);
+                    if(pce_control.ok) {
+                        /* A continue restarts the current stage (or race phase) with fresh lives. */
+                        if(!loader_font())for(;;){}
+                        pce_campaign.state=CAM_PLAY;pce_campaign.result=2;pce_metrics.hp=campaign_hearts();
+                        simulation_tick=pce_ticks;continue;
+                    }
+                    overlay_call(0x71,frontend_game_over);
+                } else overlay_call(0x71,frontend_credits);
+                pce_control.stage=0;pce_control.hero=hero;
+                overlay_call(0x72,frontend_start);if(!pce_control.ok)for(;;){};
+                if(!loader_font())for(;;){}
+                hero=pce_control.hero;
+                if(!change_stage(1))for(;;){};
+                save_store(1,hero,0);simulation_tick=pce_ticks;
                 continue;
             }
             if(pce_campaign.state==CAM_CLEAR) {

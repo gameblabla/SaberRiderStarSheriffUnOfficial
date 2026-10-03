@@ -17,6 +17,7 @@ import sys
 import story
 import timeline
 import presentation
+import frontend
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
@@ -46,7 +47,7 @@ def extract(work):
          'src/pack.c', 'src/lzo1z.c', 'src/assets.c', 'src/namehash.c', '-o', exe])
     run([exe, ROOT / 'SaberRider/data', srgb])
     # Definitions supply the same asset IDs/anchors as the gameplay sources.
-    ids = ['8403195A', '9C8F9A9E', '79260A58', '26818B85', '112DF34C', '02A38AFB', 'D39700C4', '2A02BD4F', 'FBFAF817', '4042CD71', '71887ECA', 'BFDAB70F', '1D724DD9', '211F5D78', '9393E59B', '20C6FAEF', 'ECC992CB', '72B53EF8', '925534E2', '916137ED', '906D3698', 'F5975DCF', 'F4A55EDE', 'F4A25ED9', 'F3B05E28', '0DB9F0E0', '29CAD5D3']
+    ids = ['7E11BC19', '8403195A', '9C8F9A9E', '79260A58', '26818B85', '112DF34C', '02A38AFB', 'D39700C4', '2A02BD4F', 'FBFAF817', '4042CD71', '71887ECA', 'BFDAB70F', '1D724DD9', '211F5D78', '9393E59B', '20C6FAEF', 'ECC992CB', '72B53EF8', '925534E2', '916137ED', '906D3698', 'F5975DCF', 'F4A55EDE', 'F4A25ED9', 'F3B05E28', '0DB9F0E0', '29CAD5D3']
     exe = work / 'levprep'
     run(['cc', '-O2', '-std=gnu11', '-Isrc', 'tools/saturn/levprep.c', 'src/pack.c', 'src/lzo1z.c', '-o', exe])
     run([exe, ROOT / 'SaberRider/data', work, *ids])
@@ -351,7 +352,7 @@ def main():
         print(f'Baking PCE stage {stage}', flush=True)
         data, meta = make_scene(stage, work, previews, shared)
         (out/f's{stage}.bin').write_bytes(data); scenes.append(meta)
-    ui_values,briefing,ui_bytes=presentation.bake_frontend(ROOT,work,out,previews,native_background,cblock_frame)
+    ui_h,ui_c,ui_bytes=frontend.bake(ROOT,work,out,previews,cblock_frame)
     # 96 ASCII glyphs use background characters, palette 15.
     glyphs = []
     font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf', 8)
@@ -377,8 +378,7 @@ def main():
         c.append('    {' + ','.join(str(v) for v in values) + '},')
     c.append('};')
     presentation.emit_tables(out,scenes,h,c)
-    h+=['extern const PceScene pce_ui_scenes[6];',f'#define PCE_UI_BYTES {ui_bytes}UL',f'#define PCE_BRIEFING_TEXT {briefing}UL']
-    c.append('const PceScene pce_ui_scenes[6]={'+','.join('{'+','.join(map(str,v))+'}' for v in ui_values)+'};')
+    h+=ui_h;c+=ui_c
     c.append('const uint8_t pce_actor_ids[33] = {'+','.join(map(str,scenes[0]['actor_ids']))+'};')
     (out/'assets.c').write_text('\n'.join(c)+'\n')
     h += ['#define PCE_HERO_FRAMES 9', '#define PCE_SHOT_ID 36', '#define PCE_ENEMY_SHOT_ID 37', '#define PCE_BLAST_ID 38']

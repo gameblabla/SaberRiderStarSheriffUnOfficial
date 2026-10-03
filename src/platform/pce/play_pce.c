@@ -98,7 +98,7 @@ PCE_CODE void play_init(uint8_t stage,uint8_t selected) {
         if(k<60) {trigger_cache[k]=trigger;trigger_lo[k]=trigger.type==10?32767:trigger.cx-trigger.hx-8;trigger_hi[k]=trigger.cx+trigger.hx+8;}
         trigger_timers[k]=trigger.delay;trigger_remaining[k]=trigger.remaining;trigger_spawned[k]=0;
     }
-    pce_metrics.hp=3;
+    pce_metrics.hp=campaign_hearts();
     overlay_call(0x70,combat_start);
 }
 PCE_CODE static void encounters(void) {
@@ -170,7 +170,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
         if(a->timer>45)a->b.vx=0;
         physics(&a->b);
         if(a->timer)--a->timer;else if(a->type>=2&&(a->type!=31||pce_campaign.boss_kind)) {
-            shoot(a->b.x+(a->flip?-16:16),a->b.y-8,a->flip?-3:3,0,true);a->timer=90;
+            shoot(a->b.x+(a->flip?-16:16),a->b.y-8,a->flip?-3:3,0,true);a->timer=pce_options.difficulty==0?120:pce_options.difficulty==1?90:62;
         }
     }
     for(uint8_t k=0;k<24;++k) {

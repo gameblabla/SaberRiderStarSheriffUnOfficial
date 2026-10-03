@@ -26,10 +26,12 @@ def main():
     audio=json.loads((out/'audio.json').read_text())
     (out/'disc.json').write_text(json.dumps(dict(extents=extents,data_sectors=len(image)//2048,audio=audio),indent=2)+'\n')
     cue=['FILE "saber_rider.iso" BINARY','  TRACK 01 MODE1/2048','    INDEX 01 00:00:00']
-    for track in audio['tracks']:
-        cue.extend([f'FILE "{track["file"]}" BINARY',f'  TRACK {track["track"]:02d} AUDIO',
-                    '    INDEX 00 00:00:00','    INDEX 01 00:02:00'])
-    cue.extend(['FILE "music_end.bin" BINARY','  TRACK 20 AUDIO','    INDEX 01 00:00:00'])
+    for track in sorted(audio['tracks'],key=lambda t:t['track']):
+        if track['id']=='END':
+            cue.extend([f'FILE "{track["file"]}" BINARY',f'  TRACK {track["track"]:02d} AUDIO','    INDEX 01 00:00:00'])
+        else:
+            cue.extend([f'FILE "{track["file"]}" BINARY',f'  TRACK {track["track"]:02d} AUDIO',
+                        '    INDEX 00 00:00:00','    INDEX 01 00:02:00'])
     (out/'saber_rider.cue').write_text('\n'.join(cue)+'\n')
 
 if __name__=='__main__': main()

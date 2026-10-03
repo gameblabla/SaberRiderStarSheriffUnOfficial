@@ -4,6 +4,7 @@
 #include "samples.h"
 #include "pcm.h"
 #include "audio_pcm.h"
+#include "campaign_pce.h"
 
 static bool music_active;
 volatile uint8_t pce_music_status;
@@ -89,7 +90,12 @@ bool loader_scene(uint8_t stage) {
 }
 void audio_music(uint8_t track) {
     if(track>=18)return;
-    track+=2; /* Generated MUSIC_TABLE order; track 1 is the data track. */
+    /* Volume blocks (HIGH, MEDIUM, LOW) hold the same 18 tracks at different
+     * levels; OFF plays nothing. Track 1 is the data track. */
+    static const uint8_t block[4]={0,40,21,2};
+    uint8_t level=pce_options.music&3;
+    if(!level){audio_stop();return;}
+    track+=block[level];
     /* BIOS track parameters occupy AL/CL (sector.hi), in BCD. The SDK's
      * sector.track alias occupies BL/DL and cannot be used for this call. */
     pce_sector_t start = {.hi=(track/10)*16+track%10};

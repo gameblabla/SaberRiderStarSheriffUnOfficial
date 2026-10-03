@@ -20,17 +20,36 @@ def verify(out):
         assert len(np.unique(im.reshape(-1,3),axis=0))>16,(name,'Blank screen')
     with tempfile.TemporaryDirectory(prefix='presentation-',dir=out) as base,Emulator(out/'saber_rider.cue',base) as e:
         e.run(120);e.input(8);e.run(5);e.input(0)
-        t.until(e,lambda:e.memory(ui,1)==b'\1');e.run(360);picture(e,'title')
-        t.press(e,1);e.run(240);assert e.memory(ui,1)==b'\2';picture(e,'select-saber')
+        options=symbol(out/'app.elf','pce_options.0');conts=symbol(out/'app.elf','pce_continues')
+        t.until(e,lambda:e.memory(ui,1)==b'\1',limit=20000);e.run(360);picture(e,'title')
+        # Options: difficulty to HARD caps lives/continues at 3; music volume cycles.
+        t.press(e,64);t.press(e,1);t.until(e,lambda:e.memory(ui,1)==b'\3');e.run(200);picture(e,'options')
+        t.press(e,32)                                                # difficulty NORMAL -> HARD
+        assert e.memory(options,4)[0]==2 and e.memory(options,4)[1]==3,e.memory(options,4)
+        t.press(e,64);t.press(e,128)                                 # lives 3 -> 2 (left)
+        t.press(e,64);t.press(e,32)                                  # continues stays capped at 3
+        t.press(e,64);t.press(e,128);t.press(e,128);e.run(240)       # music HIGH -> MID -> LOW
+        opt=e.memory(options,4)
+        assert opt[0]==2 and opt[1]==2 and opt[2]==3 and opt[3]==1,opt
+        picture(e,'options-changed')
+        t.press(e,64);t.press(e,1);t.until(e,lambda:e.memory(ui,1)==b'\1');e.run(60)
+        t.press(e,1);t.until(e,lambda:e.memory(ui,1)==b'\2');e.run(240);picture(e,'select-saber')
         for hero in (1,2,3):
-            t.press(e,32);e.run(240);picture(e,f'select-{hero}')
-        t.press(e,1);e.run(240);assert e.memory(ui,1)==b'\3';picture(e,'briefing')
-        for _ in range(30):
-            if e.memory(ui,1)==b'\0':break
-            t.press(e,1)
+            t.press(e,32);e.run(120);picture(e,f'select-{hero}')
+        t.press(e,1)
         t.until(e,lambda:e.memory(t.address+5,1)==b'\1');e.run(120)
-        assert t.metrics(e)['hero']==3,'Selected Colt must reach actual gameplay'
-        report['frontend']='title -> all four selections -> briefing -> Colt gameplay'
+        m=t.metrics(e)
+        assert m['hero']==3,'Selected Colt must reach actual gameplay'
+        assert m['hp']==1,'HARD difficulty gives one heart'
+        assert t.state(e)['lives']==opt[1],'Options lives must start the game'
+        report['frontend']='title -> options (difficulty, lives, continues, music) -> hero select -> Colt gameplay'
+        # Continue: a lethal hit with continues left offers CONTINUE and restarts the stage.
+        e.write(conts,bytes([1]));t.field(e,'lives',0);t.seed(e,'safe_timer',0,1);t.seed(e,'dialogs_done',255,1);t.field(e,'state',0)
+        e.write(symbol(out/'app.elf','shots'),struct.pack('<4h2B',m['player_x'],m['player_y'],0,0,1,1))
+        t.until(e,lambda:e.memory(ui,1)==b'\4',limit=3000);e.run(120);picture(e,'continue')
+        t.press(e,1);t.until(e,lambda:e.memory(t.address+5,1)==b'\1' and e.memory(ui,1)==b'\0',limit=6000);e.run(120)
+        assert e.memory(conts,1)==b'\0' and t.state(e)['lives']==opt[1] and t.metrics(e)['hero']==3
+        report['continue']='CONTINUE screen restarts the stage, consumes a continue and restores lives'
         # Use the existing Run menu to change hero without rebuilding test ROMs.
         for hero in range(4):
             t.press(e,8);current=t.metrics(e)['hero']

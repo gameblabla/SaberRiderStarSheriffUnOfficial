@@ -8,6 +8,11 @@ typedef struct __attribute__((packed)) {
     uint16_t score,boss_hp,timer,boost,power_cd;
 } PceCampaign;
 extern PceCampaign pce_campaign;
+/* Player options from the front end. music: 0 off, 1 low, 2 medium, 3 high. */
+typedef struct { uint8_t difficulty,lives,continues,music; } PceOptions;
+extern PceOptions pce_options;
+extern uint8_t pce_continues;
+uint8_t campaign_hearts(void);
 void story_start(void);
 void story_step(void);
 void mission_start(void);

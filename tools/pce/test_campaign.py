@@ -146,7 +146,7 @@ class Campaign(Test):
             self.until(e,lambda:self.state(e)['state']==2);self.press(e,1)
             assert self.state(e)['state']==4;self.capture(e,'campaign-ending');self.results['ending']=self.state(e)
             # A zero-lives collision must reach game over, with no underflow.
-            self.stage(e,1);self.field(e,'lives',0);e.write(self.address+34,b'\x01\x00')
+            self.stage(e,1);self.field(e,'lives',0);e.write(self.address+34,b'\x01\x00');self.seed(e,'pce_continues',0,1)
             self.seed(e,'safe_timer',0,1)
             px=self.metrics(e)['player_x'];py=self.metrics(e)['player_y']
             e.write(symbol(self.out/'app.elf','shots'),struct.pack('<4h2B',px,py,0,0,1,1));e.run(120)
@@ -164,7 +164,9 @@ class Campaign(Test):
             assert self.metrics(e)['player_y']>117,'Down + II must drop through a one-way platform'
             self.results['drop_through']=self.metrics(e)
             for hero in range(1,4):
-                self.press(e,8);self.press(e,16);self.press(e,8)
+                self.press(e,8)
+                for _ in range((hero-self.metrics(e)['hero'])&3):self.press(e,16)
+                self.press(e,8)
                 self.until(e,lambda:self.metrics(e)['ready'] and self.metrics(e)['hero']==hero)
                 self.field(e,'powers',2);self.seed(e,'safe_timer',250,1)
                 self.press(e,5,20);self.until(e,lambda:self.state(e)['state']==0)

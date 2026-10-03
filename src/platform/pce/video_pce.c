@@ -16,7 +16,7 @@ static uint16_t cache_refs[PCE_BG_MAX_TILES] PCE_WORK;
 static uint16_t columns[33][30] PCE_WORK;
 static uint16_t first_column, last_column;
 static uint16_t free_cursor;
-static uint8_t buffer[2048] PCE_STAGE;
+uint8_t buffer[2048] PCE_STAGE;
 uint8_t sprite_occupancy[240], sprite_line_lo, sprite_line_hi, sprite_line_ok, sprite_exact;
 extern void sprite_lines_reserve(void), sprite_lines_release(void);
 uint8_t clipped_pattern[128];
@@ -67,6 +67,20 @@ PCE_RENDER static void timing(bool wide) {
     video_vdc(VDC_REG_TIMING_HDISP, wide ? 0x043f : 0x041f);
     video_vdc(VDC_REG_TIMING_VSYNC, sprite_screen_height==240?0x0c02:0x1702);
     video_vdc(VDC_REG_TIMING_VDISP, sprite_screen_height-1);
+    video_vdc(VDC_REG_TIMING_VDISPEND, 12);
+    video_vdc(VDC_REG_DMA_CONTROL, 0);
+    pce_cpu_irq_enable();
+}
+/* 320x224 timing for the front end: the 7.16 MHz dot clock, 40 characters. */
+PCE_RENDER void video_mode_ui(void) {
+    sprite_screen_height=224;sprite_exact=1;
+    pce_cpu_irq_disable();
+    *IO_VCE_CONTROL = 1;
+    video_vdc(VDC_REG_MEMORY, 0x0010);
+    video_vdc(VDC_REG_TIMING_HSYNC, 0x0503);
+    video_vdc(VDC_REG_TIMING_HDISP, 0x0627);
+    video_vdc(VDC_REG_TIMING_VSYNC, 0x1702);
+    video_vdc(VDC_REG_TIMING_VDISP, 223);
     video_vdc(VDC_REG_TIMING_VDISPEND, 12);
     video_vdc(VDC_REG_DMA_CONTROL, 0);
     pce_cpu_irq_enable();

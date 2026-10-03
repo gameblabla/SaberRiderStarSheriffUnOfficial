@@ -1,7 +1,5 @@
 #pragma once
 #include "pce_config.h"
-extern volatile uint8_t pce_ui_state;
-void frontend_start(void);
 void presentation_frame(void);
 void foreground_prepare(void);
 void foreground_draw(void);

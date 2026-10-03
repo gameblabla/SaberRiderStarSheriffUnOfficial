@@ -1,8 +1,8 @@
 # Native PC Engine Arcade CD-ROM² port
 
 The LLVM-MOS implementation is in `src/platform/pce/`; the host asset and disc
-tools are in `tools/pce/`. Boot opens the title, four-hero selection, and the
-original mission briefing as still artwork and paged text. Select on the title
+tools are in `tools/pce/`. Boot opens the 320x224 title, then options or four-hero
+selection (the briefing was cut). Select on the title, or the Continue item,
 resumes an existing checkpoint. The disc image
 is `build/pce/saber_rider.cue` and must be kept beside its ISO and music files.
 
@@ -40,7 +40,7 @@ enabled and hardware sprite limits enabled, and
 
 | Context | Controls |
 | --- | --- |
-| Title / selection | Run or I/II start/accept; left/right select hero; Select on title resumes the checkpoint |
+| Title / options / selection | Up/down choose; left/right change an option or hero; Run or I/II accept; Select on title resumes the checkpoint |
 | Platform | Left/right move; II jump; down crouch; down + II drop through a one-way platform or slide on solid ground; I shoot |
 | Aim / power | Hold Select with directions to aim; press Select while holding I for a power |
 | Race / pursuit | Up gas, down brake, left/right steer, II turbo/ram, I fire in pursuit |
@@ -90,6 +90,38 @@ the 512-dot clock. Horizontally expanded cars preserve their physical aspect.
 Eight sampled depth rows repeat across 24 BAT rows, covering the 96-line floor.
 The finished floor page is published after the corresponding sprite list is
 prepared. Ramrod uses four baked sizes and overlapping 16-pixel slices.
+
+## Front end
+
+`tools/pce/frontend.py` bakes three 320x224 screens (40x28 BG characters, VCE
+7.16 MHz clock): title, hero select, and an options/continue/credits panel.
+Runtime code is `ui_pce.c` (renderer bank, shared services), `frontend_pce.c`
+(title/options/select) and `credits_pce.c` (continue, game over, credits).
+
+- Colour limits are avoided with sprites, which have their own palettes: the
+  chosen hero's portrait is 16x16 sprite pieces with a free palette each; the
+  title logo's worst-quantized blocks are covered by sprite patches; menu items
+  and hero names are sprites too.
+- Animation is palette driven: the tunnel cycles four palettes; hero panels
+  switch dim/selected/glow palettes; menu highlights swap sprite palettes.
+- Text is BG font characters on a flat panel colour, so there are no black boxes.
+- Options live in `pce_options` (difficulty, lives, continues, music). Hearts are
+  3/2/1 and enemy fire intervals 120/90/62 frames. Lives and continues are capped
+  at 7/5, 5/4, 3/3 by difficulty. The CD fader can only ramp to silence, so
+  music volume selects one of three attenuated copies of every track (blocks at
+  tracks 2, 21 and 40) or turns music off; the disc carries all three.
+- `emulator-profile.patch` and `tools/pce/profile.py` add a per-function
+  CPU profile to the headless emulator.
+
+## Rendering speed
+
+Platform stages run at 60 Hz. The draw path uses block-move Arcade reads
+(`TAI`), a resident cache that skips the Arcade lookup for cached sprites,
+an assembly sprite emitter, retained foreground parts (`foreground_pce.c`),
+8-line band admission for the 16-sprites-per-line limit (exact per-line counts in
+the race, cockpit and space stages), segment-wise SAT upload, and a +64
+address-increment BAT column writer. The race floor and Ramrod cockpit were not
+sped up.
 
 ## Verification and remaining work
 

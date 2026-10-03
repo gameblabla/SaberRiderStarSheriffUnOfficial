@@ -14,6 +14,7 @@ extern volatile uint8_t pce_ticks, pce_raster_enabled, pce_floor_page;
 extern volatile uint8_t pce_vdc_index;
 void video_init(void);
 void video_wait(void);
+void video_mode_ui(void);
 void video_display(bool enable);
 void video_scroll(uint16_t x, uint16_t y);
 void video_scene(const PceScene *scene);

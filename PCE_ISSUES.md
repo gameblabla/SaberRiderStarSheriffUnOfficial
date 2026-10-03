@@ -3,11 +3,8 @@
 Baseline preserved in **`9d04f6e`**, committed as WIP before corrective work.
 Implementation status below does not replace the user's visual/audio acceptance.
 
-- [x] Restore title screen and character selection before gameplay. Original
-      title art, all four portrait panels, real input selection, explicit save
-      continuation; a new game returns through this flow after game over.
-- [x] Add the opening mission briefing as original still artwork and paged text.
-      No video playback added.
+- [x] Title, options and hero selection are 320x224 screens modelled on the
+      Saturn menus (see "Front end" in `PCE_PORT.md`). The briefing was cut.
 - [x] Replace square-wave shooting with original sample `C66E1894` through
       resident PSG DDA: **5-bit PCM, approximately 6.99 kHz**. Sample IRQs restore
       MPR6; sample data survives stage reads. Impacts/special effects use PCM too.
@@ -33,6 +30,24 @@ Implementation status below does not replace the user's visual/audio acceptance.
 - [x] Disassemble `../PCE/Sound/adpcm_build_14_2bit.pce` and create a matching
       compressor: `tools/pce/adpcm2.py`. Native-ROM comparison validates 48 cases,
       954 samples, predictor saturation, step adaptation and partial-byte endings.
+
+## Second pass (2026-10-04)
+
+- [x] Platform playfields fill all 240 lines; the black top bar is gone (sky and
+      scenery draw there, HUD sprites sit on top).
+- [x] Platform stages render at 60 Hz: 120 loop iterations per 120 emulator
+      frames in stage 1 (about 45% idle), measured with the cycle profiler
+      (`tools/pce/profile.py`). Stages 3-5 also hold 60 Hz; stage 2 (race floor)
+      runs at about 15 Hz and the Ramrod cockpit at about 29 Hz and were not
+      reworked.
+- [x] Title: Start / (Continue when a save exists) / Options, with a smooth
+      dithered backdrop, the logo, and no text on black boxes.
+- [x] Options: difficulty (hearts 3/2/1, enemy fire rate), lives, continues
+      (capped per difficulty as on Saturn), music volume (off/low/mid/high) and
+      exit. Continue screen after game over; credits after the ending.
+- [x] Hero select: animated tunnel backdrop (palette cycling), full-colour
+      selected portrait as hardware sprites, silhouettes for the others.
+- [x] Fixed hero aim/motion sprite ID strides (heroes 1-3 showed the wrong pose).
 
 Remaining integration/acceptance work:
 

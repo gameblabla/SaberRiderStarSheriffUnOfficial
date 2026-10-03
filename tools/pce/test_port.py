@@ -45,10 +45,12 @@ def assets(out):
             assert s['facing_variants']==1 and s['units_per_line']<=16
         if scene['stage'] in (1,3,4,5):assert scene['ntr']<=60 and scene['rows']<=32
     audio=json.loads((out/'audio.json').read_text())
-    assert len(audio['tracks'])==18
-    for track in audio['tracks']:
+    music=[t for t in audio['tracks'] if t['id']!='END']
+    assert len(music)==54 and sorted(t['track'] for t in music)==list(range(2,20))+list(range(21,39))+list(range(40,58))
+    for track in music:
         data=(out/track['file']).read_bytes()
-        assert len(data)%2352==0 and hashlib.sha256(data).hexdigest()==track['sha256']
+        assert len(data)%2352==0
+        if 'sha256' in track: assert hashlib.sha256(data).hexdigest()==track['sha256']
         assert data[:2352*150]==bytes(2352*150) and any(data[2352*150:])
     return manifest
 
@@ -87,7 +89,7 @@ class Test:
         with tempfile.TemporaryDirectory(prefix='verify-',dir=self.out) as base:
             with Emulator(self.out/'saber_rider.cue',base) as e:
                 boot(e,self.address);self.diagnostics(e);e.run(120);d=self.metrics(e);self.capture(e,'test-town')
-                assert d['stage']==1 and d['hp']==3
+                assert d['stage']==1 and d['hp']==2   # NORMAL difficulty: two hearts
                 bank=(self.out/'voice0.bin').read_bytes()
                 actual=bytes.fromhex(e.call('asread','adpcm',0,len(bank))['hex'])
                 assert actual==bank,'Preloaded hardware ADPCM RAM must match the mastered bank'

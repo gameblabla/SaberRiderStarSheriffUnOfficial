@@ -19,15 +19,22 @@ def build(out):
     ids=re.findall(r'0x([0-9A-F]{8})',source)
     assert len(ids)==18
     tracks=[]
-    for i,mid in enumerate(ids):
-        pcm=out/f'music{i:02d}.bin';src=music/f'{mid}.ogg'
-        if not pcm.exists() or pcm.stat().st_mtime<src.stat().st_mtime:
-            subprocess.run(['ffmpeg','-y','-v','error','-i',str(src),'-af','volume=0.9,adelay=2000|2000',
-                            '-ac','2','-ar','44100','-f','s16le',str(pcm)],check=True)
-            with pcm.open('ab') as f:f.write(bytes(-pcm.stat().st_size%2352))
-        tracks.append(dict(id=mid,logical=i,track=i+2,file=pcm.name,sectors=pcm.stat().st_size//2352,
-                           sha256=hashlib.sha256(pcm.read_bytes()).hexdigest()))
-    # A real next-track endpoint also exists for the final repeatable cue.
+    # Three attenuated CD-DA copies: the PC Engine CD fader can only ramp to
+    # silence, so the music-volume option selects a track block. Each block is
+    # 18 tracks plus a silent end marker: HIGH 2-19, MID 21-38, LOW 40-57.
+    levels=[('',0.9,2),('_m',0.40,21),('_l',0.16,40)]
+    for suffix,gain,base in levels:
+        for i,mid in enumerate(ids):
+            pcm=out/f'music{i:02d}{suffix}.bin';src=music/f'{mid}.ogg'
+            if not pcm.exists() or pcm.stat().st_mtime<src.stat().st_mtime:
+                subprocess.run(['ffmpeg','-y','-v','error','-i',str(src),'-af',f'volume={gain},adelay=2000|2000',
+                                '-ac','2','-ar','44100','-f','s16le',str(pcm)],check=True)
+                with pcm.open('ab') as f:f.write(bytes(-pcm.stat().st_size%2352))
+            row=dict(id=mid,logical=i,track=base+i,file=pcm.name,sectors=pcm.stat().st_size//2352)
+            if suffix=='': row['sha256']=hashlib.sha256(pcm.read_bytes()).hexdigest()
+            tracks.append(row)
+        end=out/f'music_end{suffix}.bin';end.write_bytes(bytes(2352*300))
+        tracks.append(dict(id='END',logical=-1,track=base+18,file=end.name,sectors=300))
     (out/'music_end.bin').write_bytes(bytes(2352*300))
     sfx=work/'sfx';sfx.mkdir(exist_ok=True)
     subprocess.run([str(exe.resolve()),'sfx',str(ROOT/'SaberRider/data'),str(sfx.resolve())],check=True)
@@ -68,6 +75,6 @@ def build(out):
         voices.append(dict(hero=hero,bytes=len(bank),samples=samples))
         rows.append('{'+','.join('{%d,%d}'%(s['address'],s['bytes']) for s in samples)+'}')
     (out/'samples.h').write_text('/* Generated hardware ADPCM bank offsets. */\nstatic const uint16_t voice_samples[4][3][2]={'+','.join(rows)+'};\n')
-    (out/'audio.json').write_text(json.dumps(dict(tracks=tracks,end_track=20,voices=voices,dda=pcm_report),indent=2)+'\n')
+    (out/'audio.json').write_text(json.dumps(dict(tracks=tracks,end_track=20,volume_blocks=[2,21,40],voices=voices,dda=pcm_report),indent=2)+'\n')
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--out',type=Path,required=True);a=p.parse_args();build(a.out.resolve())

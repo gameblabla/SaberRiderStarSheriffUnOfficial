@@ -49,7 +49,7 @@ def add_art(root,work,stage,sprites,frame):
         im=get(rid).resize((32,32),Image.Resampling.NEAREST)
         portraits[name]=add('portrait_'+name,im)
         portraits[f'{rid:08X}']=portraits[name]
-    hud=[];digits=[];aim=[];motion=[]
+    hud=[];digits=[];aim=[];motion=[];pending=[]
     if stage in (1,3,4,5):
         def glyph(n):return get(0x87A5333C,n)
         for hero in range(4):
@@ -85,10 +85,14 @@ def add_art(root,work,stage,sprites,frame):
                     im=Image.fromarray(legs);im.alpha_composite(cell(torso),(0,bob))
                     row.append(add(f'hero{hero}_aim{torso}_run{k}',im,(32,32)))
             aim.append(row)
-            row=[]
-            for name,n in [('shoot',40),('recoil',41),('jump0',132),('jump1',133),('jump2',134)]:
-                row.append(add(f'hero{hero}_{name}',cell(n),(32,32)))
-            motion.append(row)
+            pending.append((hero,cell))
+    # Motion poses follow every aim row, so each group has a constant stride
+    # per hero (aim: 14, motion: 5) from its base ID.
+    for hero,cell in pending:
+        row=[]
+        for name,n in [('shoot',40),('recoil',41),('jump0',132),('jump1',133),('jump2',134)]:
+            row.append(add(f'hero{hero}_{name}',cell(n),(32,32)))
+        motion.append(row)
     return dict(portraits=portraits,hud=hud,digits=digits,aim=aim,motion=motion)
 
 def emit_tables(out,scenes,h,c):
@@ -102,38 +106,3 @@ def emit_tables(out,scenes,h,c):
     c.append('const uint16_t pce_motion_base[7]={'+','.join(str(m['presentation']['motion'][0][0]) if m['presentation']['motion'] else '0' for m in scenes)+'};')
     h.append('extern const uint16_t pce_present_base[7][3];')
     c.append('const uint16_t pce_present_base[7][3]={'+','.join('{%d,%d,%d}'%(m['presentation']['hud'][0][0],m['presentation']['digits'][0],m['presentation']['aim'][0][0]) if m['presentation']['hud'] else '{0,0,0}' for m in scenes)+'};')
-
-def bake_frontend(root,work,out,previews,native_background,cblock_frame):
-    from formats import Archive
-    def get(rid):return cblock_frame(work/'srgb'/f'{rid:08X}.srgb',0)
-    a=Archive();images=[]
-    bg=get(0xD7DEBAC0);title=Image.new('RGBA',(bg.width*2,bg.height))
-    title.alpha_composite(bg);title.alpha_composite(bg.transpose(Image.Transpose.FLIP_LEFT_RIGHT),(bg.width,0))
-    title=title.resize((256,224),Image.Resampling.NEAREST)
-    logo=get(0xB04BAC5F);logo=logo.resize((224,round(logo.height*224/logo.width)),Image.Resampling.NEAREST)
-    title.alpha_composite(logo,(16,28));images.append(title)
-    ports=[0x67C9A3D9,0x74100546,0x72A6B0FB,0xEEE2331F]
-    for selected in range(4):
-        im=sky(3,(256,224));d=ImageDraw.Draw(im)
-        for k,rid in enumerate(ports):
-            pic=get(rid);pic.thumbnail((58,128),Image.Resampling.NEAREST)
-            if k!=selected:
-                v=np.asarray(pic).copy();v[:,:,:3]//=2;pic=Image.fromarray(v)
-            x=4+k*63;d.rounded_rectangle((x,45,x+58,181),radius=3,outline=(255,215,90,255) if k==selected else (70,60,100,255),width=2)
-            im.alpha_composite(pic,(x+(58-pic.width)//2,49))
-        images.append(im)
-    room=get(0x0EAE8AEB).resize((256,224),Image.Resampling.NEAREST);images.append(room)
-    scenes=[]
-    for k,im in enumerate(images):
-        m=native_background(im,a,previews,'frontend'+str(k));scenes.append(m)
-    # Original briefing script follows its video-name header.
-    raw=(work/'29CAD5D3.levl').read_bytes().decode('latin1').split('\n',1)[1]
-    import re
-    raw=re.sub(r'<[^>]*>','',raw).strip();lines=textwrap.wrap(' '.join(raw.split()),28)
-    text='\n'.join(lines).encode('ascii','replace')+b'\0'
-    briefing=a.add('briefing_text',text)
-    data=a.finish();(out/'ui.bin').write_bytes(data)
-    values=[]
-    for m in scenes:
-        values.append([len(data),m['pal'],m['tiles'],m['map'],0,0,0,0,0,0,0,0,m['cols'],0,0,0,0,0,0,256,0,8,8])
-    return values,briefing,len(data)
