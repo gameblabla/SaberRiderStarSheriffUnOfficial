@@ -290,6 +290,55 @@ static void draw_spr(Mode7 *m, int id, int frame, real cx, real ybot, real scale
     rtex_set_color_mod(m->atlas, 255, 255, 255); rtex_set_alpha_mod(m->atlas, 255);
 }
 
+/* a soft ellipse flat on the ground under a car, bottom-centred at (sx, sy).
+ * rx comes from the car's screen width so it scales with distance naturally;
+ * ry is squashed by perspective (CAM_H/d, like ramrod.c's ground_squash). */
+static void draw_car_shadow(Mode7 *m, real sx, real sy, real rx, real d, uint8_t alpha)
+{
+    if (rx < R(1) || alpha == 0) return;
+    real sq = r_mul(r_div(CAM_H, d), R(1.4f));
+    if (sq < R(0.08f)) sq = R(0.08f);
+    if (sq > R(0.5f)) sq = R(0.5f);
+    real ry = r_mul(rx, sq);
+    if (ry < R(1)) ry = R(1);
+    if (sx + rx < 0 || sx - rx > r_int(m->sw) || sy + ry < r_int(HORIZON) || sy - ry > r_int(m->sh)) return;
+    enum { N = 16 };
+    RVertex v[N + 1]; int idx[N * 3];
+    RFColor c = { R(0.0f), R(0.0f), R(0.0f), r_mul(R(0.35f), r_div(r_int(alpha), R(255))) };
+    v[0].position = (RFPoint){ sx, sy }; v[0].color = c;
+    for (int i = 0; i < N; i++) {
+        real a = r_mul(r_div(r_int(i), r_int(N)), TWO_PI);
+        v[i + 1].position = (RFPoint){ sx + r_mul(r_cos(a), rx), sy + r_mul(r_sin(a), ry) };
+        v[i + 1].color = c;
+    }
+    for (int i = 0; i < N; i++) { idx[i * 3] = 0; idx[i * 3 + 1] = 1 + i; idx[i * 3 + 2] = 1 + (i + 1) % N; }
+    r_set_draw_blend(m->ren, R_BLEND_BLEND);
+    r_geometry(m->ren, NULL, v, N + 1, idx, N * 3);
+}
+
+/* the player's shadow is fixed-size and unscaled: the car sits at one screen
+ * spot at scale 1 (CAM_BACK), so there is no per-frame perspective or fog math.
+ * rx matches draw_car_shadow's output there (buggy 82 px wide x 0.45, squash
+ * CAM_H/CAM_BACK x 1.4 clamped to 0.5). */
+static void draw_player_shadow(Mode7 *m, real sx, real sy)
+{
+    real rx = r_mul(r_int(m->spr[S_BUGGY].w), R(0.45f));
+    real ry = r_mul(rx, R(0.5f));
+    if (sx + rx < 0 || sx - rx > r_int(m->sw) || sy + ry < r_int(HORIZON) || sy - ry > r_int(m->sh)) return;
+    enum { N = 16 };
+    RVertex v[N + 1]; int idx[N * 3];
+    RFColor c = { R(0.0f), R(0.0f), R(0.0f), R(0.35f) };
+    v[0].position = (RFPoint){ sx, sy }; v[0].color = c;
+    for (int i = 0; i < N; i++) {
+        real a = r_mul(r_div(r_int(i), r_int(N)), TWO_PI);
+        v[i + 1].position = (RFPoint){ sx + r_mul(r_cos(a), rx), sy + r_mul(r_sin(a), ry) };
+        v[i + 1].color = c;
+    }
+    for (int i = 0; i < N; i++) { idx[i * 3] = 0; idx[i * 3 + 1] = 1 + i; idx[i * 3 + 2] = 1 + (i + 1) % N; }
+    r_set_draw_blend(m->ren, R_BLEND_BLEND);
+    r_geometry(m->ren, NULL, v, N + 1, idx, N * 3);
+}
+
 /* ---------------------------------------------------------------- worlds */
 static void fill_sand(Mode7 *m)
 {
@@ -1142,6 +1191,15 @@ static void render_sprites(Mode7 *m)
         items[n++] = (DrawItem){ d, sx, sy, scale, e };
     }
     qsort(items, n, sizeof *items, cmp_far);
+    /* shadows precede every car in the pass, so one car's shadow cannot paint over another car */
+    for (int i = 0; i < n; i++) {
+        Ent *e = items[i].e;
+        if (e->kind != K_RACER && e->kind != K_ESCORT && e->kind != K_BOSS) continue;
+        real fog = clampf(r_div(items[i].d - FOG0, FOG1 - FOG0), 0, R(1));
+        uint8_t a = (uint8_t)r_trunc(255 * (R(1) - r_mul(fog, R(0.85f))));
+        real rx = r_mul(r_mul(r_int(m->spr[e->spr].w), items[i].scale), R(0.45f));
+        draw_car_shadow(m, items[i].sx, items[i].sy, rx, items[i].d, a);
+    }
     for (int i = 0; i < n; i++) {
         Ent *e = items[i].e; real fog = clampf(r_div(items[i].d - FOG0, FOG1 - FOG0), 0, R(1));
         uint8_t a = (uint8_t)r_trunc(255 * (R(1) - r_mul(fog, R(0.85f))));
@@ -1182,6 +1240,8 @@ static void render_player(Mode7 *m)
     if (m->hurt_t > 0 && (r_trunc(m->hurt_t * 20) & 1)) { r = 255; g = 90; b = 90; }
     real ang = 0;
     if (m->spin_dur > 0) { real p = R(1) - r_div(m->spin_t, m->spin_dur); ang = r_mul(360 * p, R(2) - p); }   /* one whole turn, easing out: 0 and 360 are the same pose */
+    /* the shadow stays on the ground while the car hops (bounce) or shakes */
+    draw_player_shadow(m, sx, sy + m->bounce);
     draw_spr(m, S_BUGGY, frame, sx, sy, R(1), ang, r, g, b, 255);
     if (m->turbo_on && ang == 0) {   /* the afterburner: a flame over each exhaust nozzle */
         Spr *bs = &m->spr[S_BUGGY]; real x0 = r_floorr(sx - r_int(bs->w) / 2), y0 = r_floorr(sy - r_int(bs->h));
