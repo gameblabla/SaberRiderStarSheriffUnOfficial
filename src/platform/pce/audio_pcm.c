@@ -40,6 +40,7 @@ void audio_pcm_play(uint8_t sample) {
     if(sample>2)return;
     request=sample;overlay_call(0x75,start);
 }
+void audio_pcm_tick(void) {request=5;overlay_call(0x75,start);}   /* the CONTINUE? countdown's tick (sfx 0 of the PC game) */
 __attribute__((noinline)) void audio_pcm_gallop(bool on) {request=on?3:4;overlay_call(0x75,start);}
 /* tone (audio_effect) -> voice event: jump hurt death fall enemy_hit enemy_death alarm dialogue line, then the flying
  * bosses' engine pass, gun, rider's gun, both guns, blast and big bang (tones 12-17) */

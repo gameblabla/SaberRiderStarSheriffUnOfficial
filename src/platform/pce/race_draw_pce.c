@@ -5,7 +5,7 @@
 #define RACE_SIN_SECTION ".ram_bank124.rodata"
 #include "race_math.h"
 #include "race_pce.h"
-PCE_HUD void race_briefing_frame(void) {
+PCE_BOSS void race_briefing_frame(void) {
     uint16_t commits=pce_metrics.floor_commits;
     do {overlay_call(0x79,race_frame);} while(pce_metrics.floor_commits==commits);
     video_wait();
@@ -89,6 +89,13 @@ DRAW_CODE void race_draw(void) {
         }
         /* The car slides sideways with its lean (mode7.c: 1.2 x the lean, in pixels; two dots each here). */
         int16_t x=256+((t*5)>>5);
+        /* the afterburner, first in the SAT so it burns in front of the car: a flame over each exhaust nozzle (the offsets, in
+         * dots from the car's centre, follow the five poses) */
+        if(boost_on&&!pose) {
+            static const int8_t NOZZLE[5][2]={{-20,34},{-25,31},{-30,28},{-33,23},{-36,19}};
+            uint8_t pose5=t<-80?0:t<-24?1:t>80?4:t>24?3:2,frame=(phase_t/3)&3;
+            for(uint8_t n=0;n<2;++n)video_sprite_optional(PCE_CAR_TURBO+((frame+2*n)&3),x+NOZZLE[pose5][n],195,false,16);
+        }
         if(pose) {
             video_sprite(PCE_CAR_SPIN+(pose-1)*2,x,215,false,16);
             video_sprite(PCE_CAR_SPIN+(pose-1)*2+1,x,215,false,16);
@@ -106,7 +113,7 @@ DRAW_CODE void race_draw(void) {
         video_sprite_optional(3+vis[k].kind*PCE_CAR_STEPS+i,vis[k].x,vis[k].y,false,16);
     }
     /* shots: the source's 8x8 orbs (blue the car's, red theirs) at their ground positions */
-    for(uint8_t k=0;k<6;++k)if(race_bolts[k].t) {
+    for(uint8_t k=0;k<10;++k)if(race_bolts[k].t) {
         int16_t sx,row,f;
         if(project_point(race_bolts[k].x,race_bolts[k].y,&sx,&row,&f))video_sprite_optional(race_bolts[k].own?0:1,sx,row-(1400/f),false,16);
     }
@@ -115,7 +122,7 @@ DRAW_CODE void race_draw(void) {
     put(PCE_H2_ICON,10,12);
     bar(46,16,4,hp_frac,car_hp*2>car_max?0:car_hp*4>car_max?1:2);
     put(PCE_H2_X,10,32);number(26,32,pce_campaign.lives,1,0);
-    bar(10,206,4,boost>>2,boost_on||boost>128?3:2);
+    bar(10,206,4,boost>>2,boost_locked||boost<=64?2:boost_on||boost>128?3:1);   /* orange in use or high, yellow in between, red locked out or nearly flat */
     if(rphase<=P_FINISH) {
         uint8_t lap=pce_campaign.lap>3?3:pce_campaign.lap;
         number(440,10,lap,1,0);put(PCE_H2_SLASH3,454,10);
@@ -131,11 +138,15 @@ DRAW_CODE void race_draw(void) {
         uint8_t rank=finish_rank<1?1:finish_rank>8?8:finish_rank;
         put(PCE_H2_ORD1+rank-1,200,84);put(PCE_H2_PLACE,200+PCE_H2_ORD1_W+8,84);
     } else if(rphase==P_PURSUIT) {
+        /* Two rows centred on the screen: GAP, the distance and M above, the bar under them. A row may carry 16 sprite pieces and
+         * the hull bar already takes six of the first: the old single row (label, bar, number and M = 16 more) lost its digits. */
         uint16_t span=gap_dist>4200?4200:gap_dist;
         uint16_t fill=span<260?96:96-(span-260)/41;
-        put(PCE_H2_GAP,180,14);bar(214,18,6,fill,3);
-        number(320,12,gap_dist>9999?9999:gap_dist,4,0);put(PCE_H2_M,376,12);
-
+        put(PCE_H2_GAP,184,8);number(250,8,gap_dist>9999?9999:gap_dist,4,0);put(PCE_H2_M,310,8);
+        bar(208,30,6,fill,3);
+    } else if(rphase==P_BOSS&&boss.state<2) {
+        /* the leader's hull, a red bar centred under the HUD row (it had none) */
+        bar(176,30,10,boss.hp*3,2);   /* 3 dots a hit point (30-50 points a difficulty) */
     }
     video_sat_end();
 }

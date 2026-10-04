@@ -20,7 +20,7 @@ FOES_CODE void foes_drop_mine(void) {
 }
 /* A shot from (arg_x, arg_y) at the car: speed in Q8 units a step, a random spread of about +-0.2 radians. */
 FOES_CODE void foes_aimed_bolt(void) {
-    for(uint8_t b=0;b<6;++b)if(!race_bolts[b].t) {
+    for(uint8_t b=6;b<10;++b)if(!race_bolts[b].t) {
         int16_t dx=wrapdiff(px,arg_x),dy=wrapdiff(py,arg_y);
         int16_t dist=hypot16(dx,dy);if(dist<1)dist=1;
         int16_t jit=(int16_t)(rnd()%102)-51;
@@ -36,7 +36,7 @@ FOES_CODE void foes_aimed_bolt(void) {
 FOES_CODE void foes_leader_start(void) {
     memset(escort,0,sizeof escort);memset(mines,0,sizeof mines);memset(race_bolts,0,sizeof race_bolts);
     memset(&boss,0,sizeof boss);
-    boss.hp=boss.hp_max=pce_options.difficulty==0?60:pce_options.difficulty==1?80:100;
+    boss.hp=boss.hp_max=pce_options.difficulty==0?30:pce_options.difficulty==1?40:50;   /* half the source's: the PCE car is easier to hit than to catch */
     boss.xq=(int32_t)4096<<8;boss.yq=((int32_t)py-1500)<<8;boss.speed=300;boss.since=600;boss.t2=180;
     set_pos(&boss);
 }
@@ -50,7 +50,7 @@ FOES_CODE void foes_spawn_escort(void) {
     }
 }
 FOES_CODE void foes_shots(void) {
-    for(uint8_t k=0;k<6;++k) {
+    for(uint8_t k=0;k<10;++k) {
         Bolt *b=&race_bolts[k];if(!b->t)continue;
         b->x=(b->x+(b->vx>>8))&8191;b->y=(b->y+(b->vy>>8))&8191;
         --b->t;
@@ -68,7 +68,10 @@ FOES_CODE void foes_shots(void) {
                 }
                 if(b->t&&boss.state<2&&absolute(wrapdiff(b->x,boss.x))<42&&absolute(wrapdiff(b->y,boss.y))<42) {
                     b->t=0;boss.knock=18;audio_effect(7);
-                    if(boss.state==1&&!--boss.hp){boss.state=2;boss.t=144;boss.t2=0;wreck();}   /* a hit only slows him while he flees */
+                    /* a shot hurts him from the first moment (while he flees it also slows him, but never finishes him: the catch
+                     * and its dialogue come first) */
+                    if(boss.state==1&&!--boss.hp){boss.state=2;boss.t=144;boss.t2=0;wreck();}
+                    else if(boss.state==0&&boss.hp>1)--boss.hp;
                 }
             }
             for(uint8_t i=0;i<6&&b->t;++i)
@@ -93,16 +96,20 @@ FOES_CODE void foes_escorts(void) {
         if(e->state==0) {   /* running, weaving across the road */
             e->anim+=226;
             e->speed+=(300-e->speed)>>5;
-            e->xq+=muls(step,sine(e->anim))*35/100;
-            if(e->t)--e->t;else{e->state=1;e->t=(uint8_t)(150+rnd()%90);}
-        } else {            /* slowed right down, guns on the car */
-            e->anim+=680;
+            if(e->t)--e->t;else{e->state=1;e->t=(uint8_t)(150+rnd()%90);e->t2=40;}
+        } else {            /* slowed right down, guns on the car (a shot every two seconds: gentler than the source's one a second) */
+            e->anim+=300;
             e->speed+=(90-e->speed)>>4;
             if(e->t2)--e->t2;
-            else if(dist<1400){e->t2=66;arg_x=e->x;arg_y=e->y;arg_speed=2560;arg_life=140;foes_aimed_bolt();}
+            else if(dist<1100){e->t2=120;arg_x=e->x;arg_y=e->y;arg_speed=2200;arg_life=140;foes_aimed_bolt();}
             if(e->t)--e->t;else{e->state=0;e->t=(uint8_t)(180+rnd()%180);}
         }
         if(e->knock){--e->knock;e->speed=e->speed*97/100;}
+        /* the lane steers towards a point weaving about the middle of the road, as the leader does: the old sideways integral
+         * of the weave drifted a car off the tarmac */
+        int16_t lane=wrapdiff(4096+muls(e->state?30:70,sine(e->anim)),e->x);
+        if(lane>90)lane=90;if(lane<-90)lane=-90;
+        e->xq+=muls(step,lane);
         e->yq-=step;set_pos(e);
         if(dist<44){bump(e->x,e->y,dist,44);hurt_car(1);speed=speed*3/5;}
         if(dy<-1800||dy>5000)e->hp=0;
@@ -120,28 +127,28 @@ FOES_CODE void foes_leader(void) {
         if(!(e->t&7))wreck();
         if(!--e->t){wreck();e->state=3;rphase=P_VICTORY;phase_t=0;pce_campaign.boss_hp=0;return;}
     } else if(e->state==0) {   /* the pursuit: up the road, pace rubber-banded to the gap so he stays in reach but never free */
-        target=gap>3400?250:gap>2200?380:(gap<600?540:470);
+        target=gap>3400?210:gap>2200?320:(gap<600?450:390);   /* a fifth slower than the source */
         if(e->knock&&!e->boost)target=target*3/4;
-        if(!e->boost&&e->since>180&&gap<560&&gap>0){e->boost=210;e->speed=700;wreck();}   /* early in the chase he always has one more booster */
-        if(e->boost){--e->boost;target=700;e->since=0;}else if(e->since<1000)++e->since;
+        if(!e->boost&&e->since>180&&gap<560&&gap>0){e->boost=210;e->speed=600;wreck();}   /* early in the chase he always has one more booster */
+        if(e->boost){--e->boost;target=600;e->since=0;}else if(e->since<1000)++e->since;
         e->speed+=(target-e->speed)>>(e->boost?4:6);
         if(e->t2)--e->t2;
         else if(gap<900&&gap>0){e->t2=(uint8_t)(84+rnd()%60);arg_x=e->x;arg_y=e->y;arg_life=200;foes_drop_mine();}
     } else {   /* the fight: he keeps racing just ahead of the car, weaving to block, mines out the back, a rear gunner, a booster now and then */
-        target=gap<0?560:gap<140?600:gap<520?445:gap<1200?360:280;
+        target=gap<0?450:gap<140?480:gap<520?360:gap<1200?290:225;   /* four fifths of the source's pace */
         if(e->knock)target=target*4/5;
         if(e->t3)--e->t3;
-        else if(gap>0&&gap<450&&!e->boost){e->boost=138;e->t3=(uint8_t)(120+rnd()%120);e->speed=700;wreck();}
-        if(e->boost){--e->boost;target=700;}
+        else if(gap>0&&gap<450&&!e->boost){e->boost=138;e->t3=(uint8_t)(120+rnd()%120);e->speed=580;wreck();}
+        if(e->boost){--e->boost;target=580;}
         e->speed+=(target-e->speed)>>(e->boost?4:6);
         if(e->t2)--e->t2;
         else if(gap>60&&gap<700){e->t2=(uint8_t)(60+rnd()%48);arg_x=e->x+(int16_t)(rnd()%40)-20;arg_y=e->y;arg_life=220;foes_drop_mine();}
         if(e->since)--e->since;
-        else if(gap>90&&gap<1500){e->since=(uint8_t)(72+rnd()%36);arg_x=e->x;arg_y=e->y;arg_speed=2560;arg_life=140;foes_aimed_bolt();}
+        else if(gap>90&&gap<1300){e->since=(uint8_t)(100+rnd()%50);arg_x=e->x;arg_y=e->y;arg_speed=2300;arg_life=140;foes_aimed_bolt();}
     }
     /* weaving about the road (jinking out of the car's line when it closes in); the heading follows it */
-    int16_t road_x=4096+muls(e->state==1?85:60,sine(e->anim));
-    if(e->state==1&&gap>0&&gap<260){int16_t j=dx;if(j>60)j=60;if(j<-60)j=-60;road_x-=j;}
+    int16_t road_x=4096+muls(e->state==1?60:60,sine(e->anim));
+    if(e->state==1&&gap>0&&gap<260){int16_t j=dx;if(j>30)j=30;if(j<-30)j=-30;road_x-=j;}
     int16_t angle=wrapdiff(road_x,e->x)*(e->state==1?3:2)>>1;   /* radians in Q8: 0.006 / 0.004 a unit */
     int16_t limit=e->state==1?128:102;
     if(angle>limit)angle=limit;if(angle<-limit)angle=-limit;

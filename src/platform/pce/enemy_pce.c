@@ -111,17 +111,24 @@ ENEMY_CODE static void humanoid(Actor *a) {
     a->flip=px<ax;
     if(type==31&&!pce_campaign.boss_kind)return;
     if(a->anim)--a->anim;
+    bool burning=(a->mode&4)&&a->aim;   /* the shield is burning away: no shots meanwhile */
+    if(burning)--a->aim;
     if(a->timer)--a->timer;
-    else if(onscreen) {
+    else if(onscreen&&!burning) {
         fire(a,a->flip?0:4,a->flip?-22:22,-8,true);a->anim=8;
         a->timer=84+rnd()%48-pce_options.difficulty*12;
     }
 }
 ENEMY_CODE void world_update(void) {
     rng^=frame<<1;if(!rng)rng=1;
-    for(uint8_t k=0;k<8;++k) {
-        Actor *a=&actors[k];if(!a->active)continue;
-        if(((a->b.x<(int16_t)camera-80||(a->b.x>(int16_t)camera+384&&a->type!=11&&!(a->type>=12&&a->type<=23)))&&a->type!=28)||a->b.y>272){a->active=0;continue;}
+    /* Only the walkers and grunts that stream in from the screen edges are dropped when they stray far ahead: the level's
+     * placed snipers, kneelers and shields stand where the level puts them (the zone that wakes them is a screen or more behind) */
+    for(Actor *a=actors;a<actors+8;++a) {   /* by pointer: indexing a 21-byte record costs a multiplication each time */
+        if(!a->active)continue;
+        if(((a->b.x<(int16_t)camera-80||(a->b.x>(int16_t)camera+384&&a->type<6))&&a->type!=28)||a->b.y>272){a->active=0;continue;}
+        /* The stampede tramples every humanoid in its way: the placed snipers and the rest are simply gone while it runs, which is
+         * also what keeps its scenes inside the sprite budget (they are never drawn, uploaded or fired from). */
+        if(herd_on&&(a->type<11||a->type>28)){a->active=0;continue;}
         if(a->type>=12&&a->type<=27)continue;
         if(a->type==11){advance(&a->b.x,&a->b.fx,a->flip?-512:512);continue;}   /* the herd gallops at the source's 120 px/s */
         if(a->type==28) {

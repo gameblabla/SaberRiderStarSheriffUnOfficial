@@ -14,11 +14,11 @@ def verify(out):
     with tempfile.TemporaryDirectory(prefix='herd-visibility-',dir=out) as base,Emulator(out/'saber_rider.cue',base) as e:
         boot(e,a['pce_metrics']);e.run(120);e.write(0x1402,b'\7');e.write(0x0c01,b'\0')
         def call(n,bank):
-            p=a[n];e.write(0x3b00,bytes([0x20,p&255,p>>8,0x4c,3,0x3b]))
-            for k,v in [('P',4),('SP',253),('MPR3',bank),('MPR6',108),('PC',0x3b00)]:e.call('register_set',k,v)
+            p=a[n];e.write(0x3bf0,bytes([0x20,p&255,p>>8,0x4c,0xf3,0x3b]))
+            for k,v in [('P',4),('SP',253),('MPR3',bank),('MPR6',108),('PC',0x3bf0)]:e.call('register_set',k,v)
             for _ in range(100):
                 e.run(1)
-                if e.call('registers')['registers']['PC'] in (0x3b03,0x3b04,0x3b05):break
+                if e.call('registers')['registers']['PC'] in (0x3bf3,0x3bf4,0x3bf5):break
             else:raise AssertionError((n,e.call('registers')))
         call('herd_reserve',111);e.write(a['camera'],struct.pack('<H',2200));e.write(a['safe_timer'],b'\0');e.write(a['sprite_exact'],b'\1')
         peak=0

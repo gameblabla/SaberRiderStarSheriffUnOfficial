@@ -353,8 +353,8 @@ PCE_RENDER void video_floor_row(uint8_t page, uint8_t row, const uint8_t *pairs)
 __attribute__((noinline,section(".ram_bank109.text"))) static void race_sky_load(void) {   /* beside the floor code that calls it */
     uint16_t used=0;
     memset(cache_ids,0xff,sizeof cache_ids);
-    for(uint8_t x=0;x<64;++x) {
-        arcade_read(1,scene->map+(uint32_t)x*90,buffer,90);
+    for(uint8_t x=0;x<128;++x) {
+        arcade_read(1,scene->map+(uint32_t)(x&63)*90,buffer,90);
         for(uint8_t y=0;y<16;++y) {
             uint16_t id=buffer[y*3]|(uint16_t)buffer[y*3+1]<<8;
             uint16_t slot;

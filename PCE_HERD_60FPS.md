@@ -47,9 +47,10 @@ and hardware-console timing has not been separately measured.
   overlapping 8-line bands and tight SAT space use the original per-horse or
   per-cell admission path. Sixteen-line pieces use unrolled admission and
   cached remaining capacity; every other occupancy mutation invalidates it.
-- `herd_pce.c`: prepare the next **complete** 5120-byte horse frame in three
-  slices across the existing two buffers. The displayed buffer is reused
-  only after its final VBlank. The five original animation frames still switch
+- `herd_pce.c`: prepare the next **complete** 5120-byte horse frame in four equal
+  1280-byte slices across the existing two buffers. The displayed buffer is reused
+  only after its final VBlank; the last slice completes before the next buffer is
+  published. The five original animation frames still switch
   every four simulation ticks. During the approach, retain both firing poses,
   the four straight muzzle frames and the projectile so firing needs no
   pattern reloads. Release their extra pins when the herd ends.

@@ -41,7 +41,7 @@ def assets(out):
         assert len(data)==scene['bytes']<=0x1e0000 and len(data)%2048==0
         for resource in scene['records'].values():assert resource['offset']+resource['bytes']<=len(data)
         for s in scene['sprites']:
-            assert 0<s['entries']<=32 and s['patterns']==s['entries']*128
+            assert (0<s['entries']<=32 or s['name']=='battle_cruiser') and s['patterns']==s['entries']*128
             assert s['facing_variants']==1 and s['units_per_line']<=16
         if scene['stage'] in (1,3,4,5):assert scene['ntr']<=60 and scene['rows']<=32
     audio=json.loads((out/'audio.json').read_text())

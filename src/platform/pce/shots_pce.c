@@ -15,8 +15,8 @@ SHOT_CODE static void advance(int16_t *p,uint8_t *f,int16_t v) {
     *p+=sum>>8;*f=sum;
 }
 SHOT_CODE void shots_step(void) {
-    for(uint8_t k=0;k<NSHOTS;++k) {
-        Shot *s=&shots[k];if(!s->active)continue;
+    for(Shot *s=shots;s<shots+NSHOTS;++s) {
+        if(!s->active)continue;
         if(s->enemy==2) {
             uint8_t tc=s->t<60?s->t:60;
             s->vy=((((uint16_t)tc*tc>>3)*115)>>4)-((absolute(s->vx)*15)>>4);
@@ -25,10 +25,10 @@ SHOT_CODE void shots_step(void) {
         advance(&s->x,&s->fx,s->vx);advance(&s->y,&s->fy,s->vy);
         int16_t sx=s->x-(int16_t)camera;
         if(sx<-16||sx>272||s->y<0||s->y>240){s->active=0;continue;}
-        if(s->enemy==2) {
-            /* the grenade bursts on solid ground */
+        if(s->enemy!=3) {
+            /* bullets stop at solid cells and ramps (bullets.c); a grenade also bursts */
             cell_x=s->x>>3;cell_y=s->y>>3;overlay_call(0x69,cell_call);
-            if(cell_value==15||(cell_value&16)){s->active=0;audio_effect(4);continue;}
+            if(cell_value==15||(cell_value&16)){s->active=0;if(s->enemy==2)audio_effect(4);continue;}
         }
         if(s->enemy) {
             int16_t dx=s->x-player.x,dy=s->y-player.y,r=s->enemy==2?16:8;
@@ -37,25 +37,17 @@ SHOT_CODE void shots_step(void) {
                 campaign_hurt();
                 if(pce_campaign.diagnostic&&!pce_metrics.hp)pce_metrics.hp=3;
             }
-        } else for(uint8_t j=0;j<8;++j) {
-            Actor *a=&actors[j];
+        } else for(Actor *a=actors;a<actors+8;++a) {
             if(!a->active||a->dead||(a->type>=11&&a->type<=28))continue;
             int16_t dx=s->x-a->b.x,dy=s->y-a->b.y;
             if(dx>-10&&dx<10&&dy>(a->type==8||a->type==9?-7:-21)&&dy<37) {
-                s->active=0;if(a->type>=30&&facing==a->flip)a->hp=1;
-                if(!--a->hp)actor_kill(a);else audio_effect(7);
+                s->active=0;if(a->type>=30&&facing==a->flip)a->hp=1;   /* a shot in the back kills a shield sniper */
+                if(a->type>=30&&!(a->mode&4)&&facing!=a->flip){   /* the shield takes it, then burns away (4 steps a cell) */
+                    if(!--a->hp){a->mode|=4;a->aim=18;a->hp=1;}
+                    audio_effect(7);
+                } else if(!--a->hp)actor_kill(a);else audio_effect(7);
                 audio_effect(4);break;
             }
         }
-    }
-}
-
-SHOT_CODE void shots_draw(void) {
-    for(uint8_t k=0;k<NSHOTS;++k)if(shots[k].active) {
-        Shot *s=&shots[k];
-        uint16_t id=s->enemy==3?45+(s->vy?(s->vx?1:2):0):s->enemy?37:36;
-        bool flip=s->enemy==3&&s->vx<0;
-        if(herd_on)video_sprite_optional(id,s->x-camera,s->y-16,flip,16);
-        else video_sprite(id,s->x-camera,s->y-16,flip,16);
     }
 }

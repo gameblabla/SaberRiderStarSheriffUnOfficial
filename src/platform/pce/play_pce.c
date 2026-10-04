@@ -6,6 +6,8 @@
 #include "loader_pce.h"
 #include "arcade_pce.h"
 #include "assets.h"
+#include "scenery_pce.h"
+extern uint8_t buffer[2048];
 #include <string.h>
 
 extern uint8_t sat_count,sat_page;
@@ -29,7 +31,7 @@ static uint8_t fire_timer,crouch,death_time,jumping,jump_time,flash_time,flash_d
 static int8_t flash_dx,flash_dy;
 int16_t safe_x,safe_y;
 static int16_t drop_y;
-/* Stage 3 opens as the source does (game.c walk_in): the hero starts off screen and walks in to world x 144, then the radio scene. */
+/* Stages 3-5 open as the source does (game.c walk_in): the hero starts off screen and walks in to world x 144, then the radio scene. */
 static uint8_t walk_in;
 #define WALK_START_X 8
 #define WALK_CAMERA 48
@@ -111,7 +113,7 @@ const Actor *fire_actor;uint8_t fire_aim;int8_t fire_mx,fire_my;bool fire_fast;
 PCE_CODE static Shot *new_shot(int16_t x,int16_t y,uint8_t enemy) {
     uint8_t live=0;
     for(uint8_t k=0;k<NSHOTS;++k)if(shots[k].active&&shots[k].enemy)++live;
-    if(live>=(pce_campaign.boss_kind?3:5))return 0;
+    if(live>=(pce_campaign.boss_kind?3:5)||shot_pressure)return 0;   /* nothing is fired that cannot be drawn */
     for(uint8_t k=0;k<NSHOTS;++k)if(!shots[k].active) {
         shots[k]=(Shot){x,y,0,0,1,enemy,0,0,0};return &shots[k];
     }
@@ -151,7 +153,7 @@ PCE_CODE void play_init(uint8_t stage,uint8_t selected) {
     memset(actors,0,sizeof actors);memset(shots,0,sizeof shots);
     memset(column_tags,0xff,sizeof column_tags);
     walk_in=0;
-    if(stage==3&&!pce_campaign.diagnostic){walk_in=1;player.x=safe_x=WALK_START_X;camera=WALK_CAMERA;}
+    if(stage>=3&&stage<=5&&!pce_campaign.diagnostic){walk_in=1;player.x=safe_x=WALK_START_X;camera=WALK_CAMERA;}
     overlay_call(0x70,encounter_init);
     pce_metrics.hp=campaign_hearts();
     overlay_call(0x70,combat_start);
@@ -197,6 +199,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     }
     if(slide_time){crouch=1;player.vx=(int16_t)slide_time*43;if(facing)player.vx=-player.vx;--slide_time;}
     physics(&player);
+    if(player.y>=drop_y)drop_y=-32767;   /* clear of the platform it dropped through: it can be landed on again */
     if(player.coll&4)jumping=0;else if(jumping&&jump_time<255)++jump_time;
     /* The screen only scrolls forwards: the left edge is a wall. */
     if(!cut_phase&&!walk_in&&player.x<(int16_t)camera+8){player.x=camera+8;if(player.vx<0)player.vx=0;}
@@ -228,10 +231,13 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
         shoot(player.x+(facing?-muzzle[0]:muzzle[0]),player.y+muzzle[1],vx,vy);
         flash_time=4;flash_diag=side&&(up||down);flash_dx=facing?-muzzle[0]:muzzle[0];flash_dy=muzzle[1];   /* the source's 4-frame flash at the barrel */fire_timer=pce_campaign.boost&&hero==3?4:12;audio_effect(1);
     }
-    if(!(frame&3)&&!(pce_metrics.stage==4&&pce_campaign.boss_round==2))overlay_call(0x6f,encounters);
+    if(!(frame&3)&&!(pce_metrics.stage==4&&pce_campaign.boss_round==2))overlay_call(0x78,encounters);
     overlay_call(0x73,world_update);
-    if(pce_campaign.boss_kind)camera=scene->width-256;
-    else if(!cut_phase&&!herd_locked&&player.x>120&&(uint16_t)(player.x-120)>camera) {
+    if(pce_campaign.boss_kind) {
+        /* the arena lock: the camera glides to it (at most 4 px a step, like the follow) instead of jumping */
+        uint16_t lock=scene->width-256;
+        if(camera<lock)camera+=lock-camera>4?4:lock-camera;
+    } else if(!cut_phase&&!herd_locked&&player.x>120&&(uint16_t)(player.x-120)>camera) {
         uint16_t gap=player.x-120-camera;camera+=gap>4?4:gap;   /* catches up at most 4 px a step (after a lock) */
     }
     if(camera>(uint16_t)(scene->width-256))camera=scene->width-256;
@@ -255,7 +261,7 @@ PCE_BOSS void play_draw(void) {
     else if(!pose)id=mb+ap[0]+(uint8_t)(frame/10)%ap[1];
     else if(jumping&&!grounded)id=mb+ap[2]+((jump_time/3)&3);
     /* Aim poses: up / down diagonals (running when moving), straight up, and straight down in the air. */
-    if(!slide_time&&!pce_death&&grounded&&((keys&KEY_UP)||((keys&KEY_DOWN)&&(side||(keys&KEY_SELECT))))) {
+    if(!slide_time&&!pce_death&&(grounded||!jumping)&&((keys&KEY_UP)||((keys&KEY_DOWN)&&(side||(keys&KEY_SELECT))))) {
         uint8_t direction=keys&KEY_UP?0:1;
         id=pce_present_base[stage][2]+hero*16;
         if(!side)id+=14+direction;
@@ -272,12 +278,13 @@ PCE_BOSS void play_draw(void) {
     /* The galloping herd comes right after the hero, ahead of shots and enemies: where the SAT or a scanline is full it
      * is what the optional sprites give way to, so the horses never flicker. */
     if(herd_on)overlay_call(0x6f,herd_draw);
-    /* Essential projectiles precede optional distant enemies (while the herd runs they give way to the horses). */
-    bool (*draw)(uint16_t,int16_t,int16_t,bool,uint8_t)=herd_on?video_sprite_optional:video_sprite;
+    /* Admission order is priority (priority_pce.c): the boss, the enemies, the enemies' bullets, then the hero's bullets and the
+     * muzzle flash, which are the first to go when the SAT or a scanline is full. */
     if(!pce_campaign.diagnostic)overlay_call(0x70,combat_draw);
-    if(flash_time)draw(pce_flash_base[stage]+(flash_diag?0:4)+4-flash_time,player.x+flash_dx-camera,player.y+flash_dy-16,false,16);
-    overlay_call(0x70,shots_draw);
+    if(pce_campaign.boss_kind){pce_control.phase=0;overlay_call(0x7c,shots_draw_pass);}   /* the bosses' lasers */
     overlay_call(0x74,actors_draw);
+    pce_control.phase=1;overlay_call(0x7c,shots_draw_pass);
+    if(flash_time)video_sprite_optional(pce_flash_base[stage]+(flash_diag?0:4)+4-flash_time,player.x+flash_dx-camera,player.y+flash_dy-16,false,16);
     /* While the herd is on screen the SAT has no room for the foreground pieces as well: they would come and go with
      * every horse's piece count, so the foreground layer is left out until it has passed. */
     bool herd=false;
@@ -285,7 +292,7 @@ PCE_BOSS void play_draw(void) {
     if(!herd)foreground_draw();
     /* A closing dialogue's cells return in the frame its sprites leave: the new SAT takes effect at the next VBlank, so
      * read the cells now, queue the SAT, and write them right after that VBlank, before the beam reaches the panel. */
-    if(pce_panel_restore)video_panel_restore_prepare(pce_panel_restore);
+    if(pce_panel_restore){video_panel_restore_prepare(pce_panel_restore);overlay_call(0x78,dialog_palette_prepare);}
     /* Move the world together; HUD entries precede video_front_mark and stay fixed.
      * Apply after admission so a changing shake never splits horse columns. */
     uint8_t shake_y=herd_on?((frame*13^(frame>>2))&3):0;
@@ -293,8 +300,11 @@ PCE_BOSS void play_draw(void) {
     video_sat_end();
     pce_scroll_y=shake_y;
     if(pce_panel_restore) {
+        /* The cells go back first: the beam reaches the panel a few thousand cycles after the VBlank, and the font and palette
+         * restore is slower than that (cells still holding text showed black, in a staircase, for one frame). */
         video_wait();
-        overlay_call(0x6f,story_graphics_restore);
-        video_panel_restore_apply();pce_panel_restore=0;
+        pce_vce_copy_palette(31,buffer+512,1);
+        video_panel_restore_apply();
+        overlay_call(0x6f,story_graphics_restore);pce_panel_restore=0;
     }
 }

@@ -64,10 +64,13 @@ PCE_FLOW static void herd_stream(void) {
         }
         shown=want;prefetch=(want+1)%5;prefetched=0;
     }
-    /* Start reusing the previous buffer after its final display VBlank,
-     * and prepare the next complete animation in three bounded slices. */
+    /* Start reusing the previous buffer after its final display VBlank.
+     * Four equal 1280-byte slices bound the work of every draw; the last
+     * slice finishes above, just before publishing the new animation.
+     * Three larger slices could miss a VBlank when firing began, then the
+     * skipped simulation phase forced another oversized catch-up upload. */
     uint8_t phase=frame&3;
-    uint16_t target=phase==1?1728:phase==2?3424:phase==3?5120:0;
+    uint16_t target=phase==1?1280:phase==2?2560:phase==3?3840:0;
     if(target>prefetched) {
         pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
         arcade_vram(play_scene->horse+32+(uint32_t)prefetch*5120+prefetched,

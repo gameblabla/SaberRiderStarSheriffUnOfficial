@@ -45,8 +45,8 @@ int main(int argc, char **argv) {
     fprintf(f, "],\"triggers\":[");
     for (int i=0; i<g->enemies.ntr; ++i) {
         Trigger *t=&g->enemies.tr[i];
-        fprintf(f, "%s{\"type\":%d,\"layer\":%d,\"zone\":[%d,%d,%d,%d],\"interval\":%u,\"delay\":%d,\"loops\":%d,\"waypoints\":[",
-                i?",":"",t->type,t->layer,value(t->cx),value(t->cy),value(t->hx),value(t->hy),t->interval_ms,value(t->timer*60),t->remaining);
+        fprintf(f, "%s{\"type\":%d,\"layer\":%d,\"rand\":%u,\"zone\":[%d,%d,%d,%d],\"interval\":%u,\"delay\":%d,\"loops\":%d,\"waypoints\":[",
+                i?",":"",t->type,t->layer,(unsigned)t->rand_n,value(t->cx),value(t->cy),value(t->hx),value(t->hy),t->interval_ms,value(t->timer*60),t->remaining);
         for (int k=0;k<t->nwp;++k) fprintf(f,"%s[%d,%d]",k?",":"",value(t->wp[k][0]),value(t->wp[k][1]));
         fprintf(f,"]}");
     }

@@ -23,12 +23,12 @@ def verify(out):
     with tempfile.TemporaryDirectory(prefix='audio-',dir=out) as base,Emulator(out/'saber_rider.cue',base) as e:
         boot(e,metrics);e.run(120)
         def call(e,address,arg=0):
-            code=bytes([0xa9,arg,0x20,address&255,address>>8,0x4c,5,0x3b])
-            e.write(0x3b00,code)
+            code=bytes([0xa9,arg,0x20,address&255,address>>8,0x4c,0xf5,0x3b])
+            e.write(0x3bf0,code)
             # A video boundary may pause within an IRQ. Start the isolated
             # call with a clean CPU context rather than abandoning its I bit
             # and temporary mappings in the middle of an interrupt.
-            for key,value in [('P',0),('SP',253),('MPR3',105),('MPR6',108),('PC',0x3b00)]:
+            for key,value in [('P',0),('SP',253),('MPR3',105),('MPR6',108),('PC',0x3bf0)]:
                 e.call('register_set',key,value)
             e.run(1)
         def capture(e,name,frames):
@@ -88,11 +88,11 @@ def verify(out):
         # Frame boundaries can fall inside the IRQ. Check mappings at the
         # idle trampoline, after a complete interrupt return.
         for key,value in [('MPR3',105),('MPR6',108)]:e.call('register_set',key,value)
-        e.call('register_set','SP',253);e.call('register_set','PC',0x3b05)
+        e.call('register_set','SP',253);e.call('register_set','PC',0x3bf5)
         for _ in range(60):
             e.run(1);now=e.call('registers')['registers']
-            if now['PC']==0x3b05:break
-        assert now['PC']==0x3b05 and now['MPR3']==105 and now['MPR6']==108,now
+            if now['PC']==0x3bf5:break
+        assert now['PC']==0x3bf5 and now['MPR3']==105 and now['MPR6']==108,now
         reports['concurrent']=capture(e,'concurrent',12)
         call(e,gallop,0);assert left(e,1)==0 and left(e,0)>0
         call(e,gallop,1);e.run(180)

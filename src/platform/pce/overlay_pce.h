@@ -12,6 +12,8 @@ void flow_main(void);
 void play_start(void);
 void encounter_init(void);
 void actors_draw(void);
+void shots_draw_pass(void);
+void spawn_room(void);
 void encounters(void);
 void world_update(void);
 void herd_spawn(void);

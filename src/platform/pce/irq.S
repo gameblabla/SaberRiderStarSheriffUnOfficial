@@ -6,6 +6,7 @@
 .extern pce_ticks, pce_raster_enabled, pce_floor_page, pce_raster_row
 .extern pce_scroll_x, pce_scroll_y, pce_vdc_index
 .extern pce_floor_pending, pce_scroll_hold
+.extern pce_sky_far,pce_sky_near
 .extern pce_draws
 .comm pce_visible_draw,1
 .comm pce_presented,2
@@ -30,14 +31,17 @@ pce_vblank:
     lda pce_floor_pending
     sta pce_floor_page
     st0 #7
-    st1 #0
-    st2 #0
+    lda pce_sky_far
+    sta 2
+    lda pce_sky_far+1
+    sta 3
     st0 #8
     st1 #128
     st2 #1
-    stz pce_raster_row
+    lda #255
+    sta pce_raster_row
     st0 #6
-    st1 #184            /* the floor starts at scanline 120 (RCR = line + 64) */
+    st1 #144            /* sky band at scanline 80, then floor at 120 */
     st2 #0
     bra .Ldone
 .Lnormal:
@@ -89,6 +93,20 @@ pce_hblank:
     sta 3
     bra .Lhlast
 .Lfloor:
+    lda pce_raster_row
+    cmp #255
+    bne .Lroad
+    st0 #7
+    lda pce_sky_near
+    sta 2
+    lda pce_sky_near+1
+    sta 3
+    stz pce_raster_row
+    st0 #6
+    st1 #184
+    st2 #0
+    bra .Lhdone
+.Lroad:
     st0 #7
     st1 #0
     lda pce_floor_page

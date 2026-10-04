@@ -29,9 +29,10 @@ CREDITS_CODE void frontend_continue(void) {
     for(;;) {
         video_wait();ui_read_keys();ui_cycle();
         if(!clock)ui_put_number(19,14,seconds,13);
-        if(++clock==60){clock=0;if(!seconds--)break;ui_blip();}
-        if(ui_pressed&(KEY_RUN|KEY_1|KEY_2)){pce_control.ok=1;break;}
+        if(++clock==60){clock=0;if(!seconds--)break;audio_pcm_tick();}   /* the PC game's tick (sfx 0), not the menu blip (the hit yell) */
+        if(ui_pressed&(KEY_RUN|KEY_1|KEY_2)){pce_control.ok=1;audio_pcm_play(2);break;}   /* sfx 8: the confirm */
     }
+    if(pce_control.ok)for(uint8_t i=0;i<30;++i)video_wait();   /* let the confirm sound play out */
     ui_end();audio_stop();pce_ui_state=0;
     if(pce_control.ok){--pce_continues;pce_campaign.lives=pce_options.lives;pce_campaign.powers=2;}
     previous=ui_held;

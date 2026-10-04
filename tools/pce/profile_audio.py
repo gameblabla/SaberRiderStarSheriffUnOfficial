@@ -20,8 +20,8 @@ def profile(out):
         boot(e,symbol(elf,'pce_metrics'));e.run(120)
         def call(name,arg=0):
             a=symbol(elf,name)
-            e.write(0x3b00,bytes([0xa9,arg,0x20,a&255,a>>8,0x4c,5,0x3b]))
-            for key,value in [('P',0),('SP',253),('MPR3',105),('MPR6',108),('PC',0x3b00)]:
+            e.write(0x3bf0,bytes([0xa9,arg,0x20,a&255,a>>8,0x4c,0xf5,0x3b]))
+            for key,value in [('P',0),('SP',253),('MPR3',105),('MPR6',108),('PC',0x3bf0)]:
                 e.call('register_set',key,value)
             e.run(1)
         for n in range(1,3):

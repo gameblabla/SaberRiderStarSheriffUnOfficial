@@ -42,7 +42,7 @@ BOSS_CODE static void bshoot(int16_t x,int16_t y,int16_t vx,int16_t vy) {
 extern vdc_sprite_t sat[2][64];
 extern uint8_t sat_page,sat_count,sprite_line_lo,sprite_line_hi,sprite_line_ok;
 extern void sprite_lines_reserve(void),sprite_lines_release(void);
-static uint8_t hull_count,hull_ready,hull_level,hull_seen_full;   /* hull_level: 0 full size, 1 and 2 the mid and far passes */
+static uint8_t hull_count,hull_ready,hull_level,hull_seen_full,rider_low;   /* hull_level: 0 full size, 1 and 2 the mid and far passes */
 static int16_t hull_parts[28][3];
 PCE_MISSION static void hull_load(void) {
     uint32_t record[3];uint16_t bytes;uint8_t colors[32];
@@ -73,7 +73,7 @@ PCE_MISSION void boss_start(void) {
     hull_level=2;hull_seen_full=0;
     overlay_call(0x6f,hull_load);
     audio_effect(12);   /* the engine pass (the source's sfx 0x13) opens the fight, and every later pass */
-    boss_phase=0;boss_dir=0;boss_time=boss_hold=boss_clock=0;boss_flash=boss_cd=boss_rcd=boss_fx=boss_cycle=0;boss_vy=0;
+    boss_phase=0;boss_dir=0;rider_low=0;boss_time=boss_hold=boss_clock=0;boss_flash=boss_cd=boss_rcd=boss_fx=boss_cycle=0;boss_vy=0;
     boss_x=camera+(kind==1?288:296);boss_y=kind==1?48:58;
     boss_max=kind==1?66:48+12*pce_options.difficulty;
     pce_campaign.boss_hp=boss_max;
@@ -182,7 +182,11 @@ BOSS_CODE void boss_tick(void) {
     /* The Hyperjumper's front pose (phases 9-11: drops in facing the hero, fires down, leaves upward) is the fourth record, in
      * Arcade RAM like the others: it replaces the side hull while the ship is off screen above (phase 8 -> 9) and goes back
      * the same way (11 -> 3). The wreck keeps the pose it was hit in. */
-    uint8_t want=kind==1?(boss_phase>=2?0:boss_phase==1?1:2):(boss_phase>=9&&boss_phase<=11)?3:(hull_seen_full?0:boss_phase>=2?1:2);
+    /* The gunship's rider lowers its gun (record 3: the same hull with the gun at 45 degrees) when the hero is 60 px below, and
+     * raises it again at 48 px, so the hull is not reloaded every time the hero bobs about the threshold. */
+    int16_t below=player.y+8-boss_y;
+    if(below>=60)rider_low=1;else if(below<48)rider_low=0;
+    uint8_t want=kind==1?(boss_phase>=2?rider_low?3:0:boss_phase==1?1:2):(boss_phase>=9&&boss_phase<=11)?3:(hull_seen_full?0:boss_phase>=2?1:2);
     if(want!=hull_level){hull_level=want;hull_ready=0;}
     uint8_t vulnerable=kind==1?boss_phase==2:boss_phase>=4&&boss_phase<=11;
     if(!vulnerable)return;
@@ -215,8 +219,9 @@ __attribute__((noinline,section(".ram_bank116.text"))) static void hull_body(voi
     if(!hull_ready)overlay_call(0x6f,hull_load);
     sprite_pinned[14]=sprite_pinned[47]=250;
     for(uint8_t k=0;k<hull_count;++k) {
-        int16_t dx=hull_parts[k][0],y=boss_y-16+hull_parts[k][1];
+        int16_t dx=hull_parts[k][0],y=boss_y+hull_parts[k][1];   /* the hull's anchor sits at boss_y, where the muzzles below and the hit boxes assume it (it was drawn 16 px high, cutting the rider off at the top) */
         if(flip)dx=-dx-32;
+        bool piece_flip=flip^(hull_parts[k][2]<0);   /* bit 15: the right half of a symmetric hull is its left half mirrored */
         int16_t x=boss_x-camera+dx;
         if(x<=-32||x>=256||y<=-32||y>=224)continue;
         sprite_line_lo=y<0?0:y;sprite_line_hi=y+32>224?224:y+32;
@@ -224,13 +229,13 @@ __attribute__((noinline,section(".ram_bank116.text"))) static void hull_body(voi
         sprite_lines_reserve();if(!sprite_line_ok){sprite_lines_release();continue;}
         if(sat_count>=64){sprite_lines_release();sprite_lines_release();continue;}
         sat[sat_page][sat_count++]=(vdc_sprite_t){y+64,x+32,
-            ((PCE_SPR_WORD+16*256)>>5)+hull_parts[k][2]*2,
-            VDC_SPRITE_FG|14|VDC_SPRITE_WIDTH_32|VDC_SPRITE_HEIGHT_32|(flip?VDC_SPRITE_FLIP_X:0)};
+            ((PCE_SPR_WORD+16*256)>>5)+(hull_parts[k][2]&0x7fff)*2,
+            VDC_SPRITE_FG|14|VDC_SPRITE_WIDTH_32|VDC_SPRITE_HEIGHT_32|(piece_flip?VDC_SPRITE_FLIP_X:0)};
     }
 }
 BOSS_DRAW static void hull(bool flip) {hull_flip=flip;overlay_call(0x74,hull_body);}
 BOSS_DRAW void boss_draw(void) {
-    bool flip=hull_level==3?false:boss_phase==1?true:boss_dir;   /* the front pose is not mirrored */
+    bool flip=pce_campaign.boss_kind==2&&hull_level==3?false:boss_phase==1?true:boss_dir;   /* the Hyperjumper's front pose is not mirrored */
     if(boss_phase==12) {
         if(boss_y<250&&(boss_time&1))hull(flip);
         for(uint8_t k=0;k<2;++k) {

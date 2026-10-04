@@ -380,3 +380,39 @@ Actual audio captures: `build/pce/audio-review/*.wav`.
       pass's changes removed): `test_herd_render.py` (occupancy assertion, exact=0 band representation, a mode `video_scene` no longer
       enters), `test_herd_visibility.py` (the injected `play_draw` call never returns) and `test_foreground.py` (stage 1 has no foreground
       entries any more, so it has nothing to check). Not investigated further; all other PCE tests pass.
+
+## Eighteenth pass (remaining WIP and supplied captures; details in `docs/PCE_WIP_COMPLETION_20261004.md`)
+
+- [x] Mountains keep intact native source strips, removing the sector cuts shown in the supplied save.
+- [x] Security-camera wall repair handles transparent sky, closing the missing wall tile beside the camera during stampedes.
+- [x] Dialogue corners use reserved patterns and four SAT entries; closing restores scenery and the shared sprite palette at VBlank.
+- [x] Stage 7 cruiser uses 180x98 background art, black surroundings after a palette fade, scroll-register movement, larger collision
+      outlines and source track 11. Bombs and powers flash the screen white with grunt/explosion sounds. No fight-time disc reads.
+- [x] Race sky has two scrolling cloud/horizon bands with a repeated BAT; road raster strips remain at scanline 120.
+- [x] Previous WIP retained: outrider bottom panel, stages 3–5 entrances, drop-through recovery, falling diagonal aim, solid projectile
+      collisions, gliding boss camera, scenery behind actors, pursuit music/steering/shots, gentler leader and turbo/HUD fixes.
+- [x] Native test trampolines reserve `$3bf0–$3bff`, avoiding application BSS. Foreground checks handle stage 5's empty source layer.
+      The three formerly failing regression checks now pass. Campaign verifies a drop followed by a jump back onto the platform.
+- [x] All three stampedes present 300 new frames in 300 VBlanks while firing, with zero essential overflows. Equal horse upload
+      slices remove the third stampede's firing-start slowdown.
+- [x] All 17 regression checks pass on the rebuilt disc, including campaign, menus/restarts, dialogue restoration and native audio.
+      The first suite invocation stopped at the obsolete foreground fixture; presentation/audio targets passed the remaining checks
+      after its correction. See the completion note for reports and run logs.
+
+## Nineteenth pass (playtest of the previous revision; details in `docs/PCE_PRIORITY_BOSSES_ENEMIES_20261005.md`)
+
+- [x] Platform sprite priority is tracked: hero, herd, boss, enemies, enemy bullets / grenades, the hero's bullets, muzzle flash,
+      foreground. The hero's bullets are dropped first, then the enemies' bullets, enemies last; refused enemies pause the filler
+      spawns and refused enemy bullets pause enemy fire (`priority_pce.c`).
+- [x] Placed enemies (snipers, kneelers, shield snipers) spawn as in the source: the three-enemy cap no longer skips them and they are
+      no longer culled the moment they spawn a screen ahead of the hero. `encounters` moved to bank `$78`.
+- [x] Kneelers' grenades: the source sprite in eight pre-rotated poses, swapped as it flies.
+- [x] Shield sniper (stages 4/5): shield up / burning / bare and both deaths from `assets/forest/sniper.png`; the shield absorbs front shots.
+- [x] Level 1/5 gunship has its rider (a second gun covering the other side, lowering to 45 degrees) baked into the hull cells; the hull
+      sits at the source's height.
+- [x] Level 3/4 Hyperjumper front pose: symmetric, five cells wide, right half drawn by flipping the left half's patterns (the old
+      six-cell hull lost pieces to the HUD's scanline units).
+- [x] Level 4: flat-band blue sky (no black holes, far fewer unique characters), 32 characters of cache slack against the scrolling
+      edge glitch, cabin walls in front of the hero again.
+- [x] Continue screen: the PC game's tick (sfx 0) and confirmation (sfx 8) instead of the menu blip.
+- [x] Respawn waits include the source's `rand_n` jitter (exported in the trigger's former layer byte).

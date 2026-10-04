@@ -58,9 +58,9 @@ static bool loader_archive(uint32_t sector,uint32_t remaining,bool keep_display)
     pce_cdb_irq_disable(PCE_CDB_MASK_VBLANK_NO_BIOS | PCE_CDB_MASK_HBLANK_NO_BIOS);
     uint32_t address=0;
     while (remaining) {
-        /* $76-$78 are a 24 KiB CD transfer buffer ($79-$7c hold code: boss, HUDs, the race). Only MPR6 changes;
+        /* $76-$77 are a 16 KiB CD transfer buffer ($78-$7c hold code). Only MPR6 changes;
          * code, IRQs, the stack and all live loader state remain mapped. */
-        uint8_t sectors = remaining >= 24576UL ? 12 : remaining >> 11;
+        uint8_t sectors = remaining >= 16384UL ? 8 : remaining >> 11;
         pce_sector_t s = {.lo=sector, .md=sector>>8, .hi=sector>>16};
         ++pce_metrics.disc_reads;
         uint8_t error = pce_cdb_cd_read(s, PCE_CDB_BANK_MPR6, 0x76, sectors);

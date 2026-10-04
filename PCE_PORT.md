@@ -63,7 +63,7 @@ Stage callbacks share the `$6000` CPU window: platform `$69`, floor `$6d`, flow
 `$6e`, race `$6f`, platform combat `$70`, story `$71`, Ramrod `$72`, space `$73`,
 and presentation/sprite allocation `$74`. The resident trampoline preserves the previous
 mapping across nested callbacks. Work and staging use `$6b/$6c`. CD transfers
-use `$76–$7c` (56 KiB), copying through MPR6 into Arcade RAM before music starts.
+use `$76–$77` (16 KiB); the cruiser/corner scenery overlay uses `$78`. Transfers copy through MPR6 into Arcade RAM before music starts.
 Audio controls and shot/power DAC bytes occupy `$75`; impact/gallop DAC bytes
 occupy `$7d–$7f`.
 The unrolled playback service uses the always-mapped `$6b` work bank.
@@ -86,20 +86,20 @@ DDA timer and every PSG channel.
 The runtime counts and rejects asset reads while music is active.
 
 The ordinary VDC renders baked backgrounds and bounded sprite caches.
-Platform backgrounds reserve palette 15 for text/dialogue and 32 characters
-at `$4000–$41ff` for panel tiles, leaving 896 background cache characters. The
+Platform backgrounds reserve palette 15 for text/dialogue and 16 characters
+at `$4000–$40ff` for panel tiles and four sprite patterns at `$4100–$41ff` for dialogue corners, leaving 896 background cache characters. The
 allocator admits complete objects against 64 SAT entries and 16 width units
 per scanline. HUD digits/icons precede the foreground sprites in SAT priority, followed by
 actors/projectiles. Foreground art shares one sprite palette and a separate
 cache-ID range; actor patterns remain intact. Cockpit slices are clipped to
 the viewing window. Platform BYR follows the stampede’s 0–3 pixel world shake; the HUD stays
-fixed. Only the race uses raster scrolling. Level 1 has a blue sky gradient, and level 3 a dark purple one.
+fixed. Only the race uses raster scrolling, with separate cloud and horizon bands above the road. Level 1 has a blue sky gradient, and level 3 a dark purple one.
 Both moons are removed. Optional enemies that cannot be drawn are
 removed, and hidden Ramrod mechs cannot inflict damage.
 
 Both race phases use the Wolf BAT pair-character floor and raster scrolling at
 the 512-dot clock. Horizontally expanded cars preserve their physical aspect.
-The floor begins at scanline 120 (the sky above it is plain gradient tiles): seven far strips of 8 scanlines (half-resolution samples) and twelve near strips of 4 make 19 BAT rows.
+The floor begins at scanline 120 (the sky above it has gradient tiles, source cloud wisps and a distant ridge): seven far strips of 8 scanlines (half-resolution samples) and twelve near strips of 4 make 19 BAT rows.
 The finished floor page is published after the corresponding sprite list is
 prepared. Ramrod uses four baked sizes and overlapping 16-pixel slices.
 
@@ -154,8 +154,9 @@ timers, entity pools and boss HP. Native CPU code still executes hits, deaths,
 dialog paging and transitions. These tests do not establish an unassisted full
 playthrough or physical-disc timing.
 
-`test_foreground.py` checks unmodified actor patterns and actual foreground
-SAT priority in both facings. `test_presentation.py` drives the title, all
+`test_foreground.py` checks unmodified actor patterns in both facings and the
+empty foreground path on stage 5; when source foreground exists, it also checks
+SAT priority. `test_presentation.py` drives the title, all
 four selections, briefing, HUDs and sixteen diagonal poses through real input.
 Its screenshots are in `presentation-review/`. `test_audio.py` calls compiled
 native audio entry points in an isolated scenario and records emulator output
@@ -168,8 +169,8 @@ simulation. Pursuit attacks and platform boss patterns are simplified. Ramrod
 uses coarse range/aim combat and a baked floor. The space timeline retains its
 combat events with smaller pools; radio messages, several original attack
 patterns and decorative effects still need fuller adaptation. Platform dialogue
-uses a top BG panel and four rounded sprite corners, with
-original 2D speaker portraits. Closing restores its saved world columns, font
+uses a BG panel and four rounded sprite corners in dedicated VRAM, with
+original 2D speaker portraits. The outrider cutscene places its panel at the bottom; other platform panels sit at the top. Closing restores its saved world columns, font
 and palette from Arcade RAM; displayed sprite generations remain pinned through
 SAT DMA.
 The full options UI, later movie replacement sequences and six-button mappings
@@ -228,3 +229,17 @@ implementation, measurements and emulator verification artifacts.
 The second 2026-10-04 revision (boss far/mid-pass hulls and sounds, the jingle and the 320x224 victory painting with glowing
 lettering, the blue-gradient race sky, the 19-strip floor and 15 road updates per second, stage title cards and the race controls card)
 is described in `docs/PCE_BOSS_VICTORY_RACE_FIX_20261004B.md`.
+
+The 2026-10-04 WIP completion is recorded in
+[docs/PCE_WIP_COMPLETION_20261004.md](docs/PCE_WIP_COMPLETION_20261004.md).
+It adds the 180x98 background cruiser, race sky parallax, dedicated dialogue
+corners, intact mountain scenery, and the transparent-sky camera wall repair.
+The herd streamer divides each animation upload into four equal 1280-byte
+slices. `make -f Makefile.pce test-wip` checks the new native rendering paths;
+review captures are under `build/pce/wip-review/`. Load helpers allow the longer
+scene reads through the reduced CD scratch buffer. Native test trampolines use
+reserved console RAM at `$3bf0`, outside application state.
+
+The 2026-10-05 revision (sprite admission priority and refusal tracking, placed enemies, grenades, shield snipers, the gunship's rider,
+the symmetric Hyperjumper front pose, level 4's flat sky / cache slack / cabin walls, the continue-screen tones) is described in
+`docs/PCE_PRIORITY_BOSSES_ENEMIES_20261005.md`. `make -f Makefile.pce test-campaign` also runs `test_priority.py`.

@@ -6,6 +6,8 @@
 #include "play_pce.h"
 #include "play_internal.h"
 #include "sprite_cache_pce.h"
+#include "scenery_pce.h"
+extern volatile uint16_t pce_sky_far,pce_sky_near;
 #include <string.h>
 #define STORY_CODE __attribute__((noinline,section(".ram_bank113.text")))
 static uint32_t story_address;
@@ -78,14 +80,14 @@ STORY_CODE static void draw(void) {
     uint16_t avatar;uint8_t colour;
     arcade_read(2,a,&avatar,2);arcade_read(2,a+2,&colour,1);
     arcade_read(2,a+3,story_text,sizeof story_text);story_text[255]=0;
-    /* The box sits at the top on the race and the platform stages (the hero stands where a bottom box would be). */
-    uint8_t y=story_y=pce_metrics.stage<6?5:20;
+    /* The box sits at the top on the platform stages (the hero stands where a bottom box would be), at the bottom on the race. */
+    uint8_t y=story_y=pce_metrics.stage<6&&!cut_phase?5:20;   /* the outrider's scene: the box goes below the actor the camera pans to */
     /* BG cells sit (scroll & 7) pixels left of their grid on a scrolling playfield. */
     int16_t box_x=24-(pce_raster_enabled?0:(pce_scroll_x&7)),box_y=y*8-(pce_metrics.stage!=2&&pce_metrics.stage<6?16:0);   /* platform sprites are baked 16 lines low */
     /* Blank every BG cell under the box except the four 2x2 corner blocks; the corner pieces stay in front of the
      * scenery so their rounded edges show the scenery, not a hole. */
     bool platform=pce_metrics.stage!=2&&pce_metrics.stage<6;
-    if(pce_metrics.stage==2){race_colour=colour&3;overlay_call(0x6f,race_box);}
+    if(pce_metrics.stage==2){pce_sky_far=pce_sky_near=0;race_colour=colour&3;overlay_call(0x6f,race_box);}
     else if(!platform){video_panel(5,y,24,2);video_panel(3,y+2,28,2);video_panel(5,y+4,24,2);}
     video_sat_begin();
     if(avatar!=65535) {
@@ -102,7 +104,10 @@ STORY_CODE static void draw(void) {
     }
     uint8_t first=sat_count;
     uint16_t box=pce_dialog_base[pce_metrics.stage-1]+(colour&3)*2;
-    if(pce_metrics.stage!=2){video_sprite(box,box_x,box_y,false,16);video_sprite(box+1,box_x+112,box_y,false,16);}
+    if(platform) {
+        dialog_corner_colour=colour&3;dialog_corner_y=y;
+        overlay_call(0x78,dialog_corners);
+    } else if(pce_metrics.stage!=2){video_sprite(box,box_x,box_y,false,16);video_sprite(box+1,box_x+112,box_y,false,16);}
     uint16_t left=0xffff,top=0xffff;
     for(uint8_t k=first;k<sat_count;++k){if(sat[sat_page][k].x<left)left=sat[sat_page][k].x;if(sat[sat_page][k].y<top)top=sat[sat_page][k].y;}
     for(uint8_t k=first;k<sat_count;++k) {

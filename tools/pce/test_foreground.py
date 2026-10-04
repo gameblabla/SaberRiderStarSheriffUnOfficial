@@ -9,16 +9,19 @@ from emulator import Emulator,boot,symbol
 from test_campaign import Campaign
 
 def verify(out):
-    t=Campaign(out);# Stages 1 and 3 have no foreground layer any more (it flickered); stage 4 keeps a thinned one.
-    scenes=json.loads((out/'manifest.json').read_text())['scenes'];scene=scenes[3]
-    assert scenes[0]['foreground_count']==0 and scenes[2]['foreground_count']==0
-    blob=(out/'s4.bin').read_bytes();table=scene['records']['sprite_table']['offset']
+    t=Campaign(out)
+    scenes=json.loads((out/'manifest.json').read_text())['scenes'];scene=scenes[4]
+    assert all(scenes[k]['foreground_count']==0 for k in (0,2)),'stages 1 and 3 have no foreground'
+    assert scenes[3]['foreground_count']>0,'stage 4 keeps its cabin walls'
+    blob=(out/'s5.bin').read_bytes();table=scene['records']['sprite_table']['offset']
     fg_table=scene['records']['foreground_sprites']['offset'];fg_x=[struct.unpack_from('<hhH',blob,fg_table+6*k)[0] for k in range(scene['foreground_count'])]
-    mid=fg_x[len(fg_x)//2]
-    first=next(i for i,s in enumerate(scene['sprites']) if s['name'].startswith('foreground_'))
+    # Stage 5 currently has no source foreground. Still check actor patterns and
+    # the empty-layer path; retain the priority assertions for future scenery.
+    mid=fg_x[len(fg_x)//2] if fg_x else 400
+    first=next((i for i,s in enumerate(scene['sprites']) if s['name'].startswith('foreground_')),None)
     checked=foreground=0
     with tempfile.TemporaryDirectory(prefix='foreground-',dir=out) as base,Emulator(out/'saber_rider.cue',base) as e:
-        boot(e,t.address);t.stage(e,4);t.dialogs(e);t.seed(e,'dialogs_done',255,1)
+        boot(e,t.address);t.stage(e,5);t.dialogs(e);t.seed(e,'dialogs_done',255,1)
         t.press(e,8);e.run(120)
         e.write(symbol(out/'app.elf','trigger_remaining'),bytes(100))
         e.write(symbol(out/'app.elf','actors'),bytes(8*21));e.write(symbol(out/'app.elf','shots'),bytes(16*13))
@@ -52,13 +55,17 @@ def verify(out):
                 assert actual==expected,'Foreground must use SAT priority, never cut actor patterns'
                 if scene['sprites'][sprite]['name'].startswith('hero'):
                     hero_entries.append(k);assert bool(attr&0x800)==bool(direction);checked+=1
-                if sprite>=first:fg_entries.append(k);foreground+=1
-            assert hero_entries and fg_entries,'Capture must include the hero and foreground scenery'
-            assert max(fg_entries)<min(hero_entries),'Earlier SAT entries cover later actors'
+                if first is not None and sprite>=first:fg_entries.append(k);foreground+=1
+            assert hero_entries,'Capture must include the hero'
+            if fg_x:
+                assert fg_entries,'Capture must include foreground scenery'
+                assert max(fg_entries)<min(hero_entries),'Earlier SAT entries cover later actors'
+            else:
+                assert not fg_entries and first is None,'Empty foreground must allocate no scenery sprites'
             assert e.call('registers')['registers']['BYR']==0
             t.press(e,8)
     report=dict(checked_patterns=checked,foreground_entries=foreground,facings=2,
-                actor_patterns='unmodified',foreground_priority='passed',vertical_scroll=0)
+                actor_patterns='unmodified',foreground_priority='passed' if fg_x else 'empty source layer',vertical_scroll=0)
     (out/'foreground-verification.json').write_text(json.dumps(report,indent=2)+'\n');print(report)
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--out',type=Path,default=Path('build/pce'));a=p.parse_args();verify(a.out.resolve())

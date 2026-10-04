@@ -45,7 +45,8 @@ def build(out):
     # Shot/power share the code bank; impact/gallop span the three sample banks.
     t=tables();resident=bytearray();stream=bytearray();pcm_rows=[];pcm_report=[]
     for event,rid in [('shot','C66E1894'),('impact','EB3309DC'),
-                      ('power','A8382083'),('gallop','82EFBA26')]:
+                      ('power','A8382083'),('gallop','82EFBA26'),('tick','E418A101')]:
+        if event=='tick':pcm_rows.append('{0,0,0}')   # request 4 stops the gallop: no sample 4
         # Keep the hoof rumble audible beside CD-DA; the general effects filter
         # removed its bass and attenuated an already shared PSG mix.
         filtering='highpass=f=20,lowpass=f=3000,volume=1.0' if event=='gallop' else 'highpass=f=80,lowpass=f=3000,volume=0.7'
@@ -56,6 +57,12 @@ def build(out):
         if event=='shot':
             peak=max(1,max(abs(v) for v in samples))
             samples=array.array('h',(round(32767*math.tanh(2.4*v/peak)/math.tanh(2.4)) for v in samples))
+        if event=='tick':
+            # The CONTINUE? countdown's tick (the PC game's sfx 0): trimmed, with a short fade, to what the sample banks have left.
+            room=3*8192-len(stream)-32
+            if len(samples)>room:
+                samples=samples[:room];fade=min(256,room)
+                for k in range(fade):samples[room-1-k]=int(samples[room-1-k]*k/fade)
         values=list(samples)+[0]*32
         packed=encode2(values,t)
         data=bytes((v+128)>>3 for v in decode2(packed,len(values),t))
@@ -77,7 +84,7 @@ def build(out):
     for i in range(3):
         blob=stream[i*8192:(i+1)*8192]
         header+='const uint8_t pce_pcm_bank%d[] __attribute__((used,retain,section(".ram_bank%d.rodata")))={'%(i,125+i)+','.join(map(str,blob))+'};\n'
-    header+='static const uint16_t pcm_samples[4][3] __attribute__((section(".ram_bank117.rodata")))={'+','.join(pcm_rows)+'};\n'
+    header+='static const uint16_t pcm_samples[6][3] __attribute__((section(".ram_bank117.rodata")))={'+','.join(pcm_rows)+'};\n'
     (out/'pcm.h').write_text(header)
     # Hardware ADPCM voice banks, one per hero (CD ADPCM RAM is 64 KiB). Events with several variants are picked at
     # random like the PC game's; every bank holds the same shared events (enemy yells, alarm, dialogue line).

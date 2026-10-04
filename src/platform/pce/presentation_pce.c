@@ -62,10 +62,21 @@ PCE_FLOW void presentation_frame(void) {
 /* Every live actor, optional ones last (a herd or a distant enemy that does not fit the SAT is simply not drawn). */
 PRESENT void actors_draw(void) {
     uint8_t stage=pce_metrics.stage-1;
-    for(uint8_t k=0;k<8;++k) if(actors[k].active) {
-        Actor *a=&actors[k];uint16_t id=pce_actor_ids[a->type];
+    /* Scenery props (types 12-27: the saloon doors, the security camera...) come after the fighters in the SAT, so they
+     * stay behind every fighter; where the SAT or a scanline is full they are what gives way. */
+    for(uint8_t pass=0;pass<2;++pass)
+    for(Actor *a=actors;a<actors+8;++a) {   /* by pointer: indexing a 21-byte record costs a multiplication each time */
+        if(!a->active||(a->type>=12&&a->type<=27)!=pass)continue;
+        uint16_t id=pce_actor_ids[a->type];
         if(id==255)continue;
-        if(id>=39&&id<=41) {
+        bool fighter=id>=39&&id<=41;
+        if(a->type>=30&&a->type<=31) {
+            /* the shield sniper (enemy_base + 44..59): shield up, the panel burning away over 18 steps, then bare; dead with or without it */
+            uint16_t base=pce_enemy_base[stage];
+            if(a->dead)id=base+(a->mode&4?54:48)+(a->dead-1)/4;
+            else if(a->mode&4)id=base+(a->aim>12?45:a->aim>6?46:47);
+            else id=base+44;
+        } else if(fighter) {
             /* walker 0 / grunt 1 / sniper 2: run frames, then six death frames */
             uint16_t base=pce_enemy_base[stage],kind=id-39;
             if(a->dead)id=base+(kind==0?6:kind==1?18:24)+(a->dead-1)/4;
@@ -85,7 +96,9 @@ PRESENT void actors_draw(void) {
         }
         if(a->type==16){id+=(frame/15)&1;a->flip=0;}
         if(a->type==28)id+=a->hp==2?0:a->hp==1?1:2+(a->anim>>2)%6;   /* the blue Outrider: stand, alarm, run */
-        video_sprite_optional(id,a->b.x-camera,a->b.y-16,a->flip,16);   /* a refused draw is skipped for the frame, never a removal */
+        int16_t sx=a->b.x-camera;
+        /* a refused draw is skipped for the frame, never a removal; a fighter refused on screen holds the filler spawns back */
+        if(!video_sprite_optional(id,sx,a->b.y-16,a->flip,16)&&fighter&&sx>-24&&sx<272)enemy_pressure=40;
     }
 }
 void presentation_draw(void) {overlay_call(0x6e,presentation_frame);video_front_mark();}

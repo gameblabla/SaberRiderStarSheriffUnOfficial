@@ -22,7 +22,7 @@ with tempfile.TemporaryDirectory(dir=out) as b,Emulator(out/'saber_rider.cue',b)
   value=e.memory(level,1)[0]
   if not seen or seen[-1]!=value:seen.append(value)
   playing+=e.call('registers')['registers']['Playing']
- assert seen[:3]==[2,1,0],f'hull sizes by pass: {seen}'
+ assert seen[:2]==[2,1] and seen[2] in (0,3),f'hull sizes by pass: {seen}'   # full hull: rider gun level (0) or lowered to 45 degrees (3, hero 60+ px below)
  assert e.memory(phase,1)[0]==2,'the fight begins after the passes'
  assert playing,'the engine pass and the guns must be heard (CD ADPCM)'
  print('Gunship hulls by pass',seen,'; ADPCM active in',playing,'of 60 samples.')

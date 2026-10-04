@@ -33,9 +33,9 @@ def verify(out):
         e.write(0x1402,b'\x07');e.write(0x0c01,b'\0')
         def call(name):
             a=symbol(elf,name)
-            e.write(0x3b00,bytes([0x20,a&255,a>>8,0x4c,3,0x3b]))
+            e.write(0x3bf0,bytes([0x20,a&255,a>>8,0x4c,0xf3,0x3b]))
             bank=110 if name=='presentation_frame' else 111
-            for key,val in [('P',4),('SP',253),('MPR3',bank),('MPR6',108),('PC',0x3b00)]:e.call('register_set',key,val)
+            for key,val in [('P',4),('SP',253),('MPR3',bank),('MPR6',108),('PC',0x3bf0)]:e.call('register_set',key,val)
             e.run(2)
         def seed(name,data):e.write(addr[name],data)
         call('herd_reserve')

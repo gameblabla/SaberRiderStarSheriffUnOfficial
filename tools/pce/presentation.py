@@ -202,6 +202,22 @@ def add_art(root,work,stage,sprites,frame):
         for name,n in [('sniper_aim0',16),('sniper_aim1',14),('sniper_aim2',12),('sniper_aim3',18),('sniper_aim4',20),('sniper_recoil',17),
                        ('kneel',30),('kneel_throw0',31),('kneel_throw1',32),('kneel_throw2',33)]:
             add(name,frame(work/'srgb'/f'{aid:08X}.srgb',n),(round(ox),round(oy)))
+        # The shield sniper (types 30/31, forest/sniper.png, 64x64 cells, right-facing; the torso is art column 24 and the
+        # feet row 52, so the anchor sits 12 rows above the sniper's): shield up, the panel burning away, no shield (enemy_base
+        # + 44..47), then the death with the shield (48..53) and without it (54..59).
+        sheet=Image.open(root/'assets/forest/sniper.png').convert('RGBA')
+        def shield(n):return sheet.crop((n*64,0,n*64+64,64))
+        for name,n in [('shield_up',0),('shield_burn0',2),('shield_burn1',4),('shield_gone',7)]+\
+                      [(f'shield_death{k}',14+k) for k in range(6)]+[(f'shield_bare_death{k}',8+k) for k in range(6)]:
+            add(name,shield(n),(24,20))
+        # The kneelers' grenade (16x16 source sprite, spun 0.1 rad a step in the source): eight poses, a step of 45 degrees,
+        # swapped in as it flies (enemy_base + 60..67).
+        grenade=get(0x33269F6B,0)
+        for k in range(8):
+            big=grenade.resize((48,48),Image.Resampling.NEAREST).rotate(45*k,resample=Image.Resampling.BICUBIC)
+            pix=np.asarray(big.resize((16,16),Image.Resampling.BOX)).copy()
+            pix[...,3]=np.where(pix[...,3]>=96,255,0)
+            add(f'grenade{k}',Image.fromarray(pix),(8,8))
     return dict(portraits=portraits,dialog=dialog,hud=hud,digits=digits,aim=aim,motion=motion,pose=pose,up_tip=up_tip,art_muzzle=art_muzzle,flash=flash,enemy=enemy,end=len(sprites))
 
 def emit_tables(out,scenes,h,c):

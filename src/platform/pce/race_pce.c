@@ -5,6 +5,7 @@
 #include "loader_pce.h"
 #include "save_pce.h"
 #include "floor_pce.h"
+#include "scenery_pce.h"
 #include "assets.h"
 #define RACE_SIN_SECTION ".ram_bank121.rodata"
 #include "race_math.h"
@@ -21,7 +22,9 @@
 TrackPoint track[256] PCE_STAGE;
 Rival rv[N_RIVALS];
 Mine mines[6];
-Bolt race_bolts[6];
+/* Shots: 0-5 the car's own, 6-9 the enemies' (the car's firing used to fill the pool, so the enemy never got a slot). */
+Bolt race_bolts[10] PCE_STAGE;
+uint8_t boost_locked PCE_STAGE;
 Leader boss,escort[2];
 uint16_t px,py,hd,cam_hd,phase_t,race_time,gap_dist,race_rng=0xB5AD,ps;
 int16_t speed,tilt,arg_x,arg_y,arg_dist,arg_radius,arg_speed;
@@ -78,9 +81,18 @@ RACE_CODE static void drive(uint8_t keys) {
     uint8_t cls=ground(px,py);
     int16_t vmax=cls==2?470:cls==1?380:250;
     bool playing=rphase==P_RACE||rphase>=P_PURSUIT;
-    bool turbo=(keys&KEY_2)&&boost>5&&!spin&&playing;
-    if(turbo){vmax=vmax*27/20;boost-=boost>2?2:boost;boost_on=boost>5;}
-    else {boost_on=0;if(boost<255&&!(race_time&3))++boost;}
+    /* mode7.c: the meter drains 0.33 a second under turbo, refills 0.08 a second otherwise; a drained meter locks the turbo out until
+     * it is half full again. (It was timed off race_time, which stands still in the pursuit: the meter never refilled there.) */
+    if(boost_locked&&boost>=128)boost_locked=0;
+    bool turbo=(keys&KEY_2)&&!boost_locked&&boost>13&&!spin&&playing;
+    if(turbo){
+        vmax=vmax*27/20;boost-=(phase_t&1)?1:2;boost_on=1;
+        if(boost<=13){boost=0;boost_locked=1;boost_on=0;}
+    } else {
+        boost_on=0;
+        if(boost<255&&phase_t%3==0)++boost;
+        if(boost_locked&&boost>=128)boost_locked=0;
+    }
     bool accel=(keys&(KEY_1|KEY_UP))!=0;
     if(spin){accel=false;--spin;}
     if(accel)speed+=turbo?9:5;else speed-=2;
@@ -114,7 +126,7 @@ RACE_CODE void race_start(void) {
     arcade_read(1,pce_scenes[1].track,track,sizeof track);
     car_max=pce_options.difficulty==0?16:pce_options.difficulty==1?12:8;car_hp=car_max;
     pce_metrics.hp=8;pce_campaign.lap=1;pce_campaign.rank=8;pce_campaign.boss_kind=0;pce_campaign.boss_hp=0;
-    boost=255;boost_on=0;hurt=spin=shake=fire_cd=ram_cd=0;speed=0;tilt=0;race_time=0;phase_t=0;
+    boost=255;boost_on=boost_locked=0;hurt=spin=shake=fire_cd=ram_cd=0;speed=0;tilt=0;race_time=0;phase_t=0;
     overlay_call(0x6d,field_start_call);
     uint16_t s=63005u;
     int16_t x,y;track_point(s,48,&x,&y);
@@ -155,7 +167,7 @@ RACE_CODE static void race_tick(uint8_t keys) {
         pce_campaign.lap=lapp<0?1:lapp>=2?3:lapp+1;
         if(lapp>=3) {
             rphase=P_FINISH;phase_t=0;finish_rank=pce_campaign.rank;
-            memset(mines,0,sizeof mines);memset(race_bolts,0,sizeof race_bolts);
+            memset(mines,0,sizeof mines);memset(race_bolts,0,sizeof race_bolts);audio_stop();
         }
         break; }
     case P_FINISH:
@@ -163,7 +175,7 @@ RACE_CODE static void race_tick(uint8_t keys) {
         if(phase_t>=192) {
             if(finish_rank<=3) {
                 pce_campaign.story=1;pce_campaign.event=1;
-                save_store(2,pce_control.hero,1);audio_music(9);
+                save_store(2,pce_control.hero,1);audio_music(14);   /* the pursuit's own track (mode7.c PH_PURSUIT) */
                 begin_pursuit();
             } else {pce_metrics.hp=1;campaign_hurt();}   /* must finish 3rd or better: a life, and the race again */
         }
@@ -180,7 +192,7 @@ RACE_CODE static void race_tick(uint8_t keys) {
                 pce_campaign.story=2;pce_campaign.event=1;
                 boss.state=1;boss.t=0;boss.t2=90;boss.t3=250;boss.boost=0;boss.since=0;
                 memset(escort,0,sizeof escort);memset(mines,0,sizeof mines);
-                rphase=P_BOSS;pce_campaign.boss_kind=4;audio_music(8);
+                rphase=P_BOSS;pce_campaign.boss_kind=4;audio_music(17);   /* mode7.c PH_BOSS */
             }
         }
         if(rphase==P_BOSS)pce_campaign.boss_hp=boss.hp;
@@ -204,6 +216,7 @@ RACE_CODE void race_frame(void) {
     /* Actors project against the completed road snapshot. Re-emitting them
      * on every partial sampling pass wasted time on the same displayed road. */
     if(pce_metrics.floor_commits!=commits) {
+        overlay_call(0x78,race_scenery);
         overlay_call(0x7c,race_draw);
         overlay_call(0x6d,floor_present);
     }

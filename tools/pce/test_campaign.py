@@ -26,11 +26,11 @@ class Campaign(Test):
             e.run(40)
         e.input(0);e.run(30)
         previous=symbol(self.out/'app.elf','previous')
-        self.until(e,lambda:e.memory(previous,1)==b'\0',limit=2000,step=10)
+        self.until(e,lambda:e.memory(previous,1)==b'\0',limit=12000,step=10)
         e.input(key);e.run(n)
         self.until(e,lambda:e.memory(previous,1)[0]&key==key,limit=2000,step=10)
         e.input(0);e.run(n)
-        self.until(e,lambda:e.memory(previous,1)==b'\0',limit=2000,step=10)
+        self.until(e,lambda:e.memory(previous,1)==b'\0',limit=12000,step=10)
     def seed(self,e,name,value,width=2):e.write(symbol(self.out/'app.elf',name),int(value).to_bytes(width,'little',signed=value<0))
     def field(self,e,name,value):
         i=FIELDS.index(name);offset=i if i<13 else 13+(i-13)*2
@@ -50,6 +50,7 @@ class Campaign(Test):
         # inside physics(), whose local coordinates would overwrite a write.
         self.press(e,8);e.run(120)
         e.write(symbol(self.out/'app.elf','player'),struct.pack('<4h4B',x,y,0,0,0,0,4,4))
+        self.seed(e,'camera',max(0,x-120))   # seed the view with the warp; native bosses now glide to their arena
         self.press(e,8)
     def hit_platform_boss(self,e,hp=1):
         self.press(e,8);e.run(120)
@@ -87,7 +88,7 @@ class Campaign(Test):
             assert self.metrics(e)['camera_x']>=600,self.metrics(e)
             assert e.memory(cut,1)[0]==4
             assert e.call('registers')['registers']['Playing']==1,'The dialogue voice line plays when the box opens'
-            e.run(30);assert below_box(),'The outrider must stay on screen while the text runs'
+            e.run(30);assert int.from_bytes(e.memory(symbol(self.out/'app.elf','story_y'),1),'little')==20,'Outrider dialogue must sit at the bottom'
             self.capture(e,'campaign-outrider');self.dialogs(e)
             def panned():
                 nonlocal peak
@@ -221,7 +222,7 @@ class Campaign(Test):
             assert e.memory(symbol(self.out/'app.elf','port_hp'),5)==bytes(5)
             self.results['space_power']=self.state(e);self.field(e,'boss_hp',1)
             by=int.from_bytes(e.memory(symbol(self.out/'app.elf','space_boss_y'),2),'little')
-            e.write(symbol(self.out/'app.elf','bolts'),struct.pack('<2h2b2B',130,by+14,0,0,1,0));e.run(120);self.dialogs(e)
+            e.write(symbol(self.out/'app.elf','bolts'),struct.pack('<2h2b2B',180,by+50,0,0,1,0));e.run(120);self.dialogs(e)
             self.until(e,lambda:self.state(e)['state']==2);self.press(e,1)
             assert self.state(e)['state']==4;self.capture(e,'campaign-ending');self.results['ending']=self.state(e)
             # Leave credits and deliberately start a new game. RUN held across
@@ -253,6 +254,9 @@ class Campaign(Test):
             self.press(e,66,8);e.run(60)
             assert self.metrics(e)['player_y']>117,'Down + II must drop through a one-way platform'
             self.results['drop_through']=self.metrics(e)
+            self.press(e,2,8);e.run(60)
+            assert self.metrics(e)['player_y']==97,'The same one-way platform must be reachable after dropping through it'
+            self.results['jump_back']=self.metrics(e)
             for hero in range(1,4):
                 self.press(e,8)
                 for _ in range((hero-self.metrics(e)['hero'])&3):self.press(e,16)

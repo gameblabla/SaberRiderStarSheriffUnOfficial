@@ -21,7 +21,7 @@ def verify(out):
         resident=symbol(elf,'pce_pcm_resident')
         resident_data=(out/'work/shot.dda').read_bytes()+(out/'work/power.dda').read_bytes()
         assert e.memory(resident,len(resident_data))==resident_data
-        stream=(out/'work/impact.dda').read_bytes()+(out/'work/gallop.dda').read_bytes()
+        stream=(out/'work/impact.dda').read_bytes()+(out/'work/gallop.dda').read_bytes()+(out/'work/tick.dda').read_bytes()
         for i in range(3):
             e.call('register_set','MPR6',125+i)
             assert e.memory(0xc000,min(8192,len(stream)-8192*i))==stream[8192*i:8192*(i+1)]
@@ -34,9 +34,9 @@ def verify(out):
                 e.write(state+16*ch,struct.pack('<HHH6BHH',count,start,0,125,0,0,125,loop,ch,start,count))
                 e.write(symbol(elf,'pce_pcm_active'),bytes([1<<ch]))
                 for i in range(count*(2 if loop else 1)):
-                    code=bytes([0xa2,ch*16,0x20,step&255,step>>8,0x4c,5,0x3b])
-                    e.write(0x3b00,code)
-                    for key,val in [('SP',253),('PC',0x3b00)]:e.call('register_set',key,val)
+                    code=bytes([0xa2,ch*16,0x20,step&255,step>>8,0x4c,0xf5,0x3b])
+                    e.write(0x3bf0,code)
+                    for key,val in [('SP',253),('PC',0x3bf0)]:e.call('register_set',key,val)
                     e.run(1);actual=struct.unpack('<HHH6BHH',e.memory(state+16*ch,16))
                     n=i%count
                     assert actual[2]==data[n],(ch,i,actual)

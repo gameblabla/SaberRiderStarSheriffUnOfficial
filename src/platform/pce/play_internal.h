@@ -26,4 +26,5 @@ extern int16_t probe_x,probe_y;extern uint8_t probe_left;
 void spawn_clear(void);
 void actor_kill(Actor *a);
 
-void shots_draw(void);
+void shots_draw_pass(void);
+extern uint8_t enemy_pressure,shot_pressure;   /* priority_pce.c */

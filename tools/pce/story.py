@@ -42,9 +42,6 @@ def pages(script,portraits):
             out.append(struct.pack('<HB',avatar,colour)+'\n'.join(lines[i:i+4]).encode('ascii','replace')+b'\0')
     return out
 
-# The Grand Prix's controls card (mode7.c render_instructions), as the last two pages of the opening: no portrait, blue box.
-RACE_CARD=['ALL GALAXY GRAND PRIX\nSTEER  LEFT / RIGHT\nACCELERATE  I OR UP\nFIRE  I','TURBO  II\nBRAKE  DOWN\nTHREE LAPS!']
-
 def bake(root,work,stage,archive,portraits):
     if stage==1:
         scripts=[(work/f'dialog{k}.txt').read_text() for k in range(4)]
@@ -67,7 +64,6 @@ def bake(root,work,stage,archive,portraits):
                 script=script.replace('__ACTIVE_HERO__','dialog_avatar_'+avatar+'2')
                 script=script.replace('Fireball',name)
             chunks=pages(script,portraits)
-            if stage==2 and i==0:chunks+=[struct.pack('<HB',65535,COLOURS['BLUE'])+t.encode('ascii')+b'\0' for t in RACE_CARD]
             pointers=[archive.add(f'hero{hero}_story{i}_page{j}',p) for j,p in enumerate(chunks)]
             offsets.append(archive.add(f'hero{hero}_story{i}',bytes([len(pointers)])+b''.join(struct.pack('<I',p) for p in pointers)))
     return archive.add('story_directory',bytes([len(scripts)])+b''.join(struct.pack('<I',p) for p in offsets))

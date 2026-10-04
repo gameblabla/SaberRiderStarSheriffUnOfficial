@@ -34,9 +34,8 @@ PCE_COMBAT void combat_start(void) {
     arcade_read(2,play_scene->rules+3+(uint16_t)ndialog*sizeof(DialogZone),death_zones,(uint16_t)ndeath*12);
 }
 PCE_COMBAT static void boss_begin(uint8_t kind) {
-    camera=play_scene->width-256;pce_metrics.camera_x=camera;
     pce_campaign.boss_kind=kind;
-    boss_time=0;boss_x=camera+240;boss_y=80;
+    boss_time=0;boss_x=play_scene->width-16;boss_y=80;   /* the arena's right edge; the camera glides there */
     if(kind==3){pce_campaign.boss_hp=boss_max=30;boss_phase=3;}
     else overlay_call(0x6f,boss_start);   /* the flying bosses: boss_pce.c */
     audio_music(8);
@@ -85,7 +84,7 @@ PCE_COMBAT void combat_tick(void) {
     }
     for(uint8_t k=0;k<ndialog;++k)if(!(dialogs_done&(1<<k))&&zone(dialog_zones[k].zone)) {
         dialogs_done|=1<<k;pce_campaign.story=k;
-        if(dialog_zones[k].focus){cut_k=k;cut_phase=1;overlay_call(0x6f,encounters);}   /* the scene's own actors exist from the start (idle while the camera pans) */
+        if(dialog_zones[k].focus){cut_k=k;cut_phase=1;overlay_call(0x78,encounters);}   /* the scene's own actors exist from the start (idle while the camera pans) */
         else {pce_campaign.event=1;if(dialog_zones[k].voice)audio_effect(dialog_zones[k].voice);}
         return;
     }

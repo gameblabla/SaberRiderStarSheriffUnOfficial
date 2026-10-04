@@ -45,11 +45,11 @@ PCE_FLOW static bool change_stage(uint8_t n) {
             overlay_call(0x79,race_start);pce_control.elapsed=0;
             /* The briefing freezes the world. Finish the first floor before
              * opening it, otherwise the initialization checkerboard stays up. */
-            overlay_call(0x7c,race_briefing_frame);
+            overlay_call(0x7b,race_briefing_frame);
         }
         else if(stage==6)overlay_call(0x72,mech_start);
         else if(stage==7)overlay_call(0x73,space_start);
-        if(stage!=1&&stage!=3&&stage!=7) {pce_campaign.story=0;overlay_call(0x71,story_start);}
+        if(stage==2||stage==6) {pce_campaign.story=0;overlay_call(0x71,story_start);}
     }
     video_display(true);
     audio_music(stage==1?5:stage==2?10:stage==3?13:stage==4?15:stage==5?14:stage==6?16:12);
@@ -210,7 +210,7 @@ PCE_FLOW void flow_main(void) {
                 simulation_tick=pce_ticks;continue;}
             if(stage==2)overlay_call(0x79,race_frame);
             else if(stage==6)overlay_call(0x72,mech_frame);
-            else if(stage==7)overlay_call(0x7c,space_frame);
+            else if(stage==7)overlay_call(0x78,space_frame);
             else overlay_call(0x69,play_frame);
             if(pce_campaign.event){pce_campaign.event=0;overlay_call(0x71,story_start);}
             else if(pce_campaign.result==1){pce_campaign.state=CAM_CLEAR;pce_campaign.result=0;audio_music_once(6);}
