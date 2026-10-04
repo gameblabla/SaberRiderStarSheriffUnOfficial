@@ -157,7 +157,11 @@ PCE_COMBAT void combat_tick(void) {
             }
         }
     }
-    for(uint8_t k=0;k<8;++k)if(actors[k].active&&!actors[k].dead&&!(actors[k].type>=12&&actors[k].type<=28)&&distance(player.x,actors[k].b.x)<14&&distance(player.y,actors[k].b.y)<24) {
+    /* The robot-horse herd tramples every humanoid in its way, as in the main game. */
+    for(uint8_t k=0;k<8;++k)if(actors[k].active&&actors[k].type==11)
+        for(uint8_t j=0;j<8;++j)if(actors[j].active&&!actors[j].dead&&actors[j].type!=11&&!(actors[j].type>=12&&actors[j].type<=28)
+            &&distance(actors[j].b.x,actors[k].b.x)<36&&distance(actors[j].b.y,actors[k].b.y)<40)actor_kill(&actors[j]);
+    for(uint8_t k=0;k<8;++k)if(actors[k].active&&!actors[k].dead&&!(actors[k].type>=12&&actors[k].type<=28)&&distance(player.x,actors[k].b.x)<(actors[k].type==11?32:14)&&distance(player.y,actors[k].b.y)<(actors[k].type==11?40:24)) {
         if(slide_time)actor_kill(&actors[k]);      /* a slide knocks enemies down */
         else if(!safe_timer){safe_timer=120;campaign_hurt();}
     }

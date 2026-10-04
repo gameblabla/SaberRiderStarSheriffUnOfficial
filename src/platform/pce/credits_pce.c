@@ -1,5 +1,6 @@
 #include "frontend_pce.h"
 #include "ui_pce.h"
+extern uint8_t buffer[2048];
 #include "video_pce.h"
 #include "loader_pce.h"
 #include "arcade_pce.h"
@@ -35,7 +36,8 @@ CREDITS_CODE void frontend_continue(void) {
     if(pce_control.ok){--pce_continues;pce_campaign.lives=pce_options.lives;pce_campaign.powers=2;}
     previous=ui_held;
 }
-/* GAME OVER: the Saturn's Nemesis painting at 320 wide with the lettering as pulsing sprites, faded in and out. */
+/* GAME OVER: the Saturn's Nemesis painting filling the screen, the lettering added as light by OR-ing bit planes
+ * (frontend.py); its pulse rewrites the few palettes under the letters. Faded in and out. */
 CREDITS_CODE void frontend_game_over(void) {
     previous=0;audio_stop();
     if(!loader_ui())return;
@@ -43,14 +45,14 @@ CREDITS_CODE void frontend_game_over(void) {
     ui_fade(8);ui_fade(7);video_display(true);
     audio_music_once(4);           /* the jingle plays once, then silence */
     static const uint8_t pulse[8]={0,1,2,3,3,2,1,0};
-    uint8_t level=7;bool leaving=false;
+    uint8_t level=7,shown=0;bool leaving=false;
     for(uint16_t t=0;;++t) {
         video_wait();ui_read_keys();
-        video_sat_begin();
-        uint8_t pal=pulse[(t>>3)&7];
-        for(uint8_t k=0;k<PCE_UI_GAMEOVER_W*PCE_UI_GAMEOVER_H;++k)
-            ui_sprite(PCE_UI_GAMEOVER_X+(k%PCE_UI_GAMEOVER_W)*16,PCE_UI_GAMEOVER_Y+(k/PCE_UI_GAMEOVER_W)*16,k,pal,false);
-        video_sat_end();
+        if(!level&&!leaving&&!(t&7)&&pulse[(t>>3)&7]!=shown) {
+            shown=pulse[(t>>3)&7];
+            arcade_read(2,PCE_UI_GAMEOVER_GLOW+(uint32_t)shown*PCE_UI_GAMEOVER_SLOTS*32,buffer,PCE_UI_GAMEOVER_SLOTS*32);
+            pce_vce_copy_palette(PCE_UI_GAMEOVER_SLOT,buffer,PCE_UI_GAMEOVER_SLOTS);
+        }
         if(!(t%3)) {
             if(!leaving&&level){ui_fade(--level);}
             else if(leaving){ui_fade(++level);if(level==7)break;}

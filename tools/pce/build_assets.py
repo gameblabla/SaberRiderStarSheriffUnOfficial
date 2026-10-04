@@ -78,6 +78,22 @@ def cblock_frame(path, frame):
     cx, cy = (t % sc) * tw, (t // sc) * th
     return Image.fromarray(px[cy:cy+th, cx:cx+tw])
 
+def cblock_whole_frame(path, frame):
+    """One whole multi-cell frame of a cblock (what the game's cblock_draw_frame draws), cells laid out on its grid."""
+    kind, px, meta = texbake.load_srgb(path)
+    n, cols, rows, tw, th, nt, sc = struct.unpack_from('<7H', meta)
+    cells = np.frombuffer(meta, '<u2', n * cols * rows, 16)
+    im = Image.new('RGBA', (cols * tw, rows * th))
+    for r in range(rows):
+        for c in range(cols):
+            t = int(cells[(frame % n) * cols * rows + r * cols + c])
+            if t != 65535:
+                im.alpha_composite(Image.fromarray(px[(t // sc) * th:(t // sc + 1) * th, (t % sc) * tw:(t % sc + 1) * tw]), (c * tw, r * th))
+    return im
+
+HORSE_SCALE = 0.75     # the robot-horse herd is drawn at 3/4 size: a full frame is 40 sprite pieces, the SAT has 64
+HORSE_FRAMES = 5
+
 def native_background(image, archive, previews, name):
     w = (image.width + 7) // 8 * 8
     canvas = Image.new('RGBA', (w, 240), (0, 0, 0, 255)); canvas.paste(image)
@@ -200,7 +216,10 @@ def heroes(work):
         out.append((f'hero{hero}_jump', run_frames[JUMP_RUN_FRAME], (32, 32)))
         out.append((f'hero{hero}_crouch', frame(120), (32, 32)))
     # A native projectile and blast can coexist with every stage palette.
-    for name, color, radius in [('shot', (255, 255, 180, 255), 2), ('enemy_shot', (255, 50, 50, 255), 3), ('blast', (255, 160, 30, 255), 7)]:
+    # The shots are the source's own 8x8 orbs (blue for the heroes, red for the Outriders), centred on the shot.
+    for name, rid in [('shot', 0xF0FB3C78), ('enemy_shot', 0x7027A26E)]:
+        out.append((name, cblock_frame(work / 'srgb' / f'{rid:08X}.srgb', 0), (4, 4)))
+    for name, color, radius in [('blast', (255, 160, 30, 255), 7)]:
         im = Image.new('RGBA', (16, 16)); ImageDraw.Draw(im).ellipse((8-radius, 8-radius, 8+radius, 8+radius), fill=color)
         out.append((name, im, (8, 8)))
     for name, crhc in [('walker', '02A38AFB'), ('grunt', '112DF34C'), ('sniper', 'D39700C4')]:
@@ -274,7 +293,15 @@ def make_scene(stage, work, previews, shared):
             art=work/'srgb'/f'{aid:08X}.srgb'
             if not art.exists():
                 meta['actor_ids'][t]=255;continue
-            im=cblock_frame(art,first)
+            if t==11:
+                # the galloping robot horses: every frame of the gait, whole, consecutive ids
+                ox,oy=struct.unpack_from('<ff',d,8);meta['actor_ids'][t]=len(sprites)
+                for k in range(HORSE_FRAMES):
+                    im=cblock_whole_frame(art,k);im=im.resize((round(im.width*HORSE_SCALE),round(im.height*HORSE_SCALE)),Image.Resampling.LANCZOS)
+                    sprites.append((f'horse{k}',im,(round(ox*HORSE_SCALE),round(oy*HORSE_SCALE))))
+                continue
+            if t in (25,27): im=cblock_whole_frame(art,0)
+            else: im=cblock_frame(art,first)
             if not im.getchannel('A').getbbox():
                 meta['actor_ids'][t]=255;continue
             anchor=tuple(round(v) for v in struct.unpack_from('<ff',d,8))
@@ -285,6 +312,10 @@ def make_scene(stage, work, previews, shared):
                 anchor=tuple(round(v*scale) for v in anchor)
             meta['actor_ids'][t]=len(sprites)
             sprites.append((f'actor_type{t}',im,anchor))
+        # The cutscene Outrider (type 28) is the blue one: standing, the "!" alarm pose, then the six run cells.
+        art=work/'srgb'/'6338F34D.srgb';meta['actor_ids'][28]=len(sprites)
+        for name,n in [('idle',24),('alarm',36)]+[(f'run{k}',42+k) for k in range(6)]:
+            sprites.append((f'outrider_{name}',cblock_frame(art,n),(32,32)))
     elif stage == 6:
         bg = Image.open(ROOT / 'assets/ramrod/cockpit.png').convert('RGBA').resize((256, 224), Image.Resampling.NEAREST)
         sky = Image.open(ROOT / 'assets/ramrod/sky.png').convert('RGBA').resize((256, 136), Image.Resampling.NEAREST)

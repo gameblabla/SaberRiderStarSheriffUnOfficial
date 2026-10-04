@@ -15,6 +15,7 @@ STORY_CODE static uint32_t pointer(uint32_t a) {
     uint32_t p;arcade_read(2,a,&p,4);return p;
 }
 extern vdc_sprite_t sat[2][64];
+extern uint8_t cut_phase;
 extern uint8_t sat_page,sat_count;
 extern volatile uint16_t pce_scroll_x;
 /* Saturn-style dialogue: the box is two sprite halves in the page's colour,
@@ -43,6 +44,8 @@ STORY_CODE static void draw(void) {
         bool corner=(e->x==left||e->x==left+208)&&(e->y==top||e->y==top+32);
         if(!corner)e->attr&=~VDC_SPRITE_FG;
     }
+    /* The camera-pan scene keeps its actors on screen (the outrider stays put while the text runs). */
+    if(cut_phase)overlay_call(0x74,actors_draw);
     video_sat_end();
     char *line=story_text;uint8_t lines=0;
     for(char *c=line;;++c){if(*c=='\n'||!*c){++lines;if(!*c)break;}}

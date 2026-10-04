@@ -141,6 +141,10 @@ def add_art(root,work,stage,sprites,frame):
     # Motion poses follow every aim row, so each group has a constant stride
     # per hero (aim: 16, motion: 3) from its base ID. Falling off a ledge reuses
     # one frozen run frame (hero*9+7); a real jump plays the somersault below.
+    # The player's muzzle flash: the source's strip 8623249C, frames 0-3 (diagonal) and 4-7 (straight).
+    flash=len(sprites)
+    if stage in (1,3,4,5):
+        for k in range(8):add(f'muzzle_flash{k}',get(0x8623249C,k),(8,8))
     motion0=len(sprites)
     for hero,cell in pending:
         row=[]
@@ -170,7 +174,7 @@ def add_art(root,work,stage,sprites,frame):
             for kind,cells in (('run',run),('death',death)):
                 for k,n in enumerate(cells):
                     add(f'{name}_{kind}{k}',frame(work/'srgb'/f'{aid:08X}.srgb',n),(round(ox),round(oy)))
-    return dict(portraits=portraits,dialog=dialog,hud=hud,digits=digits,aim=aim,motion=motion,pose=pose,up_tip=up_tip,art_muzzle=art_muzzle,enemy=enemy,end=len(sprites))
+    return dict(portraits=portraits,dialog=dialog,hud=hud,digits=digits,aim=aim,motion=motion,pose=pose,up_tip=up_tip,art_muzzle=art_muzzle,flash=flash,enemy=enemy,end=len(sprites))
 
 def emit_tables(out,scenes,h,c):
     m=scenes[0]['presentation']
@@ -188,5 +192,7 @@ def emit_tables(out,scenes,h,c):
     h.append('extern const uint8_t pce_hero_pose[4][6];')
     pose=next((m['presentation']['pose'] for m in scenes if m['presentation']['pose']),[[0]*6]*4)
     c.append('const uint8_t pce_hero_pose[4][6]={'+','.join('{'+','.join(map(str,e))+'}' for e in pose)+'};')
+    h.append('extern const uint16_t pce_flash_base[7];')
+    c.append('const uint16_t pce_flash_base[7]={'+','.join(str(m['presentation']['flash']) for m in scenes)+'};')
     h.append('extern const uint16_t pce_present_base[7][3];')
     c.append('const uint16_t pce_present_base[7][3]={'+','.join('{%d,%d,%d}'%(m['presentation']['hud'][0][0],m['presentation']['digits'][0],m['presentation']['aim'][0][0]) if m['presentation']['hud'] else '{0,0,0}' for m in scenes)+'};')

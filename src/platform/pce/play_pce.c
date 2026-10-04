@@ -20,7 +20,8 @@ const PceScene *play_scene;
 uint16_t camera,frame;
 uint8_t hero,facing,safe_timer;
 uint8_t slide_time;
-static uint8_t fire_timer,crouch,death_time,jumping,jump_time;
+static uint8_t fire_timer,crouch,death_time,jumping,jump_time,flash_time,flash_diag;
+static int8_t flash_dx,flash_dy;
 int16_t safe_x,safe_y;
 static int16_t drop_y;
 
@@ -32,6 +33,21 @@ PCE_CODE static uint8_t cell(int16_t x,int16_t y) {
         column_tags[slot]=x;
     }
     return collision[slot][y];
+}
+/* Spawn probe (the source's face_and_probe): an enemy that appears at the screen edge walks 64 px ahead in its
+ * mind; if a wall is in the way (a crashed car) its spawn point is raised 8 px and the walk lengthened, until the
+ * body clears, so it drops onto the roof instead of being born inside the car and jittering there. */
+int16_t probe_x,probe_y;uint8_t probe_left;
+PCE_CODE void spawn_clear(void) {
+    int16_t y=probe_y,n=64;
+    while(y>8) {
+        int16_t r0=(y+9-23)>>3,r1=(y+9+23)>>3,x=probe_x+4,c0=probe_left?(x-8-n)>>3:(x+8)>>3,c1=probe_left?(x-8)>>3:(x+8+n)>>3;
+        bool hit=false;
+        for(int16_t c=c0;c<=c1&&!hit;++c)for(int16_t r=r0;r<r1;++r)if(cell(c,r)&(probe_left?2:1)){hit=true;break;}
+        if(!hit)break;
+        y-=8;n+=8;
+    }
+    probe_y=y;
 }
 PCE_CODE static void advance(int16_t *p,uint8_t *fraction,int16_t velocity) {
     int16_t sum=(int16_t)*fraction+velocity;
@@ -96,7 +112,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     /* The story camera pans with the world frozen. */
     if(cut_phase==2||cut_phase==6){pce_metrics.camera_x=camera;return;}
     if(cut_phase)keys=pressed=0;
-    if(safe_timer)--safe_timer;if(fire_timer)--fire_timer;
+    if(safe_timer)--safe_timer;if(fire_timer)--fire_timer;if(flash_time)--flash_time;
     if(pce_death) {
         /* Like the main game: the death animation plays where the hero fell,
          * then it stands up again at the last safe spot - no stage reload. */
@@ -148,18 +164,25 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
             else{vx=0;pose=up?3:4;}
         }
         const int8_t *muzzle=pce_muzzle[hero][pose];
-        shoot(player.x+(facing?-muzzle[0]:muzzle[0]),player.y+muzzle[1],vx,vy,false);fire_timer=pce_campaign.boost&&hero==3?4:12;audio_effect(1);
+        int8_t air[2];
+        if(!(player.coll&4)) {
+            /* In the air the somersault (or the frozen run frame) is drawn whatever is aimed; the shot leaves a
+             * 14 px ring around the ball's centre (0,16): the source's own air muzzles (16,18) (11,7) (0,2). */
+            air[0]=up||down?(side?11:0):16;air[1]=up?(side?7:2):down?(side?25:30):18;muzzle=air;
+        }
+        shoot(player.x+(facing?-muzzle[0]:muzzle[0]),player.y+muzzle[1],vx,vy,false);
+        flash_time=4;flash_diag=side&&(up||down);flash_dx=facing?-muzzle[0]:muzzle[0];flash_dy=muzzle[1];   /* the source's 4-frame flash at the barrel */fire_timer=pce_campaign.boost&&hero==3?4:12;audio_effect(1);
     }
     if(!(frame&3)&&!(pce_metrics.stage==4&&pce_campaign.boss_round==2))overlay_call(0x70,encounters);
     for(uint8_t k=0;k<8;++k) {
         Actor *a=&actors[k];if(!a->active)continue;
-        if(((a->b.x<(int16_t)camera-80||a->b.x>(int16_t)camera+384)&&a->type!=28)||a->b.y>272){a->active=0;continue;}
+        if(((a->b.x<(int16_t)camera-80||(a->b.x>(int16_t)camera+384&&a->type!=11))&&a->type!=28)||a->b.y>272){a->active=0;continue;}
         if(a->type>=12&&a->type<=23)continue;
         if(a->type>=24&&a->type<=27) {
             const int16_t speeds[4]={2016,1142,2352,1344};
             advance(&a->b.x,&a->b.fx,a->flip?-speeds[a->type-24]:speeds[a->type-24]);continue;
         }
-        if(a->type==11){advance(&a->b.x,&a->b.fx,a->flip?-640:640);continue;}
+        if(a->type==11){advance(&a->b.x,&a->b.fx,a->flip?-512:512);continue;}   /* the herd gallops at the source's 120 px/s */
         if(a->type==28) {
             /* The cutscene outrider (hp 2 waiting, 1 alarmed, 0 running): once it is on screen it freezes for a second
              * facing the hero, then turns and runs off to the right. */
@@ -194,7 +217,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
             }
         } else for(uint8_t j=0;j<8;++j) {
             Actor *a=&actors[j];
-            if(a->active&&!a->dead&&!(a->type>=12&&a->type<=28)&&s->x>a->b.x-10&&s->x<a->b.x+10&&s->y>a->b.y-18&&s->y<a->b.y+24) {
+            if(a->active&&!a->dead&&!(a->type>=11&&a->type<=28)&&s->x>a->b.x-10&&s->x<a->b.x+10&&s->y>a->b.y-18&&s->y<a->b.y+24) {
                 s->active=0;if(a->type>=30&&facing==a->flip)a->hp=1;
                 if(!--a->hp)actor_kill(a);else audio_effect(7);
                 audio_effect(4);break;
@@ -222,7 +245,7 @@ __attribute__((noinline)) void play_draw(void) {
     else if(!pose)id=mb+ap[0]+(uint8_t)(frame/10)%ap[1];
     else if(jumping&&!grounded)id=mb+ap[2]+((jump_time/3)&3);
     /* Aim poses: up / down diagonals (running when moving), straight up, and straight down in the air. */
-    if(!slide_time&&!pce_death&&((keys&KEY_UP)||((keys&KEY_DOWN)&&(side||!grounded||(keys&KEY_SELECT))))) {
+    if(!slide_time&&!pce_death&&grounded&&((keys&KEY_UP)||((keys&KEY_DOWN)&&(side||(keys&KEY_SELECT))))) {
         uint8_t direction=keys&KEY_UP?0:1;
         id=pce_present_base[stage][2]+hero*16;
         if(!side)id+=14+direction;
@@ -234,20 +257,11 @@ __attribute__((noinline)) void play_draw(void) {
         if(keys&KEY_RIGHT)facing=0;
     }
     if(!safe_timer||(frame&4)||pce_death)video_sprite(id,player.x-camera,player.y-16,facing,16);
+    if(flash_time)video_sprite(pce_flash_base[stage]+(flash_diag?0:4)+4-flash_time,player.x+flash_dx-camera,player.y+flash_dy-16,false,16);
     /* Essential projectiles precede optional distant enemies. */
     for(uint8_t k=0;k<24;++k) if(shots[k].active)
         video_sprite(shots[k].enemy?37:36,shots[k].x-camera,shots[k].y-16,false,16);
     if(!pce_campaign.diagnostic)overlay_call(0x70,combat_draw);
-    for(uint8_t k=0;k<8;++k) if(actors[k].active) {
-        Actor *a=&actors[k];uint16_t id=pce_actor_ids[a->type];
-        if(id==255)continue;
-        if(id>=39&&id<=41) {
-            /* walker 0 / grunt 1 / sniper 2: run frames, then six death frames */
-            uint16_t base=pce_enemy_base[stage],kind=id-39;
-            if(a->dead)id=base+(kind==0?6:kind==1?18:24)+(a->dead-1)/4;
-            else if(a->b.vx&&kind<2)id=base+kind*12+(a->anim>>2)%6;
-        }
-        if(!video_sprite_optional(id,a->b.x-camera,a->b.y-16,a->flip,16))a->active=0;
-    }
+    overlay_call(0x74,actors_draw);
     foreground_draw();video_sat_end();
 }

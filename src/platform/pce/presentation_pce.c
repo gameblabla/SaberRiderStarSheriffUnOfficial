@@ -4,6 +4,7 @@
 #include "arcade_pce.h"
 #include "overlay_pce.h"
 #include "campaign_pce.h"
+#include "play_internal.h"
 #define PRESENT __attribute__((noinline,section(".ram_bank116.text")))
 PRESENT void presentation_frame(void) {
     const uint16_t *base=pce_present_base[pce_metrics.stage-1];
@@ -12,6 +13,23 @@ PRESENT void presentation_frame(void) {
         video_sprite(base[1]+pce_campaign.lives%10,29,14,false,16);
         video_sprite(base[1]+pce_campaign.powers%10,60,14,false,16);
         video_sprite(base[0]+pce_control.hero*4+hp,0,0,false,16);
+    }
+}
+/* Every live actor, optional ones last (a herd or a distant enemy that does not fit the SAT is simply not drawn). */
+PRESENT void actors_draw(void) {
+    uint8_t stage=pce_metrics.stage-1;
+    for(uint8_t k=0;k<8;++k) if(actors[k].active) {
+        Actor *a=&actors[k];uint16_t id=pce_actor_ids[a->type];
+        if(id==255)continue;
+        if(id>=39&&id<=41) {
+            /* walker 0 / grunt 1 / sniper 2: run frames, then six death frames */
+            uint16_t base=pce_enemy_base[stage],kind=id-39;
+            if(a->dead)id=base+(kind==0?6:kind==1?18:24)+(a->dead-1)/4;
+            else if(a->b.vx&&kind<2)id=base+kind*12+(a->anim>>2)%6;
+        }
+        if(a->type==28)id+=a->hp==2?0:a->hp==1?1:2+(a->anim>>2)%6;   /* the blue Outrider: stand, alarm, run */
+        if(a->type==11)id+=(frame>>2)%5;   /* one gait frame for the whole herd: only one set of patterns is cached */
+        if(!video_sprite_optional(id,a->b.x-camera,a->b.y-16,a->type==11?!a->flip:a->flip,16)&&a->type!=11)a->active=0;
     }
 }
 void presentation_draw(void) {overlay_call(0x74,presentation_frame);video_front_mark();}

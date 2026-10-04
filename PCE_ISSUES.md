@@ -126,6 +126,27 @@ Implementation status below does not replace the user's visual/audio acceptance.
       steps only, then runs on.
 - Code moved out of the full platform bank: trigger spawning is `encounter_pce.c` (combat bank `$70`).
 
+## Seventh pass (2026-10-04, playtest feedback)
+
+- [x] Galloping robot horses (type 11) were invisible (their sprite was one 16x16 cell of a multi-cell frame).
+      The five gait frames are baked whole at 3/4 size (a full frame is 40 sprite pieces, the SAT holds 64):
+      `horse0..4`, one gait frame shared by the herd. The source drops a column of 12 horses at once, 99 px apart,
+      195 px behind the screen edge, running at the hero at 120 px/s; here five, 132 px apart. They trample the
+      hero (jump over them) and kill every humanoid they touch; shots pass through. Spawn: `encounter_pce.c`.
+- [x] Enemies stuck in cars: an edge spawn used to land inside a crashed car and jitter. `spawn_clear` (the source's
+      face_and_probe) raises the spawn point 8 px at a time until a 64 px walk ahead is clear, so they drop onto the
+      roof.
+- [x] Bullets are the source's 8x8 orbs (blue hero / red Outrider) and the hero's muzzle flash (strip 8623249C,
+      4 frames, diagonal or straight) is drawn at the barrel.
+- [x] Opening cutscene: the blue Outrider (CRHC 0DB9F0E0: stand, "!" alarm, run) instead of the grunt, and the actors
+      stay drawn while the text runs (`actors_draw` is shared by the world and the story overlay).
+- [x] Shooting in the air keeps the somersault / run frame (aim poses only on the ground); shots leave the 14 px ring
+      round the ball (the source's air muzzles).
+- [x] Game over: the Nemesis painting fills the 320x224 screen (centre crop) and the lettering is added as light by
+      OR-ing bit planes (`gameover_screen`): the cells under the letters hold the painting in the low two planes and
+      the lettering in the high two, their four palettes carrying painting + painting-plus-light sets; the pulse
+      rewrites those palettes. No sprites.
+
 Remaining integration/acceptance work:
 
 - [ ] Integrate the reference ROM's two-channel, scanline-delivered 2-bit ADPCM

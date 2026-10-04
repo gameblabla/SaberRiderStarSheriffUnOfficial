@@ -82,12 +82,14 @@ def kmeans_groups(means, k, seed=1):
             if (g == i).any(): centers[i] = means[g == i].mean(0)
     return g
 
-def paint_cells(screen, rgba, palette_slots, colors=15):
-    """Quantize a full-colour picture into `palette_slots` palettes."""
+def paint_cells(screen, rgba, palette_slots, colors=15, skip=()):
+    """Quantize a full-colour picture into `palette_slots` palettes (cells in `skip` are left alone)."""
     a = np.asarray(rgba.convert('RGBA'))
     cells = a.reshape(ROWS, 8, COLS, 8, 4).transpose(0, 2, 1, 3, 4).reshape(-1, 8, 8, 4)
     means = cells[..., :3].reshape(len(cells), -1, 3).mean(1)
-    groups = kmeans_groups(means, len(palette_slots))
+    keep = np.array([i not in skip for i in range(len(cells))])
+    groups = np.full(len(cells), -1)
+    groups[keep] = kmeans_groups(means[keep], len(palette_slots))
     for gi, slot in enumerate(palette_slots):
         members = np.nonzero(groups == gi)[0]
         if not len(members): continue
@@ -418,20 +420,64 @@ def options_screen(get, header=True):
 
 # ---------------------------------------------------------------- game over
 GAMEOVER_ART, GAMEOVER_TEXT = 0x64981FC5, 0x24138418       # the Nemesis painting and GAME OVER lettering, as on the Saturn
-GAMEOVER_TEXT_Y = 172
+GAMEOVER_TEXT_Y = 168
+GAMEOVER_GLOW_SLOTS = (12, 13, 14, 15)    # BG palettes of the cells under the lettering
+GAMEOVER_PULSE = (1.0, 0.84, 0.67, 0.51)  # glow strength per pulse step (step 0 = the palettes as loaded)
+GAMEOVER_GLOW = (0, 0.28, 0.62, 1.0)      # additive light of each text level (0 = none)
 
 def gameover_screen(get):
-    """The 426x240 Saturn painting fitted to the 320-pixel width (letterboxed), the lettering as sprites."""
+    """The Saturn painting filling the 320x224 screen (centre crop) with the lettering added on top as light.
+
+    The translucency is done with the bit planes (PCE_ISSUES / Transparency notes): the cells under the lettering
+    keep the painting in the low two bit planes (black + 3 colours of its own) and the lettering sits in the high
+    two. Each of their palettes has four sets of four colours: the painting's, and the same three colours plus the
+    light of text level 1, 2 and 3 - so the hardware's index OR is an additive blend, with no masking. Pulsing the
+    lettering is rewriting the tail of those few palettes (`s.glow` holds every step)."""
     s = Screen()
     art = get(GAMEOVER_ART).convert('RGBA')
-    h = round(art.height * W / art.width)
-    canvas = Image.new('RGBA', (W, H), (0, 0, 0, 255))
-    canvas.alpha_composite(art.resize((W, h), Image.Resampling.LANCZOS), (0, (H - h) // 2))
-    paint_cells(s, canvas, list(range(16)))
+    w = round(art.width * H / art.height)
+    canvas = art.resize((w, H), Image.Resampling.LANCZOS).crop(((w - W) // 2, 0, (w - W) // 2 + W, H)).convert('RGBA')
     s.preview_source = canvas
-    s.sprite_patterns, s.text_w, s.text_h = two_colour_sprites(get(GAMEOVER_TEXT), None)
-    for k, level in enumerate((255, 215, 170, 130)):     # pulse steps, brightest first
-        s.sprite_palettes[k][1:3] = [word((level, level, level)), word((24, 24, 40))]
+    # text levels: ink 3, light edge 2, dark outline 1 (a faint halo), placed at the bottom centre
+    text = np.asarray(get(GAMEOVER_TEXT).convert('RGBA')).astype(int)
+    th, tw = text.shape[:2]
+    tx, ty = (W - tw) // 2, GAMEOVER_TEXT_Y
+    level = np.zeros((H, W), np.uint8)
+    lum = text[..., :3].sum(-1)
+    level[ty:ty + th, tx:tx + tw] = np.where(text[..., 3] < 128, 0, np.where(lum > 700, 3, np.where(lum > 450, 2, 1)))
+    cell_has_text = level.reshape(ROWS, 8, COLS, 8).max(axis=(1, 3)) > 0
+    text_cells = [cy * COLS + cx for cy, cx in zip(*np.nonzero(cell_has_text))]
+    free_slots = [k for k in range(16) if k not in GAMEOVER_GLOW_SLOTS]
+    paint_cells(s, canvas, free_slots, skip=set(text_cells))
+    # the painting under the lettering: black + three colours per palette, four palettes
+    rgb = np.asarray(canvas)[..., :3]
+    means = np.array([rgb[(c // COLS) * 8:(c // COLS) * 8 + 8, (c % COLS) * 8:(c % COLS) * 8 + 8].reshape(-1, 3).mean(0) for c in text_cells])
+    groups = kmeans_groups(means, len(GAMEOVER_GLOW_SLOTS))
+    bases = []
+    for gi, slot in enumerate(GAMEOVER_GLOW_SLOTS):
+        members = [c for c, g in zip(text_cells, groups) if g == gi]
+        px = np.concatenate([rgb[(c // COLS) * 8:(c // COLS) * 8 + 8, (c % COLS) * 8:(c % COLS) * 8 + 8].reshape(-1, 3) for c in members]) if members else np.zeros((1, 3), np.uint8)
+        px = px[px.sum(1) > 60]                       # colour 0 is the black backdrop
+        q = Image.fromarray(vce_rgb(vce_colors(px)).astype(np.uint8).reshape(1, -1, 3)).quantize(colors=3, method=Image.Quantize.MEDIANCUT) if len(px) else None
+        base = [(0, 0, 0)] + ([tuple(int(v) for v in c) for c in np.asarray(q.getpalette(), np.uint8).reshape(-1, 3)[:3]] if q else [])
+        base += [(0, 0, 0)] * (4 - len(base))
+        bases.append(np.array(base, int))
+        lut = np.array(base, int)
+        for c in members:
+            cy, cx = divmod(c, COLS)
+            tile = rgb[cy * 8:cy * 8 + 8, cx * 8:cx * 8 + 8].astype(int)
+            near = ((tile[:, :, None, :] - lut[None, None]) ** 2).sum(-1).argmin(-1)
+            s.index[cy * 8:cy * 8 + 8, cx * 8:cx * 8 + 8] = level[cy * 8:cy * 8 + 8, cx * 8:cx * 8 + 8] * 4 + near
+            s.pal[cy, cx] = slot
+    def glow_palette(base, strength):
+        pal = np.zeros(16, '<u2')
+        for t in range(4):
+            for b in range(4):
+                if t == 0 and b == 0: continue            # the backdrop
+                pal[4 * t + b] = word(np.clip(base[b] + GAMEOVER_GLOW[t] * strength * 255, 0, 255))
+        return pal
+    for gi, slot in enumerate(GAMEOVER_GLOW_SLOTS): s.palettes[slot] = glow_palette(bases[gi], GAMEOVER_PULSE[0])
+    s.glow = b''.join(glow_palette(bases[gi], strength).tobytes() for strength in GAMEOVER_PULSE for gi in range(len(GAMEOVER_GLOW_SLOTS)))
     return s
 
 # ---------------------------------------------------------------- credits text
@@ -480,6 +526,7 @@ def bake(root, work, out, previews, cblock_frame):
     recs[1]['extra'] = archive.add('ui_select_extra', ramp + states)
     recs[2]['extra'] = archive.add('ui_options_extra', ramp_table(RING_BRIGHT_DIM))
     for rec in recs[3:]: rec['extra'] = recs[2]['extra']     # only the panel cycles; the rest just need something to read
+    glow_off = archive.add('ui_gameover_glow', gameover.glow)
     portraits = []
     for hero, p in enumerate(select.portraits):
         pat = archive.add(f'ui_portrait{hero}_patterns', b''.join(p['patterns']))
@@ -499,8 +546,8 @@ def bake(root, work, out, previews, cblock_frame):
          f'#define PCE_UI_TITLE_START {title.items["start"][0]}', f'#define PCE_UI_TITLE_START_W {title.items["start"][1]}',
          f'#define PCE_UI_TITLE_OPTION {title.items["option"][0]}', f'#define PCE_UI_TITLE_OPTION_W {title.items["option"][1]}',
          f'#define PCE_UI_CONTINUE_PATTERN {title.continue_pattern}', f'#define PCE_UI_CONTINUE_W {title.continue_w}',
-         f'#define PCE_UI_GAMEOVER_W {gameover.text_w}', f'#define PCE_UI_GAMEOVER_H {gameover.text_h}',
-         f'#define PCE_UI_GAMEOVER_X {(W - 136) // 2}', f'#define PCE_UI_GAMEOVER_Y {GAMEOVER_TEXT_Y}',
+         f'#define PCE_UI_GAMEOVER_GLOW {glow_off}UL', f'#define PCE_UI_GAMEOVER_SLOT {GAMEOVER_GLOW_SLOTS[0]}',
+         f'#define PCE_UI_GAMEOVER_SLOTS {len(GAMEOVER_GLOW_SLOTS)}',
          f'#define PCE_UI_RAMP_BYTES {RINGS * RAMP * 2}',
          f'#define PCE_UI_STATE_BYTES {4 * PANEL_PALETTES_RUNTIME * 32}']
     names = [select.info[f'name{k}'] for k in range(4)]

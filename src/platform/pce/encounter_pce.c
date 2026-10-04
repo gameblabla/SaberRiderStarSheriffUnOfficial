@@ -31,14 +31,28 @@ PCE_COMBAT void encounters(void) {
         if(px<trigger_lo[k]||px>trigger_hi[k]||!trigger_remaining[k]) continue;
         if(player.y+9<t->cy-t->hy-23||player.y+9>t->cy+t->hy+23) continue;
         if(trigger_timers[k]) {trigger_timers[k]=trigger_timers[k]>4?trigger_timers[k]-4:0;continue;}
+        if(t->type==11) {
+            /* The robot-horse herd: the source drops a column of 12 horses at once, 99 px apart, behind the screen
+             * edge; here five (the SAT holds two on screen) 132 px apart, running at the hero. */
+            int16_t x=t->wp[0][0];bool right=x>30000;
+            int16_t x0=right?camera+256+32+56+195:camera-32-56-195;
+            for(uint8_t h=0,i=0;h<5;++h) {
+                while(i<8&&actors[i].active)++i;
+                if(i==8)break;
+                actors[i]=(Actor){.b={.x=right?x0+h*132:x0-h*132,.y=t->wp[0][1]+30},.active=1,.type=11,.hp=1,.flip=right};
+            }
+            trigger_remaining[k]=0;continue;
+        }
         /* Humanoid core first; the inventory retains other encounter recipes
          * for their stage-specific handlers rather than replacing their art. */
         for(uint8_t i=0;i<8;++i) if(!actors[i].active) {
             uint8_t wp=trigger_spawned[k]%t->nwp;
             int16_t x=t->wp[wp][0],y=t->wp[wp][1];
+            bool edge=x>30000||x< -30000;
             if(x>30000)x=camera+288;else if(x< -30000)x=camera-32;
             if(y>30000)y=256;else if(y< -30000)y=-32;
             if(y< -999)y=-1000-y;
+            if(edge&&t->type<6){probe_x=x+8;probe_y=y+19;probe_left=player.x<x;overlay_call(0x69,spawn_clear);y=probe_y-19;}
             actors[i]=(Actor){.b={.x=t->type>=11&&t->type<=27?x:x+8,.y=t->type>=11&&t->type<=27?y:y+19},.active=1,.type=t->type,.hp=t->type>=30?6:2,.timer=t->type<6?36:60,.flip=player.x<x};
             if(trigger_remaining[k]>0)--trigger_remaining[k];
             ++trigger_spawned[k];trigger_timers[k]=t->interval;break;

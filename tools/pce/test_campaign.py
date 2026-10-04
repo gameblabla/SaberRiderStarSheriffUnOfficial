@@ -181,9 +181,9 @@ class Campaign(Test):
             self.results['game_over']=self.state(e)
             self.press(e,1)
             ui=symbol(self.out/'app.elf','pce_ui_state')
-            for _ in range(30):
+            for _ in range(40):
                 e.run(120)
-                if e.memory(ui,1)==b'\0':break
+                if e.memory(ui,1)==b'\0' and self.metrics(e)['stage']==1 and self.metrics(e)['ready']:break
                 self.press(e,1)
             self.until(e,lambda:self.metrics(e)['stage']==1 and self.metrics(e)['ready'])
             self.move(e,728,97);assert self.metrics(e)['player_y']==97
