@@ -15,7 +15,7 @@ const PceUiScreen *ui_screen;
 uint16_t ui_ramp[4][12];
 uint16_t ui_ring[4][16];
 uint8_t ui_held,ui_pressed;
-uint8_t ui_cycle_step,ui_cycle_clock;
+uint8_t ui_cycle_step,ui_cycle_clock,ui_dark;
 
 UI_BASE void ui_read_keys(void) {
     ui_held=~pce_joypad_read();ui_pressed=ui_held&~previous;previous=ui_held;
@@ -49,7 +49,7 @@ UI_BASE void ui_show(uint8_t id) {
     }
     ui_cycle_step=ui_cycle_clock=0;
     video_sat_begin();video_sat_end();
-    video_display(true);
+    if(!ui_dark)video_display(true);
 }
 UI_BASE void ui_put(uint8_t col,uint8_t row,const char *text,uint8_t slot) {
     pce_cpu_irq_disable();
@@ -66,3 +66,13 @@ UI_BASE void ui_put(uint8_t col,uint8_t row,const char *text,uint8_t slot) {
     pce_cpu_irq_enable();
 }
 UI_BASE void ui_end(void) { video_sat_begin();video_sat_end(); }
+UI_BASE void ui_fade(uint8_t level) {
+    uint16_t *src=(uint16_t*)buffer,*dst=src+512;
+    if(level==8){pce_vce_copy_palette_to_ram(buffer,0,32);return;}
+    for(uint16_t i=0;i<512;++i) {
+        uint16_t c=src[i];uint8_t b=c&7,r=(c>>3)&7,g=(c>>6)&7;
+        b=b>level?b-level:0;r=r>level?r-level:0;g=g>level?g-level:0;
+        dst[i]=(uint16_t)g<<6|r<<3|b;
+    }
+    pce_vce_copy_palette(0,dst,32);
+}

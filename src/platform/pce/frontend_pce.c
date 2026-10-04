@@ -93,7 +93,12 @@ UI_CODE static uint8_t select_hero(uint8_t chosen) {
             if((ui_pressed&KEY_RIGHT)&&chosen<3)++chosen;
             if(chosen!=before){ui_blip();load_portrait(chosen);}
             if(ui_pressed&(KEY_RUN|KEY_1|KEY_2)){confirmed=1;ticks=0;audio_pcm_play(2);}
-        } else if(ticks>36) { ui_end();return chosen; }
+        } else if(ticks>36) {
+            /* Black fade-out, then the front end hands over to the NOW LOADING screen. */
+            ui_fade(8);
+            for(uint8_t level=1;level<8;++level){video_wait();video_wait();video_wait();ui_fade(level);}
+            ui_end();return chosen;
+        }
         select_palettes(chosen,(ticks&8)!=0||confirmed);
         video_sat_begin();
         for(uint8_t k=0;k<portrait_count;++k)
@@ -146,6 +151,7 @@ UI_CODE static void option_help(uint8_t row) {
 }
 UI_CODE static void options(void) {
     ui_show(SCREEN_OPTIONS);pce_ui_state=3;
+    audio_music(3);           /* the options room has its own track, as in the main game */
     for(uint8_t r=0;r<OPT_COUNT;++r)option_row(r,r==0);
     option_help(0);
     uint8_t sel=0;ticks=0;
@@ -176,7 +182,7 @@ UI_CODE static void options(void) {
                 changed=true;break;
             case OPT_MUSIC:
                 pce_options.music=(pce_options.music+4+dir)&3;
-                if(pce_options.music)audio_music(0);else audio_stop();
+                if(pce_options.music)audio_music(3);else audio_stop();
                 changed=true;break;
             default:break;
             }

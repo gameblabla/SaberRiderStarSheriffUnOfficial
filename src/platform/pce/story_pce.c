@@ -9,6 +9,8 @@
 static uint32_t story_address;
 static uint8_t page_count;
 static char story_text[256];
+/* Typewriter: the lines are kept NUL-terminated in story_text and revealed a character at a time. */
+static char *line_text[4];static uint8_t line_row[4],line_count,type_line,type_col,type_clock;
 STORY_CODE static uint32_t pointer(uint32_t a) {
     uint32_t p;arcade_read(2,a,&p,4);return p;
 }
@@ -46,10 +48,26 @@ STORY_CODE static void draw(void) {
     for(char *c=line;;++c){if(*c=='\n'||!*c){++lines;if(!*c)break;}}
     /* One line sits mid-box; two lines get a blank row between them. */
     uint8_t row=y+(lines==1?2:1),pitch=lines==2?2:1;
-    for(;lines&&*line;--lines,row+=pitch) {
+    line_count=0;type_line=type_col=type_clock=0;
+    for(;lines&&*line&&line_count<4;--lines,row+=pitch) {
         char *end=line;while(*end&&*end!='\n')++end;
-        bool more=*end!=0;*end=0;video_text(5,row,line);line=end+more;
+        bool more=*end!=0;*end=0;
+        line_text[line_count]=line;line_row[line_count++]=row;
+        line=end+more;
     }
+}
+/* One character every other frame (a held button types four times faster, as the main game's 3x). */
+STORY_CODE static bool typing(void) {
+    if(type_line>=line_count)return false;
+    type_clock+=pce_control.elapsed*((pce_control.keys&(KEY_1|KEY_2))?4:1);
+    while(type_clock>=2&&type_line<line_count) {
+        type_clock-=2;
+        char c[2]={line_text[type_line][type_col++],0};
+        if(!c[0]){++type_line;type_col=0;continue;}
+        video_text(5+type_col-1,line_row[type_line],c);
+        if(!line_text[type_line][type_col]){++type_line;type_col=0;}
+    }
+    return type_line<line_count;
 }
 STORY_CODE static void arrow(bool on) {
     video_text(28,pce_metrics.stage==2?9:24,on?"\x7f":" ");
@@ -65,6 +83,7 @@ STORY_CODE void story_start(void) {
 }
 STORY_CODE void story_step(void) {
     pce_campaign.timer+=pce_control.elapsed;
+    if(typing()){arrow(false);return;}
     arrow(!(pce_campaign.timer&32));
     if(pce_campaign.timer<12||!(pce_control.pressed&(KEY_1|KEY_2)))return;
     pce_campaign.timer=0;

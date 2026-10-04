@@ -16,7 +16,7 @@ W, H = 320, 224
 COLS, ROWS = W // 8, H // 8
 UI_TILE_WORD = 0x0800          # BG character n is at VRAM word UI_TILE_WORD + 16 * n
 UI_SPRITE_WORD = 0x6800        # sprite patterns, 64 words each (92 fit below the SAT)
-UI_SCREENS = ('title', 'select', 'options')
+UI_SCREENS = ('title', 'select', 'options', 'panel', 'gameover')
 
 def vc(rgb):
     """Round an RGB triple to the hardware's 9-bit lattice."""
@@ -389,10 +389,10 @@ def font_tiles(get):
         tiles.append(planar_tile(full))
     return tiles
 
-def options_screen(get):
+def options_screen(get, header=True):
     s = Screen()
     tunnel(s, RING_BRIGHT_DIM)
-    static_text(s, get(0xF8F9017C), 80, 0x10)                # OPTIONS header art
+    if header: static_text(s, get(0xF8F9017C), 80, 0x10)     # OPTION MODE header art
     x0, y0, w, h = PANEL_BOX
     for r in range(h):
         for c in range(w):
@@ -414,6 +414,24 @@ def options_screen(get):
         pal[5] = word((176, 186, 240))
         pal[6] = word((52, 62, 128))
     s.font = font_tiles(get)
+    return s
+
+# ---------------------------------------------------------------- game over
+GAMEOVER_ART, GAMEOVER_TEXT = 0x64981FC5, 0x24138418       # the Nemesis painting and GAME OVER lettering, as on the Saturn
+GAMEOVER_TEXT_Y = 172
+
+def gameover_screen(get):
+    """The 426x240 Saturn painting fitted to the 320-pixel width (letterboxed), the lettering as sprites."""
+    s = Screen()
+    art = get(GAMEOVER_ART).convert('RGBA')
+    h = round(art.height * W / art.width)
+    canvas = Image.new('RGBA', (W, H), (0, 0, 0, 255))
+    canvas.alpha_composite(art.resize((W, h), Image.Resampling.LANCZOS), (0, (H - h) // 2))
+    paint_cells(s, canvas, list(range(16)))
+    s.preview_source = canvas
+    s.sprite_patterns, s.text_w, s.text_h = two_colour_sprites(get(GAMEOVER_TEXT), None)
+    for k, level in enumerate((255, 215, 170, 130)):     # pulse steps, brightest first
+        s.sprite_palettes[k][1:3] = [word((level, level, level)), word((24, 24, 40))]
     return s
 
 # ---------------------------------------------------------------- credits text
@@ -448,9 +466,12 @@ def bake(root, work, out, previews, cblock_frame):
         return cblock_frame(work / 'srgb' / f'{rid:08X}.srgb', n)
     archive = Archive()
     title = title_screen(get); select = select_screen(get); options = options_screen(get)
-    for name, scr in (('title', title), ('select', select), ('options', options)):
+    panel = options_screen(get, header=False); gameover = gameover_screen(get)
+    for name, scr in (('title', title), ('select', select), ('options', options), ('panel', panel),
+                      ('gameover', gameover)):
         scr.preview(previews / f'ui_{name}.png')
-    recs = [title.emit(archive, 'title'), select.emit(archive, 'select'), options.emit(archive, 'options', options.font)]
+    recs = [title.emit(archive, 'title'), select.emit(archive, 'select'), options.emit(archive, 'options', options.font),
+            panel.emit(archive, 'panel', panel.font), gameover.emit(archive, 'gameover')]
     # Per-screen extra blobs.
     patches = b''.join(struct.pack('<HHHH', *p) for p in title.patches)
     recs[0]['extra'] = archive.add('ui_title_patches', struct.pack('<H', len(title.patches)) + patches)
@@ -458,6 +479,7 @@ def bake(root, work, out, previews, cblock_frame):
     states = b''.join(np.asarray(st, '<u2').tobytes() for st in select.state_palettes)
     recs[1]['extra'] = archive.add('ui_select_extra', ramp + states)
     recs[2]['extra'] = archive.add('ui_options_extra', ramp_table(RING_BRIGHT_DIM))
+    for rec in recs[3:]: rec['extra'] = recs[2]['extra']     # only the panel cycles; the rest just need something to read
     portraits = []
     for hero, p in enumerate(select.portraits):
         pat = archive.add(f'ui_portrait{hero}_patterns', b''.join(p['patterns']))
@@ -469,7 +491,7 @@ def bake(root, work, out, previews, cblock_frame):
     data = archive.finish()
     (out / 'ui.bin').write_bytes(data)
     h = ['typedef struct { uint32_t pal, tiles, map, sprpal, sprpat, extra; uint16_t ntiles, nsprpat; } PceUiScreen;',
-         'extern const PceUiScreen pce_ui[3];',
+         'extern const PceUiScreen pce_ui[5];',
          'typedef struct { uint32_t patterns, palette, pieces; uint16_t count; } PceUiPortrait;',
          'extern const PceUiPortrait pce_ui_portrait[4];',
          f'#define PCE_UI_BYTES {len(data)}UL', f'#define PCE_UI_CREDITS {credits_off}UL',
@@ -477,6 +499,8 @@ def bake(root, work, out, previews, cblock_frame):
          f'#define PCE_UI_TITLE_START {title.items["start"][0]}', f'#define PCE_UI_TITLE_START_W {title.items["start"][1]}',
          f'#define PCE_UI_TITLE_OPTION {title.items["option"][0]}', f'#define PCE_UI_TITLE_OPTION_W {title.items["option"][1]}',
          f'#define PCE_UI_CONTINUE_PATTERN {title.continue_pattern}', f'#define PCE_UI_CONTINUE_W {title.continue_w}',
+         f'#define PCE_UI_GAMEOVER_W {gameover.text_w}', f'#define PCE_UI_GAMEOVER_H {gameover.text_h}',
+         f'#define PCE_UI_GAMEOVER_X {(W - 136) // 2}', f'#define PCE_UI_GAMEOVER_Y {GAMEOVER_TEXT_Y}',
          f'#define PCE_UI_RAMP_BYTES {RINGS * RAMP * 2}',
          f'#define PCE_UI_STATE_BYTES {4 * PANEL_PALETTES_RUNTIME * 32}']
     names = [select.info[f'name{k}'] for k in range(4)]
@@ -485,7 +509,7 @@ def bake(root, work, out, previews, cblock_frame):
     for key in ('left', 'right'):
         i = select.info[key]
         h.append(f'#define PCE_UI_ARROW_{key.upper()} {{{i[0]},{i[1]},{i[2]},{i[3][0]},{i[3][1]}}}')
-    c = ['const PceUiScreen pce_ui[3]={' + ','.join('{%d,%d,%d,%d,%d,%d,%d,%d}' % (r['pal'], r['tiles'], r['map'], r['sprpal'], r['sprpat'], r['extra'], r['ntiles'], r['nsprpat']) for r in recs) + '};',
+    c = ['const PceUiScreen pce_ui[5]={' + ','.join('{%d,%d,%d,%d,%d,%d,%d,%d}' % (r['pal'], r['tiles'], r['map'], r['sprpal'], r['sprpat'], r['extra'], r['ntiles'], r['nsprpat']) for r in recs) + '};',
          'const PceUiPortrait pce_ui_portrait[4]={' + ','.join('{%d,%d,%d,%d}' % p for p in portraits) + '};']
     return h, c, len(data)
 

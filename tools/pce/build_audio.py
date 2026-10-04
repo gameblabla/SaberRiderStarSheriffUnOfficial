@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 import array
+import math
 from adpcm import encode
 ROOT=Path(__file__).resolve().parents[2]
 def build(out):
@@ -42,9 +43,14 @@ def build(out):
     pcm_bank=bytearray();pcm_rows=[];pcm_report=[]
     for event,rid in [('shot','C66E1894'),('impact','EB3309DC'),('power','A8382083')]:
         result=subprocess.run(['ffmpeg','-v','error','-i',str(sfx/f'{rid}.wav'),
-            '-ac','1','-ar','6991','-af','highpass=f=80,lowpass=f=3000,volume=0.7',
-            '-f','s16le','-'],check=True,capture_output=True)
+            '-ac','1','-ar','6991','-af','highpass=f=80,lowpass=f=3000,volume=0.7' if event!='shot' else
+            'highpass=f=100,lowpass=f=3400','-f','s16le','-'],check=True,capture_output=True)
         samples=array.array('h');samples.frombytes(result.stdout)
+        if event=='shot':
+            # The gun fires constantly and the original is quiet (peak 0.4 of full scale, RMS 0.07): scale it to
+            # the full 5-bit range and soft-saturate so the 31-step DAC is used from edge to edge.
+            peak=max(1,max(abs(v) for v in samples))
+            samples=array.array('h',(round(32767*math.tanh(2.4*v/peak)/math.tanh(2.4)) for v in samples))
         data=bytes(max(0,min(31,round(v/2048+16))) for v in samples)
         # End at the DDA midpoint; the IRQ then disables the channel and timer.
         data+=bytes([16])*32

@@ -9,9 +9,10 @@
 /* Continue, game over and credits share the options panel. */
 #define CREDITS_CODE __attribute__((noinline,section(".ram_bank113.text")))
 extern uint8_t previous;
+extern volatile uint16_t pce_scroll_x;
 
 CREDITS_CODE static void panel(void) {
-    ui_show(SCREEN_OPTIONS);pce_ui_state=4;ui_clear_rows(7,24);
+    ui_show(SCREEN_PANEL);pce_ui_state=4;ui_clear_rows(7,24);
 }
 CREDITS_CODE void frontend_continue(void) {
     previous=0;audio_stop();
@@ -32,16 +33,48 @@ CREDITS_CODE void frontend_continue(void) {
     if(pce_control.ok){--pce_continues;pce_campaign.lives=pce_options.lives;pce_campaign.powers=2;}
     previous=ui_held;
 }
+/* GAME OVER: the Saturn's Nemesis painting at 320 wide with the lettering as pulsing sprites, faded in and out. */
 CREDITS_CODE void frontend_game_over(void) {
     previous=0;audio_stop();
     if(!loader_ui())return;
-    panel();audio_music(4);
-    ui_put(12,12,"GAME  OVER",13);ui_put(7,16,"PRESS START",12);
+    ui_dark=1;ui_show(SCREEN_GAMEOVER);ui_dark=0;pce_ui_state=4;
+    ui_fade(8);ui_fade(7);video_display(true);
+    audio_music_once(4);           /* the jingle plays once, then silence */
+    static const uint8_t pulse[8]={0,1,2,3,3,2,1,0};
+    uint8_t level=7;bool leaving=false;
     for(uint16_t t=0;;++t) {
-        video_wait();ui_read_keys();ui_cycle();
-        if(t>60&&(ui_pressed&(KEY_RUN|KEY_1|KEY_2)))break;
+        video_wait();ui_read_keys();
+        video_sat_begin();
+        uint8_t pal=pulse[(t>>3)&7];
+        for(uint8_t k=0;k<PCE_UI_GAMEOVER_W*PCE_UI_GAMEOVER_H;++k)
+            ui_sprite(PCE_UI_GAMEOVER_X+(k%PCE_UI_GAMEOVER_W)*16,PCE_UI_GAMEOVER_Y+(k/PCE_UI_GAMEOVER_W)*16,k,pal,false);
+        video_sat_end();
+        if(!(t%3)) {
+            if(!leaving&&level){ui_fade(--level);}
+            else if(leaving){ui_fade(++level);if(level==7)break;}
+        }
+        if(!leaving&&t>60&&(ui_pressed&(KEY_RUN|KEY_1|KEY_2))){leaving=true;ui_fade(8);level=0;}
     }
     ui_end();audio_stop();pce_ui_state=0;previous=ui_held;
+}
+/* NOW LOADING, centred on a black screen. The font is already in VRAM (loader_font), and the screen stays up
+ * through the disc read that follows (loader_scene), which writes Arcade RAM only. */
+CREDITS_CODE void frontend_loading(void) {
+    video_display(false);pce_raster_enabled=0;
+    video_mode_ui();
+    pce_vce_set_color(0,0);pce_vce_set_color(15*16,0);pce_vce_set_color(15*16+15,0x1ff);
+    uint16_t blank=0xf000|(PCE_FONT_WORD>>4);
+    video_vdc(0,0);
+    for(uint16_t k=0;k<64*32;++k)video_vdc(2,blank);
+    /* 11 characters are 88 pixels: start on a character boundary 4 pixels left of centre (BXR = -4 = 508), and
+     * the row whose glyph centre sits nearest the middle of 224 lines. */
+    static const char text[]="NOW LOADING";
+    video_vdc(0,(uint16_t)14*64+14);
+    for(uint8_t k=0;text[k];++k)video_vdc(2,0xf000|((PCE_FONT_WORD>>4)+text[k]-32));
+    video_sat_begin();video_sat_end();
+    pce_scroll_x=508;
+    video_display(true);
+    video_wait();
 }
 CREDITS_CODE void frontend_credits(void) {
     previous=0;audio_stop();

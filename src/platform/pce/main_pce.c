@@ -21,6 +21,7 @@ static uint8_t simulation_tick;
 static uint8_t effect_demo,menu_hero,menu_mode;
 static const int8_t sine[32] PCE_TABLE={0,25,49,71,90,106,117,125,127,125,117,106,90,71,49,25,0,-25,-49,-71,-90,-106,-117,-125,-127,-125,-117,-106,-90,-71,-49,-25};
 PCE_FLOW static bool change_stage(uint8_t n) {
+    overlay_call(0x71,frontend_loading);
     pce_metrics.ready=0;stage=n;phase=heading=0;race_x=4696;race_y=4096;
     pce_metrics.phase=0;pce_metrics.camera_x=pce_metrics.hp=0;
     test_x=128;test_y=144;

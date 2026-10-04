@@ -6,7 +6,7 @@
  * always mapped, so every front-end overlay can call them directly. */
 #define UI_TILE_WORD 0x0800
 #define UI_SPRITE_WORD 0x6800
-enum { SCREEN_TITLE, SCREEN_SELECT, SCREEN_OPTIONS };
+enum { SCREEN_TITLE, SCREEN_SELECT, SCREEN_OPTIONS, SCREEN_PANEL, SCREEN_GAMEOVER };
 extern volatile uint8_t pce_ui_state;
 extern const PceUiScreen *ui_screen;
 extern uint8_t ui_held,ui_pressed;
@@ -17,6 +17,10 @@ void ui_vram(uint32_t address,uint16_t word,uint32_t bytes);
 void ui_show(uint8_t id);
 void ui_put(uint8_t col,uint8_t row,const char *text,uint8_t slot);
 void ui_end(void);
+/* Palette fade through black. ui_fade(8) snapshots every palette; ui_fade(n) shows the snapshot darkened by n steps
+ * (0 = as shown, 7 = black). With ui_dark set, ui_show leaves the display off so a fade-in starts from black. */
+extern uint8_t ui_dark;
+void ui_fade(uint8_t level);
 extern uint16_t ui_ramp[4][12],ui_ring[4][16];
 extern uint8_t ui_cycle_step,ui_cycle_clock;
 /* Small helpers compiled into each overlay to spare the renderer bank. */

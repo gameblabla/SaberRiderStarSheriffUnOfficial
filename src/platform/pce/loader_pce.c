@@ -54,8 +54,9 @@ bool loader_font(void) {
     if (error) { pce_metrics.load_error = error; return false; }
     return true;
 }
-static bool loader_archive(uint32_t sector,uint32_t remaining) {
-    audio_stop(); video_display(false); pce_raster_enabled = 0;
+static bool loader_archive(uint32_t sector,uint32_t remaining,bool keep_display) {
+    audio_stop(); if(!keep_display)video_display(false);
+    pce_raster_enabled = 0;
     pce_cdb_irq_disable(PCE_CDB_MASK_VBLANK_NO_BIOS | PCE_CDB_MASK_HBLANK_NO_BIOS);
     uint32_t address=0;
     while (remaining) {
@@ -80,15 +81,17 @@ static bool loader_archive(uint32_t sector,uint32_t remaining) {
     pce_cdb_irq_enable(PCE_CDB_MASK_VBLANK_NO_BIOS | PCE_CDB_MASK_HBLANK_NO_BIOS);
     return true;
 }
-bool loader_ui(void) {return loader_archive((uint32_t)__cd_ui_bin__sector,PCE_UI_BYTES);}
+bool loader_ui(void) {return loader_archive((uint32_t)__cd_ui_bin__sector,PCE_UI_BYTES,false);}
 bool loader_scene(uint8_t stage) {
     if(!stage||stage>7)return false;
-    if(!loader_archive(sector_of(stage),pce_scenes[stage-1].bytes))return false;
+    /* The NOW LOADING screen stays up for the whole disc read; the archive goes to Arcade RAM, not VRAM. */
+    if(!loader_archive(sector_of(stage),pce_scenes[stage-1].bytes,true))return false;
+    video_display(false);video_scroll(0,0);
     pce_metrics.stage = stage;
     video_scene(&pce_scenes[stage-1]);
     return true;
 }
-void audio_music(uint8_t track) {
+static void music_start(uint8_t track,uint8_t mode) {
     if(track>=18)return;
     /* Volume blocks (HIGH, MEDIUM, LOW) hold the same 18 tracks at different
      * levels; OFF plays nothing. Track 1 is the data track. */
@@ -102,9 +105,11 @@ void audio_music(uint8_t track) {
     ++track;
     pce_sector_t end = {.hi=(track/10)*16+track%10};
     pce_music_status=pce_cdb_cdda_play(PCE_CDB_LOCATION_TYPE_TRACK, start,
-        PCE_CDB_LOCATION_TYPE_TRACK, end, PCE_CDB_CDDA_PLAY_REPEAT);
+        PCE_CDB_LOCATION_TYPE_TRACK, end, mode);
     music_active = pce_music_status == 0;
 }
+void audio_music(uint8_t track) { music_start(track,PCE_CDB_CDDA_PLAY_REPEAT); }
+void audio_music_once(uint8_t track) { music_start(track,PCE_CDB_CDDA_PLAY_ONE_SHOT); }
 void audio_effect(uint8_t tone) {
     if(tone==2||tone==5||tone==6||tone==7||tone==8) {
         /* 7/8: enemy hit / death yells share the hero's ADPCM bank and never cut a hero voice. */
