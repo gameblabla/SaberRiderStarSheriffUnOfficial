@@ -18,14 +18,16 @@ CREDITS_CODE void frontend_continue(void) {
     previous=0;audio_stop();
     if(!loader_ui()){pce_control.ok=0;return;}
     panel();
-    ui_put(12,9,"CONTINUE ?",13);
-    ui_put(6,17,"PRESS START TO CONTINUE",12);
-    ui_put(8,20,"CONTINUES LEFT",14);ui_put_number(23,20,pce_continues,15);
+    /* The panel's text area is columns 4-35 and rows 7-24: its centre is column 20 (x=160), row 16. */
+    char digit[2]={'0'+pce_continues%10,0};
+    ui_put(15,10,"CONTINUE ?",13);
+    ui_put(9,18,"PRESS START TO CONTINUE",12);
+    ui_put(12,21,"CONTINUES LEFT",14);ui_put(27,21,digit,15);
     uint8_t seconds=15,clock=0;
     pce_control.ok=0;
     for(;;) {
         video_wait();ui_read_keys();ui_cycle();
-        if(!clock)ui_put_number(15,13,seconds,13);
+        if(!clock)ui_put_number(19,14,seconds,13);
         if(++clock==60){clock=0;if(!seconds--)break;ui_blip();}
         if(ui_pressed&(KEY_RUN|KEY_1|KEY_2)){pce_control.ok=1;break;}
     }

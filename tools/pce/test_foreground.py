@@ -45,7 +45,7 @@ def verify(out):
                 expected=blob[pat+piece*128:pat+(piece+1)*128]
                 actual=bytes.fromhex(e.call('asread','vram0',pattern*64,128)['hex'])
                 assert actual==expected,'Foreground must use SAT priority, never cut actor patterns'
-                if sprite<9:
+                if scene['sprites'][sprite]['name'].startswith('hero'):
                     hero_entries.append(k);assert bool(attr&0x800)==bool(direction);checked+=1
                 if sprite>=first:fg_entries.append(k);foreground+=1
             assert hero_entries and fg_entries,'Capture must include the hero and foreground scenery'

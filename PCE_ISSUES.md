@@ -86,6 +86,27 @@ Implementation status below does not replace the user's visual/audio acceptance.
       and scrolling); backward scrolling (now removed) was the suspect. Needs a
       screenshot if it persists.
 
+## Fifth pass (2026-10-04, playtest feedback)
+
+- [x] Hero animations use the original sheet cells: idle breathing (Saber 6 of
+      his 12, April 6, Fireball/Colt their 2), the four-frame somersault for a
+      real jump (walking off a ledge keeps the frozen run frame) and the death
+      sequence (5 frames, April 8). They follow the motion rows in each platform
+      scene (`pce_hero_pose` holds the offsets). `sprite_slot_of` grew to 480
+      ids because stage 1 now uses 399.
+- [x] Death: the hero no longer hops; the death animation plays where it fell,
+      then it stands up at the last safe spot (80 ticks). Hits still only blink.
+- [x] Continue screen text is centred on the panel (column 20, row 16).
+- [x] Hero select: a portrait switch used to show half-copied patterns for two
+      frames. The next portrait is copied to a second pattern buffer while the old
+      one stays up; pieces and palettes then switch right after VBlank.
+- [x] Stage 4 scrolling garbage: some 33-column windows held up to 966 distinct
+      characters against the 928-tile cache, so the right column went unloaded.
+      `tile_budget.py` redraws the cheapest single-use cells (648 of 24,960) with a
+      matching neighbouring character, max window now 924.
+- [x] Sprite glitches / foreground jitter: IRQ-masked VDC sequences and a scroll
+      hold until the SAT is queued (see `pce-vdc-irq-hazards` notes).
+
 Remaining integration/acceptance work:
 
 - [ ] Integrate the reference ROM's two-channel, scanline-delivered 2-bit ADPCM

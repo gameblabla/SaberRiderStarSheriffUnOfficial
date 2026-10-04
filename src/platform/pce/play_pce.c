@@ -30,7 +30,7 @@ const PceScene *play_scene;
 uint16_t camera,frame;
 uint8_t hero,facing,safe_timer;
 uint8_t slide_time;
-static uint8_t fire_timer,crouch,death_time;
+static uint8_t fire_timer,crouch,death_time,jumping,jump_time;
 int16_t safe_x,safe_y;
 static int16_t drop_y;
 
@@ -91,7 +91,7 @@ PCE_CODE static void shoot(int16_t x,int16_t y,int16_t vx,int16_t vy,bool enemy)
 }
 PCE_CODE void play_init(uint8_t stage,uint8_t selected) {
     scene=&pce_scenes[stage-1];hero=selected;camera=frame=0;
-    facing=fire_timer=safe_timer=crouch=slide_time=death_time=pce_death=0;drop_y=-32767;
+    facing=fire_timer=safe_timer=crouch=slide_time=death_time=jumping=jump_time=pce_death=0;drop_y=-32767;
     player=(Body){.x=scene->sx,.y=scene->sy};safe_x=player.x;safe_y=player.y;
     memset(actors,0,sizeof actors);memset(shots,0,sizeof shots);
     memset(column_tags,0xff,sizeof column_tags);
@@ -131,11 +131,11 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
         if(pce_campaign.state!=CAM_PLAY||pce_campaign.event)return;}
     if(safe_timer)--safe_timer;if(fire_timer)--fire_timer;
     if(pce_death) {
-        /* Like the main game: the hero hops and falls where it died, then
-         * stands up again at the last safe spot - no stage reload. */
-        keys=pressed=0;slide_time=0;
-        if(!death_time){player.vy=-1100;player.vx=0;safe_timer=255;}
-        if(++death_time>=70) {
+        /* Like the main game: the death animation plays where the hero fell,
+         * then it stands up again at the last safe spot - no stage reload. */
+        keys=pressed=0;slide_time=0;jumping=0;
+        if(!death_time){player.vx=0;safe_timer=255;}
+        if(++death_time>=80) {
             death_time=0;pce_death=0;
             if(!pce_campaign.lives){pce_campaign.state=CAM_OVER;pce_campaign.timer=0;return;}
             --pce_campaign.lives;pce_metrics.hp=campaign_hearts();
@@ -151,7 +151,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     if((pressed&KEY_2)&&(player.coll&4)) {
         if(crouch&&player.ground==4)drop_y=player.y+20;
         else if(crouch)slide_time=24;
-        else {player.vy=-1237;audio_effect(2);}
+        else {player.vy=-1237;audio_effect(2);jumping=1;jump_time=0;}
     }
     if(keys&KEY_SELECT) {
         if(keys&KEY_LEFT)facing=1;
@@ -159,6 +159,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     }
     if(slide_time){crouch=1;player.vx=(int16_t)slide_time*43;if(facing)player.vx=-player.vx;--slide_time;}
     physics(&player);
+    if(player.coll&4)jumping=0;else if(jumping&&jump_time<255)++jump_time;
     /* The screen only scrolls forwards: the left edge is a wall. */
     if(player.x<(int16_t)camera+8){player.x=camera+8;if(player.vx<0)player.vx=0;}
     if(pce_campaign.boss_kind&&player.x>(int16_t)camera+248)player.x=camera+248;
@@ -227,11 +228,16 @@ __attribute__((noinline)) void play_draw(void) {
     uint8_t keys=pce_control.keys,stage=pce_metrics.stage-1;
     bool grounded=player.coll&4,side=keys&(KEY_LEFT|KEY_RIGHT);
     uint8_t pose=crouch?8:!grounded?7:player.vx?1+(frame/6)%6:0;
-    uint16_t id=hero*9+pose;
-    if(slide_time)id=pce_motion_base[stage]+hero*3+2;
-    else if(grounded&&!crouch&&!player.vx&&fire_timer)id=pce_motion_base[stage]+hero*3+(fire_timer>6);
+    uint16_t id=hero*9+pose,mb=pce_motion_base[stage];
+    const uint8_t *ap=pce_hero_pose[hero];
+    /* Extra strips after the motion rows: death, slide, standing shot, idle breathing, somersault jump. */
+    if(pce_death){uint8_t d=death_time/6;id=mb+ap[4]+(d<ap[5]?d:ap[5]-1);}
+    else if(slide_time)id=mb+hero*3+2;
+    else if(grounded&&!crouch&&!player.vx&&fire_timer)id=mb+hero*3+(fire_timer>6);
+    else if(!pose)id=mb+ap[0]+(uint8_t)(frame/10)%ap[1];
+    else if(jumping&&!grounded)id=mb+ap[2]+((jump_time/3)&3);
     /* Aim poses: up / down diagonals (running when moving), straight up, and straight down in the air. */
-    if(!slide_time&&((keys&KEY_UP)||((keys&KEY_DOWN)&&(side||!grounded)))) {
+    if(!slide_time&&!pce_death&&((keys&KEY_UP)||((keys&KEY_DOWN)&&(side||!grounded)))) {
         uint8_t direction=keys&KEY_UP?0:1;
         id=pce_present_base[stage][2]+hero*16;
         if(!side)id+=14+direction;
@@ -242,7 +248,7 @@ __attribute__((noinline)) void play_draw(void) {
         if(keys&KEY_LEFT)facing=1;
         if(keys&KEY_RIGHT)facing=0;
     }
-    if(!safe_timer||(frame&4))video_sprite(id,player.x-camera,player.y-16,facing,16);
+    if(!safe_timer||(frame&4)||pce_death)video_sprite(id,player.x-camera,player.y-16,facing,16);
     /* Essential projectiles precede optional distant enemies. */
     for(uint8_t k=0;k<24;++k) if(shots[k].active)
         video_sprite(shots[k].enemy?37:36,shots[k].x-camera,shots[k].y-16,false,16);

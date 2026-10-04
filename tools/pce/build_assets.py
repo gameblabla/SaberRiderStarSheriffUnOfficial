@@ -17,6 +17,7 @@ import sys
 import story
 import timeline
 import presentation
+import tile_budget
 import frontend
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -25,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / 'tools/saturn'), str(ROOT / 'tools/dc')]
 import levl
 import texbake
-from formats import Archive, indexed, palette_for, planar_tile, pack_sprite, pair_characters, vce_rgb
+from formats import Archive, BG_TILES, indexed, palette_for, planar_tile, pack_sprite, pair_characters, vce_rgb
 
 def run(args, **kwargs):
     result = subprocess.run([str(a) for a in args], cwd=ROOT, check=True, capture_output=True, **kwargs)
@@ -99,8 +100,12 @@ def native_background(image, archive, previews, name):
         p[5:]=p[1];palette=[p]*16
     tiles, tile_lookup, names = [], {}, []
     preview = np.zeros_like(rgba)
+    cell_idx = np.stack([indexed(Image.fromarray(cell), palette[int(groups[i])]) for i, cell in enumerate(cells)])
+    if name != 'stage2':
+        cell_idx, groups, merged = tile_budget.limit_tiles(cells, cell_idx, groups, palette, w // 8, BG_TILES - 4)
+        if merged: print(f'{name}: redrew {merged} cells with neighbouring characters to fit the {BG_TILES}-tile cache', flush=True)
     for i, cell in enumerate(cells):
-        pal = int(groups[i]); idx = indexed(Image.fromarray(cell), palette[pal])
+        pal = int(groups[i]); idx = cell_idx[i]
         encoded = planar_tile(idx)
         key = encoded  # palette is stored per map entry, not duplicated in patterns
         if key not in tile_lookup: tile_lookup[key] = len(tiles); tiles.append(encoded)

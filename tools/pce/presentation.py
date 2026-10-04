@@ -69,7 +69,7 @@ def add_art(root,work,stage,sprites,frame):
         box=dialog_box([get(rid,n) for n in range(9)])
         for half in range(2):
             add(f'dialog_box{rid:08X}_{half}',box.crop((half*BOX_W//2,0,(half+1)*BOX_W//2,BOX_H)))
-    hud=[];digits=[];aim=[];motion=[];pending=[]
+    hud=[];digits=[];aim=[];motion=[];pending=[];pose=[]
     if stage in (1,3,4,5):
         def glyph(n):return get(0x87A5333C,n)
         for hero in range(4):
@@ -111,13 +111,28 @@ def add_art(root,work,stage,sprites,frame):
             aim.append(row)
             pending.append((hero,cell))
     # Motion poses follow every aim row, so each group has a constant stride
-    # per hero (aim: 16, motion: 3) from its base ID. Jumping reuses one frozen
-    # run frame (hero*9+7), so there are no airborne motion frames.
+    # per hero (aim: 16, motion: 3) from its base ID. Falling off a ledge reuses
+    # one frozen run frame (hero*9+7); a real jump plays the somersault below.
+    motion0=len(sprites)
     for hero,cell in pending:
         row=[]
         for name,n in [('shoot',40),('recoil',41),('slide',149)]:
             row.append(add(f'hero{hero}_{name}',cell(n),(32,32)))
         motion.append(row)
+    # Extra animation strips follow the motion rows. Each hero's idle breathing,
+    # somersault jump and death cells are the right-facing source animations
+    # (idle: Saber's 12-frame cycle halved, April's 6, Fireball/Colt's 2; death:
+    # anim 51, April's patched 8-frame one). `pose` holds, per hero, offsets
+    # from the motion base: idle, idle count, jump (4), death, death count.
+    for hero,cell in pending:
+        idle=[168+2*k for k in range(6)] if hero==0 else list(range(176,182)) if hero==2 else [4,5]
+        death=list(range(160,168)) if hero==2 else list(range(144,149))
+        entry=[]
+        for kind,cells in (('idle',idle),('jump',range(132,136)),('death',death)):
+            entry+=[len(sprites)-motion0,len(cells)]
+            for k,n in enumerate(cells):
+                add(f'hero{hero}_{kind}{k}',cell(n),(32,32))
+        pose.append(entry)
     enemy=0
     if stage in (1,3,4,5):
         # Run (cells 0-5) and death frames of the three enemy bodies, right-facing; left is a flip.
@@ -127,7 +142,7 @@ def add_art(root,work,stage,sprites,frame):
             for kind,cells in (('run',run),('death',death)):
                 for k,n in enumerate(cells):
                     add(f'{name}_{kind}{k}',frame(work/'srgb'/f'{aid:08X}.srgb',n),(round(ox),round(oy)))
-    return dict(portraits=portraits,dialog=dialog,hud=hud,digits=digits,aim=aim,motion=motion,enemy=enemy,end=len(sprites))
+    return dict(portraits=portraits,dialog=dialog,hud=hud,digits=digits,aim=aim,motion=motion,pose=pose,enemy=enemy,end=len(sprites))
 
 def emit_tables(out,scenes,h,c):
     m=scenes[0]['presentation']
@@ -142,5 +157,8 @@ def emit_tables(out,scenes,h,c):
     c.append('const uint16_t pce_enemy_base[7]={'+','.join(str(m['presentation']['enemy']) for m in scenes)+'};')
     h.append('extern const uint16_t pce_motion_base[7];')
     c.append('const uint16_t pce_motion_base[7]={'+','.join(str(m['presentation']['motion'][0][0]) if m['presentation']['motion'] else '0' for m in scenes)+'};')
+    h.append('extern const uint8_t pce_hero_pose[4][6];')
+    pose=next((m['presentation']['pose'] for m in scenes if m['presentation']['pose']),[[0]*6]*4)
+    c.append('const uint8_t pce_hero_pose[4][6]={'+','.join('{'+','.join(map(str,e))+'}' for e in pose)+'};')
     h.append('extern const uint16_t pce_present_base[7][3];')
     c.append('const uint16_t pce_present_base[7][3]={'+','.join('{%d,%d,%d}'%(m['presentation']['hud'][0][0],m['presentation']['digits'][0],m['presentation']['aim'][0][0]) if m['presentation']['hud'] else '{0,0,0}' for m in scenes)+'};')

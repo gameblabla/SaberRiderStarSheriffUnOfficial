@@ -69,29 +69,46 @@ UI_CODE static void select_palettes(uint8_t chosen,bool glow) {
         pce_vce_copy_palette(4+h,buffer,1);
     }
 }
-static uint8_t portrait_count;
-static uint16_t portrait_pieces[50][4];
-UI_CODE static void load_portrait(uint8_t hero) {
+/* A portrait's patterns take over a frame to copy, so two buffers alternate: the next hero is copied to the idle
+ * one while the old portrait keeps showing, then pieces (SAT) and palettes switch together right after VBlank.
+ * Slot 0 follows the screen's own sprite patterns, slot 1 sits just below the sprite area (free on this screen). */
+#define PORTRAIT_MAX 50
+static uint8_t portrait_count,portrait_slot;
+static uint16_t portrait_pieces[PORTRAIT_MAX][4];
+UI_CODE static void portrait_patterns(uint8_t hero,uint8_t slot) {
     const PceUiPortrait *p=&pce_ui_portrait[hero];
-    portrait_count=p->count;
-    ui_vram(p->patterns,UI_SPRITE_WORD+ui_screen->nsprpat*64,(uint32_t)p->count*128);
+    ui_vram(p->patterns,slot?UI_SPRITE_WORD-PORTRAIT_MAX*64:UI_SPRITE_WORD+ui_screen->nsprpat*64,(uint32_t)p->count*128);
+}
+UI_CODE static void portrait_pieces_use(uint8_t hero,uint8_t slot) {
+    const PceUiPortrait *p=&pce_ui_portrait[hero];
+    portrait_count=p->count;portrait_slot=slot;
     arcade_read(2,p->pieces,portrait_pieces,(uint16_t)p->count*8);
-    arcade_read(2,p->palette,buffer,512);
+}
+UI_CODE static void portrait_palette(uint8_t hero) {
+    arcade_read(2,pce_ui_portrait[hero].palette,buffer,512);
     pce_vce_copy_palette(16+3,buffer+3*32,13);
 }
 UI_CODE static uint8_t select_hero(uint8_t chosen) {
     ui_show(SCREEN_SELECT);pce_ui_state=2;
     audio_music(1);
-    load_portrait(chosen);select_palettes(chosen,false);
-    uint8_t confirmed=0;ticks=0;
+    portrait_patterns(chosen,0);portrait_pieces_use(chosen,0);portrait_palette(chosen);select_palettes(chosen,false);
+    uint8_t confirmed=0,shown=chosen;bool palettes_due=false;ticks=0;
     for(;;) {
         video_wait();ui_read_keys();++ticks;
+        /* The SAT with the new portrait went out at this VBlank: its palettes follow immediately. */
+        if(palettes_due){portrait_palette(chosen);shown=chosen;palettes_due=false;}
+        select_palettes(shown,(ticks&8)!=0||confirmed);
         ui_cycle();
         if(!confirmed) {
-            uint8_t before=chosen;
-            if((ui_pressed&KEY_LEFT)&&chosen>0)--chosen;
-            if((ui_pressed&KEY_RIGHT)&&chosen<3)++chosen;
-            if(chosen!=before){ui_blip();load_portrait(chosen);}
+            if(!palettes_due&&shown==chosen) {
+                if((ui_pressed&KEY_LEFT)&&chosen>0)--chosen;
+                if((ui_pressed&KEY_RIGHT)&&chosen<3)++chosen;
+                if(chosen!=shown) {
+                    ui_blip();
+                    portrait_patterns(chosen,portrait_slot^1);
+                    portrait_pieces_use(chosen,portrait_slot^1);palettes_due=true;
+                }
+            }
             if(ui_pressed&(KEY_RUN|KEY_1|KEY_2)){confirmed=1;ticks=0;audio_pcm_play(2);}
         } else if(ticks>36) {
             /* Black fade-out, then the front end hands over to the NOW LOADING screen. */
@@ -99,14 +116,13 @@ UI_CODE static uint8_t select_hero(uint8_t chosen) {
             for(uint8_t level=1;level<8;++level){video_wait();video_wait();video_wait();ui_fade(level);}
             ui_end();return chosen;
         }
-        select_palettes(chosen,(ticks&8)!=0||confirmed);
         video_sat_begin();
         for(uint8_t k=0;k<portrait_count;++k)
-            ui_sprite(panel_x[chosen]+portrait_pieces[k][0],0x30+portrait_pieces[k][1],
-                   ui_screen->nsprpat+portrait_pieces[k][2],portrait_pieces[k][3],false);
+            ui_sprite(panel_x[palettes_due?chosen:shown]+portrait_pieces[k][0],0x30+portrait_pieces[k][1],
+                   portrait_slot?portrait_pieces[k][2]-PORTRAIT_MAX:ui_screen->nsprpat+portrait_pieces[k][2],portrait_pieces[k][3],false);
         for(uint8_t h=0;h<4;++h) {
             int16_t x=panel_x[h]+((h==0||h==3)?16:0);
-            uint8_t pal=h==chosen?0:1,w=name_width[h],at=name_pattern[h];
+            uint8_t pal=h==(palettes_due?chosen:shown)?0:1,w=name_width[h],at=name_pattern[h];
             while(w>=2){ui_sprite(x,0xd0,at,pal,true);x+=32;at+=2;w-=2;}
             if(w)ui_sprite(x,0xd0,at,pal,false);
         }
