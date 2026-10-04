@@ -44,6 +44,13 @@ PCE_COMBAT void encounters(void) {
             }
             trigger_remaining[k]=0;continue;
         }
+        /* The source's enemies die to one hit (a shield sniper takes 4/6/8). The SAT only holds three of them beside
+         * the HUD and hero, so a new one waits for a free place rather than being drawn in and out. */
+        if(t->type!=28&&(t->type<11||t->type>28)) {
+            uint8_t live=0;
+            for(uint8_t i=0;i<8;++i)if(actors[i].active&&!actors[i].dead&&(actors[i].type<11||actors[i].type>28))++live;
+            if(live>=3)continue;
+        }
         /* Humanoid core first; the inventory retains other encounter recipes
          * for their stage-specific handlers rather than replacing their art. */
         for(uint8_t i=0;i<8;++i) if(!actors[i].active) {
@@ -54,7 +61,7 @@ PCE_COMBAT void encounters(void) {
             if(y>30000)y=256;else if(y< -30000)y=-32;
             if(y< -999)y=-1000-y;
             if(edge&&t->type<6){probe_x=x+8;probe_y=y+19;probe_left=player.x<x;overlay_call(0x69,spawn_clear);y=probe_y-19;}
-            actors[i]=(Actor){.b={.x=t->type>=11&&t->type<=27?x:x+8,.y=t->type>=11&&t->type<=27?y:y+19},.active=1,.type=t->type,.hp=t->type>=30?6:2,.timer=t->type<6?36:60,.flip=player.x<x};
+            actors[i]=(Actor){.b={.x=t->type>=11&&t->type<=27?x:x+8,.y=t->type>=11&&t->type<=27?y:y+19},.active=1,.type=t->type,.hp=t->type>=30?(pce_options.difficulty==0?4:pce_options.difficulty==1?6:8):1,.timer=t->type<6?36:60,.flip=player.x<x};
             if(trigger_remaining[k]>0)--trigger_remaining[k];
             ++trigger_spawned[k];trigger_timers[k]=t->interval;break;
         }

@@ -25,11 +25,12 @@ PRESENT void actors_draw(void) {
             /* walker 0 / grunt 1 / sniper 2: run frames, then six death frames */
             uint16_t base=pce_enemy_base[stage],kind=id-39;
             if(a->dead)id=base+(kind==0?6:kind==1?18:24)+(a->dead-1)/4;
+            else if(!(a->b.coll&4)&&kind<2)id=base+30+kind*2+((frame>>3)&1);   /* dropping: the fall cells, not a frozen run frame */
             else if(a->b.vx&&kind<2)id=base+kind*12+(a->anim>>2)%6;
         }
         if(a->type==28)id+=a->hp==2?0:a->hp==1?1:2+(a->anim>>2)%6;   /* the blue Outrider: stand, alarm, run */
         if(a->type==11)id+=(frame>>2)%5;   /* one gait frame for the whole herd: only one set of patterns is cached */
-        if(!video_sprite_optional(id,a->b.x-camera,a->b.y-16,a->type==11?!a->flip:a->flip,16)&&a->type!=11)a->active=0;
+        video_sprite_optional(id,a->b.x-camera,a->b.y-16,a->type==11?!a->flip:a->flip,16);   /* a refused draw is skipped for the frame, never a removal */
     }
 }
 void presentation_draw(void) {overlay_call(0x74,presentation_frame);video_front_mark();}

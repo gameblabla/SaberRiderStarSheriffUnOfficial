@@ -103,7 +103,7 @@ PCE_COMBAT void combat_tick(void) {
             if(stage==4&&++arena_time<1440) {
                 if(arena_time==1){pce_campaign.story=1;pce_campaign.event=1;}
                 if(!(arena_time%120))for(uint8_t k=0;k<8;++k)if(!actors[k].active) {
-                    actors[k]=(Actor){.b={.x=camera+240,.y=170},.active=1,.type=2,.hp=2,.timer=60};break;
+                    actors[k]=(Actor){.b={.x=camera+240,.y=170},.active=1,.type=2,.hp=1,.timer=60};break;
                 }
             } else {
                 boss_begin(stage==1||stage==5?1:2);

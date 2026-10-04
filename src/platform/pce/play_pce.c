@@ -90,7 +90,7 @@ PCE_CODE static void physics(Body *b) {
 PCE_CODE static void shoot(int16_t x,int16_t y,int16_t vx,int16_t vy,bool enemy) {
     uint8_t active=0;
     for(uint8_t k=0;k<24;++k)if(shots[k].active&&shots[k].enemy==enemy)++active;
-    if(active>=(enemy?(pce_campaign.boss_kind?2:6):4))return;
+    if(active>=(enemy?(pce_campaign.boss_kind?2:4):4))return;
     for(uint8_t k=0;k<24;++k) if(!shots[k].active) {
         shots[k]=(Shot){x,y,vx,vy,1,enemy};return;
     }

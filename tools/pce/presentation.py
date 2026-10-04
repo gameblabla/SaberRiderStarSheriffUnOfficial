@@ -174,6 +174,11 @@ def add_art(root,work,stage,sprites,frame):
             for kind,cells in (('run',run),('death',death)):
                 for k,n in enumerate(cells):
                     add(f'{name}_{kind}{k}',frame(work/'srgb'/f'{aid:08X}.srgb',n),(round(ox),round(oy)))
+        # Falling (anim 0x30: two cells) for the walker and the grunt: drawn while they are off the ground.
+        for name,crhc,cells in [('walker','02A38AFB',(8,9)),('grunt','112DF34C',(6,7))]:
+            d=(work/f'{crhc}.levl').read_bytes();aid=struct.unpack_from('<I',d,4)[0];ox,oy=struct.unpack_from('<ff',d,8)
+            for k,n in enumerate(cells):
+                add(f'{name}_fall{k}',frame(work/'srgb'/f'{aid:08X}.srgb',n),(round(ox),round(oy)))
     return dict(portraits=portraits,dialog=dialog,hud=hud,digits=digits,aim=aim,motion=motion,pose=pose,up_tip=up_tip,art_muzzle=art_muzzle,flash=flash,enemy=enemy,end=len(sprites))
 
 def emit_tables(out,scenes,h,c):

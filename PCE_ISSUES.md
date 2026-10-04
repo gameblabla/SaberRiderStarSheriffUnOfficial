@@ -170,6 +170,16 @@ Implementation status below does not replace the user's visual/audio acceptance.
       one; `test_foreground.py` now checks foreground priority on stage 4 and asserts stages 1/3 carry none.
       The horse herd stays; with the SAT free of foreground it holds 33-52 of 64 entries, nothing refused.
 
+## Tenth pass (2026-10-04, playtest feedback)
+
+- [x] Enemy hit points follow the source: every humanoid dies to one hit (they had 2); a shield sniper takes 4/6/8
+      shots by difficulty (was 6). Stage 4's arena grunts too.
+- [x] Enemies popping in and out: an optional actor the SAT could not take for a frame used to be deleted. A refused
+      draw is now just skipped, and at most three humanoids are alive at once (a new one waits for a free place), which
+      is what the SAT holds beside the HUD and hero. Enemy shots: at most 4 at a time.
+- [x] A walker or grunt dropping from a platform shows its two fall cells (source anim 0x30) instead of a frozen run
+      frame (`walker_fall0/1`, `grunt_fall0/1` after the sniper's death cells; drawn while `coll&4` is clear).
+
 Remaining integration/acceptance work:
 
 - [ ] Integrate the reference ROM's two-channel, scanline-delivered 2-bit ADPCM
