@@ -29,8 +29,8 @@ PCE_COMBAT void encounter_init(void) {
         if(trigger.type>=24&&trigger.type<=27)trigger_remaining[k]=0;   /* background airships: not drawn here, so never spawned */
     }
 }
-/* The convoy is instantiated lazily: the source drops all of its horses at once (12-13, 99 px apart), but the actor pool
- * holds eight, so each horse is created when its place in the column comes within a few horses of the screen. The
+/* The convoy is instantiated lazily: the source drops all of its horses at once (12-13, 99 px apart).
+ * The PCE spaces them 224 px apart to fit the real scanline limit. The actor pool holds eight, so each horse is created when its place in the column comes within a few horses of the screen. The
  * column marches at the horses' own speed (2 px a step, 8 per call), so `herd_next` is where the next one would be. */
 uint8_t herd_pending;int16_t herd_next;
 __attribute__((noinline,section(".ram_bank116.text"))) void herd_feed(void) {
@@ -39,7 +39,7 @@ __attribute__((noinline,section(".ram_bank116.text"))) void herd_feed(void) {
         uint8_t i=0;while(i<8&&actors[i].active)++i;
         if(i==8)break;
         actors[i]=(Actor){.b={.x=herd_next,.y=(((herd_y+30-48)+4)&~7)+48},.active=1,.type=11,.hp=1,.flip=1};
-        herd_next+=99;--herd_pending;
+        herd_next+=224;--herd_pending;
     }
 }
 PCE_MISSION void encounters(void) {
@@ -61,9 +61,10 @@ PCE_MISSION void encounters(void) {
         if(t->type==11) {
             /* The herd begins before the separately exported camera-stop zone. The source drops a column
              * of 12 horses at once, 99 px apart, behind the right screen edge, running at the hero at 120 px/s; here
-             * five, 192 px apart, so at most two are on screen and two fit a scanline beside the hero. */
+             * the same horse count, 224 px apart, so at most two are on screen and two fit a scanline beside the hero. */
             if(!play_scene->horse||t->wp[0][0]<=30000){trigger_remaining[k]=0;continue;}
-            herd_y=t->wp[0][1];herd_lead=t->interval*5/2;herd_pending=(uint8_t)t->remaining+1;herd_next=camera+328+herd_lead+16;overlay_call(0x6f,herd_spawn);overlay_call(0x74,herd_feed);
+            herd_y=t->wp[0][1];herd_lead=t->interval*5/2;herd_pending=(uint8_t)t->remaining+1;if(pce_metrics.stage==1&&t->cx<4000)herd_pending=8;   /* the first convoy runs a third shorter */
+            herd_next=camera+328+herd_lead+16;overlay_call(0x6f,herd_spawn);overlay_call(0x74,herd_feed);
             trigger_remaining[k]=0;continue;
         }
         if(herd_on)continue;   /* nothing else is called in while the herd runs */

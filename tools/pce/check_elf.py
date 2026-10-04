@@ -6,7 +6,7 @@ import subprocess
 import sys
 nm=Path(sys.argv[1]).resolve();elf=Path(sys.argv[2]).resolve()
 output=subprocess.check_output([str(nm),'--undefined-only',str(elf)],text=True)
-allowed=re.compile(r'__cd_(s[1-7]_bin|font_bin|ui_bin|voice[0-3]_bin)__sector$')
+allowed=re.compile(r'__cd_(s[1-7]_bin|font_bin|ui_bin|victory_bin|voice[0-3]_bin)__sector$')
 bad=[line for line in output.splitlines() if not allowed.fullmatch(line.split()[-1])]
 if bad:raise SystemExit('Unresolved application symbols:\n'+'\n'.join(bad))
 symbols=subprocess.check_output([str(nm),str(elf)],text=True)

@@ -60,22 +60,22 @@ FIELD_CODE static void update_field(bool grid,int16_t plat) {
         Rival *r=&rv[k];if(!r->hp)continue;
         int16_t gap=r->gap=gap_units(r),target=r->max;
         if(gap>2600)target-=target>>2;else if(gap>1200)target-=(target>>3)+(target>>6);else if(gap<-900)target+=target>>3;   /* x3/4, x0.86, x1.12 */
-        if(r->knock){r->knock=r->knock>2?r->knock-2:0;target>>=1;}
+        if(r->knock){r->knock=r->knock>4?r->knock-4:0;target>>=1;}
         if(grid)target=0;
         else if(rphase==P_FINISH)target=r->hornet?760:target-(target>>3)-(target>>4);
         int16_t d=target-r->speed;
-        r->speed+=r->speed<target?(d>>5)+(d>>6)+(d>>7):(d>>4)+(d>>6)+(d>>7);   /* x7/256, x11/256 a step: doubled */
+        r->speed+=r->speed<target?((d>>5)+(d>>6)+(d>>7))*2:((d>>4)+(d>>6)+(d>>7))*2;   /* x7/256, x11/256 a step: four simulation steps */
         if(!grid&&rphase!=P_FINISH) {
-            if(!--r->t){r->t=(uint8_t)(45+rnd()%90);r->lat_t=(int16_t)(rnd()%150)-75;}
-            if(gap>30&&gap<320&&rphase==P_RACE)r->lat_t+=(plat-r->lat_t)>>(r->hornet?4:5);
-            {int16_t e=r->lat_t-r->lat;r->lat+=(e>>5)+(e>>7);}   /* x5/256 a step: doubled */
-        } else if(rphase==P_FINISH&&r->hornet)r->lat+=(420-r->lat)>>4;
+            if(r->t<=2){r->t=(uint8_t)(45+rnd()%90);r->lat_t=(int16_t)(rnd()%150)-75;}else r->t-=2;
+            if(gap>30&&gap<320&&rphase==P_RACE)r->lat_t+=2*((plat-r->lat_t)>>(r->hornet?4:5));
+            {int16_t e=r->lat_t-r->lat;r->lat+=2*((e>>5)+(e>>7));}   /* x5/256 a step: four simulation steps */
+        } else if(rphase==P_FINISH&&r->hornet)r->lat+=2*((420-r->lat)>>4);
         uint16_t old=r->s;
-        {uint16_t v=r->speed>0?r->speed:0;r->s+=(v>>3)+(v>>5)+(v>>7)+(v>>9);}   /* x85/1024 a step: doubled */
+        {uint16_t v=r->speed>0?r->speed:0;r->s+=2*((v>>3)+(v>>5)+(v>>7)+(v>>9));}   /* x85/1024 a step: four simulation steps */
         if(r->s<old)++r->lap;
         track_point(r->s,r->lat,&r->x,&r->y);
         if(r->hornet&&rphase==P_RACE&&race_time>480&&r->speed>200) {
-            if(r->t2)--r->t2;
+            if(r->t2>2)r->t2-=2;
             else if(gap>60&&gap<900){r->t2=(uint8_t)(54+rnd()%45);arg_x=r->x;arg_y=r->y;arg_life=200;overlay_call(0x7a,foes_drop_mine);}   /* a mine out the back when ahead of the car */
             else if(gap<-40&&gap>-800){r->t2=(uint8_t)(36+rnd()%30);arg_x=r->x;arg_y=r->y;arg_speed=2773;arg_life=130;overlay_call(0x7a,foes_aimed_bolt);}   /* shots at the car when behind it */
             else r->t2=15;
@@ -92,7 +92,7 @@ FIELD_CODE static void standings(void) {
 
 FIELD_CODE void field_start_call(void) {start_field();}
 /* arg_x: the car's lateral offset on the circuit, arg_life: 1 on the grid */
-FIELD_CODE void field_update_call(void) {if(!(phase_t&1))update_field(arg_life,arg_x);}   /* every other step, each worth two */
+FIELD_CODE void field_update_call(void) {if(!(phase_t&3))update_field(arg_life,arg_x);}   /* every fourth step, each worth four */
 FIELD_CODE void field_standings_call(void) {standings();}
 /* arg_speed: progress (as unsigned), arg_dist: lateral offset; the point comes back in arg_x, arg_y */
 FIELD_CODE void field_point_call(void) {track_point((uint16_t)arg_speed,arg_dist,&arg_x,&arg_y);}

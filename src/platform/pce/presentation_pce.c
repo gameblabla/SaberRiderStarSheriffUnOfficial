@@ -83,6 +83,7 @@ PRESENT void actors_draw(void) {
                 }
             }
         }
+        if(a->type==16){id+=(frame/15)&1;a->flip=0;}
         if(a->type==28)id+=a->hp==2?0:a->hp==1?1:2+(a->anim>>2)%6;   /* the blue Outrider: stand, alarm, run */
         video_sprite_optional(id,a->b.x-camera,a->b.y-16,a->flip,16);   /* a refused draw is skipped for the frame, never a removal */
     }

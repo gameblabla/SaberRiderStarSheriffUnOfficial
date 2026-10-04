@@ -49,3 +49,13 @@ SHOT_CODE void shots_step(void) {
         }
     }
 }
+
+SHOT_CODE void shots_draw(void) {
+    for(uint8_t k=0;k<NSHOTS;++k)if(shots[k].active) {
+        Shot *s=&shots[k];
+        uint16_t id=s->enemy==3?45+(s->vy?(s->vx?1:2):0):s->enemy?37:36;
+        bool flip=s->enemy==3&&s->vx<0;
+        if(herd_on)video_sprite_optional(id,s->x-camera,s->y-16,flip,16);
+        else video_sprite(id,s->x-camera,s->y-16,flip,16);
+    }
+}

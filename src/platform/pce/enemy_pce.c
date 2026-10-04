@@ -121,7 +121,7 @@ ENEMY_CODE void world_update(void) {
     rng^=frame<<1;if(!rng)rng=1;
     for(uint8_t k=0;k<8;++k) {
         Actor *a=&actors[k];if(!a->active)continue;
-        if(((a->b.x<(int16_t)camera-80||(a->b.x>(int16_t)camera+384&&a->type!=11))&&a->type!=28)||a->b.y>272){a->active=0;continue;}
+        if(((a->b.x<(int16_t)camera-80||(a->b.x>(int16_t)camera+384&&a->type!=11&&!(a->type>=12&&a->type<=23)))&&a->type!=28)||a->b.y>272){a->active=0;continue;}
         if(a->type>=12&&a->type<=27)continue;
         if(a->type==11){advance(&a->b.x,&a->b.fx,a->flip?-512:512);continue;}   /* the herd gallops at the source's 120 px/s */
         if(a->type==28) {

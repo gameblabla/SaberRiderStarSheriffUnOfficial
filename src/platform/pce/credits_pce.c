@@ -61,25 +61,6 @@ CREDITS_CODE void frontend_game_over(void) {
     }
     ui_end();audio_stop();pce_ui_state=0;previous=ui_held;
 }
-/* NOW LOADING, centred on a black screen. The font is already in VRAM (loader_font), and the screen stays up
- * through the disc read that follows (loader_scene), which writes Arcade RAM only. */
-CREDITS_CODE void frontend_loading(void) {
-    video_display(false);pce_raster_enabled=0;
-    video_mode_ui();
-    pce_vce_set_color(0,0);pce_vce_set_color(15*16,0);pce_vce_set_color(15*16+15,0x1ff);
-    uint16_t blank=0xf000|(PCE_FONT_WORD>>4);
-    video_vdc(0,0);
-    for(uint16_t k=0;k<64*32;++k)video_vdc(2,blank);
-    /* 11 characters are 88 pixels: start on a character boundary 4 pixels left of centre (BXR = -4 = 508), and
-     * the row whose glyph centre sits nearest the middle of 224 lines. */
-    static const char text[]="NOW LOADING";
-    video_vdc(0,(uint16_t)14*64+14);
-    for(uint8_t k=0;text[k];++k)video_vdc(2,0xf000|((PCE_FONT_WORD>>4)+text[k]-32));
-    video_sat_begin();video_sat_end();
-    pce_scroll_x=508;
-    video_display(true);
-    video_wait();
-}
 CREDITS_CODE void frontend_credits(void) {
     previous=0;audio_stop();
     if(!loader_ui())return;

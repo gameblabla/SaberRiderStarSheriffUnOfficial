@@ -9,7 +9,7 @@ extern uint8_t buffer[2048];
 extern vdc_sprite_t sat[2][64];
 extern uint8_t sat_count;
 extern uint8_t previous;
-extern volatile uint16_t pce_scroll_x;
+extern volatile uint16_t pce_scroll_x,pce_scroll_y;
 volatile uint8_t pce_ui_state;
 const PceUiScreen *ui_screen;
 uint16_t ui_ramp[4][12];
@@ -36,7 +36,7 @@ UI_BASE void ui_vram(uint32_t address,uint16_t word,uint32_t bytes) {
 /* Build and load a screen: palettes, characters, BAT, sprite patterns. */
 UI_BASE void ui_show(uint8_t id) {
     const PceUiScreen *s=ui_screen=&pce_ui[id];
-    video_display(false);pce_raster_enabled=0;pce_scroll_x=0;
+    video_display(false);pce_raster_enabled=0;pce_scroll_x=pce_scroll_y=0;
     video_mode_ui();
     arcade_read(2,s->pal,buffer,512);pce_vce_copy_palette(0,buffer,16);
     arcade_read(2,s->sprpal,buffer,512);pce_vce_copy_palette(16,buffer,16);

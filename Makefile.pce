@@ -8,7 +8,7 @@ PCE_SRC := $(filter-out src/platform/pce/ipl.c,$(PCE_SRC))
 PCE_SRC += $(wildcard src/platform/pce/*.S)
 PCE_SRC += $(OUT)/assets.c
 PCE_ASSETS := $(OUT)/assets.h $(OUT)/assets.c $(OUT)/manifest.json $(OUT)/source.sha256
-PCE_ASSETS += $(foreach stage,1 2 3 4 5 6 7,$(OUT)/s$(stage).bin) $(OUT)/font.bin $(OUT)/ui.bin
+PCE_ASSETS += $(foreach stage,1 2 3 4 5 6 7,$(OUT)/s$(stage).bin) $(OUT)/font.bin $(OUT)/ui.bin $(OUT)/victory.bin
 PCE_AUDIO := $(OUT)/audio.json $(foreach track,00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17,$(OUT)/music$(track).bin $(OUT)/music$(track)_m.bin $(OUT)/music$(track)_l.bin) $(OUT)/music_end.bin $(OUT)/music_end_m.bin $(OUT)/music_end_l.bin
 PCE_AUDIO += $(OUT)/samples.h $(OUT)/pcm.h $(foreach hero,0 1 2 3,$(OUT)/voice$(hero).bin)
 
@@ -34,7 +34,7 @@ $(OUT)/ipl.elf: src/platform/pce/ipl.c src/platform/pce/link/ipl.ld $(OUT)/ipl_f
 assets: | $(OUT)
 	python3 tools/pce/build_assets.py --out $(OUT)
 
-$(PCE_ASSETS) &: tools/pce/build_assets.py tools/pce/formats.py tools/pce/tile_budget.py tools/pce/export.c tools/pce/export_muzzle.c tools/pce/export_track.c tools/pce/story.py tools/pce/timeline.py tools/pce/presentation.py tools/pce/frontend.py $(wildcard src/*.[ch]) $(wildcard SaberRider/data/*.pck) $(wildcard assets/*.png assets/*.txt assets/pce/*.png assets/ramrod/*.png assets/ramrod/*.txt assets/space/*.png assets/space/*.txt assets/stage3/native/*.png) | $(OUT)
+$(PCE_ASSETS) &: tools/pce/build_assets.py tools/pce/formats.py tools/pce/tile_budget.py tools/pce/export.c tools/pce/export_muzzle.c tools/pce/export_track.c tools/pce/story.py tools/pce/timeline.py tools/pce/presentation.py tools/pce/frontend.py $(wildcard src/*.[ch]) $(wildcard SaberRider/data/*.pck) $(wildcard assets/*.png assets/*.txt assets/pce/*.png assets/victory/*.png assets/ramrod/*.png assets/ramrod/*.txt assets/space/*.png assets/space/*.txt assets/stage3/native/*.png) | $(OUT)
 	python3 tools/pce/build_assets.py --out $(OUT)
 
 $(OUT)/app.elf: $(PCE_SRC) $(wildcard src/platform/pce/*.h) $(OUT)/assets.h $(OUT)/samples.h $(OUT)/pcm.h Makefile.pce tools/pce/check_elf.py src/platform/pce/link/link.ld
@@ -48,8 +48,11 @@ $(OUT)/saber_rider.cue: $(OUT)/ipl.bin $(OUT)/ipl.elf $(OUT)/app.elf $(PCE_ASSET
 test: all
 	python3 tools/pce/test_port.py --out $(OUT)
 	python3 tools/pce/test_campaign.py --out $(OUT)
+	python3 tools/pce/test_boss_presentation.py --out $(OUT)
+	python3 tools/pce/test_boss_passes.py --out $(OUT)
 	python3 tools/pce/test_herd.py --out $(OUT)
 	python3 tools/pce/test_herd_render.py --out $(OUT)
+	python3 tools/pce/test_herd_visibility.py --out $(OUT)
 	python3 tools/pce/profile_gameplay.py --out $(OUT) --herd 1 --require-60
 	python3 tools/pce/profile_gameplay.py --out $(OUT) --herd 2 --require-60
 	python3 tools/pce/profile_gameplay.py --out $(OUT) --herd 3 --require-60
@@ -62,6 +65,8 @@ test: all
 
 test-campaign: all
 	python3 tools/pce/test_campaign.py --out $(OUT)
+	python3 tools/pce/test_boss_presentation.py --out $(OUT)
+	python3 tools/pce/test_boss_passes.py --out $(OUT)
 	python3 tools/pce/test_herd.py --out $(OUT)
 
 test-presentation: all
@@ -77,6 +82,7 @@ test-audio: all
 test-herd: all
 	python3 tools/pce/test_herd.py --out $(OUT)
 	python3 tools/pce/test_herd_render.py --out $(OUT)
+	python3 tools/pce/test_herd_visibility.py --out $(OUT)
 	python3 tools/pce/profile_gameplay.py --out $(OUT) --herd 1 --require-60
 	python3 tools/pce/profile_gameplay.py --out $(OUT) --herd 2 --require-60
 	python3 tools/pce/profile_gameplay.py --out $(OUT) --herd 3 --require-60

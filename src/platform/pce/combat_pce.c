@@ -6,7 +6,7 @@
 static uint8_t dialogs_done,ndialog,ndeath;
 static uint16_t arena_time;
 extern int16_t boss_x,boss_y;extern uint8_t boss_phase,boss_flash,boss_max;extern uint16_t boss_time;
-void boss_start(void),boss_tick(void),boss_draw(void);
+void boss_start(void),boss_tick(void),boss_draw(void),boss_release(void);
 typedef struct { int16_t zone[4],focus; uint16_t before,after,voice; } DialogZone;
 static DialogZone dialog_zones[4];
 static int16_t death_zones[8][6];
@@ -38,7 +38,7 @@ PCE_COMBAT static void boss_begin(uint8_t kind) {
     pce_campaign.boss_kind=kind;
     boss_time=0;boss_x=camera+240;boss_y=80;
     if(kind==3){pce_campaign.boss_hp=boss_max=30;boss_phase=3;}
-    else overlay_call(0x7b,boss_start);   /* the flying bosses: boss_pce.c */
+    else overlay_call(0x6f,boss_start);   /* the flying bosses: boss_pce.c */
     audio_music(8);
 }
 PCE_COMBAT static void power_strike(void) {
@@ -132,6 +132,7 @@ PCE_COMBAT void combat_tick(void) {
             }
         } else overlay_call(0x7b,boss_tick);
         if(!pce_campaign.boss_hp) {
+            if(kind!=3)overlay_call(0x6f,boss_release);
             if(pce_metrics.stage==4) {
                 ++pce_campaign.score;pce_campaign.boss_round=2;
             } else if(pce_metrics.stage==5&&kind==1) {
@@ -154,7 +155,7 @@ PCE_COMBAT void combat_tick(void) {
             &&distance(actors[j].b.x,actors[k].b.x)<48&&distance(actors[j].b.y,actors[k].b.y)<40)actor_kill(&actors[j]);
     if(horses||humanoids)for(uint8_t k=0;k<8;++k)if(actors[k].active&&!actors[k].dead&&!(actors[k].type>=12&&actors[k].type<=28)&&distance(player.x,actors[k].b.x)<(actors[k].type==11?44:14)&&distance(player.y,actors[k].b.y)<(actors[k].type==11?40:24)) {
         if(slide_time)actor_kill(&actors[k]);      /* a slide knocks enemies down */
-        else if(!safe_timer){safe_timer=120;campaign_hurt();}
+        else if(!safe_timer){safe_timer=120;if(actors[k].type==11)audio_effect(4);campaign_hurt();}
     }
 }
 PCE_COMBAT void combat_draw(void) {
@@ -165,7 +166,6 @@ PCE_COMBAT void combat_draw(void) {
         if(pce_campaign.timer>=114){power_strike();pce_campaign.state=CAM_PLAY;video_restore();}
     }
     if(pce_campaign.boss_kind==3&&pce_campaign.boss_hp&&(!boss_flash||(frame&2)))video_sprite(43,boss_x-camera,boss_y-16,player.x<boss_x,16);
-    else if(pce_campaign.boss_kind&&pce_campaign.boss_kind!=3&&pce_campaign.boss_hp)overlay_call(0x7b,boss_draw);
-    if(pce_campaign.boss_kind){video_text(1,1,"BOSS");video_number(6,1,pce_campaign.boss_hp);}
+    else if(pce_campaign.boss_kind&&pce_campaign.boss_kind!=3&&pce_campaign.boss_hp)overlay_call(0x79,boss_draw);
 
 }

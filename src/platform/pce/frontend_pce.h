@@ -5,5 +5,7 @@
 void frontend_start(void);
 void frontend_continue(void);
 void frontend_game_over(void);
-void frontend_loading(void);
+void frontend_card(void);
 void frontend_credits(void);
+
+void frontend_victory(void);

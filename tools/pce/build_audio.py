@@ -46,8 +46,11 @@ def build(out):
     t=tables();resident=bytearray();stream=bytearray();pcm_rows=[];pcm_report=[]
     for event,rid in [('shot','C66E1894'),('impact','EB3309DC'),
                       ('power','A8382083'),('gallop','82EFBA26')]:
+        # Keep the hoof rumble audible beside CD-DA; the general effects filter
+        # removed its bass and attenuated an already shared PSG mix.
+        filtering='highpass=f=20,lowpass=f=3000,volume=1.0' if event=='gallop' else 'highpass=f=80,lowpass=f=3000,volume=0.7'
         result=subprocess.run(['ffmpeg','-v','error','-i',str(sfx/f'{rid}.wav'),
-            '-ac','1','-ar','6991','-af','highpass=f=80,lowpass=f=3000,volume=0.7',
+            '-ac','1','-ar','6991','-af',filtering,
             '-f','s16le','-'],check=True,capture_output=True)
         samples=array.array('h');samples.frombytes(result.stdout)
         if event=='shot':
@@ -81,8 +84,12 @@ def build(out):
     #   jump 9C7B3FD9 (sfx 2) | hurt (sfx 3, hero's own) | death (sfx 4) | fall (sfx 15, out of the level)
     #   enemy hit = sfx 5: BF4917FF BF5B14EA BF6D1599; enemy death = sfx 5 at once + sfx 6 (89389611 / 8923950D) 3 frames on
     #   alarm = sfx 22 (E105C92A, the cutscene Outrider's "!"); dialogue voice FDB525F9 (level 1 "Oh no! The Star Sheriffs!!!")
-    def load(src,gain=0.65):
-        result=subprocess.run(['ffmpeg','-v','error','-i',str(src),'-ac','1','-ar','8000','-af',f'volume={gain}','-f','s16le','-'],check=True,capture_output=True)
+    def load(src,gain=0.65,rate=8000,seconds=None,fade=0.0):
+        # the CD ADPCM player runs at 32 kHz / (16 - n): n=12 is 8 kHz, 10 is 5.33 kHz, 8 is 4 kHz
+        filters=f'lowpass=f={min(3500,rate*0.45):.0f},volume={gain}'
+        if seconds:filters+=f',atrim=end={seconds}'
+        if fade:filters+=f',afade=t=out:st={seconds-fade}:d={fade}'
+        result=subprocess.run(['ffmpeg','-v','error','-i',str(src),'-ac','1','-ar',str(rate),'-af',filters,'-f','s16le','-'],check=True,capture_output=True)
         return np.frombuffer(result.stdout,'<i2').astype(np.int32)
     def mix(first,second,delay=400):   # delay: 3 frames at 8 kHz
         out=np.zeros(max(len(first),len(second)+delay),np.int32)
@@ -93,8 +100,20 @@ def build(out):
     shared_death=[mix(shared_hit[i],load(sfx/f'{deaths[j]}.wav')) for i,j in ((0,0),(1,1),(2,0))]
     shared=[('enemy_hit',shared_hit,yells),('enemy_death',shared_death,[f'{yells[i]}+{deaths[j]}' for i,j in ((0,0),(1,1),(2,0))]),
             ('alarm',[load(sfx/'E105C92A.wav',0.8)],['E105C92A']),('dialogue_oh_no',[load(sfx/'FDB525F9.wav',0.8)],['FDB525F9'])]
+    # The flying bosses' sounds (the source's sfx 0x13 engine pass, 0x10 gun, 0x12 rider's gun, 0x11 blast, 0x15 the wreck's big bang),
+    # at the lower ADPCM rates that fit beside a hero's bank in the 64 KiB; the gun and the rider's gun also as the pair the
+    # gunship fires on the same step.
+    gun=load(sfx/'8AEB8147.wav',0.9,5333);pilot=load(sfx/'0AFC505A.wav',0.9,5333)
+    pair=np.zeros(max(len(gun),len(pilot)),np.int32);pair[:len(gun)]+=gun;pair[:len(pilot)]+=pilot
+    shared+=[('boss_appear',[load(sfx/'15A00BA1.wav',0.9,4000,4.2,0.5)],['15A00BA1']),
+             ('boss_cannon',[gun],['8AEB8147']),('boss_rider',[pilot],['0AFC505A']),
+             ('boss_volley',[np.clip(pair*0.8,-32768,32767).astype(np.int32)],['8AEB8147+0AFC505A']),
+             ('boss_blast',[load(sfx/'F11FCC31.wav',0.9,5333)],['F11FCC31']),
+             ('boss_down',[load(sfx/'47D886A1.wav',0.9,4000,3.4,0.4)],['47D886A1'])]
     voices=[];rows=[]
-    EVENTS=('jump','hurt','death','fall','enemy_hit','enemy_death','alarm','dialogue_oh_no')
+    EVENTS=('jump','hurt','death','fall','enemy_hit','enemy_death','alarm','dialogue_oh_no','boss_appear','boss_cannon','boss_rider','boss_volley','boss_blast','boss_down')
+    PRIORITY=(1,2,3,3,1,1,1,4,1,0,0,0,0,2)
+    RATE=(12,12,12,12,12,12,12,12,8,10,10,10,10,8)
     for hero,name in enumerate(('saber','fireball','april','colt')):
         if hero==1:   # Fireball keeps the demo's own samples: jump, the sfx 5 yells as hurt, the sfx 6 yells as death, sfx 15 for a fall
             own=[('jump',[load(sfx/'9C7B3FD9.wav')],['9C7B3FD9']),('hurt',[load(sfx/f'{r}.wav') for r in yells],yells),
@@ -119,8 +138,8 @@ def build(out):
     counts=[g[1] for g in rows[0][0]];firsts=[g[0] for g in rows[0][0]]
     assert all([g[1] for g in r[0]]==counts and [g[0] for g in r[0]]==firsts for r in rows)
     header='/* Generated hardware ADPCM bank layout. */\n#define VOICE_SAMPLES %d\n'%len(rows[0][1])
-    header+='/* per event: first sample, variants, priority */\nstatic const uint8_t voice_groups[%d][3] __attribute__((section(".ram_bank117.rodata")))={%s};\n'%(
-        len(EVENTS),','.join('{%d,%d,%d}'%(f,c,pr) for f,c,pr in zip(firsts,counts,(1,2,3,3,1,1,1,4))))
+    header+='/* per event: first sample, variants, priority, BIOS ADPCM rate */\nstatic const uint8_t voice_groups[%d][4] __attribute__((section(".ram_bank117.rodata")))={%s};\n'%(
+        len(EVENTS),','.join('{%d,%d,%d,%d}'%(f,c,pr,rt) for f,c,pr,rt in zip(firsts,counts,PRIORITY,RATE)))
     header+='static const uint16_t voice_samples[4][VOICE_SAMPLES][2] __attribute__((section(".ram_bank117.rodata")))={'+','.join('{'+','.join(r[1])+'}' for r in rows)+'};\n'
     header+='static const uint16_t voice_total[4] __attribute__((section(".ram_bank117.rodata")))={%s};\n'%','.join(str(r[2]) for r in rows)
     (out/'samples.h').write_text(header)

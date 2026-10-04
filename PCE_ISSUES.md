@@ -339,3 +339,17 @@ Actual audio captures: `build/pce/audio-review/*.wav`.
   32 HUD cases. Each convoy still presents 300 new frames in 300 VBlanks;
   continuous firing after the three convoys peaks at 9/7/7 width units and
   both rightmost background columns match the resident cache.
+
+## Fifteenth pass (2026-10-04, playtest of the previous revision)
+
+- [x] Security camera cell no longer carries a differently coloured patch of wall; dialogue has no blinking arrow; the first
+      stampede has 8 horses.
+- [x] Gunship / Hyperjumper: half-size hull on the far pass, three-quarter on the mid pass, full size only for the fight; the
+      source's engine, gun, rider's gun, blast and big-bang samples play (CD ADPCM events in every hero bank).
+- [x] Victory: the stage jingle (CD-DA track 6) plays instead of being cut by the disc read, the painting is the centred 320x224
+      of the original with MISSION ACCOMPLISHED added as pulsing light like GAME OVER, and track 7 plays on it.
+- [x] Race: blue gradient sky of plain tiles, floor from scanline 120 in 19 strips, no car drawn above the floor, road updates
+      12.2 -> 15.0 per second with the seven rivals; every stage opens with its title card and the race ends its opening
+      with the controls card.
+- [ ] Not done: the road still updates at about 15 Hz, not 60 (floor sampling is 46% of the cycles); physical hardware
+      acceptance of the new ADPCM rates (4 and 5.33 kHz) and of the boss sound balance.

@@ -8,6 +8,10 @@
 #include "assets.h"
 #include <string.h>
 
+extern uint8_t sat_count,sat_page;
+extern vdc_sprite_t sat[2][64];
+extern volatile uint16_t pce_scroll_y;
+
 /* Positions retain whole-world range. Fractions and velocities are separate
  * Q8 values; a 16-bit fixed-point world coordinate would overflow after 127px. */
 Body player;
@@ -136,7 +140,7 @@ PCE_CODE void grenade_call(void) {
 PCE_CODE void phys_call(void) {physics(phys_body);}
 PCE_CODE void cell_call(void) {cell_value=cell(cell_x,cell_y);}
 PCE_CODE void play_init(uint8_t stage,uint8_t selected) {
-    scene=&pce_scenes[stage-1];hero=selected;camera=frame=0;
+    scene=&pce_scenes[stage-1];hero=selected;hero_sprite=selected*9;camera=frame=0;
     facing=fire_timer=safe_timer=crouch=slide_time=death_time=jumping=jump_time=pce_death=0;drop_y=-32767;
     player=(Body){.x=scene->sx,.y=scene->sy};safe_x=player.x;safe_y=player.y;
     memset(actors,0,sizeof actors);memset(shots,0,sizeof shots);
@@ -227,6 +231,7 @@ PCE_BOSS void play_draw(void) {
     /* The hardware scroll stays put until this frame's SAT is uploaded (see irq.S). */
     pce_scroll_hold=1;
     video_background(camera);video_sat_begin();foreground_prepare();presentation_draw();
+    uint8_t world_first=sat_count;
     uint8_t keys=pce_control.keys,stage=pce_metrics.stage-1;
     bool grounded=player.coll&4,side=keys&(KEY_LEFT|KEY_RIGHT);
     uint8_t pose=crouch?8:!grounded?7:player.vx?1+(frame/6)%6:0;
@@ -258,10 +263,9 @@ PCE_BOSS void play_draw(void) {
     if(herd_on)overlay_call(0x6f,herd_draw);
     /* Essential projectiles precede optional distant enemies (while the herd runs they give way to the horses). */
     bool (*draw)(uint16_t,int16_t,int16_t,bool,uint8_t)=herd_on?video_sprite_optional:video_sprite;
-    if(flash_time)draw(pce_flash_base[stage]+(flash_diag?0:4)+4-flash_time,player.x+flash_dx-camera,player.y+flash_dy-16,false,16);
-    for(uint8_t k=0;k<NSHOTS;++k) if(shots[k].active)
-        draw(shots[k].enemy?37:36,shots[k].x-camera,shots[k].y-16,false,16);
     if(!pce_campaign.diagnostic)overlay_call(0x70,combat_draw);
+    if(flash_time)draw(pce_flash_base[stage]+(flash_diag?0:4)+4-flash_time,player.x+flash_dx-camera,player.y+flash_dy-16,false,16);
+    overlay_call(0x70,shots_draw);
     overlay_call(0x74,actors_draw);
     /* While the herd is on screen the SAT has no room for the foreground pieces as well: they would come and go with
      * every horse's piece count, so the foreground layer is left out until it has passed. */
@@ -271,7 +275,12 @@ PCE_BOSS void play_draw(void) {
     /* A closing dialogue's cells return in the frame its sprites leave: the new SAT takes effect at the next VBlank, so
      * read the cells now, queue the SAT, and write them right after that VBlank, before the beam reaches the panel. */
     if(pce_panel_restore)video_panel_restore_prepare(pce_panel_restore);
+    /* Move the world together; HUD entries precede video_front_mark and stay fixed.
+     * Apply after admission so a changing shake never splits horse columns. */
+    uint8_t shake_y=herd_on?((frame*13^(frame>>2))&3):0;
+    if(shake_y)for(uint8_t i=world_first;i<sat_count;++i)sat[sat_page][i].y-=shake_y;
     video_sat_end();
+    pce_scroll_y=shake_y;
     if(pce_panel_restore) {
         video_wait();
         overlay_call(0x6f,story_graphics_restore);

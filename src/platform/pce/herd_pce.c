@@ -78,7 +78,7 @@ PCE_FLOW static void herd_stream(void) {
 /* Use the offscreen approach to retain the two firing poses, four straight
  * muzzle frames and projectile. Their nine pattern pages fit beside the HUD
  * and both displayed idle generations, with the herd's buffers reserved. */
-PCE_FLOW static void herd_warm(void) {
+HERD_CODE static void herd_warm(void) {
     if(warm_count<7) {
         uint8_t i=warm_count,stage=pce_metrics.stage-1;
         uint16_t id=i<2?pce_motion_base[stage]+hero*3+i:
@@ -102,7 +102,7 @@ HERD_CODE void herd_draw(void) {
     audio_pcm_gallop(true);
     sprite_pinned[47]=250;
     overlay_call(0x6e,herd_stream);
-    overlay_call(0x6e,herd_warm);
+    herd_warm();
     uint16_t code=(PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(cur)*256)>>5;
     bool shared=herd_horse_count&&herd_same&&sat_count+2*herd_cells<=64&&
         (sprite_exact||!(herd_horses[0].y&7));

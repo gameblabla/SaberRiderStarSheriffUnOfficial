@@ -70,8 +70,8 @@ The herd spawns before the camera locks. The exported PC camera-stop zones
 are x=2392, 6292 and 8976; spawn triggers are x=2252, 5916 and 8648.
 Starting distance follows each trigger's interval (195, 435 and 420 pixels).
 `test_herd.py` executes native scrolling, spawning, locking, gallop playback and
-release with no mid-sequence disc reads. Five horses spaced 192 pixels apart
-respect the VDC sprite budget.
+release with no mid-sequence disc reads. The original horse count is retained, spaced 256 pixels apart to keep every
+visible column within the VDC scanline budget beside all four firing poses.
 
 ## Build 14 ROM disassembly
 

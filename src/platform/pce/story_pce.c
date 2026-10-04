@@ -37,7 +37,7 @@ PCE_MISSION static void platform_box(void) {
     uint8_t colour=platform_colour,y=platform_y;
     uint32_t record[4];uint16_t bytes;
     extern uint8_t buffer[2048];
-    extern volatile uint16_t pce_scroll_x;
+    extern volatile uint16_t pce_scroll_x,pce_scroll_y;
     uint32_t a=pce_dialog_bg[pce_metrics.stage-1]+(uint16_t)(colour&3)*18;
     arcade_read(2,a,record,16);arcade_read(2,a+16,&bytes,2);
     arcade_read(2,record[0],buffer,32);pce_vce_copy_palette(15,buffer,1);
@@ -69,7 +69,7 @@ STORY_CODE static uint32_t pointer(uint32_t a) {
 extern vdc_sprite_t sat[2][64];
 extern uint8_t cut_phase;
 extern uint8_t sat_page,sat_count;
-extern volatile uint16_t pce_scroll_x;
+extern volatile uint16_t pce_scroll_x,pce_scroll_y;
 /* Platform panels and opaque-backed glyphs are BG tiles. Their four rounded
  * sprite corners retain the scenery behind them; other modes keep their own
  * panel renderer. */
@@ -134,9 +134,6 @@ STORY_CODE static bool typing(void) {
     }
     return type_line<line_count;
 }
-STORY_CODE static void arrow(bool on) {
-    video_text(28,story_y+4,on?"\x7f":" ");
-}
 STORY_CODE void story_start(void) {
     uint32_t dir=pce_scenes[pce_metrics.stage-1].story;
     uint8_t count;arcade_read(2,dir,&count,1);
@@ -150,12 +147,13 @@ STORY_CODE void story_start(void) {
     /* Resuming from Run invalidates the BAT. Remove the menu's cells before
      * reopening a panel, including the cells outside its restoration area. */
     if(pce_metrics.stage!=2&&pce_metrics.stage<6)video_background(camera);
+    /* Reset world rumble before submitting the unshifted box and actors. */
+    if(pce_metrics.stage!=2&&pce_metrics.stage<6)pce_scroll_y=0;
     draw();
 }
 STORY_CODE void story_step(void) {
     pce_campaign.timer+=pce_control.elapsed;
-    if(typing()){arrow(false);return;}
-    arrow(!(pce_campaign.timer&32));
+    if(typing())return;
     if(pce_campaign.timer<12||!(pce_control.pressed&(KEY_1|KEY_2)))return;
     pce_campaign.timer=0;
     if(++pce_campaign.page<page_count)draw();

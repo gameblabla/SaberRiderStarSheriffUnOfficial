@@ -30,7 +30,7 @@ MECH_SIZES = (24, 32, 40, 48, 56, 64, 72, 80)   # baked widths of the Ramrod mec
 sys.path[:0] = [str(ROOT / 'tools/saturn'), str(ROOT / 'tools/dc')]
 import levl
 import texbake
-from formats import Archive, BG_TILES, indexed, palette_for, planar_tile, planar_sprite, pack_sprite, pair_characters, vce_rgb
+from formats import Archive, BG_TILES, indexed, palette_for, planar_tile, planar_sprite, pack_sprite, pair_characters, vce_rgb, vce_colors
 
 def run(args, **kwargs):
     result = subprocess.run([str(a) for a in args], cwd=ROOT, check=True, capture_output=True, **kwargs)
@@ -94,6 +94,22 @@ def cblock_whole_frame(path, frame):
             if t != 65535:
                 im.alpha_composite(Image.fromarray(px[(t // sc) * th:(t // sc + 1) * th, (t % sc) * tw:(t % sc + 1) * tw]), (c * tw, r * th))
     return im
+
+CAMERA_WALL = {(123,123,132),(148,148,148),(173,173,173),(90,90,107),(58,66,82)}
+def key_wall(im):
+    """The security camera's cell carries a patch of the building wall behind its bracket. That wall is a different grey from
+    the background tiles it sits on (and from each building), so the patch showed as a coloured block. The wall greys
+    connected to the cell's left and bottom edges are made transparent: the scenery shows through instead."""
+    a = np.array(im.convert('RGBA')); h, w = a.shape[:2]
+    seen = np.zeros((h, w), bool)
+    stack = [(y, 0) for y in range(h)] + [(h - 1, x) for x in range(w)]
+    while stack:
+        y, x = stack.pop()
+        if not (0 <= y < h and 0 <= x < w) or seen[y, x] or tuple(int(v) for v in a[y, x, :3]) not in CAMERA_WALL: continue
+        seen[y, x] = True
+        stack += [(y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)]
+    a[seen, 3] = 0
+    return Image.fromarray(a)
 
 HORSE_FRAMES = 5
 
@@ -210,6 +226,54 @@ def native_background(image, archive, previews, name):
     Image.fromarray(preview[:, :min(w, 1024)]).save(previews / f'{name}.png')
     return dict(pal=pal_off, tiles=tile_off, map=map_off, cols=w // 8, tile_count=len(tiles))
 
+def race_sky(archive, previews, sand):
+    """The Grand Prix's sky as plain background tiles: a blue gradient from the zenith to a pale horizon (scanline 113), then
+    the haze of the ground out to the floor's first scanline (120). One 15-colour palette: 13 shades of the gradient and the
+    haze; ordered dithering (8x8 Bayer, 64 steps between neighbouring shades) keeps the bands invisible, and because the
+    dither repeats every 8 dots a tile row is the same all across, so the whole sky is 16 distinct characters."""
+    HORIZON = 113
+    def word(c): return int(vce_colors(np.clip(np.asarray(c, float), 0, 255).astype(np.uint8)))
+    zenith, pale = np.array((12, 60, 188.)), np.array((200, 220, 255.))
+    haze = np.asarray(sand, float) * 0.72 + pale * 0.28
+    # The hardware has 8 levels a channel, so shades picked one by one wander in hue (a teal band appeared). The shades are
+    # instead the lattice points of a straight walk from the zenith to the horizon colour, 12 steps of at most one level a
+    # channel, and the dither between neighbours is then a one-level difference.
+    z_lat, p_lat = np.round(zenith * 7 / 255), np.round(pale * 7 / 255)
+    # (green rounds down and blue up, so that no step has more green than a sky has)
+    walk = []
+    for k in range(13):
+        f = k / 12
+        r = np.floor(z_lat[0] + (p_lat[0] - z_lat[0]) * f + 0.5); g = np.floor(z_lat[1] + (p_lat[1] - z_lat[1]) * f)
+        bl = np.ceil(z_lat[2] + (p_lat[2] - z_lat[2]) * f)
+        walk.append(np.array((r, g, bl)) * 255 / 7)
+    palette = np.zeros(16, '<u2')
+    for k, c in enumerate(walk): palette[k + 1] = word(c)
+    palette[15] = word(haze)
+    bayer = np.array([[0]])
+    for _ in range(3): bayer = np.block([[4 * bayer, 4 * bayer + 2], [4 * bayer + 3, 4 * bayer + 1]])   # 8x8 ordered dither, 64 levels
+    rows = []
+    for r in range(16):
+        tile = np.zeros((8, 8), np.uint8)
+        for dy in range(8):
+            y = r * 8 + dy
+            for x in range(8):
+                if y >= HORIZON: tile[dy, x] = 15
+                else:
+                    pos = (y / (HORIZON - 1)) ** 1.45 * 12
+                    k = min(int(pos), 11); frac = pos - k
+                    tile[dy, x] = k + 1 + (1 if frac * 64 > bayer[y % 8, x] else 0)
+        rows.append(tile)
+    tiles = [planar_tile(t) for t in rows]
+    column = b''.join(struct.pack('<HB', min(y, 15), 0) for y in range(30))
+    pal_off = archive.add('bg_palette', np.asarray([palette] * 16, '<u2').tobytes())
+    tile_off = archive.add('bg_patterns', b''.join(tiles))
+    map_off = archive.add('bg_columns', column * 64)
+    preview = np.zeros((240, 512, 3), np.uint8)
+    for r in range(16):
+        preview[r * 8:r * 8 + 8] = np.tile(vce_rgb(palette)[rows[r]], (1, 64, 1))
+    Image.fromarray(preview).save(previews / 'stage2.png')
+    return dict(pal=pal_off, tiles=tile_off, map=map_off, cols=64, tile_count=len(tiles))
+
 def platform_background(stage, work):
     level, files = levl.load_dump(work / f'stage{stage}.layers')
     banks = {i: levl.png_bank(path, i) if path else levl.load_bank(work / 'srgb' / f'{i:08X}.srgb')
@@ -242,8 +306,10 @@ def add_sprites(archive, sprites, previews):
     # The HUD pieces of a stage share one palette (the cache gives them the shared-palette slots, see sprite_cache_pce.c).
     hud=[im for name,im,_ in sprites if name.startswith('hudp_')]
     hud_palette=palette_for(hud,unique=True) if hud else None
+    boss=[im for name,im,_ in sprites if name in ('gunship_left','gunship_right','hyperjumper_left','hyperjumper_right')]
+    boss_palette=palette_for(boss) if boss else None
     for name, im, anchor in sprites:
-        pat, parts, palette, line = pack_sprite(im, anchor,fg_palette if name.startswith("foreground_") else hud_palette if name.startswith('hudp_') else None)
+        pat, parts, palette, line = pack_sprite(im, anchor,boss_palette if name in ('gunship_left','gunship_right','hyperjumper_left','hyperjumper_right') else fg_palette if name.startswith("foreground_") else hud_palette if name.startswith('hudp_') else None)
         if not parts or len(parts)>32:
             raise ValueError(f'{name}: expected 1..32 visible sprite pieces, got {len(parts)}')
         offset = archive.add(name + '_patterns', pat)
@@ -409,17 +475,41 @@ def make_scene(stage, work, previews, shared):
 
         sprites = list(shared)
         if stage in (1,5):
-            # The Black Hornet gunship: the boss character's whole frame 0 (208x112, origin 107,46; the cannon points
-            # left) at 5/8 size, so it costs about 25 sprite pieces.
             d=(work/'2A02BD4F.levl').read_bytes();aid=struct.unpack_from('<I',d,4)[0]
             im=cblock_whole_frame(work/'srgb'/f'{aid:08X}.srgb',0)
-            im=im.resize((130,70),Image.Resampling.LANCZOS)
-            sprites.append(('gunship',im,(67,29)))
+            name,anchor,split='gunship',(107,46),112
         else:
-            # The Hyperjumper's side view (130x108, nose left) at 3/4 size.
-            im=Image.open(ROOT/'assets/hyperjumper/side_normal.png').convert('RGBA').resize((98,81),Image.Resampling.LANCZOS)
-            sprites.append(('hyperjumper',im,(49,40)))
+            im=Image.open(ROOT/'assets/hyperjumper/side_normal.png').convert('RGBA')
+            name,anchor,split='hyperjumper',(65,54),64
+        # Hardware 32x32 cells leave SAT room for the full hull and its lasers. The hull exists at full size for the fight
+        # and at 3/4 and 1/2 size for the mid and far passes (the ship flies in from the distance): three records,
+        # reloaded into the same pattern pages when the ship changes layer.
+        hull_records=b''
+        for scale in (1.0,0.75,0.5):
+            hull=im if scale==1.0 else im.resize((round(im.width*scale),round(im.height*scale)),Image.Resampling.LANCZOS)
+            hull_anchor=tuple(round(v*scale) for v in anchor)
+            pal=palette_for([hull]);idx=indexed(hull,pal);patterns=[];pieces=[]
+            for y in range(0,hull.height,32):
+                for x in range(0,hull.width,32):
+                    cell=idx[y:y+32,x:x+32]
+                    cell=np.pad(cell,((0,32-cell.shape[0]),(0,32-cell.shape[1])))
+                    if not cell.any():continue
+                    pieces.append((x-hull_anchor[0],y-hull_anchor[1],len(patterns)))
+                    for row in (0,16):
+                        for col in (0,16):patterns.append(planar_sprite(cell[row:row+16,col:col+16]))
+            assert len(patterns)<=96
+            bp=a.add('boss_big_palette',pal.tobytes())
+            bd=a.add('boss_big_pieces',b''.join(struct.pack('<hhH',*r) for r in pieces))
+            bt=a.add('boss_big_patterns',b''.join(patterns))
+            hull_records+=struct.pack('<IIIHB',bp,bd,bt,len(patterns)*128,len(pieces))
+        meta['boss_big_offset']=a.add('boss_big',hull_records)
+        # Two independently cached metasprites preserve the native art and anchor.
+        sprites.append((name+'_left',im.crop((0,0,split,im.height)),anchor))
         sprites.append(('dark_april',shared[18][1],shared[18][2]))
+        sprites.append((name+'_right',im.crop((split,0,im.width,im.height)),(anchor[0]-split,anchor[1])))
+        laser=cblock_frame(work/'srgb'/'A2E02F5A.srgb',0)
+        for label,angle in (('horizontal',0),('diagonal',-45),('vertical',90)):
+            sprites.append(('boss_laser_'+label,laser.rotate(angle,resample=Image.Resampling.NEAREST),(8,8)))
         meta['actor_ids']=[255]*33
         for t in range(1,33):meta['actor_ids'][t]=39 if t in (1,3,4) else 40 if t in (2,5,28) else 41
         for t,crhc in enumerate(['FBFAF817','4042CD71','71887ECA','BFDAB70F','1D724DD9','211F5D78','9393E59B','20C6FAEF','ECC992CB','72B53EF8','925534E2','916137ED','906D3698','F5975DCF','F4A55EDE','F4A25ED9','F3B05E28'],11):
@@ -432,7 +522,9 @@ def make_scene(stage, work, previews, shared):
                 meta['actor_ids'][t]=255;continue
             if 24<=t<=27:      # the airships of the far background layers: not drawn (the PCE has no such layer)
                 meta['actor_ids'][t]=255;continue
-            im=cblock_frame(art,first)
+            flags=struct.unpack_from('<I',d,0x34+24+20)[0]
+            whole=bool(flags&8)
+            im=cblock_whole_frame(art,first) if whole else cblock_frame(art,first)
             if not im.getchannel('A').getbbox():
                 meta['actor_ids'][t]=255;continue
             anchor=tuple(round(v) for v in struct.unpack_from('<ff',d,8))
@@ -441,8 +533,13 @@ def make_scene(stage, work, previews, shared):
                 scale=min(128/im.width,64/im.height)
                 im=im.resize((max(1,round(im.width*scale)),max(1,round(im.height*scale))),Image.Resampling.NEAREST)
                 anchor=tuple(round(v*scale) for v in anchor)
+            if t==16:
+                im=key_wall(im)
             meta['actor_ids'][t]=len(sprites)
             sprites.append((f'actor_type{t}',im,anchor))
+            if t==16:
+                # Security camera: both original animation cells, no static substitute.
+                sprites.append(('actor_type16_frame1',key_wall(cblock_whole_frame(art,first+1) if whole else cblock_frame(art,first+1)),anchor))
         # The cutscene Outrider (type 28) is the blue one: standing, the "!" alarm pose, then the six run cells.
         art=work/'srgb'/'6338F34D.srgb';meta['actor_ids'][28]=len(sprites)
         for name,n in [('idle',24),('alarm',36)]+[(f'run{k}',42+k) for k in range(6)]:
@@ -514,8 +611,7 @@ def make_scene(stage, work, previews, shared):
         meta['hud']=hud.base;meta['hud_macros']=hud.macros('H7')
         collision = 0
     else:
-        bg = Image.new('RGBA', (512,224), (0,0,0,255))
-        bg.paste(Image.open(ROOT/'assets/sky_mode7.png').convert('RGBA').resize((128,32)).resize((512,128),Image.Resampling.NEAREST), (0,0))
+        bg = Image.new('RGBA', (512,224), (0,0,0,255))   # (the sky is baked by race_sky below: plain tiles, no picture)
         sprites = shared[36:39]
         im = Image.open(ROOT / 'assets/mode7.png').convert('RGBA')
         rows7 = {r.split()[0]: [int(v) for v in r.split()[1:6]] for r in (ROOT / 'assets/mode7.txt').read_text().splitlines()}
@@ -557,6 +653,9 @@ def make_scene(stage, work, previews, shared):
         ground = blocks[np.minimum(race, 10), cx, cy] | (cls[np.minimum(race, 10)] << 4)
         a.add('race_map', ground.astype(np.uint8).tobytes())    # first: the sampler addresses it from Arcade offset 0
         a.add('floor_palette', pal.tobytes())
+        # the commonest sand colour of the ground: the haze between the sky and the floor's first scanline matches it
+        sand_index = int(np.bincount((ground & 15)[(ground >> 4) == 0].ravel(), minlength=16).argmax())
+        race_sand = vce_rgb(pal[sand_index:sand_index + 1])[0]
         meta['track_offset']=a.add('track', (work/'track.bin').read_bytes())
         a.add('pair_characters', pair_characters())
         a.add('floor_geometry', floor_tables.generate())
@@ -592,7 +691,7 @@ def make_scene(stage, work, previews, shared):
         meta['foreground_count']=len(entries)
         foreground.crop((0,0,1024,224)).save(previews/f'foreground{stage}.png')
     meta['story_offset']=story.bake(ROOT,work,stage,a,meta['presentation']['portraits'])
-    meta.update(native_background(bg, a, previews, f'stage{stage}'))
+    meta.update(race_sky(a, previews, race_sand) if stage == 2 else native_background(bg, a, previews, f'stage{stage}'))
     sprite_table, rows, costs = add_sprites(a, list(sprites), previews)
     meta.update(collision=collision, sprite_table=sprite_table, sprite_count=len(rows), sprites=costs,
                 records=a.records, bytes=len(a.finish()), color_palettes=16, sprite_palettes=16)
@@ -641,6 +740,8 @@ def main():
     h.append('extern const int8_t pce_muzzle[4][9][2];')
     c.append('const int8_t pce_muzzle[4][9][2]={'+','.join('{'+','.join('{%d,%d}'%(row[2*k],row[2*k+1]) for k in range(9))+'}' for row in muzzle)+'};')
     h+=ui_h;c+=ui_c
+    h.append('extern const uint32_t pce_boss_big[7];')
+    c.append('const uint32_t pce_boss_big[7]={'+','.join(str(m.get('boss_big_offset',0))+'UL' for m in scenes)+'};')
     for name in ('dialog_bg','dialog_original_font'):
         h.append(f'extern const uint32_t pce_{name}[7];')
         c.append(f'const uint32_t pce_{name}[7]={{'+','.join(str(m['records'].get(name,{}).get('offset',0))+'UL' for m in scenes)+'};')

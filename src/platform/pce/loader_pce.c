@@ -12,7 +12,7 @@ static uint8_t voice_priority;
 DISC_SECTOR(s1_bin); DISC_SECTOR(s2_bin); DISC_SECTOR(s3_bin);
 DISC_SECTOR(s4_bin); DISC_SECTOR(s5_bin); DISC_SECTOR(s6_bin);
 DISC_SECTOR(s7_bin); DISC_SECTOR(font_bin);
-DISC_SECTOR(ui_bin);
+DISC_SECTOR(ui_bin);DISC_SECTOR(victory_bin);
 DISC_SECTOR(voice0_bin);DISC_SECTOR(voice1_bin);DISC_SECTOR(voice2_bin);DISC_SECTOR(voice3_bin);
 static uint32_t sector_of(uint8_t stage) {
     switch (stage) {
@@ -80,6 +80,8 @@ static bool loader_archive(uint32_t sector,uint32_t remaining,bool keep_display)
     return true;
 }
 bool loader_ui(void) {return loader_archive((uint32_t)__cd_ui_bin__sector,PCE_UI_BYTES,false);}
+/* One of the 19 victory paintings (each its own small extent of victory.bin). */
+bool loader_victory(uint8_t index) {return loader_archive((uint32_t)__cd_victory_bin__sector+pce_victory_sector[index],pce_victory_bytes[index],false);}
 bool loader_scene(uint8_t stage) {
     if(!stage||stage>7)return false;
     /* The NOW LOADING screen stays up for the whole disc read; the archive goes to Arcade RAM, not VRAM. */
@@ -109,13 +111,14 @@ static void music_start(uint8_t track,uint8_t mode) {
 void audio_music(uint8_t track) { music_start(track,PCE_CDB_CDDA_PLAY_REPEAT); }
 void audio_music_once(uint8_t track) { music_start(track,PCE_CDB_CDDA_PLAY_ONE_SHOT); }
 void audio_effect(uint8_t tone) {
-    /* 2 jump, 5 hurt, 6 death, 7/8 enemy hit / death yells, 9 alarm "!", 10 dialogue line, 11 fall: CD ADPCM voices
-     * (the bank picks a variant); a hero voice is never cut by a lower-priority one. */
-    if(tone==2||(tone>=5&&tone<=11)) {
+    /* 2 jump, 5 hurt, 6 death, 7/8 enemy hit / death yells, 9 alarm "!", 10 dialogue line, 11 fall, 12-17 the flying bosses'
+     * engine pass, gun, rider's gun, both, blast and big bang: CD ADPCM voices (the bank picks a variant); a hero voice is
+     * never cut by a lower-priority one. */
+    if(tone==2||(tone>=5&&tone<=17)) {
         audio_pcm_voice(tone);
         if((pce_cdb_adpcm_status()&ADPCM_STOPPED)||pce_voice.priority>=voice_priority) {
             pce_cdb_adpcm_stop();
-            pce_cdb_adpcm_play(pce_voice.address,pce_voice.bytes,12,PCE_CDB_ADPCM_ONE_SHOT);
+            pce_cdb_adpcm_play(pce_voice.address,pce_voice.bytes,pce_voice.rate,PCE_CDB_ADPCM_ONE_SHOT);
             voice_priority=pce_voice.priority;
         }
         return;

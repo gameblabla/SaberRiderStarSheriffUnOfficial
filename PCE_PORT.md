@@ -92,14 +92,14 @@ allocator admits complete objects against 64 SAT entries and 16 width units
 per scanline. HUD digits/icons precede the foreground sprites in SAT priority, followed by
 actors/projectiles. Foreground art shares one sprite palette and a separate
 cache-ID range; actor patterns remain intact. Cockpit slices are clipped to
-the viewing window. Platform BYR stays at zero; only the race uses raster
-scrolling. Level 1 has a blue sky gradient, and level 3 a dark purple one.
+the viewing window. Platform BYR follows the stampede’s 0–3 pixel world shake; the HUD stays
+fixed. Only the race uses raster scrolling. Level 1 has a blue sky gradient, and level 3 a dark purple one.
 Both moons are removed. Optional enemies that cannot be drawn are
 removed, and hidden Ramrod mechs cannot inflict damage.
 
 Both race phases use the Wolf BAT pair-character floor and raster scrolling at
 the 512-dot clock. Horizontally expanded cars preserve their physical aspect.
-Eight sampled depth rows repeat across 24 BAT rows, covering the 96-line floor.
+The floor begins at scanline 120 (the sky above it is plain gradient tiles): seven far strips of 8 scanlines (half-resolution samples) and twelve near strips of 4 make 19 BAT rows.
 The finished floor page is published after the corresponding sprite list is
 prepared. Ramrod uses four baked sizes and overlapping 16-pixel slices.
 
@@ -217,3 +217,14 @@ The frontend-only `tools/pce/emulator-audio.patch` adds `sound_capture` and
 `register_set` RPC commands for these checks; it does not change emulated
 hardware or timing. It is applied to the local headless emulator source and
 binary. The previous binary is kept as `PCE/mednafen-pce-headless.pre-audio`.
+
+The 2026-10-04 boss/presentation revision restores native boss sizes, two-frame
+security cameras and all 19 victory paintings at 320×224, removes boss HP
+readouts, resets rumble before dialogue, and shortens convoy spacing to 224 px.
+Race profiling with seven rivals measures 61 road updates per 300 video frames,
+up from 34. See `docs/PCE_BOSS_RACE_PRESENTATION_FIX_20261004.md` for the
+implementation, measurements and emulator verification artifacts.
+
+The second 2026-10-04 revision (boss far/mid-pass hulls and sounds, the jingle and the 320x224 victory painting with glowing
+lettering, the blue-gradient race sky, the 19-strip floor and 15 road updates per second, stage title cards and the race controls card)
+is described in `docs/PCE_BOSS_VICTORY_RACE_FIX_20261004B.md`.

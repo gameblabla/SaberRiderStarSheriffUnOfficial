@@ -199,8 +199,13 @@ RACE_CODE void race_frame(void) {
     pce_control.x=px-(cam_c*92>>7);
     pce_control.y=py-(cam_s*92>>7);
     pce_control.heading=(uint8_t)(cam_hd>>9)&127;pce_control.phase=rphase>=P_PURSUIT;
+    uint16_t commits=pce_metrics.floor_commits;
     overlay_call(0x6d,floor_draw);
-    overlay_call(0x7c,race_draw);
-    overlay_call(0x6d,floor_present);
+    /* Actors project against the completed road snapshot. Re-emitting them
+     * on every partial sampling pass wasted time on the same displayed road. */
+    if(pce_metrics.floor_commits!=commits) {
+        overlay_call(0x7c,race_draw);
+        overlay_call(0x6d,floor_present);
+    }
     pce_metrics.phase=rphase>=P_PURSUIT;pce_metrics.player_x=px;pce_metrics.player_y=py;
 }

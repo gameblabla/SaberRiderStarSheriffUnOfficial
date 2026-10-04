@@ -25,3 +25,5 @@ extern uint8_t cut_phase;   /* story camera pan around a level dialogue (combat_
 extern int16_t probe_x,probe_y;extern uint8_t probe_left;
 void spawn_clear(void);
 void actor_kill(Actor *a);
+
+void shots_draw(void);

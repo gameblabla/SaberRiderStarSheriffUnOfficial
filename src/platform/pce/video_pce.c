@@ -209,7 +209,8 @@ PCE_RENDER bool video_background(uint16_t camera) {
             if (!column_load(last_column)) return false;
         }
     }
-    video_scroll(camera, 0);
+    /* Keep the displayed shake until the matching SAT has been submitted. */
+    video_scroll(camera, pce_scroll_y);
     return true;
 }
 PCE_RENDER void video_text(uint8_t x, uint8_t y, const char *text) {
@@ -330,15 +331,8 @@ PCE_RENDER void video_race_init(void) {
     video_display(true);
 }
 PCE_RENDER void video_floor_row(uint8_t page, uint8_t row, const uint8_t *pairs) {
-    video_vdc(0, (uint16_t)row * 128 + (page ? 64 : 0));
-    pce_cpu_irq_disable();
-    pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;*IO_VDC_INDEX=2;
-    pce_cpu_irq_enable();
-    /* IRQ handlers restore index 2 and never change the VRAM write address.
-     * Stream a whole row without a banked call and SEI/CLI per BAT entry. */
-    for (uint8_t x = 0; x < 64; ++x) {
-        *IO_VDC_DATA_LO=pairs[x];*IO_VDC_DATA_HI=0xf2;
-    }
+    /* the row's 64 words (pairs: low and high bytes interleaved) by the PCM-friendly block copy, setup atomic */
+    sat_transfer((uint16_t)row * 128 + (page ? 64 : 0), pairs, 128);
 }
 __attribute__((noinline,section(".ram_bank109.text"))) static void race_sky_load(void) {   /* beside the floor code that calls it */
     uint16_t used=0;

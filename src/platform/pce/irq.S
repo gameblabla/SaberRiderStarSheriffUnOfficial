@@ -37,7 +37,7 @@ pce_vblank:
     st2 #1
     stz pce_raster_row
     st0 #6
-    st1 #192
+    st1 #184            /* the floor starts at scanline 120 (RCR = line + 64) */
     st2 #0
     bra .Ldone
 .Lnormal:
@@ -52,8 +52,10 @@ pce_vblank:
     sta 3
 1:
     st0 #8
-    st1 #0
-    st2 #0
+    lda pce_scroll_y
+    sta 2
+    lda pce_scroll_y+1
+    sta 3
     st0 #6
     st1 #255
     st2 #3
@@ -63,7 +65,7 @@ pce_vblank:
     pla
     rts
 
-/* 24 logical rows, each repeated over 4 scanlines. The native 128x64 BAT
+/* 19 logical rows: the first seven repeat over 8 scanlines (from scanline 120), the last twelve over 4. The native 128x64 BAT
  * halves are selected with BXR; BYR redirects the scanline to row*8. */
 pce_hblank:
     pha
@@ -107,12 +109,22 @@ pce_hblank:
     sta 3
     inc pce_raster_row
     lda pce_raster_row
-    cmp #24
+    cmp #19
     bcs .Lhlast
+    cmp #7
+    bcs .Lnear
+    asl
     asl
     asl
     clc
-    adc #192
+    adc #184
+    bra .Lset
+.Lnear:
+    asl
+    asl
+    clc
+    adc #212
+.Lset:
     tax
     st0 #6
     stx 2

@@ -20,6 +20,10 @@ class Campaign(Test):
         self.campaign=symbol(out/'app.elf','pce_campaign')
     def state(self,e):return dict(zip(FIELDS,struct.unpack('<13B5H',e.memory(self.campaign,23))))
     def press(self,e,key,n=30):
+        if self.state(e)['state']==2:
+            ui=symbol(self.out/'app.elf','pce_ui_state')
+            self.until(e,lambda:e.memory(ui,1)==b'\5',limit=6000)
+            e.run(40)
         e.input(0);e.run(30)
         previous=symbol(self.out/'app.elf','previous')
         self.until(e,lambda:e.memory(previous,1)==b'\0',limit=2000,step=10)

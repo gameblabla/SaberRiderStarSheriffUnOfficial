@@ -22,7 +22,7 @@ static uint8_t effect_demo,menu_hero,menu_mode;
 void race_briefing_frame(void);
 static const int8_t sine[32] PCE_TABLE={0,25,49,71,90,106,117,125,127,125,117,106,90,71,49,25,0,-25,-49,-71,-90,-106,-117,-125,-127,-125,-117,-106,-90,-71,-49,-25};
 PCE_FLOW static bool change_stage(uint8_t n) {
-    overlay_call(0x71,frontend_loading);
+    pce_control.stage=n;overlay_call(0x79,frontend_card);
     pce_metrics.ready=0;stage=n;phase=heading=0;race_x=4696;race_y=4096;
     pce_metrics.phase=0;pce_metrics.camera_x=pce_metrics.hp=0;
     test_x=128;test_y=144;
@@ -194,13 +194,11 @@ PCE_FLOW void flow_main(void) {
                 continue;
             }
             if(pce_campaign.state==CAM_CLEAR) {
-                video_text(3,10,"MISSION COMPLETE");video_text(3,12,"I/II CONTINUE");
-                if(pressed&(KEY_1|KEY_2)) {
-                    if(stage==7){pce_campaign.state=CAM_END;continue;}
-                    pce_campaign.powers=2;
-                    if(!change_stage(stage+1))for(;;){};
-                    save_store(stage,hero,0);simulation_tick=pce_ticks;
-                }
+                overlay_call(0x72,frontend_victory);
+                if(stage==7){pce_campaign.state=CAM_END;continue;}
+                pce_campaign.powers=2;
+                if(!loader_font()||!change_stage(stage+1))for(;;){};
+                save_store(stage,hero,0);simulation_tick=pce_ticks;
                 continue;
             }
             if(pce_campaign.result==2){
@@ -215,7 +213,7 @@ PCE_FLOW void flow_main(void) {
             else if(stage==7)overlay_call(0x73,space_frame);
             else overlay_call(0x69,play_frame);
             if(pce_campaign.event){pce_campaign.event=0;overlay_call(0x71,story_start);}
-            else if(pce_campaign.result==1){pce_campaign.state=CAM_CLEAR;pce_campaign.result=0;audio_music(6);}
+            else if(pce_campaign.result==1){pce_campaign.state=CAM_CLEAR;pce_campaign.result=0;audio_music_once(6);}
             continue;
         }
         if(stage==2||stage==6||stage==7)render_test(keys,pressed);

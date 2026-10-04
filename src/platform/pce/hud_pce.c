@@ -117,10 +117,6 @@ PCE_HUD void hud7_draw(void) {
     for(uint8_t i=0;i<h->items&&i<2;++i)put7(PCE_H7_STAR,50+i*9,50);
     if(h->boss_on) {
         put7(PCE_H7_CRUISER,108,4);
-        uint8_t px=(uint8_t)((uint16_t)(h->boss_hp>1200?1200:h->boss_hp)*11/150);   /* 88 px for 1200 */
-        for(uint8_t i=0;i<6&&px>(uint8_t)(i*16);++i) {
-            uint8_t k=px-i*16;if(k>16)k=16;
-            put7(PCE_H7_BAR_RED_1+k-1,108+i*16,14);
-        }
+
     }
 }

@@ -2,6 +2,8 @@
 #include "campaign_pce.h"
 #include "overlay_pce.h"
 #include "loader_pce.h"
+#include "arcade_pce.h"
+#include "sprite_cache_pce.h"
 /* The two flying bosses of the platform stages, on the source game's timelines (enemies.c update_boss for the level-1
  * gunship, night.c for the Hyperjumper), in whole 1/60 s steps; positions are the sprite's centre in world px.
  *
@@ -14,6 +16,7 @@
  * 11 leaves upward, then the other side. It hurts on contact with its hull and takes hits throughout 4-11.
  * Phase 12 (both): the wreck falls and burns for 228 steps, then the stage clears. */
 #define BOSS_CODE PCE_BOSS
+#define BOSS_DRAW PCE_RACE   /* $79: the race core's bank, idle on the platform stages */
 int16_t boss_x,boss_y;
 uint8_t boss_phase,boss_flash,boss_max;
 uint16_t boss_time;
@@ -33,11 +36,43 @@ BOSS_CODE static void bstep(int16_t v) {
 BOSS_CODE static void bshoot(int16_t x,int16_t y,int16_t vx,int16_t vy) {
     uint8_t live=0;
     for(uint8_t k=0;k<NSHOTS;++k)if(shots[k].active&&shots[k].enemy)++live;
-    if(live>=8)return;
-    for(uint8_t k=0;k<NSHOTS;++k)if(!shots[k].active){shots[k]=(Shot){x,y,vx,vy,1,1,0,0,0};return;}
+    if(live>=NSHOTS-2)return;
+    for(uint8_t k=0;k<NSHOTS;++k)if(!shots[k].active){shots[k]=(Shot){x,y,vx,vy,1,3,0,0,0};return;}
 }
-BOSS_CODE void boss_start(void) {
+extern vdc_sprite_t sat[2][64];
+extern uint8_t sat_page,sat_count,sprite_line_lo,sprite_line_hi,sprite_line_ok;
+extern void sprite_lines_reserve(void),sprite_lines_release(void);
+static uint8_t hull_count,hull_ready,hull_level,hull_seen_full;   /* hull_level: 0 full size, 1 and 2 the mid and far passes */
+static int16_t hull_parts[28][3];
+PCE_MISSION static void hull_load(void) {
+    uint32_t record[3];uint16_t bytes;uint8_t colors[32];
+    uint32_t address=pce_boss_big[pce_metrics.stage-1]+(uint16_t)hull_level*15;
+    arcade_read(2,address,record,12);arcade_read(2,address+12,&bytes,2);
+    arcade_read(2,address+14,&hull_count,1);
+    for(uint8_t p=16;p<40;++p) {
+        uint8_t owner=pattern_owner[p];
+        if(owner&&owner!=48) {
+            sprite_ids[owner-1]=0xffff;
+            for(uint8_t q=0;q<48;++q)if(pattern_owner[q]==owner)pattern_owner[q]=0;
+        }
+        pattern_owner[p]=48;
+    }
+    sprite_ids[14]=0xffff;sprite_pinned[14]=250;sprite_pinned[47]=250;
+    arcade_read(2,record[0],colors,32);pce_vce_copy_palette(30,colors,1);
+    arcade_read(2,record[1],hull_parts,hull_count*6);
+    pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
+    arcade_vram(record[2],PCE_SPR_WORD+16*256,bytes);
+    hull_ready=1;
+}
+PCE_MISSION void boss_release(void) {
+    for(uint8_t p=16;p<40;++p)pattern_owner[p]=0;
+    sprite_pinned[14]=sprite_pinned[47]=0;hull_ready=0;
+}
+PCE_MISSION void boss_start(void) {
     uint8_t kind=pce_campaign.boss_kind;
+    hull_level=2;hull_seen_full=0;
+    overlay_call(0x6f,hull_load);
+    audio_effect(12);   /* the engine pass (the source's sfx 0x13) opens the fight, and every later pass */
     boss_phase=0;boss_dir=0;boss_time=boss_hold=boss_clock=0;boss_flash=boss_cd=boss_rcd=boss_fx=boss_cycle=0;boss_vy=0;
     boss_x=camera+(kind==1?288:296);boss_y=kind==1?48:58;
     boss_max=kind==1?66:48+12*pce_options.difficulty;
@@ -49,7 +84,7 @@ BOSS_CODE static void horse_step(void) {
     switch(boss_phase) {
     case 0:   /* the far-layer pass, leaves at 6.5 px a step */
         bstep(-1664);
-        if(boss_x+350<cam){boss_phase=1;boss_x=cam-820;boss_fx=0;}
+        if(boss_x+350<cam){boss_phase=1;boss_x=cam-820;boss_fx=0;audio_effect(12);}
         break;
     case 1:   /* the mid-layer pass, left to right */
         bstep(1664);
@@ -66,14 +101,16 @@ BOSS_CODE static void horse_step(void) {
         if(move)bstep(boss_dir?597:-597);
         int16_t dx=boss_x-cam;
         if(dx>-64&&dx<256) {
-            if(fire&&!boss_cd){bshoot(boss_x+(boss_dir?56:-59),boss_y+31,boss_dir?1006:-1006,1006);boss_cd=12;}
-            if(!boss_rcd&&!(boss_hold>=160&&boss_hold<=184)) {
+            bool gun=fire&&!boss_cd,pilot=!boss_rcd&&!(boss_hold>=160&&boss_hold<=184);
+            if(gun){bshoot(boss_x+(boss_dir?90:-95),boss_y+50,boss_dir?996:-996,996);boss_cd=12;}
+            if(pilot) {
                 /* the rider on its back covers the other side, lower when the hero is 60 px below */
                 bool low=player.y+8-boss_y>=60;
                 int16_t vx=boss_dir?-1422:1422,vy=0;
-                if(low){vx=boss_dir?-1006:1006;vy=1006;}
-                bshoot(boss_x+(boss_dir?(low?-47:-53):(low?44:50)),boss_y+(low?6:-16),vx,vy);boss_rcd=12;
+                if(low){vx=boss_dir?-996:996;vy=996;}
+                bshoot(boss_x+(boss_dir?(low?-75:-85):(low?70:80)),boss_y+(low?10:-25),vx,vy);boss_rcd=12;
             }
+            if(gun||pilot)audio_effect(gun&&pilot?15:gun?13:14);
         }
         break; }
     }
@@ -85,7 +122,7 @@ BOSS_CODE static void hyper_step(void) {
     uint8_t ph=boss_phase,next=ph;
     int16_t s=boss_dir?1:-1;
     bool p2=pce_campaign.boss_hp*2<=boss_max,fire=false;
-    int16_t vx=s*1006,vy=1006,mx=-s*5,my=0;      /* the side gun: diagonal bolts, 3.9 px a step each way */
+    int16_t vx=s*996,vy=996,mx=-s*5,my=0;      /* the side gun: diagonal bolts, 3.9 px a step each way */
     switch(ph) {
     case 0:v=-1408;boss_y=58;if(x<-40)next=1;break;                       /* far pass, right to left */
     case 1:if(h>=78){next=2;x=-60;boss_dir=1;}break;
@@ -122,8 +159,11 @@ BOSS_CODE static void hyper_step(void) {
     }
     boss_x=camera+x;
     if(v)bstep(v);
-    if(fire&&!boss_cd){bshoot(boss_x+mx,boss_y+my,vx,vy);boss_cd=12;}
-    if(next!=ph){boss_phase=next;if(next!=3||ph!=11)boss_hold=0;}
+    if(fire&&!boss_cd){bshoot(boss_x+mx,boss_y+my,vx,vy);boss_cd=12;audio_effect(ph==10?14:13);}
+    if(next!=ph){
+        boss_phase=next;if(next!=3||ph!=11)boss_hold=0;
+        if(next==2||next==4||next==7||next==9)audio_effect(12);   /* each pass and entrance has the engine's roar */
+    }
 }
 BOSS_CODE void boss_tick(void) {
     uint8_t kind=pce_campaign.boss_kind;
@@ -131,11 +171,16 @@ BOSS_CODE void boss_tick(void) {
     if(boss_phase==12) {
         /* the wreck drops, jitters sideways and burns; the stage clears when the clock runs out */
         boss_vy+=34;boss_y+=boss_vy>>8;boss_x+=(int16_t)(rnd()%3)-2;
-        if(!(boss_time&7)&&boss_time<64)audio_effect(4);
+        if(!(boss_time&7)&&boss_time<64)audio_effect(16);
+        if(boss_time==8)audio_effect(17);
         if(++boss_time>=228){pce_campaign.boss_hp=0;}
         return;
     }
     if(kind==1)horse_step();else hyper_step();
+    /* the ship grows as it comes in from the distance: its far and mid passes use smaller hulls, the fight the full one */
+    if(boss_phase>=4)hull_seen_full=1;
+    uint8_t want=kind==1?(boss_phase>=2?0:boss_phase==1?1:2):(hull_seen_full?0:boss_phase>=2?1:2);
+    if(want!=hull_level){hull_level=want;hull_ready=0;}
     uint8_t vulnerable=kind==1?boss_phase==2:boss_phase>=4&&boss_phase<=11;
     if(!vulnerable)return;
     /* the ship's hull hurts on contact (the gunship has only its lasers) */
@@ -160,13 +205,32 @@ BOSS_CODE void boss_tick(void) {
         }
     }
 }
-BOSS_CODE void boss_draw(void) {
-    bool flip=boss_dir;
+BOSS_DRAW static void hull(bool flip) {
+    if(!hull_ready)overlay_call(0x6f,hull_load);
+    sprite_pinned[14]=sprite_pinned[47]=250;
+    for(uint8_t k=0;k<hull_count;++k) {
+        int16_t dx=hull_parts[k][0],y=boss_y-16+hull_parts[k][1];
+        if(flip)dx=-dx-32;
+        int16_t x=boss_x-camera+dx;
+        if(x<=-32||x>=256||y<=-32||y>=224)continue;
+        sprite_line_lo=y<0?0:y;sprite_line_hi=y+32>224?224:y+32;
+        sprite_lines_reserve();if(!sprite_line_ok)continue;
+        sprite_lines_reserve();if(!sprite_line_ok){sprite_lines_release();continue;}
+        if(sat_count>=64){sprite_lines_release();sprite_lines_release();continue;}
+        sat[sat_page][sat_count++]=(vdc_sprite_t){y+64,x+32,
+            ((PCE_SPR_WORD+16*256)>>5)+hull_parts[k][2]*2,
+            VDC_SPRITE_FG|14|VDC_SPRITE_WIDTH_32|VDC_SPRITE_HEIGHT_32|(flip?VDC_SPRITE_FLIP_X:0)};
+    }
+}
+BOSS_DRAW void boss_draw(void) {
+    bool flip=boss_phase==1?true:boss_dir;
     if(boss_phase==12) {
-        if(boss_y<250&&(boss_time&1))video_sprite_optional(42,boss_x-camera,boss_y-16,flip,16);
-        for(uint8_t k=0;k<2;++k)
-            video_sprite_optional(38,boss_x-camera+(int16_t)(rnd()%48)-24,boss_y-16+(int16_t)(rnd()%40)-20,false,16);
+        if(boss_y<250&&(boss_time&1))hull(flip);
+        for(uint8_t k=0;k<2;++k) {
+            uint8_t a=(uint8_t)(frame*29+k*71+boss_time*13),b=(uint8_t)(frame*53+k*37+boss_time*7);
+            video_sprite_optional(38,boss_x-camera+(int16_t)(a%48)-24,boss_y-16+(int16_t)(b%40)-20,false,16);
+        }
         return;
     }
-    if(!boss_flash||(frame&2))video_sprite(42,boss_x-camera,boss_y-16,flip,16);
+    if(!boss_flash||(frame&2))hull(flip);
 }

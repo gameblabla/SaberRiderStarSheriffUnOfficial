@@ -75,9 +75,11 @@ def verify(out):
                 e.run(30)
                 assert bytes.fromhex(e.call('asread', 'vram0', 0x8400, 3072)['hex']) == original_font
                 assert bytes.fromhex(e.call('asread', 'pram', 480, 32)['hex']) == original_palette
+                c.seed(e,'pce_scroll_y',3)
                 c.press(e, 8)
                 e.run(100)
                 assert c.state(e)['state'] == 1
+                assert e.memory(symbol(elf,'pce_scroll_y'),2)==b'\0\0','Dialogue must undo world rumble'
             # The next page is the stampede warning in the supplied save.
             c.press(e, 1, 15)
             e.run(120)

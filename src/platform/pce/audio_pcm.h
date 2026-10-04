@@ -15,7 +15,7 @@ void audio_pcm_stop(void);
 void audio_pcm_play(uint8_t sample);
 void audio_pcm_gallop(bool on);
 /* CD ADPCM voices: the bank (audio_pcm.c) resolves a tone to one of its variants; the BIOS call stays resident. */
-typedef struct { uint16_t address,bytes; uint8_t priority,hero; } PceVoice;
+typedef struct { uint16_t address,bytes; uint8_t priority,hero,rate; } PceVoice;
 extern PceVoice pce_voice;
 void audio_pcm_voice(uint8_t tone);
 uint16_t audio_pcm_voice_bytes(uint8_t hero);

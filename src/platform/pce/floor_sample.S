@@ -1,4 +1,5 @@
-/* The floor samplers: one BAT row of 64 pair characters into floor_pairs.
+/* The floor samplers: one BAT row of 64 pair characters into floor_pairs (the low byte of each VDC word, i.e. every other
+ * byte: the high bytes are set once, so that the whole row is block-copied to the BAT).
  *
  * The ground is one byte per 8-unit cell (colour in the low nibble, class in the high one) at Arcade offset 0, 1024 cells
  * wide. A sample's position is kept as 24-bit U = u << 2 and V = v << 4 (u, v: Q3 world units, 16 bits, wrapping at 8192),
@@ -214,7 +215,8 @@ floor_sample_map:
     STEP_U 2
     STEP_V 2
     inx
-    cpx #64
+    inx
+    cpx #128
     beq 1f
     jmp .Lmap_loop
 1:  rts
@@ -238,7 +240,8 @@ floor_sample_half:
     STEP_U 5
     STEP_V 5
     inx
-    cpx #64
+    inx
+    cpx #128
     bne .Lhalf_loop
     rts
 
@@ -261,6 +264,7 @@ floor_sample_road:
     sta floor_pairs,x
     STEP_U 4
     inx
-    cpx #64
+    inx
+    cpx #128
     bne .Lroad_loop
     rts

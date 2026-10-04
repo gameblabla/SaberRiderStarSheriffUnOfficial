@@ -426,31 +426,38 @@ GAMEOVER_PULSE = (1.0, 0.84, 0.67, 0.51)  # glow strength per pulse step (step 0
 GAMEOVER_GLOW = (0, 0.28, 0.62, 1.0)      # additive light of each text level (0 = none)
 
 def gameover_screen(get, artwork=None):
-    """The supplied painting filling the 320x224 screen with the lettering added on top as light.
+    """The supplied painting filling the 320x224 screen with the lettering added on top as light."""
+    art = (artwork if artwork is not None else get(GAMEOVER_ART)).convert('RGBA')
+    w = round(art.width * H / art.height)
+    canvas = art.resize((w, H), Image.Resampling.LANCZOS).crop(((w - W) // 2, 0, (w - W) // 2 + W, H)).convert('RGBA')
+    text = get(GAMEOVER_TEXT).convert('RGBA')
+    return glow_screen(canvas, [(text, (W - text.width) // 2, GAMEOVER_TEXT_Y)])
+
+def glow_screen(canvas, layers, dim=1.0):
+    """A 320x224 painting with lettering added on top as light.
 
     The translucency is done with the bit planes (PCE_ISSUES / Transparency notes): the cells under the lettering
     keep the painting in the low two bit planes (black + 3 colours of its own) and the lettering sits in the high
     two. Each of their palettes has four sets of four colours: the painting's, and the same three colours plus the
     light of text level 1, 2 and 3 - so the hardware's index OR is an additive blend, with no masking. Pulsing the
-    lettering is rewriting the tail of those few palettes (`s.glow` holds every step)."""
+    lettering is rewriting the tail of those few palettes (`s.glow` holds every step). `layers` are (RGBA lettering,
+    x, y); `dim` darkens the painting under the lettering so that the added light keeps its contrast."""
     s = Screen()
-    art = (artwork if artwork is not None else get(GAMEOVER_ART)).convert('RGBA')
-    w = round(art.width * H / art.height)
-    canvas = art.resize((w, H), Image.Resampling.LANCZOS).crop(((w - W) // 2, 0, (w - W) // 2 + W, H)).convert('RGBA')
     s.preview_source = canvas
-    # text levels: ink 3, light edge 2, dark outline 1 (a faint halo), placed at the bottom centre
-    text = np.asarray(get(GAMEOVER_TEXT).convert('RGBA')).astype(int)
-    th, tw = text.shape[:2]
-    tx, ty = (W - tw) // 2, GAMEOVER_TEXT_Y
+    # text levels: ink 3, light edge 2, dark outline 1 (a faint halo)
     level = np.zeros((H, W), np.uint8)
-    lum = text[..., :3].sum(-1)
-    level[ty:ty + th, tx:tx + tw] = np.where(text[..., 3] < 128, 0, np.where(lum > 700, 3, np.where(lum > 450, 2, 1)))
+    for image, tx, ty in layers:
+        text = np.asarray(image.convert('RGBA')).astype(int)
+        th, tw = text.shape[:2]
+        lum = text[..., :3].sum(-1)
+        lv = np.where(text[..., 3] < 128, 0, np.where(lum > 700, 3, np.where(lum > 450, 2, 1)))
+        level[ty:ty + th, tx:tx + tw] = np.maximum(level[ty:ty + th, tx:tx + tw], lv)
     cell_has_text = level.reshape(ROWS, 8, COLS, 8).max(axis=(1, 3)) > 0
     text_cells = [cy * COLS + cx for cy, cx in zip(*np.nonzero(cell_has_text))]
     free_slots = [k for k in range(16) if k not in GAMEOVER_GLOW_SLOTS]
     paint_cells(s, canvas, free_slots, skip=set(text_cells))
     # the painting under the lettering: black + three colours per palette, four palettes
-    rgb = np.asarray(canvas)[..., :3]
+    rgb = (np.asarray(canvas)[..., :3] * dim).astype(np.uint8)
     means = np.array([rgb[(c // COLS) * 8:(c // COLS) * 8 + 8, (c % COLS) * 8:(c % COLS) * 8 + 8].reshape(-1, 3).mean(0) for c in text_cells])
     groups = kmeans_groups(means, len(GAMEOVER_GLOW_SLOTS))
     bases = []
@@ -519,6 +526,26 @@ def bake(root, work, out, previews, cblock_frame):
         scr.preview(previews / f'ui_{name}.png')
     recs = [title.emit(archive, 'title'), select.emit(archive, 'select'), options.emit(archive, 'options', options.font),
             panel.emit(archive, 'panel', panel.font), gameover.emit(archive, 'gameover')]
+    # Original per-stage/per-hero victory paintings (426x240): the centred 320x224 of each, lettering added as light like GAME OVER.
+    victory = []
+    for stage in range(1,8):
+        heroes=('saber','fireball','april','colt') if stage in (1,3,4,5) else (None,)
+        for hero in heroes:
+            name=f'stage{stage}'+(f'_{hero}' if hero else '')
+            art=Image.open(root/'assets/victory'/f'{name}.png').convert('RGBA')
+            x0,y0=(art.width-W)//2,(art.height-H)//2
+            canvas=art.crop((x0,y0,x0+W,y0+H))
+            layers=[]
+            for rid,cy in ((0xF6172502,160),(0xF629241D,184)):
+                label=get(rid).convert('RGBA')
+                layers.append((label,(W-label.width)//2,cy-label.height//2))
+            scr=glow_screen(canvas,layers,dim=0.8)
+            scr.preview(previews/f'ui_victory_{name}.png')
+            # each painting is its own small extent of victory.bin (about 45 KB): the disc read at a stage's end is not the whole UI
+            own=Archive()
+            rec=scr.emit(own,f'victory_{name}')
+            rec['extra']=own.add('ui_victory_extra',ramp_table(RING_BRIGHT_DIM)+scr.glow)
+            victory.append((rec,own.finish()))
     # Per-screen extra blobs.
     patches = b''.join(struct.pack('<HHHH', *p) for p in title.patches)
     recs[0]['extra'] = archive.add('ui_title_patches', struct.pack('<H', len(title.patches)) + patches)
@@ -527,6 +554,11 @@ def bake(root, work, out, previews, cblock_frame):
     recs[1]['extra'] = archive.add('ui_select_extra', ramp + states)
     recs[2]['extra'] = archive.add('ui_options_extra', ramp_table(RING_BRIGHT_DIM))
     for rec in recs[3:]: rec['extra'] = recs[2]['extra']     # only the panel cycles; the rest just need something to read
+    # a victory screen's extra blob is the ramp the loader reads, then the pulse palettes of its lettering
+    recs += [rec for rec, _ in victory]
+    victory_bin = b''.join(data for _, data in victory)
+    (out / 'victory.bin').write_bytes(victory_bin)
+    sectors = np.cumsum([0] + [len(d) // 2048 for _, d in victory])[:-1]
     glow_off = archive.add('ui_gameover_glow', gameover.glow)
     portraits = []
     for hero, p in enumerate(select.portraits):
@@ -539,7 +571,9 @@ def bake(root, work, out, previews, cblock_frame):
     data = archive.finish()
     (out / 'ui.bin').write_bytes(data)
     h = ['typedef struct { uint32_t pal, tiles, map, sprpal, sprpat, extra; uint16_t ntiles, nsprpat; } PceUiScreen;',
-         'extern const PceUiScreen pce_ui[5];',
+         'extern const PceUiScreen pce_ui[24];',
+         '#define PCE_UI_VICTORY_BASE 5',
+         'extern const uint16_t pce_victory_sector[19];','extern const uint32_t pce_victory_bytes[19];',
          'typedef struct { uint32_t patterns, palette, pieces; uint16_t count; } PceUiPortrait;',
          'extern const PceUiPortrait pce_ui_portrait[4];',
          f'#define PCE_UI_BYTES {len(data)}UL', f'#define PCE_UI_CREDITS {credits_off}UL',
@@ -557,7 +591,9 @@ def bake(root, work, out, previews, cblock_frame):
     for key in ('left', 'right'):
         i = select.info[key]
         h.append(f'#define PCE_UI_ARROW_{key.upper()} {{{i[0]},{i[1]},{i[2]},{i[3][0]},{i[3][1]}}}')
-    c = ['const PceUiScreen pce_ui[5]={' + ','.join('{%d,%d,%d,%d,%d,%d,%d,%d}' % (r['pal'], r['tiles'], r['map'], r['sprpal'], r['sprpat'], r['extra'], r['ntiles'], r['nsprpat']) for r in recs) + '};',
+    c = ['const uint16_t pce_victory_sector[19]={' + ','.join(str(int(v)) for v in sectors) + '};',
+         'const uint32_t pce_victory_bytes[19]={' + ','.join(str(len(d)) + 'UL' for _, d in victory) + '};',
+         'const PceUiScreen pce_ui[24]={' + ','.join('{%d,%d,%d,%d,%d,%d,%d,%d}' % (r['pal'], r['tiles'], r['map'], r['sprpal'], r['sprpat'], r['extra'], r['ntiles'], r['nsprpat']) for r in recs) + '};',
          'const PceUiPortrait pce_ui_portrait[4]={' + ','.join('{%d,%d,%d,%d}' % p for p in portraits) + '};']
     return h, c, len(data)
 

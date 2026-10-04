@@ -31,3 +31,5 @@ void space_start(void);
 void space_frame(void);
 void floor_start(void);
 void floor_draw(void);
+extern uint8_t ui_lift_level;
+void ui_lift(void);

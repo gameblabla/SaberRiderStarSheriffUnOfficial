@@ -66,6 +66,16 @@ class Test:
     def press(self,e,key,n=30):
         e.input(key);e.run(n);e.input(0);e.run(n)
     def stage(self,e,n):
+        ui=symbol(self.out/'app.elf','pce_ui_state')
+        if e.memory(symbol(self.out/'app.elf','pce_campaign'),1)==b'\2':
+            for _ in range(100):
+                if e.memory(ui,1)==b'\5':break
+                e.run(120)
+        if e.memory(ui,1)==b'\5':
+            self.press(e,1,60)
+            for _ in range(100):
+                if e.memory(ui,1)==b'\0' and self.metrics(e)['ready']:break
+                e.run(120)
         for _ in range(100):
             if self.metrics(e)['ready']:break
             e.run(120)
