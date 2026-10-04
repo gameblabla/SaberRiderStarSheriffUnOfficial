@@ -29,9 +29,9 @@ PRESENT void actors_draw(void) {
             else if(a->b.vx&&kind<2)id=base+kind*12+(a->anim>>2)%6;
         }
         if(a->type==28)id+=a->hp==2?0:a->hp==1?1:2+(a->anim>>2)%6;   /* the blue Outrider: stand, alarm, run */
-        if(a->type==11)id+=(frame>>2)%5;   /* one gait frame for the whole herd: only one set of patterns is cached */
-        video_sprite_optional(id,a->b.x-camera,a->b.y-16,a->type==11?!a->flip:a->flip,16);   /* a refused draw is skipped for the frame, never a removal */
+        video_sprite_optional(id,a->b.x-camera,a->b.y-16,a->flip,16);   /* a refused draw is skipped for the frame, never a removal */
     }
+    if(herd_on)overlay_call(0x6f,herd_draw);
 }
 void presentation_draw(void) {overlay_call(0x74,presentation_frame);video_front_mark();}
 

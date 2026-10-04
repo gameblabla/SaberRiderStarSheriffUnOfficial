@@ -25,6 +25,7 @@ def verify(out):
         t.seed(e,'safe_timer',0,1);t.press(e,8)
         for world_x,direction in ((mid+40,0),(mid+24,128)):
             t.move(e,world_x,150)
+            t.press(e,8);e.run(60);t.seed(e,'camera',world_x-120);t.press(e,8)   # the camera only closes 4 px a step
             if direction:t.press(e,direction,3)
             e.run(120);t.capture(e,f'foreground-{direction}');t.press(e,8);e.run(120)
             d=t.metrics(e)

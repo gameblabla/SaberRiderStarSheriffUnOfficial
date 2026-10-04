@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / 'tools/saturn'), str(ROOT / 'tools/dc')]
 import levl
 import texbake
-from formats import Archive, BG_TILES, indexed, palette_for, planar_tile, pack_sprite, pair_characters, vce_rgb
+from formats import Archive, BG_TILES, indexed, palette_for, planar_tile, planar_sprite, pack_sprite, pair_characters, vce_rgb
 
 def run(args, **kwargs):
     result = subprocess.run([str(a) for a in args], cwd=ROOT, check=True, capture_output=True, **kwargs)
@@ -91,8 +91,27 @@ def cblock_whole_frame(path, frame):
                 im.alpha_composite(Image.fromarray(px[(t // sc) * th:(t // sc + 1) * th, (t % sc) * tw:(t % sc + 1) * tw]), (c * tw, r * th))
     return im
 
-HORSE_SCALE = 0.625    # the robot-horse herd is drawn at 5/8 size: a full frame is 40 sprite pieces and the SAT holds 64; at this size a frame is ~15, two fit beside the HUD and hero
 HORSE_FRAMES = 5
+
+def horse_frames(work, archive):
+    """The robot-horse gallop at full size, as VDC big sprite cells: each frame (128x80) is four columns of one 32x64
+    and one 32x16 sprite, so a horse costs 8 SAT entries instead of 33 pieces. Per frame, 40 patterns: the four 32x64
+    blocks (8 patterns each, row-major two wide), then the four 32x16 blocks (2 each). One shared palette first."""
+    art = work / 'srgb' / '8873D18C.srgb'
+    frames = [cblock_whole_frame(art, k) for k in range(HORSE_FRAMES)]
+    pal = palette_for(frames)
+    out = pal.astype('<u2').tobytes()
+    for im in frames:
+        idx = indexed(im, pal)
+        pats = []
+        for c in range(4):
+            for r in range(4):
+                for h in range(2): pats.append(planar_sprite(idx[16*r:16*r+16, 32*c+16*h:32*c+16*h+16]))
+        for c in range(4):
+            for h in range(2): pats.append(planar_sprite(idx[64:80, 32*c+16*h:32*c+16*h+16]))
+        out += b''.join(pats)
+    assert len(out) == 32 + HORSE_FRAMES * 5120
+    return archive.add('horse_frames', out)
 
 FG_MAX_PIECES, FG_MAX_UNITS = 20, 8    # foreground sprite pieces per 288-px window / per 16-line row
 
@@ -307,6 +326,7 @@ def make_scene(stage, work, previews, shared):
         rules+=b''.join(struct.pack('<4hhHH',*z['zone'],z['focus'][0],round(z['hold'][0]*60/1000),round(z['hold'][1]*60/1000)) for z in zones)
         rules+=b''.join(struct.pack('<6h',*z) for z in deaths)
         meta['rules_offset']=a.add('flow_zones',rules)
+        if stage==1: meta['horse_offset']=horse_frames(work,a)
 
         sprites = list(shared)
         if stage in (1,5):
@@ -327,13 +347,8 @@ def make_scene(stage, work, previews, shared):
             art=work/'srgb'/f'{aid:08X}.srgb'
             if not art.exists():
                 meta['actor_ids'][t]=255;continue
-            if t==11:
-                # the galloping robot horses: every frame of the gait, whole, consecutive ids
-                ox,oy=struct.unpack_from('<ff',d,8);meta['actor_ids'][t]=len(sprites)
-                for k in range(HORSE_FRAMES):
-                    im=cblock_whole_frame(art,k);im=im.resize((round(im.width*HORSE_SCALE),round(im.height*HORSE_SCALE)),Image.Resampling.LANCZOS)
-                    sprites.append((f'horse{k}',im,(round(ox*HORSE_SCALE),round(oy*HORSE_SCALE))))
-                continue
+            if t==11:      # the galloping robot horses are drawn by the herd code from their own big-cell frames
+                meta['actor_ids'][t]=255;continue
             if 24<=t<=27:      # the airships of the far background layers: not drawn (the PCE has no such layer)
                 meta['actor_ids'][t]=255;continue
             im=cblock_frame(art,first)
@@ -450,11 +465,11 @@ def main():
         glyphs.append(planar_tile(((px[..., 3] >= 64) * 15).astype(np.uint8)))
     (out/'font.bin').write_bytes(b''.join(glyphs))
     h = ['/* Generated: all offsets are Arcade RAM byte addresses. */', '#pragma once', '#include <stdint.h>',
-         'typedef struct { uint32_t bytes, pal, tiles, map, collision, sprites, triggers, story, track, rules, occlusion, foreground; uint16_t cols, ccols, crows, nsprites, nforeground; int16_t sx, sy, width; uint8_t ntr, cw, ch; } PceScene;',
+         'typedef struct { uint32_t bytes, pal, tiles, map, collision, sprites, triggers, story, track, rules, occlusion, foreground, horse; uint16_t cols, ccols, crows, nsprites, nforeground; int16_t sx, sy, width; uint8_t ntr, cw, ch; } PceScene;',
          'extern const PceScene pce_scenes[7];','extern const uint8_t pce_actor_ids[33];']
     c=['#include "pce_config.h"','#include "assets.h"','const PceScene pce_scenes[7] = {']
     for m in scenes:
-        values = [m['bytes'],m['pal'],m['tiles'],m['map'],m['collision'],m['sprite_table'],m.get('trigger_offset',0),m['story_offset'],m.get('track_offset',0),m.get('rules_offset',0),0,m['foreground_offset'],m['cols'],m.get('cols',0) if 'cellw' not in m else m['width']//m['cellw'],m.get('rows',0),m['sprite_count'],m['foreground_count'],*m.get('start',(128,180)),m.get('width',m['cols']*8),m.get('ntr',0),m.get('cellw',8),m.get('cellh',8)]
+        values = [m['bytes'],m['pal'],m['tiles'],m['map'],m['collision'],m['sprite_table'],m.get('trigger_offset',0),m['story_offset'],m.get('track_offset',0),m.get('rules_offset',0),0,m['foreground_offset'],m.get('horse_offset',0),m['cols'],m.get('cols',0) if 'cellw' not in m else m['width']//m['cellw'],m.get('rows',0),m['sprite_count'],m['foreground_count'],*m.get('start',(128,180)),m.get('width',m['cols']*8),m.get('ntr',0),m.get('cellw',8),m.get('cellh',8)]
         # Native map columns and collision columns are independent.
         if 'cellw' in m: values[13] = json.loads((work/f"stage{m['stage']}.json").read_text())['cols']
         c.append('    {' + ','.join(str(v) for v in values) + '},')

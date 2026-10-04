@@ -180,6 +180,21 @@ Implementation status below does not replace the user's visual/audio acceptance.
 - [x] A walker or grunt dropping from a platform shows its two fall cells (source anim 0x30) instead of a frozen run
       frame (`walker_fall0/1`, `grunt_fall0/1` after the sniper's death cells; drawn while `coll&4` is clear).
 
+## Eleventh pass (2026-10-04, playtest feedback)
+
+- [x] The horse herd is a cutscene at the source's 1:1 size. A frame (128x80) is baked as VDC big sprite cells - four
+      columns of a 32x64 and a 32x16 sprite - so a horse is 8 SAT entries instead of 33 pieces (`horse_frames` in
+      build_assets, `herd_pce.c`). The 40 patterns of the current gallop frame are streamed into 10 reserved pages of the
+      sprite cache (two buffers, so the frame on screen is never overwritten). Five horses 192 px apart gallop at
+      120 px/s; at most two are on screen and the SAT stays at 22-38 of 64.
+- [x] While the herd runs the camera is locked (the hero is held inside the screen, nothing else spawns) and it is
+      released when the last horse has gone; the camera then catches up at most 4 px a step. All three convoys of
+      level 1 (x 2252, 5916, 8648). Horses trample humanoids and hurt the hero; shots pass through.
+- [x] Opening cutscene: the outrider's hit point change (3e1009e) had made it spawn "alarmed", so the "!" showed at
+      once and it was already running when the text opened. Fixed, and it now exists from the start of the scene:
+      idle while the camera pans, "!" when the camera arrives, the "!" held through the text, runs off after it -
+      the sequence traced from the PC game (`headless` run of the same level data).
+
 Remaining integration/acceptance work:
 
 - [ ] Integrate the reference ROM's two-channel, scanline-delivered 2-bit ADPCM

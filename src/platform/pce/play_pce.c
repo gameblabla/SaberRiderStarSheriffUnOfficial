@@ -145,7 +145,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     if(player.coll&4)jumping=0;else if(jumping&&jump_time<255)++jump_time;
     /* The screen only scrolls forwards: the left edge is a wall. */
     if(!cut_phase&&player.x<(int16_t)camera+8){player.x=camera+8;if(player.vx<0)player.vx=0;}
-    if(pce_campaign.boss_kind&&player.x>(int16_t)camera+248)player.x=camera+248;
+    if((pce_campaign.boss_kind||herd_on)&&player.x>(int16_t)camera+248)player.x=camera+248;   /* boss arena / herd: the screen is locked */
     if((player.coll&4)&&!pce_death){safe_x=player.x;safe_y=player.y;}
     if(player.y>272&&!pce_death) {
         campaign_hurt();
@@ -186,11 +186,10 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
         if(a->type==28) {
             /* The cutscene outrider (hp 2 waiting, 1 alarmed, 0 running): once it is on screen it freezes for a second
              * facing the hero, then turns and runs off to the right. */
-            if(a->hp==2){int16_t d=camera+128-a->b.x;if(d<0)d=-d;if(d<128){a->hp=1;a->timer=75;}}
+            if(a->hp==2){int16_t d=camera+128-a->b.x;if(d<0)d=-d;if(d<128){a->hp=1;a->timer=62;}}
             else if(a->hp==1){if(!--a->timer){a->hp=0;a->flip=0;}}
             a->b.vx=a->hp?0:512;physics(&a->b);
-            if(a->b.vx)++a->anim;
-            if(!a->hp&&a->b.x>(int16_t)camera+272)a->active=0;
+            if(!a->hp){++a->anim;if(a->b.x>(int16_t)camera+272)a->active=0;}
             continue;
         }
         if(a->dead){if(++a->dead>24)a->active=0;continue;}
@@ -225,7 +224,9 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
         }
     }
     if(pce_campaign.boss_kind)camera=scene->width-256;
-    else if(!cut_phase&&player.x>120&&(uint16_t)(player.x-120)>camera)camera=player.x-120;
+    else if(!cut_phase&&!herd_on&&player.x>120&&(uint16_t)(player.x-120)>camera) {
+        uint16_t gap=player.x-120-camera;camera+=gap>4?4:gap;   /* catches up at most 4 px a step (after a lock) */
+    }
     if(camera>(uint16_t)(scene->width-256))camera=scene->width-256;
     pce_metrics.player_x=player.x;pce_metrics.player_y=player.y;pce_metrics.camera_x=camera;pce_metrics.hero=hero;
 }

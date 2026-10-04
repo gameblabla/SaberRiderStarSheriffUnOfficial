@@ -33,17 +33,14 @@ PCE_COMBAT void encounters(void) {
         if(player.y+9<t->cy-t->hy-23||player.y+9>t->cy+t->hy+23) continue;
         if(trigger_timers[k]) {trigger_timers[k]=trigger_timers[k]>4?trigger_timers[k]-4:0;continue;}
         if(t->type==11) {
-            /* The robot-horse herd: the source drops a column of 12 horses at once, 99 px apart, behind the screen
-             * edge; here five (the SAT holds two on screen) 150 px apart, running at the hero. */
-            int16_t x=t->wp[0][0];bool right=x>30000;
-            int16_t x0=right?camera+256+32+56+195:camera-32-56-195;
-            for(uint8_t h=0,i=0;h<5;++h) {
-                while(i<8&&actors[i].active)++i;
-                if(i==8)break;
-                actors[i]=(Actor){.b={.x=right?x0+h*150:x0-h*150,.y=t->wp[0][1]+30},.active=1,.type=11,.hp=1,.flip=right};
-            }
+            /* The robot-horse herd (a cutscene: the camera stays put until it has passed). The source drops a column
+             * of 12 horses at once, 99 px apart, behind the right screen edge, running at the hero at 120 px/s; here
+             * five, 192 px apart, so at most two are on screen and two fit a scanline beside the hero. */
+            if(!play_scene->horse||t->wp[0][0]<=30000){trigger_remaining[k]=0;continue;}
+            herd_y=t->wp[0][1];overlay_call(0x6f,herd_spawn);
             trigger_remaining[k]=0;continue;
         }
+        if(herd_on)continue;   /* nothing else is called in while the herd runs */
         /* The source's enemies die to one hit (a shield sniper takes 4/6/8). The SAT only holds three of them beside
          * the HUD and hero, so a new one waits for a free place rather than being drawn in and out. */
         if(t->type!=28&&(t->type<11||t->type>28)) {
@@ -61,7 +58,7 @@ PCE_COMBAT void encounters(void) {
             if(y>30000)y=256;else if(y< -30000)y=-32;
             if(y< -999)y=-1000-y;
             if(edge&&t->type<6){probe_x=x+8;probe_y=y+19;probe_left=player.x<x;overlay_call(0x69,spawn_clear);y=probe_y-19;}
-            actors[i]=(Actor){.b={.x=t->type>=11&&t->type<=27?x:x+8,.y=t->type>=11&&t->type<=27?y:y+19},.active=1,.type=t->type,.hp=t->type>=30?(pce_options.difficulty==0?4:pce_options.difficulty==1?6:8):1,.timer=t->type<6?36:60,.flip=player.x<x};
+            actors[i]=(Actor){.b={.x=t->type>=11&&t->type<=27?x:x+8,.y=t->type>=11&&t->type<=27?y:y+19},.active=1,.type=t->type,.hp=t->type==28?2:t->type>=30?(pce_options.difficulty==0?4:pce_options.difficulty==1?6:8):1,.timer=t->type<6?36:60,.flip=player.x<x};
             if(trigger_remaining[k]>0)--trigger_remaining[k];
             ++trigger_spawned[k];trigger_timers[k]=t->interval;break;
         }
