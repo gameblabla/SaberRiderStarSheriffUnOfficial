@@ -27,9 +27,6 @@ $(OUT)/ipl_font.h: tools/pce/ipl_font.py | $(OUT)
 $(PCE_AUDIO) &: tools/pce/build_audio.py tools/pce/adpcm.py tools/pce/adpcm2.py ../PCE/Sound/adpcm_build_14_2bit.pce src/audio.c $(wildcard SaberRider/data/*.pck assets/voice/*.wav) | $(OUT)
 	python3 $< --out $(OUT)
 
-src/platform/pce/floor_geometry.h: tools/pce/floor_tables.py
-	python3 $<
-
 $(OUT)/ipl.elf: src/platform/pce/ipl.c src/platform/pce/link/ipl.ld $(OUT)/ipl_font.h | $(OUT)
 	$(PCE_CC) $(PCE_FLAGS) $< -o $@ -T src/platform/pce/link/ipl.ld -Wl,-Map,$@.map
 	$(MOS)/bin/llvm-objcopy --remove-section=.llvm_sympart --remove-section=.rela.llvm_sympart $@

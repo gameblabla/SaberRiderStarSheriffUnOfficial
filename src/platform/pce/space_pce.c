@@ -4,6 +4,7 @@
 #include "arcade_pce.h"
 #include "loader_pce.h"
 #include <string.h>
+#include "hud_pce.h"
 #define SPACE_CODE __attribute__((noinline,section(".ram_bank115.text")))
 typedef struct __attribute__((packed)) {uint16_t time;uint8_t kind,n;int16_t y;uint16_t gap;uint8_t pattern,drop;} Event;
 typedef struct {int16_t x,y;uint8_t kind,hp,pattern,drop;uint16_t clock;uint8_t charge;} Foe;
@@ -169,10 +170,8 @@ SPACE_CODE void space_frame(void) {
     if(pickup)video_sprite_optional(8+pickup,pickup_x,pickup_y,false,16);
     if(pce_campaign.boss_kind&&beam_clock%300>220)
         for(uint8_t x=16;x<128;x+=16)video_sprite_optional(1,x,space_boss_y+28,false,16);
-    video_sat_end();video_text(1,0,"RAMROD HP");video_number(11,0,pce_metrics.hp);
-    video_text(18,0,"B");video_number(20,0,bombs);
-    if(pce_campaign.boss_kind){video_text(1,1,"CRUISER");video_number(10,1,pce_campaign.boss_hp);}
-    video_text(18,1,"P");video_number(20,1,pce_campaign.powers);
-    if(power_timer)video_text(4,12,"HERO POWER - RAMROD BLAST");
+    hud7=(Hud7){pce_metrics.hp,pce_campaign.lives,power,bombs,pce_campaign.powers,pce_campaign.boss_kind!=0,(uint8_t)flight_clock,pce_campaign.boss_hp};
+    overlay_call(0x7c,hud7_draw);
+    video_sat_end();
     pce_metrics.player_x=ship_x;pce_metrics.player_y=ship_y;
 }

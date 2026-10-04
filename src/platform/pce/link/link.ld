@@ -9,6 +9,8 @@ __ram_bank114 = 0x6000;
 __ram_bank115 = 0x6000;
 __ram_bank116 = 0x6000;
 __ram_bank117 = 0x6000;
+__ram_bank121 = 0x6000;
+__ram_bank122 = 0x6000;
 __ram_bank123 = 0x6000;
 __ram_bank124 = 0x6000;
 INCLUDE binary-scd.ld

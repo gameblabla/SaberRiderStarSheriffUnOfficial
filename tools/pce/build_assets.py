@@ -18,11 +18,15 @@ import story
 import timeline
 import presentation
 import tile_budget
+import hudart
+import floor_tables
 import frontend
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[2]
+CAR_WIDTHS = (16, 24, 32, 40, 52, 64)   # baked widths of the race cars
+MECH_SIZES = (24, 32, 40, 48, 56, 64, 72, 80)   # baked widths of the Ramrod mechs; the cockpit scales between them
 sys.path[:0] = [str(ROOT / 'tools/saturn'), str(ROOT / 'tools/dc')]
 import levl
 import texbake
@@ -232,8 +236,11 @@ def add_sprites(archive, sprites, previews):
     rows, costs = [], []
     fg=[im for name,im,_ in sprites if name.startswith('foreground_')]
     fg_palette=palette_for(fg) if fg else None
+    # The HUD pieces of a stage share one palette (the cache gives them the shared-palette slots, see sprite_cache_pce.c).
+    hud=[im for name,im,_ in sprites if name.startswith('hudp_')]
+    hud_palette=palette_for(hud,unique=True) if hud else None
     for name, im, anchor in sprites:
-        pat, parts, palette, line = pack_sprite(im, anchor,fg_palette if name.startswith("foreground_") else None)
+        pat, parts, palette, line = pack_sprite(im, anchor,fg_palette if name.startswith("foreground_") else hud_palette if name.startswith('hudp_') else None)
         if not parts or len(parts)>32:
             raise ValueError(f'{name}: expected 1..32 visible sprite pieces, got {len(parts)}')
         offset = archive.add(name + '_patterns', pat)
@@ -377,17 +384,58 @@ def make_scene(stage, work, previews, shared):
         for name,n in [('idle',24),('alarm',36)]+[(f'run{k}',42+k) for k in range(6)]:
             sprites.append((f'outrider_{name}',cblock_frame(art,n),(32,32)))
     elif stage == 6:
-        bg = Image.open(ROOT / 'assets/ramrod/cockpit.png').convert('RGBA').resize((256, 224), Image.Resampling.NEAREST)
-        sky = Image.open(ROOT / 'assets/ramrod/sky.png').convert('RGBA').resize((256, 136), Image.Resampling.NEAREST)
-        # Recompose a rectangular viewing window. All mech pieces are clipped
-        # to it at runtime; background priority cannot mask an opaque sky.
-        bg.paste(sky.crop((0, 0, 224, 116)), (16, 20))
-        floor = Image.open(ROOT / 'assets/ramrod/floor.png').convert('RGBA').resize((224, 44), Image.Resampling.NEAREST)
-        bg.paste(floor, (16, 136))
+        fonts = hudart.Fonts(work, cblock_frame)
+        # The world: the sky panorama round the planet above a horizon at row 112 and the desert floor below, full
+        # screen; the cockpit art (centre 256 of its 426 columns, like the source's 4:3 view) goes over it with its
+        # monitors and consoles, and the viewing window is whatever the art leaves transparent.
+        sky = Image.open(ROOT / 'assets/ramrod/sky.png').convert('RGBA').crop((330, 17, 700, 170)).resize((256, 105), Image.Resampling.LANCZOS)
+        floor = Image.open(ROOT / 'assets/ramrod/floor.png').convert('RGBA').resize((256, 112), Image.Resampling.LANCZOS)
+        bg = Image.new('RGBA', (256, 224), (34, 126, 200, 255))
+        bg.paste(sky, (0, 7)); bg.paste(floor, (0, 112))
+        shade = np.linspace(0.74, 1.0, 112)[:, None, None]
+        arr = np.asarray(bg).astype(float); arr[112:, :, :3] *= shade; bg = Image.fromarray(arr.astype(np.uint8))
+        cock = Image.open(ROOT / 'assets/ramrod/cockpit.png').convert('RGBA').crop((85, 0, 341, 224))
+        bg.alpha_composite(cock)
+        # The two monitors the source draws over the art (ramrod.c render_monitors, 52x33 each): the radar's rings and
+        # view cone and the status screen's labels and bar troughs are static; dots, bars and digits are sprites.
+        d = ImageDraw.Draw(bg)
+        rx, ry = 33, 23
+        d.rectangle((rx, ry, rx + 51, ry + 32), fill=(6, 34, 20, 255))
+        rcx, rcy = rx + 26, ry + 18
+        for radius in (8, 16):
+            d.ellipse((rcx - radius, rcy - radius, rcx + radius, rcy + radius), outline=(20, 90, 50, 255))
+        d.rectangle((rx, ry, rx + 51, ry + 1), fill=(6, 34, 20, 255)); d.rectangle((rx, ry + 31, rx + 51, ry + 32), fill=(6, 34, 20, 255))
+        d.line((rcx, rcy, rcx - 12, rcy - 14), fill=(20, 90, 50, 255)); d.line((rcx, rcy, rcx + 12, rcy - 14), fill=(20, 90, 50, 255))
+        sx, sy = 174, 23
+        d.rectangle((sx, sy, sx + 51, sy + 32), fill=(18, 22, 60, 255))
+        for label, ly, color in (('ARM', 1, (255, 210, 120)), ('GUN', 11, (255, 210, 120)), ('W', 22, (150, 200, 255)), ('x', 22, (255, 255, 255))):
+            lim = fonts.text(label, color)
+            bg.alpha_composite(lim, (sx + (38 if label == 'x' else 2), sy + ly + (1 if label != 'x' else 2)))
+        for ty in (3, 13): d.rectangle((sx + 27, sy + ty, sx + 27 + 21, sy + ty + 4), fill=(4, 6, 20, 255))
         sprites = shared[36:39]
+        # Mech frames at eight baked widths: the sprite pulls its 16 px slices together (sprite_generic's scale) between
+        # two baked widths, which hides the steps (the multiple-versions-plus-slices scheme of the Plutiedev scaling article).
         for kind in ('mech','mech_red','mech_gold'):
-            for size in (32, 48, 64, 80): sprites += atlas(ROOT / 'assets/ramrod/atlas.png', kind, size)
+            for size in MECH_SIZES: sprites += atlas(ROOT / 'assets/ramrod/atlas.png', kind, size)
         sprites += atlas(ROOT / 'assets/ramrod/atlas.png', 'arm', 64)
+        hud = hudart.Hud(sprites)
+        hudart.add_bar_fills(hud, ('green', 'yellow', 'red', 'orange'))
+        hudart.add_digits(hud, fonts, ('white', 'cyan', 'pink'))
+        for name, c, n in (('dot_green', (120, 255, 200), 2), ('dot_gold', (255, 210, 40), 3), ('dot_red', (255, 70, 60), 3), ('dot_white', (255, 255, 255), 3)):
+            im = Image.new('RGBA', (16, 16)); ImageDraw.Draw(im).rectangle((0, 0, n - 1, n - 1), fill=(*c, 255)); hud.add(name, im)
+        for name, c in (('cross_green', (120, 255, 140)), ('cross_red', (255, 70, 60))):
+            im = Image.new('RGBA', (16, 16)); dd = ImageDraw.Draw(im)
+            dd.line((0, 8, 5, 8), fill=(*c, 230)); dd.line((10, 8, 15, 8), fill=(*c, 230)); dd.line((8, 0, 8, 5), fill=(*c, 230)); dd.line((8, 10, 8, 15), fill=(*c, 230)); dd.point((8, 8), fill=(*c, 230))
+            hud.add(name, im, (8, 8))
+        for danger, c in (('', (255, 200, 60)), ('_danger', (255, 60, 60))):
+            im = Image.new('RGBA', (16, 16)); dd = ImageDraw.Draw(im)
+            for k in range(5): dd.line((k, 5 - k, k, 5 + k), fill=(*c, 255))
+            hud.add('chevron' + danger, im)
+        for name, text, color, big in (('wave1', 'WAVE 1', (255, 182, 0), True), ('wave2', 'WAVE 2', (255, 182, 0), True), ('wave3', 'WAVE 3', (255, 182, 0), True),
+                                       ('cleared', 'WAVE CLEARED', (255, 255, 255), True), ('destroyed', 'SQUADRON DESTROYED', (255, 255, 255), True),
+                                       ('down', 'RAMROD IS DOWN!', (255, 60, 60), True), ('warning', 'WARNING: COMMAND MECH', (255, 80, 80), False)):
+            hudart.add_text(hud, fonts, name, text, color, big)
+        meta['hud'] = hud.base; meta['hud_macros'] = hud.macros('H6')
         collision = 0
     elif stage == 7:
         bg = Image.open(ROOT / 'assets/space/nebula.png').convert('RGBA').resize((512, 224), Image.Resampling.NEAREST)
@@ -397,37 +445,67 @@ def make_scene(stage, work, previews, shared):
         sprites+=atlas(ROOT/'assets/space/atlas.png','drone')+atlas(ROOT/'assets/space/atlas.png','mine')
         sprites+=atlas(ROOT/'assets/space/atlas.png','cap')
         meta['track_offset']=a.add('space_timeline',timeline.bake(ROOT/'src/space.c'))
+        hud=hudart.Hud(sprites)
+        hudart.space_hud(hud,hudart.Fonts(work,cblock_frame),Image.open(ROOT/'assets/space/atlas.png').convert('RGBA'))
+        meta['hud']=hud.base;meta['hud_macros']=hud.macros('H7')
         collision = 0
     else:
         bg = Image.new('RGBA', (512,224), (0,0,0,255))
         bg.paste(Image.open(ROOT/'assets/sky_mode7.png').convert('RGBA').resize((128,32)).resize((512,128),Image.Resampling.NEAREST), (0,0))
         sprites = shared[36:39]
         im = Image.open(ROOT / 'assets/mode7.png').convert('RGBA')
-        for row in (ROOT / 'assets/mode7.txt').read_text().splitlines():
-            name, x, y, w, h, frames = row.split(); x, y, w, h, frames = map(int, (x,y,w,h,frames))
-            if name not in ('buggy', 'hornet', 'leader', 'firenza', 'racer_blue', 'racer_purple', 'mine'): continue
-            for scale in (24, 40, 64):
-                nh = round(h * scale / w)
-                car = im.crop((x, y, x+w, y+h)).resize((scale, nh), Image.Resampling.NEAREST)
-                car=car.resize((scale*2,nh),Image.Resampling.NEAREST)
-                sprites.append((f'{name}{scale}', car, (scale, nh)))
+        rows7 = {r.split()[0]: [int(v) for v in r.split()[1:6]] for r in (ROOT / 'assets/mode7.txt').read_text().splitlines()}
+        def car(name, frame, scale):
+            x, y, w, h, frames = rows7[name]
+            c = im.crop((x + frame * w, y, x + (frame + 1) * w, y + h))
+            nh = round(h * scale / w)
+            c = c.resize((scale, nh), Image.Resampling.NEAREST).resize((scale * 2, nh), Image.Resampling.NEAREST)
+            return c, (scale, nh)
+        # Each car at five baked widths (the race draws one at the nearest width at or above its size and pulls its
+        # slices together to the exact one), the straight-ahead frame; the player's buggy also keeps its four steering frames.
+        for name in ('buggy', 'hornet', 'leader', 'firenza', 'racer_blue', 'racer_purple', 'mine'):
+            for scale in CAR_WIDTHS:
+                c, anchor = car(name, rows7[name][4] // 2, scale)
+                sprites.append((f'{name}{scale}', c, anchor))
+        for frame in (0, 1, 3, 4):
+            c, anchor = car('buggy', frame, CAR_WIDTHS[-1])
+            sprites.append((f'buggy_steer{frame}', c, anchor))
         env = dict(os.environ, SABER_ASSETS=str(ROOT / 'assets'), SABER_FRAMES='1', SABER_M7MAP=str(work/'race.pgm'))
         run([ROOT/'build/headless/saber_headless', ROOT/'SaberRider/data', 2], env=env)
         race = np.asarray(Image.open(work/'race.pgm'), np.uint8) // 20
-        a.add('race_map',race.tobytes())
+        floor = im.crop((0, 119, 352, 151))
+        # 14 floor colours + white (index 15 is the text font's white, so the floor never picks it for a cell). Every
+        # 8-unit map cell of the ground is baked to ONE byte: its colour (low nibble: the mean of the material's 8x8-texel
+        # block that cell covers) and its class (high nibble: 0 sand, 1 kerb, 2 road), so a floor sample is a single
+        # Arcade read and the car's physics reads the same byte.
+        pal = palette_for([floor], colors=14); pal[15] = 0x1ff
+        rgb = vce_rgb(pal[1:15]).astype(np.int32)
+        def nearest(mean): return int(((rgb - mean[None]) ** 2).sum(-1).argmin()) + 1
+        ROAD = (2, 3, 6, 7, 9); KERB = (4, 5, 10)
+        blocks = np.zeros((11, 4, 4), np.uint8)
+        texture = np.asarray(floor.convert('RGB')).astype(np.float64)
+        for k in range(11):
+            for by in range(4):
+                for bx in range(4):
+                    blocks[k, bx, by] = nearest(texture[by*8:by*8+8, k*32+bx*8:k*32+bx*8+8].reshape(-1, 3).mean(0))
+        cls = np.array([2 if k in ROAD else 1 if k in KERB else 0 for k in range(11)], np.uint8)
+        cx = np.arange(1024)[None, :] & 3; cy = np.arange(1024)[:, None] & 3
+        ground = blocks[np.minimum(race, 10), cx, cy] | (cls[np.minimum(race, 10)] << 4)
+        a.add('race_map', ground.astype(np.uint8).tobytes())    # first: the sampler addresses it from Arcade offset 0
+        a.add('floor_palette', pal.tobytes())
         meta['track_offset']=a.add('track', (work/'track.bin').read_bytes())
         a.add('pair_characters', pair_characters())
-        floor = im.crop((0, 119, 352, 151))
-        pal = palette_for([floor]); pal[15]=0x1ff; a.add('floor_palette', pal.tobytes())
-        # 11 materials share the palette, so either half of a BAT pair can
-        # sample any material without selecting conflicting subpalettes.
-        tex = indexed(floor, pal)
-        a.add('floor_textures', np.stack([tex[:, k*32:(k+1)*32] for k in range(11)]).tobytes())
-        a.add('floor_mips', np.stack([tex[2::4,k*32+2:(k+1)*32:4] for k in range(11)]).tobytes())
-        # Pursuit is the source's straight desert road; both working sets fit
-        # by representing its repeated row rather than another 1 MiB map.
+        a.add('floor_geometry', floor_tables.generate())
+        # Pursuit is the source's straight desert road; both working sets fit by representing its repeated row
+        # (indexed by the x cell, 1 KiB aligned) rather than another 1 MiB map.
         road = np.zeros(1024, np.uint8); road[496:528] = 7; road[498:526] = 2; road[511:513] = 3
-        a.add('pursuit_row', road.tobytes())
+        row = np.array([int(blocks[m, 0, 0]) | (int(cls[m]) << 4) for m in range(11)], np.uint8)
+        a.add('pursuit_row', row[road].tobytes(), 1024)
+        hud=hudart.Hud(sprites)
+        sheet=im
+        bx,by,bw,bh,bn=[int(v) for v in next(r for r in (ROOT/'assets/mode7.txt').read_text().splitlines() if r.split()[0]=='buggy').split()[1:6]]
+        hudart.race_hud(hud,hudart.Fonts(work,cblock_frame),sheet.crop((bx+2*bw,by,bx+3*bw,by+bh)) if bn>=3 else sheet.crop((bx,by,bx+bw,by+bh)))
+        meta['hud']=hud.base;meta['hud_macros']=hud.macros('H2')
         collision = 0
     # Append presentation art after fixed gameplay IDs to retain mission IDs.
     meta['presentation']=presentation.add_art(ROOT,work,stage,sprites,cblock_frame)
@@ -497,10 +575,17 @@ def main():
     h.append('extern const int8_t pce_muzzle[4][9][2];')
     c.append('const int8_t pce_muzzle[4][9][2]={'+','.join('{'+','.join('{%d,%d}'%(row[2*k],row[2*k+1]) for k in range(9))+'}' for row in muzzle)+'};')
     h+=ui_h;c+=ui_c
+    h.append('extern const uint16_t pce_hud_base[7];')
+    c.append('const uint16_t pce_hud_base[7]={'+','.join(str(m.get('hud',0)) for m in scenes)+'};')
+    for m in scenes: h += m.get('hud_macros',[])
+    h += [f'#define PCE_CAR_STEPS {len(CAR_WIDTHS)}', '#define PCE_CAR_STEER (3+7*PCE_CAR_STEPS)', 'extern const uint8_t pce_car_widths[PCE_CAR_STEPS];']
+    h += [f'#define PCE_MECH_STEPS {len(MECH_SIZES)}', f'#define PCE_MECH_ARM (3+3*PCE_MECH_STEPS*8)', 'extern const uint8_t pce_mech_sizes[PCE_MECH_STEPS];']
+    c.append('const uint8_t pce_car_widths[PCE_CAR_STEPS]={'+','.join(map(str,CAR_WIDTHS))+'};')
+    c.append('const uint8_t pce_mech_sizes[PCE_MECH_STEPS]={'+','.join(map(str,MECH_SIZES))+'};')
     c.append('const uint8_t pce_actor_ids[33] = {'+','.join(map(str,scenes[0]['actor_ids']))+'};')
     (out/'assets.c').write_text('\n'.join(c)+'\n')
     h += ['#define PCE_HERO_FRAMES 9', '#define PCE_SHOT_ID 36', '#define PCE_ENEMY_SHOT_ID 37', '#define PCE_BLAST_ID 38']
-    for name in ('pair_characters','floor_palette','floor_mips','race_map','pursuit_row'):
+    for name in ('pair_characters','floor_palette','floor_geometry','race_map','pursuit_row'):
         h.append(f"#define PCE_RACE_{name.upper()} {scenes[1]['records'][name]['offset']}UL")
     (out/'assets.h').write_text('\n'.join(h)+'\n')
     # Runtime work buffers are separate from BIOS/compiler console RAM.

@@ -131,18 +131,35 @@ class Campaign(Test):
             self.results['town']=self.state(e)
             self.press(e,1);self.until(e,lambda:self.metrics(e)['stage']==2 and self.metrics(e)['ready']);self.dialogs(e)
             assert self.state(e)['lives']==3,'Lives must carry into the next stage'
-            # Run the race and seven rivals, seed only the final gate crossing.
-            e.input(16);e.run(600);e.input(0)
-            assert self.metrics(e)['floor_commits']>20
+            # Drive the race against its seven rivals (the countdown, then the car on the circuit), seed only the final lap.
+            app=self.out/'app.elf'
+            def sym(n):return symbol(app,n)
+            def word(n,signed=False):return int.from_bytes(e.memory(sym(n),2),'little',signed=signed)
+            e.input(16);e.run(900);e.input(0)
+            assert self.metrics(e)['floor_commits']>20,self.metrics(e)
+            assert e.memory(sym('rphase'),1)[0]==1,'The countdown must hand over to the race'
+            assert word('speed',True)>100,'Holding up must accelerate the car'
             self.results['race_running']=self.state(e)
-            self.field(e,'lap',3);self.seed(e,'race_progress',65500)
-            self.seed(e,'speed',112,1);e.write(symbol(self.out/'app.elf','rival_laps'),bytes(7))
-            reads=self.metrics(e)['disc_reads'];e.input(16);e.run(120);e.input(0);self.dialogs(e)
-            assert self.metrics(e)['phase']==1 and self.metrics(e)['disc_reads']==reads
-            self.seed(e,'gap',261);self.seed(e,'speed',112,1);e.input(16);e.run(120);e.input(0);self.dialogs(e)
-            assert self.state(e)['boss_kind']==4
-            self.field(e,'boss_hp',1);e.input(1);e.run(120);e.input(0);self.dialogs(e)
-            self.until(e,lambda:self.state(e)['state']==2);self.capture(e,'campaign-pursuit-clear');self.results['race']=self.state(e)
+            # The rivals are out of the way (rank 1) and the car is on its last lap; the finish hands over to the pursuit.
+            e.write(sym('rv'),bytes(7*23));e.write(sym('lapp'),bytes([3]))
+            reads=self.metrics(e)['disc_reads'];e.input(16);e.run(600);e.input(0);self.dialogs(e)
+            assert self.metrics(e)['phase']==1 and self.metrics(e)['disc_reads']==reads,self.metrics(e)
+            assert e.memory(sym('rphase'),1)[0]==3
+            # Catch the leader: put the car just behind him (he is a few hundred units up the road).
+            bx,by=struct.unpack('<2h',e.memory(sym('boss')+8,4))
+            e.write(sym('px'),struct.pack('<2H',bx,(by+120)&8191))   # (not paused: the pause menu restarts the stage)
+            e.input(16);e.run(30);e.input(0);self.dialogs(e)
+            assert self.state(e)['boss_kind']==4 and e.memory(sym('rphase'),1)[0]==4,self.state(e)
+            # One more hit: a shot of the car's own on him with a single hit point left.
+            e.run(30)
+            bx,by=struct.unpack('<2h',e.memory(sym('boss')+8,4))
+            e.write(sym('boss')+19,bytes([1]))
+            e.write(sym('race_bolts'),struct.pack('<4h2B',bx,by,0,0,20,1)+bytes(10*5))
+            for _ in range(40):   # the rest of the boss's dialogue, the burn-out, the victory dialogue
+                self.dialogs(e)
+                if self.state(e)['state']==2:break
+                e.run(120)
+            self.until(e,lambda:self.state(e)['state']==2,limit=300);self.capture(e,'campaign-pursuit-clear');self.results['race']=self.state(e)
             # Remaining platform bosses, including Dark April as a second fight.
             for stage,x in ((3,6920),(4,6340),(5,6580)):
                 self.stage(e,stage);self.dialogs(e);self.move(e,x)

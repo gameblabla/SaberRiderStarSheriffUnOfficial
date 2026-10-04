@@ -33,12 +33,14 @@ def planar_sprite(index):
     if a.shape != (16, 16) or a.max() > 15: raise ValueError('Invalid sprite pattern')
     return b''.join(np.packbits((a >> b) & 1, axis=1)[:, ::-1].tobytes() for b in range(4))
 
-def palette_for(images, colors=15):
+def palette_for(images, colors=15, unique=False):
+    """`unique`: every distinct colour counts once, so a few pixels of a rare colour keep their own entry."""
     px = np.concatenate([np.asarray(im.convert('RGBA')).reshape(-1, 4) for im in images])
     px = px[px[:, 3] >= 128, :3]
     if not len(px): return np.zeros(16, '<u2')
     # Quantization occurs on the final 9-bit color lattice.
     px = vce_rgb(vce_colors(px)).astype(np.uint8)
+    if unique: px = np.unique(px, axis=0)
     q = Image.fromarray(px.reshape(1, -1, 3)).quantize(colors=colors, method=Image.Quantize.MEDIANCUT)
     pal = np.zeros(16, '<u2')
     rgb = np.asarray(q.getpalette(), np.uint8).reshape(-1, 3)[:colors]

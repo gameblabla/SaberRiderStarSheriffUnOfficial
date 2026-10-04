@@ -40,7 +40,7 @@ PCE_FLOW static bool change_stage(uint8_t n) {
         if(stage!=6&&stage!=7)overlay_call(0x69,play_start);
     }
     if(!pce_campaign.diagnostic) {
-        if(stage==2){overlay_call(0x6f,race_start);pce_control.elapsed=0;overlay_call(0x6f,race_frame);}
+        if(stage==2){overlay_call(0x79,race_start);pce_control.elapsed=0;overlay_call(0x79,race_frame);}
         else if(stage==6)overlay_call(0x72,mech_start);
         else if(stage==7)overlay_call(0x73,space_start);
         if(stage!=1&&stage!=7) {pce_campaign.story=0;overlay_call(0x71,story_start);}
@@ -69,7 +69,7 @@ PCE_FLOW static void render_test(uint8_t keys,uint8_t pressed) {
             phase^=1;if(phase){race_x=4096;heading=8;}
             save_store(stage,hero,phase);
         }
-        pce_control.x=race_x;pce_control.y=race_y;pce_control.heading=heading;pce_control.phase=phase;
+        pce_control.x=race_x;pce_control.y=race_y;pce_control.heading=heading<<2;pce_control.phase=phase;
         overlay_call(0x6d,floor_draw);
     } else if(stage==6) {
         if(keys&KEY_LEFT)test_x-=2;if(keys&KEY_RIGHT)test_x+=2;
@@ -123,11 +123,13 @@ PCE_FLOW void flow_main(void) {
     if(!change_stage(initial))for(;;){}
     if(resumed&&initial==checkpoint.stage&&stage==2&&checkpoint.phase){
         phase=1;pce_metrics.phase=1;race_x=4096;heading=8;
-        if(!pce_campaign.diagnostic){pce_control.phase=1;overlay_call(0x6f,race_start);pce_campaign.state=CAM_PLAY;pce_campaign.timer=0;video_restore();}
+        if(!pce_campaign.diagnostic){pce_control.phase=1;overlay_call(0x79,race_start);pce_campaign.state=CAM_PLAY;pce_campaign.timer=0;video_restore();}
     }
     simulation_tick=pce_ticks;
     for(;;) {
-        video_wait();
+        /* The race runs as fast as it can (a pass is rarely a whole number of frames, and waiting out the rest wastes the
+         * time the floor wants): the wait is only for the first tick after the last pass began. */
+        if(stage==2){while(pce_ticks==simulation_tick){}++pce_metrics.frames;}else video_wait();
         uint8_t elapsed=pce_ticks-simulation_tick;simulation_tick=pce_ticks;
         if(elapsed>12)elapsed=12;
         uint8_t keys=~pce_joypad_read(),pressed=keys&~previous;previous=keys;audio_tick();
@@ -194,10 +196,10 @@ PCE_FLOW void flow_main(void) {
                 if(!(pce_cdb_adpcm_status()&ADPCM_STOPPED)){video_sat_begin();video_sat_end();continue;}
                 uint8_t resume_phase=pce_metrics.phase,resume_wave=pce_campaign.wave;
                 pce_campaign.result=0;if(!change_stage(stage))for(;;){};
-                if(stage==2&&resume_phase){pce_control.phase=1;overlay_call(0x6f,race_start);pce_campaign.state=CAM_PLAY;pce_campaign.timer=0;}
+                if(stage==2&&resume_phase){pce_control.phase=1;overlay_call(0x79,race_start);pce_campaign.state=CAM_PLAY;pce_campaign.timer=0;}
                 if(stage==6){pce_control.phase=resume_wave;overlay_call(0x72,mech_start);pce_campaign.state=CAM_PLAY;}
                 simulation_tick=pce_ticks;continue;}
-            if(stage==2)overlay_call(0x6f,race_frame);
+            if(stage==2)overlay_call(0x79,race_frame);
             else if(stage==6)overlay_call(0x72,mech_frame);
             else if(stage==7)overlay_call(0x73,space_frame);
             else overlay_call(0x69,play_frame);

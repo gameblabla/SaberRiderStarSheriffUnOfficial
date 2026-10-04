@@ -223,7 +223,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     pce_metrics.player_x=player.x;pce_metrics.player_y=player.y;pce_metrics.camera_x=camera;pce_metrics.hero=hero;
 }
 uint16_t hero_sprite;
-__attribute__((noinline)) void play_draw(void) {
+PCE_BOSS void play_draw(void) {
     /* The hardware scroll stays put until this frame's SAT is uploaded (see irq.S). */
     pce_scroll_hold=1;
     video_background(camera);video_sat_begin();foreground_prepare();presentation_draw();

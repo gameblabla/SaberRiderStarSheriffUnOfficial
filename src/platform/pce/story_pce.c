@@ -93,7 +93,9 @@ STORY_CODE void story_start(void) {
     story_address=pointer(dir+1+((uint16_t)pce_control.hero*count+pce_campaign.story)*4);
     arcade_read(2,story_address,&page_count,1);
     pce_campaign.page=0;pce_campaign.state=CAM_STORY;pce_campaign.timer=0;
-    if(pce_metrics.stage==2||pce_metrics.stage>=6){video_sat_begin();video_sat_end();}   /* platform stages keep their sprites in the SAT */
+    /* The race and the cockpits keep their HUD in sprites: let the last two displayed generations go (their cache slots
+     * stay pinned through the SAT DMA) so the box and the avatar find slots in the same frame. */
+    if(pce_metrics.stage==2||pce_metrics.stage>=6)for(uint8_t k=0;k<3;++k){video_sat_begin();video_sat_end();video_wait();}
     draw();
 }
 STORY_CODE void story_step(void) {
@@ -112,7 +114,8 @@ STORY_CODE void story_step(void) {
         if(pce_metrics.stage!=2&&pce_metrics.stage<6) {
             /* Put the blanked cells back and swap the sprites in one go: a full background reload takes several frames,
              * uncovering the box column by column while its in-front corner pieces linger. */
-            pce_panel_restore=story_y;play_draw();
-        } else video_restore();
+            pce_panel_restore=story_y;overlay_call(0x7b,play_draw);
+        } else if(pce_metrics.stage==2)video_race_sky();   /* the sky cells the box blanked and the text covered */
+        else video_restore();
     }
 }

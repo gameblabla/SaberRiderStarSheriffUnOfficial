@@ -14,9 +14,9 @@ PCE_CODE void play_frame(void) {
     for(uint8_t i=0;i<pce_control.elapsed&&(pce_campaign.diagnostic||pce_campaign.state==CAM_PLAY)&&!pce_campaign.event&&!pce_campaign.result;++i) {
         play_tick(pce_control.keys,i?0:pce_control.pressed);pce_control.pressed=0;
     }
-    play_draw();
+    overlay_call(0x7b,play_draw);
 }
-PCE_CODE void play_present(void) { play_draw(); }
+PCE_CODE void play_present(void) { overlay_call(0x7b,play_draw); }
 PCE_FLOOR void floor_start(void) { pce_control.ok=floor_init(); }
 PCE_FLOOR void floor_draw(void) {
     floor_update(pce_control.x,pce_control.y,pce_control.heading,pce_control.phase);

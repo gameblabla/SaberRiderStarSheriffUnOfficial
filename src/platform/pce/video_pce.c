@@ -336,7 +336,7 @@ PCE_RENDER void video_floor_row(uint8_t page, uint8_t row, const uint8_t *pairs)
         *IO_VDC_DATA_LO=pairs[x];*IO_VDC_DATA_HI=0xf2;
     }
 }
-__attribute__((noinline,section(".ram_bank116.text"))) static void race_sky_load(void) {
+__attribute__((noinline,section(".ram_bank109.text"))) static void race_sky_load(void) {   /* beside the floor code that calls it */
     uint16_t used=0;
     memset(cache_ids,0xff,sizeof cache_ids);
     for(uint8_t x=0;x<64;++x) {
@@ -364,4 +364,4 @@ __attribute__((noinline,section(".ram_bank116.text"))) static void race_sky_load
     pce_control.ok=1;
 }
 
-bool video_race_sky(void) {overlay_call(0x74,race_sky_load);return pce_control.ok;}
+bool video_race_sky(void) {overlay_call(0x6d,race_sky_load);return pce_control.ok;}

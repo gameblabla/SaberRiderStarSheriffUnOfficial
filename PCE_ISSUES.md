@@ -246,6 +246,35 @@ Implementation status below does not replace the user's visual/audio acceptance.
       size (the old art was a stretched 16x16 cell) and the Hyperjumper keeps its aspect (3/4 size). Code space: the CD buffer is
       40 KiB ($76-$7a, was 56 KiB) so banks $7b/$7c are spare code banks (`PCE_BOSS`, `link.ld`, `check_elf.py`).
 
+## Fourteenth pass (2026-10-04, playtest feedback)
+
+- [x] Level 2 floor at a much higher internal resolution (`PCE/Framebuffer/Wolf3D.txt`): the floor is BAT pair characters at the
+      512-dot clock, 24 BAT rows of four lines, 128 samples across, each row its own perspective row (geometry for 128 headings
+      in the Arcade RAM, `floor_tables.py`), time-sliced: `floor_update` samples a budget of pairs a call and the budget follows the
+      loop (it keeps passes to two or three frames; the pass no longer waits out the rest of a frame, see `main_pce.c`). A full
+      floor commits about 7-8 times a second, the sprites are projected from the camera of the floor last completed
+      (`floor_shown_*`) so cars and road agree, and the car, HUD and shots run on top at the loop's 20 Hz. No black bars: the sky
+      is the 512-wide art and the HUD is sprites (`hudart.py`), the dialogue box restores the sky cells afterwards.
+- [x] Level 2 plays like the source (`race_*_pce.c`, banks `$79` core, `$7a` shots/leader/escort, `$6d` the field, `$7c` sprites and
+      HUD): free steering car with the ground deciding top speed (road / kerb / sand, turbo), seven rivals on the circuit's rails with
+      the source's speeds and rubber band, Black Hornet mines and shots, three laps, a top-three finish needed (a life and the race
+      again otherwise), then the pursuit of the leader (escorts, mines, his booster, the rear gunner, rams) and the boss fight.
+      The race ticks at 60 Hz; the field every other tick with doubled steps. Everything is 16-bit (no library division in the hot paths).
+- [x] Level 6 phase 1 and phase 2 HUDs follow the source (`hud_pce.c`, bank `$7c`): the cockpit is cropped from the 426-wide PC
+      cockpit, the mech frames are baked at 8 widths and drawn with the slice technique (`PCE/scalingsprites`), the HUD is sprite
+      pieces rendered from the source's fonts (arm/gun bars, wave, radar, heat; shield cells, power pips, torpedoes, hero power,
+      the cruiser's name and hull bar). The HUD sprites of a stage share one palette (`hudp_` in `build_assets.py`) and live in the
+      shared-palette slots of the sprite cache (`pce_hud_base`), so a HUD cannot starve the world of cache slots (the cruiser fight
+      used to drop its own sprites).
+- [x] Herd, aim, palette, enemies, bosses: see the thirteenth pass. The aim-up-while-running-down-right glitch and the white row
+      at BG Y=199 are fixed there.
+- [ ] Not reproduced: the black screen after "select a hero, die once, start a new game, select another hero". Tried the
+      continue timeout, game over, title and every hero pair, and the hero change from the run menu after dying; all showed the
+      stage. If it still happens, the exact sequence (and whether a CONTINUE was used) would help.
+- [ ] The game-over picture: the pasted image never arrived, so the PCE game-over screen is unchanged; re-attach it to use it.
+- [ ] The race's dialogue box is half the screen wide (the box and font are 256-clock art on a 512-dot screen).
+- [ ] Stage loads read 12-sector chunks now (the CD buffer is 24 KiB: `$76-$78`; banks `$79-$7c` are code).
+
 Remaining integration/acceptance work:
 
 - [ ] Integrate the reference ROM's two-channel, scanline-delivered 2-bit ADPCM

@@ -21,6 +21,7 @@ CACHE_CODE static void allocate(void) {
     if(cache_stage!=pce_metrics.stage) {
         cache_first=65535;
         if(s->nforeground)arcade_read(2,s->foreground+4,&cache_first,2);
+        else if(pce_hud_base[pce_metrics.stage-1])cache_first=pce_hud_base[pce_metrics.stage-1];   /* the HUD pieces share one palette */
         cache_stage=pce_metrics.stage;
     }
     uint8_t low=id>=cache_first?15:0,high=id>=cache_first?48:15;

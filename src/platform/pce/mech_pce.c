@@ -2,12 +2,14 @@
 #include "overlay_pce.h"
 #include "video_pce.h"
 #include "loader_pce.h"
+#include "assets.h"
+#include "hud_pce.h"
 #define MECH_CODE __attribute__((noinline,section(".ram_bank114.text")))
-typedef struct {int16_t x;uint16_t distance,hp,clock;uint8_t variant,on;} Mech;
-static Mech mechs[3];
-static uint8_t visible[3];
-static uint16_t wave_clock;
-static uint8_t spawned,killed,aim,heat,gun_cd,punch_cd,hurt,overheated;
+Mech mechs[3];
+uint8_t visible[3];
+uint16_t wave_clock;
+uint8_t spawned,killed,aim,heat,gun_cd,punch_cd,overheated;
+static uint8_t hurt;
 /* Source WAVES in ramrod.c: four, six, then eight mechs. */
 static const uint8_t variants[3][8] __attribute__((section(".ram_bank114.rodata")))={{0,0,0,0},{0,0,1,0,1,0},{2,0,0,1,0,1,0,1}};
 static const uint16_t delays[3][8] __attribute__((section(".ram_bank114.rodata")))={{0,120,360,600},{0,30,240,420,600,720},{0,18,36,360,480,780,900,1080}};
@@ -68,20 +70,5 @@ MECH_CODE static void mech_tick(void) {
 }
 MECH_CODE void mech_frame(void) {
     for(uint8_t i=0;i<pce_control.elapsed&&!pce_campaign.event&&!pce_campaign.result&&pce_campaign.state==CAM_PLAY;++i)mech_tick();
-    video_background(0);video_sat_begin();
-    uint16_t arm=punch_cd>30?108:99;
-    video_sprite(arm,0,0,false,16);video_sprite(arm,256,0,true,16);
-    if(gun_cd>4)video_sprite(0,128,94,false,16);
-    for(uint8_t k=0;k<3;++k)if(mechs[k].on) {
-        Mech *m=&mechs[k];uint8_t size=m->distance>600?0:m->distance>360?1:m->distance>180?2:3;
-        uint8_t pose=m->distance<180&&m->clock%60>40?6:m->clock%120>78?4:(m->clock/12)%4;
-        uint16_t id=3+(uint16_t)m->variant*32+size*8+pose;
-        visible[k]=video_sprite_optional(id,m->x+128-aim,164,false,16);
-    }
-    video_sat_end();video_text(1,0,"RAMROD ARMOR");video_number(14,0,pce_metrics.hp);
-    video_text(1,1,"WAVE");video_number(6,1,pce_campaign.wave+1);
-    video_text(12,1,"TARGET");video_number(20,1,pce_campaign.boss_hp);
-    video_text(1,2,"HEAT");video_number(6,2,heat);
-    video_text(1,25,overheated?"OVERHEATED - COOLING          ":"I GUN II PUNCH UP/DOWN RANGE  ");
-    pce_metrics.player_x=aim;pce_metrics.player_y=heat;
+    overlay_call(0x7c,mech_draw);
 }

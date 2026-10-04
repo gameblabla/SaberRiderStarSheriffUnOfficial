@@ -1,6 +1,7 @@
 #include "video_pce.h"
 #include "arcade_pce.h"
 #include "sprite_cache_pce.h"
+#include "assets.h"
 /* Scaled and cockpit-clipped sprite pieces. This slow path lives in the $71
  * overlay so the renderer bank keeps room for its hot paths. */
 extern vdc_sprite_t sat[2][64];
@@ -21,18 +22,18 @@ __attribute__((noinline,section(".ram_bank113.text"))) void sprite_generic(void)
         if (scale != 16) { dx = (int32_t)dx * scale / 16; dy = (int32_t)dy * scale / 16; }
         int16_t px = x + dx, py = y + dy;
         if (px <= -16 || px >= (pce_raster_enabled ? 512 : 256) || py <= -16 || py >= 224) continue;
-        /* Cockpit viewing window: never draw a partial slice across its rim. */
-        if (pce_metrics.stage == 6 && id<99 && (px + 16 <= 16 || px >= 240 || py + 16 <= 20 || py >= 180)) continue;
+        /* Cockpit viewing window: the world shows above the consoles (row 158) across the whole width. */
+        if (pce_metrics.stage == 6 && id<PCE_MECH_ARM && py >= 158) continue;
         int16_t lo = py < 0 ? 0 : py, hi = py + 16 > 224 ? 224 : py + 16;
         if(sat_count==64)goto refused;
         sprite_line_lo=lo;sprite_line_hi=hi;sprite_lines_reserve();
         if(!sprite_line_ok)goto refused;
         uint16_t pattern = d[4] | (uint16_t)d[5]<<8;
         uint16_t vram_pattern=(sprite_words[slot]>>5)+pattern*2;
-        if (pce_metrics.stage==6 && id<99 && (px<16 || px+16>240 || py<20 || py+16>180)) {
+        if (pce_metrics.stage==6 && id<PCE_MECH_ARM && (px<0 || px+16>256 || py<0 || py+16>158)) {
             if (clipped_count>=28) { sprite_lines_release();goto refused; }
-            uint8_t left=px<16?16-px:0, right=px+16>240?240-px:16;
-            uint8_t top=py<20?20-py:0, bottom=py+16>180?180-py:16;
+            uint8_t left=px<0?-px:0, right=px+16>256?256-px:16;
+            uint8_t top=py<0?-py:0, bottom=py+16>158?158-py:16;
             if(flip) { uint8_t t=left;left=16-right;right=16-t; }
             uint16_t mask=(0xffffU>>left)&(0xffffU<<(16-right));
             {uint8_t head[4];arcade_read(2,video_scene_ptr->sprites+(uint32_t)id*16,head,4);
