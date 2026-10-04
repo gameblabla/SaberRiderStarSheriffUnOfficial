@@ -10,6 +10,8 @@ extern PceControl pce_control;
 void overlay_call(uint8_t bank,void (*method)(void));
 void flow_main(void);
 void play_start(void);
+void encounter_init(void);
+void encounters(void);
 void play_frame(void);
 void play_present(void);
 void race_start(void);

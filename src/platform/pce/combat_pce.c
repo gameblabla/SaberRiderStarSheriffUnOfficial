@@ -6,7 +6,16 @@
 static uint8_t dialogs_done,ndialog,ndeath,boss_phase,boss_flash;
 static uint16_t boss_time,arena_time;
 static int16_t boss_x,boss_y;
-static int16_t dialog_zones[4][4],death_zones[8][6];
+typedef struct { int16_t zone[4],focus; uint16_t before,after; } DialogZone;
+static DialogZone dialog_zones[4];
+static int16_t death_zones[8][6];
+/* Level dialogue with a camera focus (the outrider who spots the heroes): the hero comes to a stop, the camera pans
+ * to the focus point 4 px a step, holds while the scene plays, the text runs, the scene plays on, and the camera
+ * returns to the hero. Phases: 1 stop, 2 pan out, 3 hold, 4 text, 5 hold, 6 pan back. The world is frozen while
+ * the camera pans (as in the main game). */
+uint8_t cut_phase;
+static uint8_t cut_k;
+static uint16_t cut_wait,cut_target;
 PCE_COMBAT static int16_t distance(int16_t a,int16_t b) { int16_t n=a-b;return n<0?-n:n; }
 PCE_COMBAT static bool zone(const int16_t *z) {
     return distance(player.x+4,z[0])<=z[2]+8&&distance(player.y+9,z[1])<=z[3]+23;
@@ -15,13 +24,13 @@ PCE_COMBAT static void bullet(int16_t x,int16_t y,int16_t vx,int16_t vy) {
     for(uint8_t k=0;k<24;++k)if(!shots[k].active){shots[k]=(Shot){x,y,vx,vy,1,1};break;}
 }
 PCE_COMBAT void combat_start(void) {
-    boss_phase=boss_flash=dialogs_done=ndialog=ndeath=0;boss_time=arena_time=0;
+    boss_phase=boss_flash=dialogs_done=ndialog=ndeath=cut_phase=0;boss_time=arena_time=0;
     pce_campaign.boss_kind=pce_campaign.boss_round=0;pce_campaign.boss_hp=0;
     pce_campaign.result=pce_campaign.event=0;pce_campaign.boost=pce_campaign.power_cd=0;
     uint8_t count[2];arcade_read(2,play_scene->rules,count,2);
     ndialog=count[0]>4?4:count[0];ndeath=count[1]>8?8:count[1];
-    arcade_read(2,play_scene->rules+2,dialog_zones,(uint16_t)ndialog*8);
-    arcade_read(2,play_scene->rules+2+(uint16_t)ndialog*8,death_zones,(uint16_t)ndeath*12);
+    arcade_read(2,play_scene->rules+2,dialog_zones,(uint16_t)ndialog*sizeof(DialogZone));
+    arcade_read(2,play_scene->rules+2+(uint16_t)ndialog*sizeof(DialogZone),death_zones,(uint16_t)ndeath*12);
 }
 PCE_COMBAT static void boss_begin(uint8_t kind) {
     camera=play_scene->width-256;pce_metrics.camera_x=camera;
@@ -42,15 +51,40 @@ PCE_COMBAT static void power_strike(void) {
     } else pce_campaign.boost=hero==2?480:600;
     pce_campaign.power_cd=1200;audio_effect(4);
 }
+/* Moves the camera 4 px towards a target; true on arrival. */
+PCE_COMBAT static bool cut_pan(uint16_t target) {
+    if(camera+4<=target)camera+=4;else if(camera>=target+4)camera-=4;else {camera=target;return true;}
+    return false;
+}
+PCE_COMBAT static void cut_step(void) {
+    uint16_t limit=play_scene->width-256;
+    switch(cut_phase) {
+    case 1:if((player.coll&4)&&!slide_time){
+            int16_t t=dialog_zones[cut_k].focus-128;
+            cut_target=t<0?0:t>(int16_t)limit?limit:t;cut_phase=2;
+        }break;
+    case 2:if(cut_pan(cut_target)){cut_phase=3;cut_wait=dialog_zones[cut_k].before;}break;
+    case 3:if(cut_wait)--cut_wait;else {cut_phase=4;pce_campaign.event=1;}break;
+    case 4:cut_phase=5;cut_wait=dialog_zones[cut_k].after;break;   /* the text has closed */
+    case 5:if(cut_wait)--cut_wait;else cut_phase=6;break;
+    default:{
+            uint16_t t=player.x>120?player.x-120:0;
+            if(cut_pan(t>limit?limit:t))cut_phase=0;
+        }
+    }
+}
 PCE_COMBAT void combat_tick(void) {
     if(pce_campaign.boost)--pce_campaign.boost;
     if(pce_campaign.power_cd)--pce_campaign.power_cd;
+    if(cut_phase){cut_step();return;}
     if((pce_control.pressed&KEY_SELECT)&&(pce_control.keys&KEY_1)&&
        pce_campaign.powers&&!pce_campaign.power_cd&&!pce_campaign.boost) {
         --pce_campaign.powers;pce_campaign.state=CAM_POWER;pce_campaign.timer=0;return;
     }
-    for(uint8_t k=0;k<ndialog;++k)if(!(dialogs_done&(1<<k))&&zone(dialog_zones[k])) {
-        dialogs_done|=1<<k;pce_campaign.story=k;pce_campaign.event=1;return;
+    for(uint8_t k=0;k<ndialog;++k)if(!(dialogs_done&(1<<k))&&zone(dialog_zones[k].zone)) {
+        dialogs_done|=1<<k;pce_campaign.story=k;
+        if(dialog_zones[k].focus){cut_k=k;cut_phase=1;}else pce_campaign.event=1;
+        return;
     }
     for(uint8_t k=0;k<ndeath;++k)if(zone(death_zones[k])&&!safe_timer) {
         campaign_hurt();safe_timer=120;

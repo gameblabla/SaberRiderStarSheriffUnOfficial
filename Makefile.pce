@@ -37,7 +37,7 @@ $(OUT)/ipl.elf: src/platform/pce/ipl.c src/platform/pce/link/ipl.ld $(OUT)/ipl_f
 assets: | $(OUT)
 	python3 tools/pce/build_assets.py --out $(OUT)
 
-$(PCE_ASSETS) &: tools/pce/build_assets.py tools/pce/formats.py tools/pce/export.c tools/pce/export_track.c tools/pce/story.py tools/pce/timeline.py tools/pce/presentation.py tools/pce/frontend.py $(wildcard src/*.[ch]) $(wildcard SaberRider/data/*.pck) $(wildcard assets/*.png assets/*.txt assets/ramrod/*.png assets/ramrod/*.txt assets/space/*.png assets/space/*.txt assets/stage3/native/*.png) | $(OUT)
+$(PCE_ASSETS) &: tools/pce/build_assets.py tools/pce/formats.py tools/pce/export.c tools/pce/export_muzzle.c tools/pce/export_track.c tools/pce/story.py tools/pce/timeline.py tools/pce/presentation.py tools/pce/frontend.py $(wildcard src/*.[ch]) $(wildcard SaberRider/data/*.pck) $(wildcard assets/*.png assets/*.txt assets/ramrod/*.png assets/ramrod/*.txt assets/space/*.png assets/space/*.txt assets/stage3/native/*.png) | $(OUT)
 	python3 tools/pce/build_assets.py --out $(OUT)
 
 $(OUT)/app.elf: $(PCE_SRC) $(wildcard src/platform/pce/*.h) $(OUT)/assets.h $(OUT)/samples.h $(OUT)/pcm.h Makefile.pce tools/pce/check_elf.py src/platform/pce/link/link.ld

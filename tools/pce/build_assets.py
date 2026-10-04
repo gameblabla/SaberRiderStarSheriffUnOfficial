@@ -43,6 +43,14 @@ def extract(work):
     run(['cc', '-std=gnu11', '-O2', '-Isrc', 'tools/pce/export.c', *objects, '-lpng', '-lm', '-o', exe])
     env = dict(os.environ, SABER_ASSETS=str(ROOT / 'assets'), SABER_START='100', SABER_HERO='1')
     for stage in (1, 3, 4, 5): run([exe, ROOT / 'SaberRider/data', stage, work], env=env)
+    # The source game's barrel position for each aim pose, per hero (shots must leave the drawn gun).
+    exe = work / 'export_muzzle'
+    run(['cc', '-std=gnu11', '-O2', '-Isrc', 'tools/pce/export_muzzle.c', *objects, '-lpng', '-lm', '-o', exe])
+    muzzle = []
+    for hero in range(4):
+        out = run([exe, ROOT / 'SaberRider/data'], env=dict(env, SABER_HERO=str(hero))).stdout.decode().split()
+        muzzle.append([int(v) for v in out])
+    (work / 'muzzle.json').write_text(json.dumps(muzzle))
     exe = work / 'texprep'
     run(['cc', '-std=gnu11', '-O2', '-Isrc', 'tools/dc/texprep.c', 'src/gfx.c', 'src/font.c',
          'src/pack.c', 'src/lzo1z.c', 'src/assets.c', 'src/namehash.c', '-o', exe])
@@ -242,7 +250,8 @@ def make_scene(stage, work, previews, shared):
         zones=meta['dialogs'] if stage==1 else []
         deaths=meta['deathzones'] if stage==1 else []
         rules=bytes([len(zones),len(deaths)])
-        rules+=b''.join(struct.pack('<4h',*z['zone']) for z in zones)
+        # Dialogue zone + camera focus x (0 = none) + ticks to hold before / after the text (60 Hz).
+        rules+=b''.join(struct.pack('<4hhHH',*z['zone'],z['focus'][0],round(z['hold'][0]*60/1000),round(z['hold'][1]*60/1000)) for z in zones)
         rules+=b''.join(struct.pack('<6h',*z) for z in deaths)
         meta['rules_offset']=a.add('flow_zones',rules)
 
@@ -382,6 +391,17 @@ def main():
         c.append('    {' + ','.join(str(v) for v in values) + '},')
     c.append('};')
     presentation.emit_tables(out,scenes,h,c)
+    muzzle=json.loads((work/'muzzle.json').read_text())
+    # Shots leave the barrel of the pose as the PCE draws it: the art's own tip where it can be measured (the
+    # source's muzzle table is for the Saturn's composed poses), straight up from its composite, and the source's
+    # figure for straight down (the legs hide the gun there).
+    for hero,tip in enumerate(next((m['presentation']['up_tip'] for m in scenes if m['presentation']['up_tip']),[])):
+        muzzle[hero][6:8]=tip
+    for hero,tips in enumerate(next((m['presentation']['art_muzzle'] for m in scenes if m['presentation']['art_muzzle']),[])):
+        for case,tip in enumerate(tips):
+            if tip: muzzle[hero][2*case:2*case+2]=tip
+    h.append('extern const int8_t pce_muzzle[4][9][2];')
+    c.append('const int8_t pce_muzzle[4][9][2]={'+','.join('{'+','.join('{%d,%d}'%(row[2*k],row[2*k+1]) for k in range(9))+'}' for row in muzzle)+'};')
     h+=ui_h;c+=ui_c
     c.append('const uint8_t pce_actor_ids[33] = {'+','.join(map(str,scenes[0]['actor_ids']))+'};')
     (out/'assets.c').write_text('\n'.join(c)+'\n')

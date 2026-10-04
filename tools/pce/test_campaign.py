@@ -62,9 +62,21 @@ class Campaign(Test):
             boot(e,self.address);e.run(120)
             assert self.state(e)['diagnostic']==0
             reads=self.metrics(e)['disc_reads'];x=self.metrics(e)['player_x']
+            # The "Star Sheriffs" scene: the hero stops, the camera pans right to the outrider on the platform
+            # (focus x 730, 4 px a step), the text runs there, and the camera comes back to the hero.
+            cut=symbol(self.out/'app.elf','cut_phase');peak=0
             e.input(32);self.until(e,lambda:self.state(e)['state']==1,limit=1000);e.input(0)
             assert self.metrics(e)['player_x']>x
-            self.capture(e,'campaign-dialog');self.dialogs(e)
+            self.capture(e,'campaign-dialog');self.dialogs(e)    # the opening dialogue (x 192)
+            e.input(32);self.until(e,lambda:self.state(e)['state']==1,limit=1500,step=10);e.input(0)
+            assert self.metrics(e)['camera_x']>=600,self.metrics(e)
+            assert e.memory(cut,1)[0]==4
+            self.capture(e,'campaign-outrider');self.dialogs(e)
+            def panned():
+                nonlocal peak
+                peak=max(peak,self.metrics(e)['camera_x']);return e.memory(cut,1)==b'\0'
+            self.until(e,panned,limit=2000,step=10)
+            m=self.metrics(e);assert m['camera_x']==m['player_x']-120 and peak>=600,(m,peak)
             assert self.metrics(e)['disc_reads']==reads,'Dialogs must use preloaded data'
             # Run pauses and resumes the same position without a disc reload.
             x=self.metrics(e)['player_x'];self.press(e,8);e.run(120);self.press(e,8)
@@ -73,6 +85,21 @@ class Campaign(Test):
             self.press(e,5,20);self.until(e,lambda:self.state(e)['state']==0,limit=1000)
             assert self.state(e)['powers']==1 and self.state(e)['power_cd']>0
             self.results['power']=self.state(e)
+            # A diagonal shot leaves the barrel of the pose drawn (pce_muzzle, up-diagonal standing), at 6 px a
+            # step on each axis; it used to leave a fixed point that missed the gun by up to 13 px.
+            m=self.metrics(e);table=symbol(self.out/'app.elf','pce_muzzle')
+            mx,my=struct.unpack('<2b',e.memory(table+(m['hero']*9+5)*2,2))
+            e.write(symbol(self.out/'app.elf','shots'),bytes(24*10))
+            e.input(4);e.run(4);e.input(4|16|32|1)
+            for _ in range(30):
+                e.run(1)
+                raw=e.memory(symbol(self.out/'app.elf','shots'),24*10)
+                found=[struct.unpack_from('<4h2B',raw,k*10) for k in range(24) if raw[k*10+8]]
+                if found:break
+            e.input(0)
+            assert found and found[0][2:4]==(6,-6),found
+            m=self.metrics(e)
+            assert (found[0][0]-6,found[0][1]+6)==(m['player_x']+mx,m['player_y']+my),(found[0],m,mx,my)
             # Town boss arrival, player-shot damage, then native clear decision.
             self.move(e,9800);self.until(e,lambda:self.state(e)['boss_kind']==1,limit=600)
             self.seed(e,'boss_phase',3,1);self.seed(e,'boss_time',0);self.field(e,'boss_hp',2)

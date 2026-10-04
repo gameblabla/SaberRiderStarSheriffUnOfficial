@@ -44,6 +44,30 @@ def dialog_box(tiles):
     put(6,0,BOX_H-ch,cw,ch);put(7,cw,BOX_H-ch,mx,ch);put(8,BOX_W-cw,BOX_H-ch,cw,ch)
     return im
 
+
+def art_tips(hero,cell):
+    """Barrel tips (offset from the cell's anchor) of the aim and shoot poses exactly as the PCE draws them, in
+    pce_muzzle order (None = not derived here). The gun is the furthest-reaching part of each pose along its
+    aim; checked against the source's own barrel-pixel table (heroes.c) it agrees to a pixel for Saber and April."""
+    def alpha(im):return np.asarray(im)[:,:,3]>=64
+    def reach(a,ymax):                    # furthest right, among the rows above ymax
+        ys,xs=np.nonzero(a);keep=ys<=ymax;xs,ys=xs[keep],ys[keep];i=np.argmax(xs)
+        return xs[i]-32,float(ys[xs==xs[i]].mean())-32
+    def diag_up(a):
+        ys,xs=np.nonzero(a);i=np.argmax(xs-ys);return xs[i]-32,float(ys[i])-32
+    def mean(tips):return [int(round(sum(t[k] for t in tips)/len(tips))) for k in (0,1)]
+    def run(torso,fn,ymax):
+        tips=[]
+        for k in range(6):
+            bob=(0,1,2,0,1,2)[k] if hero==0 else (1 if k in (2,5) else 0) if hero in (1,3) else 0
+            legs=np.asarray(cell(104+k)).copy();legs[:38+bob if hero==0 else 0]=0
+            im=Image.fromarray(legs);im.alpha_composite(cell(torso),(0,bob))
+            tips.append(fn(alpha(im)) if fn else reach(alpha(im),ymax))
+        return mean(tips)
+    stand=mean([reach(alpha(cell(40)),48),reach(alpha(cell(41)),48)])
+    return [stand,run(88,None,40),mean([reach(alpha(cell(120)),64)]),None,None,
+            mean([diag_up(alpha(cell(44)))]),mean([reach(alpha(cell(42)),50)]),run(100,diag_up,0),run(98,None,44)]
+
 def add_art(root,work,stage,sprites,frame):
     def get(rid,n=0):return frame(work/'srgb'/f'{rid:08X}.srgb',n)
     def add(name,im,anchor=(0,0)):
@@ -69,7 +93,7 @@ def add_art(root,work,stage,sprites,frame):
         box=dialog_box([get(rid,n) for n in range(9)])
         for half in range(2):
             add(f'dialog_box{rid:08X}_{half}',box.crop((half*BOX_W//2,0,(half+1)*BOX_W//2,BOX_H)))
-    hud=[];digits=[];aim=[];motion=[];pending=[];pose=[]
+    hud=[];digits=[];aim=[];motion=[];pending=[];pose=[];up_tip=[];art_muzzle=[]
     if stage in (1,3,4,5):
         def glyph(n):return get(0x87A5333C,n)
         for hero in range(4):
@@ -108,7 +132,11 @@ def add_art(root,work,stage,sprites,frame):
             for name,torso,dy in [('aimup',38,-30),('aimdown',46,-9)]:
                 im=Image.new('RGBA',(64,64));im.alpha_composite(cell(22));im.alpha_composite(cell(torso),(0,dy))
                 row.append(add(f'hero{hero}_{name}',im,(32,32)))
+                if name=='aimup':   # the shot leaves the top of the drawn gun (the cell is cut off at the top of its 64 px)
+                    ys,xs=np.nonzero(np.asarray(im)[:,:,3]>=64)
+                    up_tip.append((int(round(xs[ys==ys.min()].mean()))-32,int(ys.min())-32))
             aim.append(row)
+            art_muzzle.append(art_tips(hero,cell))
             pending.append((hero,cell))
     # Motion poses follow every aim row, so each group has a constant stride
     # per hero (aim: 16, motion: 3) from its base ID. Falling off a ledge reuses
@@ -142,7 +170,7 @@ def add_art(root,work,stage,sprites,frame):
             for kind,cells in (('run',run),('death',death)):
                 for k,n in enumerate(cells):
                     add(f'{name}_{kind}{k}',frame(work/'srgb'/f'{aid:08X}.srgb',n),(round(ox),round(oy)))
-    return dict(portraits=portraits,dialog=dialog,hud=hud,digits=digits,aim=aim,motion=motion,pose=pose,enemy=enemy,end=len(sprites))
+    return dict(portraits=portraits,dialog=dialog,hud=hud,digits=digits,aim=aim,motion=motion,pose=pose,up_tip=up_tip,art_muzzle=art_muzzle,enemy=enemy,end=len(sprites))
 
 def emit_tables(out,scenes,h,c):
     m=scenes[0]['presentation']

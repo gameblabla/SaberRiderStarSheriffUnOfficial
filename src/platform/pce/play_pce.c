@@ -5,26 +5,16 @@
 #include "video_pce.h"
 #include "loader_pce.h"
 #include "arcade_pce.h"
+#include "assets.h"
 #include <string.h>
 
 /* Positions retain whole-world range. Fractions and velocities are separate
  * Q8 values; a 16-bit fixed-point world coordinate would overflow after 127px. */
-typedef struct __attribute__((packed)) {
-    int16_t cx,cy,hx,hy; uint16_t interval,delay,type;
-    uint8_t layer; int8_t remaining; uint8_t nwp; int16_t wp[8][2];
-} Trigger;
-_Static_assert(sizeof(Trigger)==49,"Trigger format changed");
 Body player;
 Actor actors[8] PCE_WORK;
 Shot shots[24] PCE_WORK;
 static uint8_t collision[32][32] PCE_WORK;
 static uint16_t column_tags[32];
-static uint16_t trigger_timers[100];
-static int8_t trigger_remaining[100];
-static uint8_t trigger_spawned[100];
-static Trigger trigger;
-static Trigger trigger_cache[60] PCE_STAGE;
-static int16_t trigger_lo[60] PCE_STAGE,trigger_hi[60] PCE_STAGE;
 const PceScene *play_scene;
 #define scene play_scene
 uint16_t camera,frame;
@@ -95,40 +85,17 @@ PCE_CODE void play_init(uint8_t stage,uint8_t selected) {
     player=(Body){.x=scene->sx,.y=scene->sy};safe_x=player.x;safe_y=player.y;
     memset(actors,0,sizeof actors);memset(shots,0,sizeof shots);
     memset(column_tags,0xff,sizeof column_tags);
-    for(uint8_t k=0;k<scene->ntr;++k) {
-        arcade_read(2,scene->triggers+(uint32_t)k*sizeof trigger,&trigger,sizeof trigger);
-        if(k<60) {trigger_cache[k]=trigger;trigger_lo[k]=trigger.type==10?32767:trigger.cx-trigger.hx-8;trigger_hi[k]=trigger.cx+trigger.hx+8;}
-        trigger_timers[k]=trigger.delay;trigger_remaining[k]=trigger.remaining;trigger_spawned[k]=0;
-    }
+    overlay_call(0x70,encounter_init);
     pce_metrics.hp=campaign_hearts();
     overlay_call(0x70,combat_start);
-}
-PCE_CODE static void encounters(void) {
-    if((pce_metrics.stage==4&&pce_campaign.boss_round==2)||(frame&3))return;
-    uint8_t k=0;
-    int16_t px=player.x+4;
-    for(const Trigger *t=trigger_cache;k<scene->ntr;++k,++t) {
-        if(px<trigger_lo[k]||px>trigger_hi[k]||!trigger_remaining[k]) continue;
-        if(player.y+9<t->cy-t->hy-23||player.y+9>t->cy+t->hy+23) continue;
-        if(trigger_timers[k]) {trigger_timers[k]=trigger_timers[k]>4?trigger_timers[k]-4:0;continue;}
-        /* Humanoid core first; the inventory retains other encounter recipes
-         * for their stage-specific handlers rather than replacing their art. */
-        for(uint8_t i=0;i<8;++i) if(!actors[i].active) {
-            uint8_t wp=trigger_spawned[k]%t->nwp;
-            int16_t x=t->wp[wp][0],y=t->wp[wp][1];
-            if(x>30000)x=camera+288;else if(x< -30000)x=camera-32;
-            if(y>30000)y=256;else if(y< -30000)y=-32;
-            if(y< -999)y=-1000-y;
-            actors[i]=(Actor){.b={.x=t->type>=11&&t->type<=27?x:x+8,.y=t->type>=11&&t->type<=27?y:y+19},.active=1,.type=t->type,.hp=t->type>=30?6:2,.timer=60,.flip=player.x<x};
-            if(trigger_remaining[k]>0)--trigger_remaining[k];
-            ++trigger_spawned[k];trigger_timers[k]=t->interval;break;
-        }
-    }
 }
 PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     ++frame;
     if(!pce_campaign.diagnostic){overlay_call(0x70,combat_tick);
         if(pce_campaign.state!=CAM_PLAY||pce_campaign.event)return;}
+    /* The story camera pans with the world frozen. */
+    if(cut_phase==2||cut_phase==6){pce_metrics.camera_x=camera;return;}
+    if(cut_phase)keys=pressed=0;
     if(safe_timer)--safe_timer;if(fire_timer)--fire_timer;
     if(pce_death) {
         /* Like the main game: the death animation plays where the hero fell,
@@ -161,7 +128,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     physics(&player);
     if(player.coll&4)jumping=0;else if(jumping&&jump_time<255)++jump_time;
     /* The screen only scrolls forwards: the left edge is a wall. */
-    if(player.x<(int16_t)camera+8){player.x=camera+8;if(player.vx<0)player.vx=0;}
+    if(!cut_phase&&player.x<(int16_t)camera+8){player.x=camera+8;if(player.vx<0)player.vx=0;}
     if(pce_campaign.boss_kind&&player.x>(int16_t)camera+248)player.x=camera+248;
     if((player.coll&4)&&!pce_death){safe_x=player.x;safe_y=player.y;}
     if(player.y>272&&!pce_death) {
@@ -169,27 +136,45 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
         if(!pce_death){player=(Body){.x=safe_x,.y=safe_y};safe_timer=120;}
     }
     if((keys&KEY_1)&&!fire_timer) {
-        int16_t vx=facing?-8:8,vy=0;
-        if(keys&KEY_UP){vy=-8;if(!(keys&(KEY_RIGHT|KEY_LEFT)))vx=0;}
-        if((keys&KEY_DOWN)&&(!crouch||(keys&(KEY_SELECT|KEY_LEFT|KEY_RIGHT)))){vy=8;if(!(keys&(KEY_LEFT|KEY_RIGHT)))vx=0;}
-        shoot(player.x+(facing?-18:18),player.y+(crouch?4:-8),vx,vy,false);fire_timer=pce_campaign.boost&&hero==3?4:12;audio_effect(1);
+        /* Straight shots fly 8 px a step, diagonals 6 on each axis (the source's 0.7 x). The shot leaves the barrel
+         * of the pose drawn: pce_muzzle holds the source game's own muzzle offset per hero and pose (level, level
+         * running, crouch, up, down, then up / down diagonals standing and running); the art is mirrored for left. */
+        bool side=keys&(KEY_LEFT|KEY_RIGHT),run=(player.coll&4)&&player.vx;
+        bool up=keys&KEY_UP,down=(keys&KEY_DOWN)&&(!crouch||(keys&(KEY_SELECT|KEY_LEFT|KEY_RIGHT)));
+        int16_t vx=facing?-8:8,vy=0;uint8_t pose=crouch?2:run;
+        if(up||down) {
+            vy=up?-8:8;
+            if(side){vx=facing?-6:6;vy=up?-6:6;pose=(up?5:6)+(run?2:0);}
+            else{vx=0;pose=up?3:4;}
+        }
+        const int8_t *muzzle=pce_muzzle[hero][pose];
+        shoot(player.x+(facing?-muzzle[0]:muzzle[0]),player.y+muzzle[1],vx,vy,false);fire_timer=pce_campaign.boost&&hero==3?4:12;audio_effect(1);
     }
-    encounters();
+    if(!(frame&3)&&!(pce_metrics.stage==4&&pce_campaign.boss_round==2))overlay_call(0x70,encounters);
     for(uint8_t k=0;k<8;++k) {
         Actor *a=&actors[k];if(!a->active)continue;
-        if(a->b.x<(int16_t)camera-80||a->b.x>(int16_t)camera+384||a->b.y>272){a->active=0;continue;}
+        if(((a->b.x<(int16_t)camera-80||a->b.x>(int16_t)camera+384)&&a->type!=28)||a->b.y>272){a->active=0;continue;}
         if(a->type>=12&&a->type<=23)continue;
         if(a->type>=24&&a->type<=27) {
             const int16_t speeds[4]={2016,1142,2352,1344};
             advance(&a->b.x,&a->b.fx,a->flip?-speeds[a->type-24]:speeds[a->type-24]);continue;
         }
         if(a->type==11){advance(&a->b.x,&a->b.fx,a->flip?-640:640);continue;}
-        if(a->type==28){if(a->timer)--a->timer;else a->b.x-=2;continue;}
+        if(a->type==28) {
+            /* The cutscene outrider (hp 2 waiting, 1 alarmed, 0 running): once it is on screen it freezes for a second
+             * facing the hero, then turns and runs off to the right. */
+            if(a->hp==2){int16_t d=camera+128-a->b.x;if(d<0)d=-d;if(d<128){a->hp=1;a->timer=60;}}
+            else if(a->hp==1){if(!--a->timer){a->hp=0;a->flip=0;}}
+            a->b.vx=a->hp?0:512;physics(&a->b);
+            if(a->b.vx)++a->anim;
+            if(!a->hp&&a->b.x>(int16_t)camera+272)a->active=0;
+            continue;
+        }
         if(a->dead){if(++a->dead>24)a->active=0;continue;}
         /* Walkers keep the heading they spawned with and turn round at walls and cars; the rest face the hero. */
         if(a->type>=6)a->flip=player.x<a->b.x;
-        a->b.vx=a->type<6?(a->flip?-170:170):0;
-        if(a->timer>45)a->b.vx=0;
+        a->b.vx=a->type<6?(a->flip?-512:512):0;
+        if(a->type>=2&&a->timer+24>(pce_options.difficulty==0?120:pce_options.difficulty==1?90:62))a->b.vx=0;   /* a shooter plants its feet for 24 steps, then runs on */
         physics(&a->b);
         if(a->b.coll&3)a->flip^=1;
         if(a->b.vx)++a->anim;
@@ -217,7 +202,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
         }
     }
     if(pce_campaign.boss_kind)camera=scene->width-256;
-    else if(player.x>120&&(uint16_t)(player.x-120)>camera)camera=player.x-120;
+    else if(!cut_phase&&player.x>120&&(uint16_t)(player.x-120)>camera)camera=player.x-120;
     if(camera>(uint16_t)(scene->width-256))camera=scene->width-256;
     pce_metrics.player_x=player.x;pce_metrics.player_y=player.y;pce_metrics.camera_x=camera;pce_metrics.hero=hero;
 }
@@ -237,7 +222,7 @@ __attribute__((noinline)) void play_draw(void) {
     else if(!pose)id=mb+ap[0]+(uint8_t)(frame/10)%ap[1];
     else if(jumping&&!grounded)id=mb+ap[2]+((jump_time/3)&3);
     /* Aim poses: up / down diagonals (running when moving), straight up, and straight down in the air. */
-    if(!slide_time&&!pce_death&&((keys&KEY_UP)||((keys&KEY_DOWN)&&(side||!grounded)))) {
+    if(!slide_time&&!pce_death&&((keys&KEY_UP)||((keys&KEY_DOWN)&&(side||!grounded||(keys&KEY_SELECT))))) {
         uint8_t direction=keys&KEY_UP?0:1;
         id=pce_present_base[stage][2]+hero*16;
         if(!side)id+=14+direction;

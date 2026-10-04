@@ -107,6 +107,25 @@ Implementation status below does not replace the user's visual/audio acceptance.
 - [x] Sprite glitches / foreground jitter: IRQ-masked VDC sequences and a scroll
       hold until the SAT is queued (see `pce-vdc-irq-hazards` notes).
 
+## Sixth pass (2026-10-04, playtest feedback)
+
+- [x] "Oh no! The Star Sheriffs" scene (level 1, x 349): the hero stops, the camera pans right 4 px a step to the
+      outrider on the platform (focus x 730 from the level data), holds 1 s with the world running (the outrider
+      freezes in alarm, then turns and runs off right), the text runs there, 2 s more of scene, then the camera
+      pans back left to the hero. The world is frozen during the pans, as in the main game. Dialogue zones now carry
+      focus x + the two hold times (`export.c` -> `flow_zones`, 14 bytes each); the state machine is `cut_step` in
+      `combat_pce.c` (`cut_phase`). The outrider (type 28) used to be culled the moment it spawned (off screen) and
+      walked left; it is exempt from the cull and runs right at 120 px/s.
+- [x] Diagonal shots left a fixed point (18,-8) from the hero, up to 13 px off the gun. `pce_muzzle[hero][9]` holds
+      the barrel tip of each pose (level, level running, crouch, up, down, diagonal up/down standing and running):
+      measured from the pose art as the PCE draws it (`presentation.art_tips`; agrees with the source's barrel
+      table for Saber/April to a pixel), straight down from the source game (`export_muzzle.c`). Diagonal shots
+      fly 6 px per axis (the source's 0.7 x of 8), not 8. Select + down on the ground now draws the straight-down aim.
+- [x] Enemies were sheepish: walkers/grunts moved 0.66 px a step (source: 120 px/s = 2 px a step, 1.2 x the hero) and
+      stood still up to 75 steps after every shot. They now run at 2 px a step and a shooter plants its feet for 24
+      steps only, then runs on.
+- Code moved out of the full platform bank: trigger spawning is `encounter_pce.c` (combat bank `$70`).
+
 Remaining integration/acceptance work:
 
 - [ ] Integrate the reference ROM's two-channel, scanline-delivered 2-bit ADPCM

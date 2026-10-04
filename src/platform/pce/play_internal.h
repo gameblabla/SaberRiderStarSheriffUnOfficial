@@ -13,4 +13,5 @@ extern uint16_t camera,frame;
 extern uint8_t hero,facing,safe_timer;
 extern int16_t safe_x,safe_y;
 extern uint8_t slide_time;
+extern uint8_t cut_phase;   /* story camera pan around a level dialogue (combat_pce.c); 0 = none */
 void actor_kill(Actor *a);

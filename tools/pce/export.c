@@ -47,8 +47,9 @@ int main(int argc, char **argv) {
     }
     fprintf(f, "],\"dialogs\":[");
     for(int k=0;k<4;++k) {
-        fprintf(f,"%s{\"id\":%u,\"zone\":[%d,%d,%d,%d]}",k?",":"",g->dialogs[k].text,
-                value(g->dialogs[k].cx),value(g->dialogs[k].cy),value(g->dialogs[k].hx),value(g->dialogs[k].hy));
+        fprintf(f,"%s{\"id\":%u,\"zone\":[%d,%d,%d,%d],\"focus\":[%d,%d],\"hold\":[%d,%d]}",k?",":"",g->dialogs[k].text,
+                value(g->dialogs[k].cx),value(g->dialogs[k].cy),value(g->dialogs[k].hx),value(g->dialogs[k].hy),
+                value(g->dialogs[k].focus_x),value(g->dialogs[k].focus_y),value(g->dialogs[k].t_in*1000),value(g->dialogs[k].t_out*1000));
         if(g->dialogs[k].text) {
             Dialog d;
             if(dialog_open(&d,g->dialogs[k].text)) {
