@@ -3,6 +3,7 @@
 #include "arcade_pce.h"
 #include "video_pce.h"
 #include "presentation_pce.h"
+#include "play_pce.h"
 #include "sprite_cache_pce.h"
 #include <string.h>
 #define STORY_CODE __attribute__((noinline,section(".ram_bank113.text")))
@@ -31,7 +32,8 @@ STORY_CODE static void draw(void) {
     int16_t box_x=24-(pce_raster_enabled?0:(pce_scroll_x&7)),box_y=y*8-(pce_metrics.stage!=2&&pce_metrics.stage<6?16:0);   /* platform sprites are baked 16 lines low */
     /* Blank every BG cell under the box except the four 2x2 corner blocks; the corner pieces stay in front of the
      * scenery so their rounded edges show the scenery, not a hole. */
-    video_panel(5,y,24,2);video_panel(3,y+2,28,2);video_panel(5,y+4,24,2);
+    bool platform=pce_metrics.stage!=2&&pce_metrics.stage<6;
+    if(!platform){video_panel(5,y,24,2);video_panel(3,y+2,28,2);video_panel(5,y+4,24,2);}
     video_sat_begin();
     if(avatar!=65535)video_sprite(avatar,box_x-26,box_y-8,false,16);
     uint8_t first=sat_count;
@@ -47,6 +49,8 @@ STORY_CODE static void draw(void) {
     /* The camera-pan scene keeps its actors on screen (the outrider stays put while the text runs). */
     if(cut_phase)overlay_call(0x74,actors_draw);
     video_sat_end();
+    /* Platform stages: the cells go blank right after the VBlank that brings the box sprites (see the restore). */
+    if(platform){video_wait();video_panel_blank(y);}
     char *line=story_text;uint8_t lines=0;
     for(char *c=line;;++c){if(*c=='\n'||!*c){++lines;if(!*c)break;}}
     /* One line sits mid-box; two lines get a blank row between them. */
@@ -82,7 +86,8 @@ STORY_CODE void story_start(void) {
     story_address=pointer(dir+1+((uint16_t)pce_control.hero*count+pce_campaign.story)*4);
     arcade_read(2,story_address,&page_count,1);
     pce_campaign.page=0;pce_campaign.state=CAM_STORY;pce_campaign.timer=0;
-    video_sat_begin();video_sat_end();draw();
+    if(!cut_phase){video_sat_begin();video_sat_end();}   /* in the camera scene the actors must stay in the SAT */
+    draw();
 }
 STORY_CODE void story_step(void) {
     pce_campaign.timer+=pce_control.elapsed;
@@ -96,6 +101,11 @@ STORY_CODE void story_step(void) {
          * release them and make the foreground re-admit every chunk. */
         memset(sprite_used,0,sizeof sprite_used);memset(sprite_pinned,0,sizeof sprite_pinned);
         foreground_reset();
-        pce_campaign.state=CAM_PLAY;video_restore();
+        pce_campaign.state=CAM_PLAY;
+        if(pce_metrics.stage!=2&&pce_metrics.stage<6) {
+            /* Put the blanked cells back and swap the sprites in one go: a full background reload takes several frames,
+             * uncovering the box column by column while its in-front corner pieces linger. */
+            pce_panel_restore=20;play_draw();
+        } else video_restore();
     }
 }

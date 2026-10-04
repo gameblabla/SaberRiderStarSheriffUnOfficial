@@ -21,6 +21,7 @@ PCE_COMBAT void encounter_init(void) {
         arcade_read(2,scene->triggers+(uint32_t)k*sizeof trigger,&trigger,sizeof trigger);
         if(k<60) {trigger_cache[k]=trigger;trigger_lo[k]=trigger.type==10?32767:trigger.cx-trigger.hx-8;trigger_hi[k]=trigger.cx+trigger.hx+8;}
         trigger_timers[k]=trigger.delay;trigger_remaining[k]=trigger.remaining;trigger_spawned[k]=0;
+        if(trigger.type>=24&&trigger.type<=27)trigger_remaining[k]=0;   /* background airships: not drawn here, so never spawned */
     }
 }
 PCE_COMBAT void encounters(void) {
@@ -33,13 +34,13 @@ PCE_COMBAT void encounters(void) {
         if(trigger_timers[k]) {trigger_timers[k]=trigger_timers[k]>4?trigger_timers[k]-4:0;continue;}
         if(t->type==11) {
             /* The robot-horse herd: the source drops a column of 12 horses at once, 99 px apart, behind the screen
-             * edge; here five (the SAT holds two on screen) 132 px apart, running at the hero. */
+             * edge; here five (the SAT holds two on screen) 150 px apart, running at the hero. */
             int16_t x=t->wp[0][0];bool right=x>30000;
             int16_t x0=right?camera+256+32+56+195:camera-32-56-195;
             for(uint8_t h=0,i=0;h<5;++h) {
                 while(i<8&&actors[i].active)++i;
                 if(i==8)break;
-                actors[i]=(Actor){.b={.x=right?x0+h*132:x0-h*132,.y=t->wp[0][1]+30},.active=1,.type=11,.hp=1,.flip=right};
+                actors[i]=(Actor){.b={.x=right?x0+h*150:x0-h*150,.y=t->wp[0][1]+30},.active=1,.type=11,.hp=1,.flip=right};
             }
             trigger_remaining[k]=0;continue;
         }

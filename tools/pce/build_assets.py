@@ -91,8 +91,42 @@ def cblock_whole_frame(path, frame):
                 im.alpha_composite(Image.fromarray(px[(t // sc) * th:(t // sc + 1) * th, (t % sc) * tw:(t % sc + 1) * tw]), (c * tw, r * th))
     return im
 
-HORSE_SCALE = 0.75     # the robot-horse herd is drawn at 3/4 size: a full frame is 40 sprite pieces, the SAT has 64
+HORSE_SCALE = 0.625    # the robot-horse herd is drawn at 5/8 size: a full frame is 40 sprite pieces and the SAT holds 64; at this size a frame is ~15, two fit beside the HUD and hero
 HORSE_FRAMES = 5
+
+FG_MAX_PIECES, FG_MAX_UNITS = 20, 8    # foreground sprite pieces per 288-px window / per 16-line row
+
+def thin_foreground(fg):
+    """Drop the foreground chunks that cannot be drawn steadily. The foreground is sprite pieces re-emitted every
+    frame after the actors; the SAT holds 64 (HUD ~16, hero ~10, shots and enemies the rest) and a scanline 16
+    units, so where more than FG_MAX_PIECES pieces (or FG_MAX_UNITS in one row) fall inside the camera window
+    some of them are refused or not, frame by frame, and flicker. Remove 32x32 chunks, most crowded first, until
+    every window fits: the removal is fixed, so what stays is stable."""
+    a = np.asarray(fg).copy()
+    h, w = a.shape[:2]
+    blocks = np.zeros((h // 16, w // 16), bool)
+    for y in range(h // 16):
+        for x in range(w // 16): blocks[y, x] = (a[y*16:y*16+16, x*16:x*16+16, 3] > 0).any()
+    removed = 0
+    again = True
+    while again:
+        again = False
+        for cam in range(0, max(1, w - 255), 16):
+            c0, c1 = max(0, (cam - 31) // 16), (cam + 256) // 16 + 1
+            sub = blocks[:, c0:c1]
+            if sub.sum() <= FG_MAX_PIECES and sub.sum(1).max() <= FG_MAX_UNITS: continue
+            best = None
+            for cy in range(0, blocks.shape[0], 2):
+                for cx in range((c0 // 2) * 2, c1, 2):
+                    n = blocks[cy:cy+2, cx:cx+2].sum()
+                    if n and (best is None or n > best[0]): best = (n, cy, cx)
+            _, cy, cx = best
+            blocks[cy:cy+2, cx:cx+2] = False
+            a[cy*16:cy*16+32, cx*16:cx*16+32] = 0
+            removed += 1; again = True
+            break
+    print(f'  foreground thinned: {removed} chunks removed', flush=True)
+    return Image.fromarray(a)
 
 def native_background(image, archive, previews, name):
     w = (image.width + 7) // 8 * 8
@@ -300,8 +334,9 @@ def make_scene(stage, work, previews, shared):
                     im=cblock_whole_frame(art,k);im=im.resize((round(im.width*HORSE_SCALE),round(im.height*HORSE_SCALE)),Image.Resampling.LANCZOS)
                     sprites.append((f'horse{k}',im,(round(ox*HORSE_SCALE),round(oy*HORSE_SCALE))))
                 continue
-            if t in (25,27): im=cblock_whole_frame(art,0)
-            else: im=cblock_frame(art,first)
+            if 24<=t<=27:      # the airships of the far background layers: not drawn (the PCE has no such layer)
+                meta['actor_ids'][t]=255;continue
+            im=cblock_frame(art,first)
             if not im.getchannel('A').getbbox():
                 meta['actor_ids'][t]=255;continue
             anchor=tuple(round(v) for v in struct.unpack_from('<ff',d,8))
@@ -380,6 +415,7 @@ def make_scene(stage, work, previews, shared):
         for i,(name,im,(ax,ay)) in enumerate(sprites):
             if i<hud0 or aim0<=i<meta['presentation']['end']:   # gameplay, aim and motion poses (not the HUD)
                 sprites[i]=(name,im,(ax,ay-16))
+        foreground=thin_foreground(foreground)
         entries=presentation.add_foreground(foreground,sprites)
         meta['foreground_offset']=a.add('foreground_sprites',b''.join(struct.pack('<hhH',*v) for v in entries))
         meta['foreground_count']=len(entries)

@@ -14,7 +14,7 @@ static const PceScene *scene;
 const PceScene *video_scene_ptr;
 static uint16_t cache_ids[PCE_BG_MAX_TILES] PCE_WORK;
 static uint16_t cache_refs[PCE_BG_MAX_TILES] PCE_WORK;
-static uint16_t columns[33][30] PCE_WORK;
+uint16_t columns[33][30] PCE_WORK;
 static uint16_t first_column, last_column;
 static uint16_t free_cursor;
 uint8_t buffer[2048] PCE_STAGE;

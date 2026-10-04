@@ -147,6 +147,23 @@ Implementation status below does not replace the user's visual/audio acceptance.
       the lettering in the high two, their four palettes carrying painting + painting-plus-light sets; the pulse
       rewrites those palettes. No sprites.
 
+## Eighth pass (2026-10-04, playtest feedback)
+
+- [x] Cutscene outrider flicker / dialogue box edges: the dialogue's cells and sprites now change in the same frame.
+      Opening: sprites are queued, then right after the next VBlank the panel's cells are blanked column by column
+      (`video_panel_blank`, increment-64 writes, done before the beam reaches the panel; no black band). Closing:
+      the Arcade reads for the cells run first (`video_panel_restore_prepare`), the SAT without the box is queued,
+      and after the VBlank the cells are written back (`..._apply`) - the old full background reload took several
+      frames and left the in-front corner pieces up. The actors stay in the SAT throughout (no empty-SAT upload).
+      The outrider's alarm lasts 75 steps so the "!" is still up when the text opens.
+- [x] Background airships (types 24-27) removed from the PCE (they flew in far background layers): never spawned.
+- [x] Foreground flicker: foreground sprite pieces are re-emitted every frame after the actors, so where more of them
+      sit in a window than the SAT/scanline budget leaves, they come and go. `thin_foreground` removes 32x32 chunks,
+      most crowded first, until every 288-px window holds at most 20 pieces and 8 per 16-line row (stage 1: 125
+      chunks, stage 3: 103, stage 4: 29, stage 5: none) - a fixed removal, so what stays is steady. While the herd
+      is on screen the foreground is left out altogether. Horses are drawn at 5/8 size (~15 pieces a frame), 150 px
+      apart; with the foreground out the SAT stays at 30-52 of 64 and nothing is refused.
+
 Remaining integration/acceptance work:
 
 - [ ] Integrate the reference ROM's two-channel, scanline-delivered 2-bit ADPCM

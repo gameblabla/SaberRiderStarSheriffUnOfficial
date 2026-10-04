@@ -19,7 +19,7 @@ const PceScene *play_scene;
 #define scene play_scene
 uint16_t camera,frame;
 uint8_t hero,facing,safe_timer;
-uint8_t slide_time;
+uint8_t slide_time,pce_panel_restore;
 static uint8_t fire_timer,crouch,death_time,jumping,jump_time,flash_time,flash_diag;
 static int8_t flash_dx,flash_dy;
 int16_t safe_x,safe_y;
@@ -186,7 +186,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
         if(a->type==28) {
             /* The cutscene outrider (hp 2 waiting, 1 alarmed, 0 running): once it is on screen it freezes for a second
              * facing the hero, then turns and runs off to the right. */
-            if(a->hp==2){int16_t d=camera+128-a->b.x;if(d<0)d=-d;if(d<128){a->hp=1;a->timer=60;}}
+            if(a->hp==2){int16_t d=camera+128-a->b.x;if(d<0)d=-d;if(d<128){a->hp=1;a->timer=75;}}
             else if(a->hp==1){if(!--a->timer){a->hp=0;a->flip=0;}}
             a->b.vx=a->hp?0:512;physics(&a->b);
             if(a->b.vx)++a->anim;
@@ -263,5 +263,14 @@ __attribute__((noinline)) void play_draw(void) {
         video_sprite(shots[k].enemy?37:36,shots[k].x-camera,shots[k].y-16,false,16);
     if(!pce_campaign.diagnostic)overlay_call(0x70,combat_draw);
     overlay_call(0x74,actors_draw);
-    foreground_draw();video_sat_end();
+    /* While the herd is on screen the SAT has no room for the foreground pieces as well: they would come and go with
+     * every horse's piece count, so the foreground layer is left out until it has passed. */
+    bool herd=false;
+    for(uint8_t k=0;k<8;++k)if(actors[k].active&&actors[k].type==11)herd=true;
+    if(!herd)foreground_draw();
+    /* A closing dialogue's cells return in the frame its sprites leave: the new SAT takes effect at the next VBlank, so
+     * read the cells now, queue the SAT, and write them right after that VBlank, before the beam reaches the panel. */
+    if(pce_panel_restore)video_panel_restore_prepare(pce_panel_restore);
+    video_sat_end();
+    if(pce_panel_restore){video_wait();video_panel_restore_apply();pce_panel_restore=0;}
 }
