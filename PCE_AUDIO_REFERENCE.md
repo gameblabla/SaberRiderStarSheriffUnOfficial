@@ -1,74 +1,71 @@
 # PCE sound reference and current implementation
 
-The game decodes the supplied Build 14 **2-bit software ADPCM** through the
-HuC6280 timer IRQ at approximately **6.99 kHz**, writing the predictor's high
-five bits to independent PSG DDA channels:
+The asset builder encodes the supplied Build 14 **2-bit software ADPCM**, then
+expands its exact output to **5-bit DAC bytes**. The HuC6280 timer IRQ delivers
+those bytes at approximately **6.99 kHz** to independent PSG DDA channels:
 
 | PSG channel | Effects |
 | --- | --- |
-| 0 | Original gunfire / impact / power / UI effects (latest request replaces the previous effect) |
-| 1 | Original horse gallop (`SFX_TABLE[28]`, `82EFBA26`), looping while the herd lives |
+| 0 | Gunfire / impact / power / UI effects (latest request replaces the previous effect) |
+| 1 | Horse gallop (`SFX_TABLE[28]`, `82EFBA26`), looping while the herd lives |
 
-Gunfire and impacts do not interrupt the gallop. Each stream has its own
-16-bit saturated predictor, step index, packed-byte phase and exact sample
-count. A loop resets its pointer, predictor and index, including when its
-last byte contains fewer than four samples. One-shot effects disable only
-their own channel; the timer stops when both channels are idle.
-`audio_pcm_stop()` stops all software voices before blocking loads.
+The DAC values, sample count, sample rate and loop boundary are identical to the
+previous native decoder. Build-time expansion removes predictor arithmetic,
+adaptation-table reads and packed-code extraction from the interrupt. No disc
+reads or runtime decompression are needed when starting an effect.
 
-`src/platform/pce/audio_pcm.S` is the resident timer entry plus a banked native
-decoder. The BIOS timer hook jumps to it, so it returns with RTI. It preserves
-A/X/Y and MPR3/MPR6. It uses private direct-page state at `$2080–$20a0`,
-touches no compiler registers, and does not change VDC registers or raster scheduling. Code and exact ROM tables use
-bank `$75`; compressed samples use `$7d–$7f`. The loader uses `$76–$7c` as a
-56 KiB CD scratch buffer, preserving the decoder and samples across loads.
-The existing CD-DA music and CD hardware ADPCM character voices remain separate
-from these software-decoded PSG channels.
+`src/platform/pce/audio_pcm.S` is the resident timer entry plus a banked playback
+service. The BIOS timer hook jumps to it, so it returns with RTI. It preserves
+A/X and MPR3/MPR6, leaves Y untouched, and uses private direct-page state at
+`$2080–$20a0`. It touches no compiler registers, VDC registers or raster scheduling.
+MPR6 is saved once per interrupt across both voices. Streams cross `$dfff` into
+`$c000` in the next bank; looping restores both the start pointer and start bank.
+The timer stops when both channels are idle, and `audio_pcm_stop()` stops every
+voice before blocking loads.
 
-The demo's weighted two-channel 8-bit output and scanline delivery are not
-used by this game driver. One 5-bit DAC per voice lets the gallop overlap
-one one-shot effect without taking over the race raster.
+Audio code and 7,006 shot/power DAC bytes share bank `$75`. Impact and gallop
+occupy 23,041 bytes across `$7d–$7f`. The linker checks bank capacity. The loader
+retains its 56 KiB scratch buffer in `$76–$7c`, preserving audio across loads.
+The existing CD-DA music and CD hardware ADPCM character voices remain separate.
 
-Profiling twelve isolated video frames measured these percentages of all CPU
-cycles. Decoder percentages exclude the resident IRQ wrapper and BIOS dispatch;
+Twelve isolated video frames measured these percentages of all CPU cycles.
+Service percentages exclude the resident IRQ wrapper and BIOS dispatch;
 handler percentages include the wrapper but still exclude BIOS dispatch.
 
-| Driver | One voice: decoder | Two voices: decoder | Two voices: handler |
+| Driver | One voice: service | Two voices: service | Two voices: handler |
 | --- | --- | --- | --- |
-| Two channels before optimization | 26.31% | 44.18% | — |
-| Direct-page state / packed-byte optimization | 18.18% | 32.99% | 40.90% |
-| Final optimized driver | 17.21% | 31.24% | 37.59% |
+| Previous optimized runtime decoder | 17.21% | 31.24% | 37.59% |
+| Exact DAC bytes decoded during build | 10.26% | 17.30% | 24.34% |
 
-The final one-voice handler measured 23.56%. The previous three-channel driver
-measured 65.70% decoder time with all three voices playing. These measurements
-are isolated sample-delivery costs, not gameplay rendering throughput or the
-demo's claimed 17% total budget. Reproduce with
+The new one-voice handler measured 17.29%, down from 23.56%. The two-voice
+handler uses **35.2% fewer cycles**. These are isolated delivery costs, not
+whole-game frame-rate guarantees. Reproduce with
 `python3 tools/pce/profile_audio.py --out build/pce` (`audio-profile.json`).
-Historical measurements are saved under `build/pce/audio-optimization/`.
 
-The optimized driver reserves dedicated direct-page state, protected by the
-linker's compiler-ZP boundary assertion. It uses an active-channel mask,
-HuC6280 bit branches, indexed-indirect sample reads, and a four-sample countdown.
-Packed-byte fetches locally save/restore MPR6 once per four samples. Sign/size
-branches reuse the code bits' carry flag for exact ADC/SBC; sample-count updates
-check the high byte only when needed. The rate, codec tables, saturation and
-5-bit output are unchanged.
+`profile_gameplay.py` measures a seeded first-herd encounter with held fire for
+300 video frames. Counting render-loop iterations (rather than simulation
+ticks, which catch up after missed frames), the previous driver completed 75
+draws; the new driver completed 113: approximately **15.0 to 22.6 fps** when
+normalized to 60 video frames per second. Audio handler time fell from 37.35%
+to 24.23%. This seeded encounter still drops frames; it is not a worst-case
+measurement for every scene.
+Run `python3 tools/pce/profile_gameplay.py --out build/pce` to reproduce.
 
 `build/pce/audio-review/` contains actual emulator WAV captures for isolated
 effects, concurrent voices, the looping gallop, and stop checks.
-`test_audio.py` checks native sample delivery, mapping restoration, concurrent
+`test_audio.py` checks sample delivery rate, mapping restoration, concurrent
 channels, looping, silence after stopping, and all four heroes' voices.
-`test_adpcm2.py` compares the host codec with the supplied ROM's decoder;
-`test_software_adpcm.py` checks 4,430 native game decoder samples/states across
-both channels, saturation limits, code combinations and partial bytes.
+`test_adpcm2.py` compares the host codec with the supplied ROM's decoder.
+`test_software_adpcm.py` checks all 30,047 DAC asset bytes against that codec,
+verifies loaded banks after boot, and executes 1,590 native playback samples
+covering both channels, count borrows, bank crossings, and loop bank reset.
 
 The herd spawns before the camera locks. The exported PC camera-stop zones
 are x=2392, 6292 and 8976; spawn triggers are x=2252, 5916 and 8648.
 Starting distance follows each trigger's interval (195, 435 and 420 pixels).
-`test_herd.py` seeds each approach, then executes native scrolling, spawning,
-locking, gallop playback and release with no mid-sequence disc reads. The
-PCE adaptation still uses five horses spaced 192 pixels apart to respect the
-VDC sprite budget.
+`test_herd.py` executes native scrolling, spawning, locking, gallop playback and
+release with no mid-sequence disc reads. Five horses spaced 192 pixels apart
+respect the VDC sprite budget.
 
 ## Build 14 ROM disassembly
 

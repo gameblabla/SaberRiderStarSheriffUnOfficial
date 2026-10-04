@@ -1,9 +1,9 @@
 #pragma once
 #include "pce_config.h"
-/* Layout shared with the assembly IRQ; two independent decoder states. */
+/* Layout shared with the assembly IRQ; two independent playback states. */
 typedef struct __attribute__((packed)) {
-    uint16_t left,read,predictor;
-    uint8_t index,packed,phase,bank,loop,channel;
+    uint16_t left,read,last_sample;
+    uint8_t start_bank,reserved0,reserved1,bank,loop,channel;
     uint16_t start,count;
 } PcePcmVoice;
 _Static_assert(sizeof(PcePcmVoice)==16,"IRQ voice stride");

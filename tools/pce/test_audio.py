@@ -47,7 +47,7 @@ def verify(out):
                 remaining=left(e,channel)
                 assert registers['TIMS']==1 and remaining>0
                 assert registers['MPR6']==saved_bank,'PCM IRQ must restore interrupted MPR6'
-                assert e.memory(voices+channel*16+9,1)[0]==(125 if tone==1 else 126)
+                assert e.memory(voices+channel*16+9,1)[0]==(117 if tone==1 else 125)
                 before=remaining;e.run(1);after=left(e,channel)
                 delivered=before-after
                 assert 110<=delivered<=122,(before,after)
@@ -70,8 +70,8 @@ def verify(out):
         gallop=symbol(elf,'audio_pcm_gallop')
         call(e,stop);e.run(120);call(e,gallop,1);call(e,effect,1);call(e,effect,4)
         assert all(left(e,ch)>0 for ch in range(2))
-        assert e.memory(voices+9,1)==bytes([126]),'Impact replaces the shot on the shared channel'
-        assert e.memory(voices+16+9,1)==bytes([127]),'Gallop keeps its independent channel'
+        assert e.memory(voices+9,1)==bytes([125]),'Impact replaces the shot on the shared channel'
+        assert e.memory(voices+16+9,1)==bytes([126]),'Gallop keeps its independent channel'
         before=[left(e,ch) for ch in range(2)]
         e.run(1)
         after=[left(e,ch) for ch in range(2)]

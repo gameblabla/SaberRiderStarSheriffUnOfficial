@@ -1,40 +1,56 @@
 #!/usr/bin/env python3
-"""Execute both native decoders against Build 14, including counter/loop edges."""
+"""Check exact Build 14 DAC assets and native playback, bank/count/loop edges."""
 import argparse,json,struct,tempfile
 from pathlib import Path
-from adpcm2 import tables,advance,encode
+from adpcm2 import decode,tables
 from emulator import Emulator,boot,symbol
 
 def verify(out):
     elf=out/'app.elf';state=symbol(elf,'pce_pcm_voices');step=symbol(elf,'pce_pcm_step')
-    t=tables();checked=0;start=0xc0f0
+    checked=0;asset_samples=0
+    for row in json.loads((out/'audio.json').read_text())['dda']:
+        event=row['event'];packed=(out/'work'/f'{event}.adpcm2').read_bytes()
+        expected=bytes((v+128)>>3 for v in decode(packed,row['samples'],tables()))
+        assert (out/'work'/f'{event}.dda').read_bytes()==expected,event
+        asset_samples+=len(expected)
     with tempfile.TemporaryDirectory(prefix='software-adpcm-',dir=out) as base,Emulator(out/'saber_rider.cue',base) as e:
         boot(e,symbol(elf,'pce_metrics'))
         e.write(0x0c01,b'\0');e.write(0x1402,b'\x07')
         for key,val in [('P',4),('MPR3',117),('MPR6',125)]:e.call('register_set',key,val)
-        streams=[bytes([v])*17 for v in (0,255,0x55,0xaa,0xe4)]+[encode([int(24000*((i%11)-5)/5) for i in range(67)],t)]
+        # Real generated arrays must survive normal boot and CD scratch loading.
+        resident=symbol(elf,'pce_pcm_resident')
+        resident_data=(out/'work/shot.dda').read_bytes()+(out/'work/power.dda').read_bytes()
+        assert e.memory(resident,len(resident_data))==resident_data
+        stream=(out/'work/impact.dda').read_bytes()+(out/'work/gallop.dda').read_bytes()
+        for i in range(3):
+            e.call('register_set','MPR6',125+i)
+            assert e.memory(0xc000,min(8192,len(stream)-8192*i))==stream[8192*i:8192*(i+1)]
+        e.call('register_set','MPR6',125)
         for ch in range(2):
-            cases=[(packed,count,predictor,index,0) for packed in streams
-                   for count in (1,2,3,7,67) for predictor,index in ((32768,0),(0,255),(65535,255))]
-            # Borrow across the low counter byte; packed reads cross a page.
-            cases += [(bytes([0xe4])*65,count,32768,0,0) for count in (255,256,257)]
-            cases += [(bytes([0xe4])*2,7,32768,0,1)]
-            for packed,count,predictor,index,loop in cases:
-                e.write(start,packed)
-                e.write(state+16*ch,struct.pack('<HHH6BHH',count,start,predictor,index,0,0,125,loop,ch,start,count))
-                for i in range(count):
+            for count,loop in [(1,0),(2,0),(3,0),(7,0),(255,0),(256,0),(257,0),(7,1)]:
+                start=0xdff0;data=bytes(i%32 for i in range(count))
+                e.write(start,data[:16]);e.call('register_set','MPR6',126)
+                e.write(0xc000,data[16:]);e.call('register_set','MPR6',125)
+                e.write(state+16*ch,struct.pack('<HHH6BHH',count,start,0,125,0,0,125,loop,ch,start,count))
+                e.write(symbol(elf,'pce_pcm_active'),bytes([1<<ch]))
+                for i in range(count*(2 if loop else 1)):
                     code=bytes([0xa2,ch*16,0x20,step&255,step>>8,0x4c,5,0x3b])
-                    e.write(0x3b00,code);e.call('register_set','SP',253);e.call('register_set','PC',0x3b00);e.run(1)
-                    predictor,index=advance(predictor,index,(packed[i>>2]>>((i&3)*2))&3,t)
-                    actual=struct.unpack('<HHH6BHH',e.memory(state+16*ch,16))
-                    if loop and i==count-1:
-                        assert actual[:4]==(count,start,32768,0) and actual[5]==0,actual
+                    e.write(0x3b00,code)
+                    for key,val in [('SP',253),('PC',0x3b00)]:e.call('register_set',key,val)
+                    e.run(1);actual=struct.unpack('<HHH6BHH',e.memory(state+16*ch,16))
+                    n=i%count
+                    assert actual[2]==data[n],(ch,i,actual)
+                    if loop and n==count-1:
+                        assert actual[:2]==(count,start) and actual[6]==125,actual
                     else:
-                        assert actual[:4]==(count-i-1,start+(i//4)+1,predictor,index),(ch,i,actual,predictor,index)
-                        assert actual[5]==(3-i)%4,actual
-                    assert e.call('registers')['registers']['MPR6']==125,'Fetch must restore MPR6'
+                        read=start+n+1;bank=125
+                        if read>=0xe000:read-=8192;bank+=1
+                        assert actual[:2]==(count-n-1,read) and actual[6]==bank,actual
+                    assert e.call('registers')['registers']['MPR6']==125,'Restore caller MPR6'
                     checked+=1
-    report=dict(samples_compared=checked,channels=2,counter_borrow=True,page_crossing=True,partial_byte_loop=True,passed=True)
+                if not loop:assert e.memory(symbol(elf,'pce_pcm_active'),1)==b'\0'
+    report=dict(asset_samples_compared=asset_samples,native_samples_compared=checked,channels=2,
+                counter_borrow=True,bank_crossing=True,loop_bank_reset=True,passed=True)
     (out/'software-adpcm-verification.json').write_text(json.dumps(report,indent=2)+'\n');print(report)
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--out',type=Path,default=Path('build/pce'));verify(p.parse_args().out.resolve())

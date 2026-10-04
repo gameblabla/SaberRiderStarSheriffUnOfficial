@@ -19,7 +19,7 @@ PCM_CODE static void start(void) {
     if(sample==4) {v=&pce_pcm_voices[1];v->left=0;v->loop=0;pce_pcm_active&=1;*IO_PSG_CH_SELECT=1;*IO_PSG_CH_CONTROL=0;}
     else if(sample!=3||!v->left) {
         v->left=v->count=pcm_samples[sample][2];v->read=v->start=pcm_samples[sample][1];
-        v->bank=pcm_samples[sample][0];v->predictor=0x8000;v->index=v->phase=0;
+        v->bank=pcm_samples[sample][0];v->last_sample=16;v->start_bank=v->bank;
         v->loop=sample==3;v->channel=channel;pce_pcm_active|=1<<channel;
         *IO_PSG_VOLUME=0xff;*IO_PSG_CH_SELECT=channel;
         *IO_PSG_CH_CONTROL=0;*IO_PSG_CH_VOLUME=0xff;

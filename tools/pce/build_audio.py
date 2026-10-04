@@ -9,7 +9,7 @@ import subprocess
 import array
 import math
 from adpcm import encode
-from adpcm2 import encode as encode2, tables, ROM
+from adpcm2 import encode as encode2, decode as decode2, tables, ROM
 ROOT=Path(__file__).resolve().parents[2]
 def build(out):
     work=out/'work'; music=work/'music';music.mkdir(parents=True,exist_ok=True)
@@ -40,12 +40,11 @@ def build(out):
     (out/'music_end.bin').write_bytes(bytes(2352*300))
     sfx=work/'sfx';sfx.mkdir(exist_ok=True)
     subprocess.run([str(exe.resolve()),'sfx',str(ROOT/'SaberRider/data'),str(sfx.resolve())],check=True)
-    # Build 14 software ADPCM: two independent PSG DDA voices, timer at 6991 Hz.
-    # Each packed sample stays in one bank. Code and exact ROM tables occupy dedicated bank $75 below the sample banks.
-    # The loader scratch is moved to $76-$7c to preserve the decoder.
-    t=tables();banks=[bytearray() for _ in range(3)];pcm_rows=[];pcm_report=[]
-    for event,rid,bank in [('shot','C66E1894',125),('impact','EB3309DC',126),
-                           ('power','A8382083',125),('gallop','82EFBA26',127)]:
+    # Expand the exact Build 14 output to 5-bit DAC bytes at build time.
+    # Shot/power share the code bank; impact/gallop span the three sample banks.
+    t=tables();resident=bytearray();stream=bytearray();pcm_rows=[];pcm_report=[]
+    for event,rid in [('shot','C66E1894'),('impact','EB3309DC'),
+                      ('power','A8382083'),('gallop','82EFBA26')]:
         result=subprocess.run(['ffmpeg','-v','error','-i',str(sfx/f'{rid}.wav'),
             '-ac','1','-ar','6991','-af','highpass=f=80,lowpass=f=3000,volume=0.7',
             '-f','s16le','-'],check=True,capture_output=True)
@@ -54,19 +53,27 @@ def build(out):
             peak=max(1,max(abs(v) for v in samples))
             samples=array.array('h',(round(32767*math.tanh(2.4*v/peak)/math.tanh(2.4)) for v in samples))
         values=list(samples)+[0]*32
-        data=encode2(values,t);blob=banks[bank-125];address=0xc000+len(blob)
-        if len(blob)+len(data)>8192:raise ValueError(f'{event}: compressed bank overflow')
-        blob.extend(data);pcm_rows.append((bank,address,len(values)))
+        packed=encode2(values,t)
+        data=bytes((v+128)>>3 for v in decode2(packed,len(values),t))
+        (work/f'{event}.adpcm2').write_bytes(packed)
+        (work/f'{event}.dda').write_bytes(data)
+        if event in ('shot','power'):
+            address=f'(uint16_t)pce_pcm_resident+0x6000+{len(resident)}'
+            bank=117;resident.extend(data)
+        else:
+            bank=125+len(stream)//8192;address=str(0xc000+len(stream)%8192)
+            stream.extend(data)
+        pcm_rows.append(f'{{{bank},{address},{len(values)}}}')
         pcm_report.append(dict(event=event,source=rid,samples=len(values),bytes=len(data),
-                               rate=6991,codec='build14-2bit-low-pair-first',channel=1 if event=='gallop' else 0))
-    header='/* Build 14 packed effects: bank, CPU address, exact sample count. */\n'
-    header+='static const uint16_t pcm_samples[4][3] __attribute__((section(".ram_bank117.rodata")))={'+','.join('{%d,%d,%d}'%v for v in pcm_rows)+'};\n'
-    for i,blob in enumerate(banks):
+                               packed_bytes=len(packed),rate=6991,
+                               codec='build14-predecoded-5bit',channel=1 if event=='gallop' else 0))
+    if len(stream)>3*8192:raise ValueError('DDA sample banks overflow')
+    header='/* Exact Build 14 DAC bytes: bank, mapped CPU address, sample count. */\n'
+    header+='const uint8_t pce_pcm_resident[] __attribute__((used,retain,section(".ram_bank117.rodata")))={'+','.join(map(str,resident))+'};\n'
+    for i in range(3):
+        blob=stream[i*8192:(i+1)*8192]
         header+='const uint8_t pce_pcm_bank%d[] __attribute__((used,retain,section(".ram_bank%d.rodata")))={'%(i,125+i)+','.join(map(str,blob))+'};\n'
-    for name,values in [('small_lo',[v&255 for v in t[0]]),('small_hi',[v>>8 for v in t[0]]),
-                        ('large_lo',[v&255 for v in t[1]]),('large_hi',[v>>8 for v in t[1]]),
-                        ('next_small',t[2]),('next_large',t[3])]:
-        header+='const uint8_t pce_adpcm_'+name+'[256] __attribute__((used,retain,section(".ram_bank117.rodata")))={'+','.join(map(str,values))+'};\n'
+    header+='static const uint16_t pcm_samples[4][3] __attribute__((section(".ram_bank117.rodata")))={'+','.join(pcm_rows)+'};\n'
     (out/'pcm.h').write_text(header)
     voices=[];rows=[]
     for hero,name in enumerate(('saber','fireball','april','colt')):

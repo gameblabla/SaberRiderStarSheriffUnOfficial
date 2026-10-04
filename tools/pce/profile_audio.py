@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Measure decoder cycles for 1/2 software voices using native timer IRQs.
+"""Measure playback service cycles for 1/2 software voices using native timer IRQs.
 
-Uses isolated RAM calls after normal boot. decoder_percent excludes the resident wrapper; handler_percent includes it.
+Uses isolated RAM calls after normal boot. service_percent excludes the resident wrapper; handler_percent includes it.
 Both exclude BIOS dispatch. This does not measure gameplay rendering throughput.
 """
 import argparse
@@ -14,6 +14,8 @@ def profile(out):
     reports=[];elf=out/'app.elf';state=symbol(elf,'pce_pcm_voices')
     irq_start=(104<<13)+(symbol(elf,'pce_pcm_irq')&8191)
     irq_end=(104<<13)+(symbol(elf,'pce_pcm_irq_end')&8191)
+    service_start=(117<<13)+(symbol(elf,'pce_pcm_service')&8191)
+    service_end=(117<<13)+(symbol(elf,'pce_pcm_service_end')&8191)
     with tempfile.TemporaryDirectory(prefix='audio-profile-',dir=out) as base,Emulator(out/'saber_rider.cue',base) as e:
         boot(e,symbol(elf,'pce_metrics'));e.run(120)
         def call(name,arg=0):
@@ -31,13 +33,13 @@ def profile(out):
                 assert all(e.memory(state+i*16,2)!=b'\0\0' for i in range(2))
             e.call('prof_start');e.run(12)
             dump=Path(base)/'prof.txt';e.call('prof_dump',str(dump))
-            total=decoder=wrapper=0
+            total=service=wrapper=0
             for line in dump.read_text().splitlines():
                 address,cycles=line.split();address=int(address,16);cycles=int(cycles);total+=cycles
-                if address>>13==117:decoder+=cycles
+                if service_start<=address<service_end:service+=cycles
                 if irq_start<=address<irq_end:wrapper+=cycles
-            reports.append(dict(channels=n,video_frames=12,decoder_percent=round(decoder*100/total,2),
-                                handler_percent=round((decoder+wrapper)*100/total,2)))
+            reports.append(dict(channels=n,video_frames=12,service_percent=round(service*100/total,2),
+                                handler_percent=round((service+wrapper)*100/total,2)))
     (out/'audio-profile.json').write_text(json.dumps(reports,indent=2)+'\n');print(reports)
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--out',type=Path,default=Path('build/pce'));profile(p.parse_args().out.resolve())
