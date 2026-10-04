@@ -99,7 +99,9 @@ int main(int argc, char **argv) {
         assert(SND16(6) == 8 && SND16(8) == 0x60FE);
         assert(!aud_playing(h) && !s->users);
         clock_us += 5000000; /* running CPU throughout playback, including a late skip */
+        SND16(MOVIE_OFF) = 0xBEEF; SND16(0x7FFFE) = 0xBEEF;   /* the clip's audio ring */
         aud_movie_end();
+        assert(SND16(MOVIE_OFF) == 0 && SND16(0x7FFFE) == 0);   /* nothing of it is left for the SCSP to read */
         assert(!movie && driver_ok && cpu_running && cpu_starts == starts + 2);
         assert(SND16(TABLE_OFF) == 0x1234 && SND16(BANK_OFF) == 0x5678);
         for (unsigned off = 0; off < DRV_BYTES; off += 2)
@@ -130,7 +132,9 @@ int main(int argc, char **argv) {
     memcpy(data, "ADPK\x44\xac\x00\x00\x00\x01", 10);
     auto_ack = true;
     for (int stage = 0; stage < 8; stage++) for (int hero = 0; hero < 4; hero++) {
+        SND16(BANK_END - 2) = 0xA5A5; SND16(BANK_OFF + 0x1000) = 0xA5A5; SND16(TABLE_OFF + 0x3FE) = 0xA5A5;
         assert(aud_prepare_scene(stage, hero));
+        assert(SND16(BANK_END - 2) == 0 && SND16(TABLE_OFF + 0x3FE) == 0);   /* the bank is scrubbed before it is filled */
         uint32_t at = BANK_OFF, mask = 1u << (stage * 4 + hero);
         for (int i = 0; i < nsamples; i++) {
             if (samples[i].scene_mask & mask) { assert(samples[i].addr == at); at += samples[i].bytes; }

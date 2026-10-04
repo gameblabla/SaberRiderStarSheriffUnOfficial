@@ -71,3 +71,34 @@ checks, and Ymir CPU/audio measurements are in `artifacts/saturn-movie-audio/`.
 These checks verify the corrected sequence in code and emulators. A real
 Saturn retest is still needed to confirm the reported hardware symptom is
 gone.
+
+## Follow-up 2026-10-04: glitching at the first stage start (some NTSC-M consoles)
+
+Reported by a tester on one NTSC-M console revision, not seen on another console or in Mednafen/Ymir: sound glitching,
+"as if a buffer were not cleared", when the first stage starts after character select. The 2026-10-01 validation
+above drove stages through SABER.ENV shortcuts and never ran the menu path (briefing clip -> character select ->
+load -> stage 1); that path was run headless here and behaves the same as before in both emulators, so this change
+is hardening against hardware-only state, **not a confirmed root-cause fix**. It needs a retest on the affected console.
+
+What the code relied on that only an emulator guarantees:
+
+- Sound RAM was never cleared: only the effect table was zeroed, so the rest held the console's power-on DRAM pattern
+  (it differs between hardware revisions; emulators start at zero), and the bank was refilled over the previous scene.
+  Anything a slot or the DSP reads outside a sample's own bytes was therefore undefined. Sega Technical Bulletin #36
+  (Sattechs.txt): initialize every chip, never rely on boot-ROM / power-on state.
+- `aud_movie_end` restarted the 68000 with `driver_start` alone, on top of whatever the clip had left in the SCSP
+  (the film player's slots 0-1 and timer C, the CD pass-through on slots 16-17). Boot and `aud_movie_begin` both
+  reset the chip first.
+
+Changes (`src/platform/saturn/aud_sat.c`):
+
+- `aud_init` zeroes all 512 KB of sound RAM (68000 off) before loading the driver.
+- `driver_start(true)` (movie end, clock change) runs `scsp_quiet()` first: every slot, timer and DSP register cleared,
+  as at boot.
+- `aud_movie_end` zeroes the clip's ring (0x78000-0x7FFFF) before the driver restarts.
+- `aud_prepare_scene` zeroes the effect table and the whole bank once every channel's stop is acknowledged, then
+  loads the scene's samples.
+
+`tools/saturn/tests/resident_audio.c` now poisons the ring, the table end and the bank end and asserts they are zero
+after a movie end / scene prepare. Mednafen menu run (title -> briefing -> select -> stage 1): stage load time and
+per-second audio levels match the build without the change.

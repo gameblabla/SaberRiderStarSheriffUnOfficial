@@ -109,6 +109,15 @@ static void snd_cpu(bool on)
     sat_smpc_unlock();
 }
 
+/* Zero sound RAM [from, to) with word stores (the SH-2 window does not take byte stores reliably). Sound RAM powers up
+ * with whatever the console's DRAM holds (it differs between hardware revisions; an emulator starts it at zero), and
+ * nothing the driver reads may depend on it: Sega Technical Bulletin #36 - initialize every chip, never rely on the
+ * state the boot ROM or power-on left. */
+static void sound_ram_zero(uint32_t from, uint32_t to)
+{
+    for (uint32_t o = from; o < to; o += 2) SND16(o) = 0;
+}
+
 /* the 68000 off and every slot, timer and DSP register cleared (the sound RAM is kept) */
 static void scsp_quiet(void)
 {
@@ -138,9 +147,12 @@ static void movie_cpu_start(void)
     snd_cpu(true);
 }
 
-static bool driver_start(void)
+/* quiet: the movie / clock-change restarts come with the SCSP in whatever state the clip or the BIOS left it (the film
+ * player's slots 0-1 and its timer C, the CD pass-through on slots 16 / 17, a running DSP): reset all of it first, as
+ * the boot does, so the driver starts on a silent chip. */
+static bool driver_start(bool quiet)
 {
-    snd_cpu(false);
+    if (quiet) scsp_quiet(); else snd_cpu(false);   /* both leave the 68000 off */
     SCSP_MVOL = 1u << 9;
     for (uint32_t i = 0; i < DRV_BYTES; i += 2) SND16(i) = (uint16_t)(adp68k_bin[i] << 8 | adp68k_bin[i + 1]);
     SCSP_MCIRE = 0xFFFF; SCSP_SCIRE = 0xFFFF;
@@ -352,7 +364,10 @@ bool aud_prepare_scene(int stage, int hero)
         samples[i].addr = 0; samples[i].reported = false;
     }
     memset(id_used, 0, sizeof id_used);
-    for (uint32_t i = TABLE_OFF; i < BANK_OFF; i += 2) SND16(i) = 0;
+    /* Every hardware channel is stopped and acknowledged: no slot reads the bank. Clear all of it, so what lies between
+     * and after the scene's samples (the previous scene's, or a power-on pattern) is silence for a slot that reads
+     * a few bytes past a sample's end, and the effect table has no stale entry. */
+    sound_ram_zero(TABLE_OFF, BANK_END);
     bank_next = BANK_OFF; bank_loading = true;
     bool ok = true;
     for (int i = 0; i < nsamples; i++)
@@ -411,7 +426,8 @@ void aud_movie_end(void)
     if (!movie) return;
     movie = false; movie_music = false;
     movie_cd_level();
-    driver_ok = driver_start();
+    sound_ram_zero(MOVIE_OFF, 0x80000u);   /* the clip's ring(s): none of its audio is left to be read */
+    driver_ok = driver_start(true);
     cd_dirty = true;
     if (pend.s && sat_timer_us() - pend.us < 200000u) aud_play(pend.s, pend.gain, false);   /* the click that closed it */
     pend.s = NULL;
@@ -423,7 +439,7 @@ void aud_clock_change(bool begin)
     if (begin) {   /* what plays is cut (the SCSP is reset): nothing is left counted as playing */
         for (int i = 0; i < CHANNELS; i++) { voice_release(&voices[i]); voices[i].action = 0; }
         driver_ok = false;
-    } else driver_ok = driver_start();
+    } else driver_ok = driver_start(true);
 }
 
 /* the film player's slots (third_party/libyaul_cinepak/film_snd.c): slot ch loops over bytes of 8/16-bit PCM at off */
@@ -534,8 +550,8 @@ bool aud_init(void)
     }
     cd_sat_stream_stop();
     scsp_quiet(); /* discard BIOS slot/DSP state before starting the game's driver */
-    for (uint32_t i = TABLE_OFF; i < BANK_OFF; i += 2) SND16(i) = 0;
-    driver_ok = driver_start();
+    sound_ram_zero(0, 0x80000u);   /* the whole 4 Mbit: power-on contents are not zero on every console */
+    driver_ok = driver_start(false);
     printf("snd: adp68k (8 ADPCM channels on the SCSP DSP), %lu KB bank, %d CD-DA tracks%s\n",
            (unsigned long)((BANK_END - BANK_OFF) / 1024), ntracks, driver_ok ? "" : ", NO DRIVER");
     return driver_ok && aud_prepare_scene(0, 0);
