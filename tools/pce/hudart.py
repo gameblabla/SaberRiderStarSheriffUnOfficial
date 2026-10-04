@@ -89,8 +89,10 @@ def add_text(hud, fonts, name, s, color, big=False, shadow=True):
 CELL = [(90, 220, 60), (170, 225, 50), (250, 210, 40), (250, 140, 30), (230, 30, 30)]
 
 def space_hud(hud, fonts, atlas_sheet):
-    """Shield cells (green at the bottom, red on top; the four of hp_max 4 in two pieces of two), the labels, power pips,
-    torpedoes and hero-power stars, the cruiser's name and bar fill."""
+    """The space flight's HUD as one narrow column down the top left (at most one piece on any scanline, two with the cruiser's
+    gauge on the right): shield cells (green at the bottom, red on top; the four of hp_max 4 in two pieces of two), then one
+    piece each for the lives, the gun power pips, the torpedoes and the hero-power stars (an icon and its count), and a
+    vertical hull gauge for the cruiser. The source's labels are gone: the icons carry the meaning."""
     colors = (0, 2, 3, 4)                      # the source's MAP[4]: bottom to top
     for pname, pair in (('top', (3, 2)), ('bot', (1, 0))):   # piece (upper cell, lower cell) = cell indices
         for mask in range(4):
@@ -102,18 +104,29 @@ def space_hud(hud, fonts, atlas_sheet):
                     d.rectangle((4, y, 10, y + 6), fill=(*c, 255)); d.rectangle((5, y + 1, 6, y + 2), fill=(255, 255, 255, 255))
                 else: d.rectangle((5, y + 1, 9, y + 5), fill=(c[0] // 5, c[1] // 5, c[2] // 5, 255))
             hud.add(f'cells_{pname}_{mask}', im)
-    for name, text, color in (('ramrod', 'RAMROD', (255, 210, 90)), ('xlife', 'x', (255, 255, 255)), ('pwr', 'PWR', (150, 220, 255)),
-                              ('trp', 'TRP', (255, 190, 120)), ('spc', 'SPC', (255, 150, 220)), ('cruiser', 'CRUISER', (255, 170, 120))):
-        hud.add(name, fonts.text(text, color, False, True))
-    add_digits(hud, fonts, ('white',))
-    for name, c in (('pip_on', (80, 230, 255)), ('pip_off', (20, 40, 60))):
-        im = Image.new('RGBA', (16, 16)); ImageDraw.Draw(im).rectangle((0, 0, 6, 4), fill=(*c, 255)); hud.add(name, im)
+    white, cyan = (255, 255, 255), (80, 230, 255)
+    for n in range(10):                        # spare lives: "x3"
+        hud.add(f'life_{n}', piece(fonts.text(f'x{n}', white, False, True), 0, 0))
+    for n in range(4):                         # gun power: three pips
+        im = Image.new('RGBA', (16, 16)); d = ImageDraw.Draw(im)
+        for i in range(3):
+            c = cyan if i < n else (20, 40, 60)
+            d.rectangle((i * 5, 2, i * 5 + 3, 6), fill=(*c, 255))
+        hud.add(f'pwr_{n}', im)
     torp = atlas_sheet.crop((367, 0, 378, 11)).resize((6, 6), Image.Resampling.NEAREST)
-    hud.add('torp', piece(torp))
-    im = Image.new('RGBA', (16, 16)); d = ImageDraw.Draw(im)
+    star = Image.new('RGBA', (7, 7)); d = ImageDraw.Draw(star)
     d.rectangle((2, 0, 4, 6), fill=(255, 200, 240, 255)); d.rectangle((0, 2, 6, 4), fill=(255, 200, 240, 255)); d.point((3, 3), fill=(255, 255, 255, 255))
-    hud.add('star', im)
-    add_bar_fills(hud, ('red',), 5)
+    for name, icon, count in (('trp', torp, 6), ('spc', star, 3)):
+        for n in range(count):
+            im = Image.new('RGBA', (16, 16)); im.alpha_composite(icon, (0, 1))
+            im.alpha_composite(fonts.text(str(n), white, False, True), (icon.width + 2, 0))
+            hud.add(f'{name}_{n}', im)
+    for k in range(17):                        # the cruiser's hull: one 16-dot segment of a vertical gauge, k dots filled from the bottom
+        im = Image.new('RGBA', (16, 16)); d = ImageDraw.Draw(im)
+        d.rectangle((8, 0, 15, 15), fill=(10, 10, 20, 255)); d.rectangle((8, 0, 8, 15), fill=(90, 90, 150, 255)); d.rectangle((15, 0, 15, 15), fill=(90, 90, 150, 255))
+        if k:
+            d.rectangle((10, 16 - k, 13, 15), fill=(230, 70, 40, 255)); d.rectangle((10, 16 - k, 10, 15), fill=(255, 150, 100, 255))
+        hud.add(f'hull_{k}', im)
 
 # ------------------------------------------------------------------ the race (mode7.c render_hud)
 def wide(im):

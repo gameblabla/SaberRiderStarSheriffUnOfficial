@@ -92,7 +92,7 @@ RACE_CODE static void drive(uint8_t keys) {
     int16_t turn=sp+(sp>>3);                  /* 1.9 rad/s at 300 u/s: 330 units a step */
     if(cls==0)turn-=turn>>3;
     hd+=steer*turn;
-    tilt+=(steer*7-tilt)/8;
+    tilt+=(steer*112-tilt)>>3;                 /* Q4: whole numbers made (7 - 0) / 8 = 0, so the car never leaned */
     cam_hd+=((int16_t)(hd-cam_hd)>>3)+((int16_t)(hd-cam_hd)>>5);
     /* the step in Q8 units: speed / 60 * 256 = speed * 4.27 */
     int16_t mx=muls(speed,cosine(hd)),my=muls(speed,sine(hd));

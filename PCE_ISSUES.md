@@ -353,3 +353,30 @@ Actual audio captures: `build/pce/audio-review/*.wav`.
       with the controls card.
 - [ ] Not done: the road still updates at about 15 Hz, not 60 (floor sampling is 46% of the cycles); physical hardware
       acceptance of the new ADPCM rates (4 and 5.33 kHz) and of the boss sound balance.
+
+## Sixteenth pass (2026-10-04, playtest of the previous revision; details in `docs/PCE_PLAYTEST_FIX_20261004C.md`)
+
+- [x] MISSION ACCOMPLISHED is opaque sprites over the painting (no translucency); GAME OVER keeps its pulsing light.
+- [x] NOW LOADING returns under the stage title card's text.
+- [x] Stage 1: the hole beside the security camera is closed (the wall is in the background); background seams every 256 dots
+      from parallax layers (buildings, a doubled van nose) are gone (continuous layers with steps in empty places).
+- [x] Dialogue boxes have one flat inside colour; the speaker portrait palette is reloaded each page (April after Claudia).
+- [x] Race: no speedometer; the mine spin-out turns the car (11 baked poses, two sprite objects each).
+- [x] Stage 3: the hero walks in from off screen to the radio scene; night colours on every background layer.
+- [x] Stages 3 and 4: Hyperjumper's front pose is a hull record in Arcade RAM swapped in while the ship is off screen; stage 4 has
+      no foreground layer.
+
+## Seventeenth pass (2026-10-04, playtest of the previous revision; details in `docs/PCE_PLAYTEST_FIX_20261004D.md`)
+
+- [x] Stage 7: enemy ships drawn unflipped (they faced backwards); they explode (fireball frames) with the enemy's yell + explosion
+      (CD ADPCM `enemy_death`), mines burst with the PCM impact, and the cruiser breaks up over 72 steps with the big bang before the
+      closing dialogue.
+- [x] Stage 7 HUD: one narrow column at the top left (one sprite per scanline at most), vertical cruiser hull gauge at the right edge.
+- [x] Stage 7 nebula scrolls its whole 512 dots and wraps without a one-frame reload.
+- [x] Background streaming: a tile slot released by a column that scrolled out is held until the next call (the old picture is still
+      displayed until the next VBlank). Not reproduced with the available checks, see the doc.
+- [x] Race: the steering poses now show (the lean was an integer division that stayed 0) and the car slides with its lean.
+- [ ] Three regression tests fail on the previous pass's uncommitted work (checked: they pass on the last commit, and still fail with this
+      pass's changes removed): `test_herd_render.py` (occupancy assertion, exact=0 band representation, a mode `video_scene` no longer
+      enters), `test_herd_visibility.py` (the injected `play_draw` call never returns) and `test_foreground.py` (stage 1 has no foreground
+      entries any more, so it has nothing to check). Not investigated further; all other PCE tests pass.

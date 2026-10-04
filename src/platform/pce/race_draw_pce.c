@@ -78,9 +78,24 @@ DRAW_CODE void race_draw(void) {
     video_sat_begin();
     /* the car: hard left .. hard right from the steering lean, blinking while it is hurt */
     if(!hurt||(race_time&4)||rphase!=P_RACE) {
-        int16_t t=tilt;
-        uint16_t id=t<-4?PCE_CAR_STEER:t<-1?PCE_CAR_STEER+1:t>4?PCE_CAR_STEER+3:t>1?PCE_CAR_STEER+2:3+PCE_CAR_STEPS-1;
-        video_sprite(id,256,215,false,16);
+        int16_t t=tilt;   /* Q4, as mode7.c's steering lean x 16 */
+        /* A spin-out is one whole turn, easing out (mode7.c: angle = 360 p (2 - p) with p the elapsed share of the 36 steps),
+         * shown as the nearest of the baked poses; pose 0 (and the full turn) is the upright car. */
+        uint8_t pose=0;
+        if(spin) {
+            uint16_t p=(uint16_t)(36-(spin>36?36:spin))*7;   /* 0..252 of 256 */
+            pose=(uint8_t)((((p*(512-p))>>8)*PCE_CAR_SPIN_FRAMES+128)>>8);
+            if(pose>=PCE_CAR_SPIN_FRAMES)pose=0;
+        }
+        /* The car slides sideways with its lean (mode7.c: 1.2 x the lean, in pixels; two dots each here). */
+        int16_t x=256+((t*5)>>5);
+        if(pose) {
+            video_sprite(PCE_CAR_SPIN+(pose-1)*2,x,215,false,16);
+            video_sprite(PCE_CAR_SPIN+(pose-1)*2+1,x,215,false,16);
+        } else {
+            uint16_t id=t<-80?PCE_CAR_STEER:t<-24?PCE_CAR_STEER+1:t>80?PCE_CAR_STEER+3:t>24?PCE_CAR_STEER+2:3+PCE_CAR_STEPS-1;
+            video_sprite(id,x,215,false,16);
+        }
     }
     for(uint8_t k=0;k<nvis;++k) {
         uint16_t rows=vis[k].y-113,dots=rows+(rows>>3)+(rows>>5);   /* 11776 / f */
@@ -95,13 +110,12 @@ DRAW_CODE void race_draw(void) {
         int16_t sx,row,f;
         if(project_point(race_bolts[k].x,race_bolts[k].y,&sx,&row,&f))video_sprite_optional(race_bolts[k].own?0:1,sx,row-(1400/f),false,16);
     }
-    /* HUD: the car's damage bar and spare cars, the turbo bar and the speed, then what the phase has to say */
+    /* HUD: the car's damage bar and spare cars, the turbo bar (no speedometer), then what the phase has to say */
     uint16_t hp_frac=(uint16_t)car_hp*64/car_max;   /* 16-bit throughout: the 32-bit multiply and divide cost the road its updates */
     put(PCE_H2_ICON,10,12);
     bar(46,16,4,hp_frac,car_hp*2>car_max?0:car_hp*4>car_max?1:2);
     put(PCE_H2_X,10,32);number(26,32,pce_campaign.lives,1,0);
     bar(10,206,4,boost>>2,boost_on||boost>128?3:2);
-    number(436,206,(uint16_t)(speed>0?speed:0)*3/5,3,0);
     if(rphase<=P_FINISH) {
         uint8_t lap=pce_campaign.lap>3?3:pce_campaign.lap;
         number(440,10,lap,1,0);put(PCE_H2_SLASH3,454,10);

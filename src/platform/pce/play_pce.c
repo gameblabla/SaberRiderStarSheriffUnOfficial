@@ -29,6 +29,11 @@ static uint8_t fire_timer,crouch,death_time,jumping,jump_time,flash_time,flash_d
 static int8_t flash_dx,flash_dy;
 int16_t safe_x,safe_y;
 static int16_t drop_y;
+/* Stage 3 opens as the source does (game.c walk_in): the hero starts off screen and walks in to world x 144, then the radio scene. */
+static uint8_t walk_in;
+#define WALK_START_X 8
+#define WALK_CAMERA 48
+#define WALK_STOP_X 144
 
 PCE_CODE static uint8_t cell(int16_t x,int16_t y) {
     if(x<0||(uint16_t)x>=scene->ccols||y<0||(uint16_t)y>=scene->crows) return 0;
@@ -145,6 +150,8 @@ PCE_CODE void play_init(uint8_t stage,uint8_t selected) {
     player=(Body){.x=scene->sx,.y=scene->sy};safe_x=player.x;safe_y=player.y;
     memset(actors,0,sizeof actors);memset(shots,0,sizeof shots);
     memset(column_tags,0xff,sizeof column_tags);
+    walk_in=0;
+    if(stage==3&&!pce_campaign.diagnostic){walk_in=1;player.x=safe_x=WALK_START_X;camera=WALK_CAMERA;}
     overlay_call(0x70,encounter_init);
     pce_metrics.hp=campaign_hearts();
     overlay_call(0x70,combat_start);
@@ -156,6 +163,10 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     /* The story camera pans with the world frozen. */
     if(cut_phase==2||cut_phase==6){pce_metrics.camera_x=camera;return;}
     if(cut_phase)keys=pressed=0;
+    if(walk_in) {
+        keys=KEY_RIGHT;pressed=0;
+        if(player.x>=WALK_STOP_X){walk_in=0;keys=0;pce_campaign.story=0;pce_campaign.event=1;}
+    }
     if(safe_timer)--safe_timer;if(fire_timer)--fire_timer;if(flash_time)--flash_time;
     if(pce_death) {
         /* Like the main game: the death animation plays where the hero fell,
@@ -188,7 +199,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     physics(&player);
     if(player.coll&4)jumping=0;else if(jumping&&jump_time<255)++jump_time;
     /* The screen only scrolls forwards: the left edge is a wall. */
-    if(!cut_phase&&player.x<(int16_t)camera+8){player.x=camera+8;if(player.vx<0)player.vx=0;}
+    if(!cut_phase&&!walk_in&&player.x<(int16_t)camera+8){player.x=camera+8;if(player.vx<0)player.vx=0;}
     if((pce_campaign.boss_kind||herd_locked)&&player.x>(int16_t)camera+248)player.x=camera+248;   /* boss arena / herd: the screen is locked */
     if((player.coll&4)&&!pce_death){safe_x=player.x;safe_y=player.y;}
     if(player.y>272&&!pce_death) {

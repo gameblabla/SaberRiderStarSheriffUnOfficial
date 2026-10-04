@@ -42,7 +42,12 @@ def dialog_box(tiles):
     put(0,0,0,cw,ch);put(1,cw,0,mx,ch);put(2,BOX_W-cw,0,cw,ch)
     put(3,0,ch,cw,my);put(4,cw,ch,mx,my);put(5,BOX_W-cw,ch,cw,my)
     put(6,0,BOX_H-ch,cw,ch);put(7,cw,BOX_H-ch,mx,ch);put(8,BOX_W-cw,BOX_H-ch,cw,ch)
-    return im
+    # The source fills the inside with a vertical gradient. Text glyphs are opaque cells of one colour, so the inside is a
+    # single flat colour (the top one): nothing can clash with the characters.
+    a=np.asarray(im).copy();fill=a[BOX_H//2-1,BOX_W//2].copy()
+    inside=(a[...,3]>=128)&~((a[...,:3]>=250).all(axis=-1))
+    a[inside]=fill
+    return Image.fromarray(a)
 
 
 def art_tips(hero,cell):

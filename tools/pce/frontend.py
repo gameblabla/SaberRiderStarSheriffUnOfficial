@@ -433,6 +433,50 @@ def gameover_screen(get, artwork=None):
     text = get(GAMEOVER_TEXT).convert('RGBA')
     return glow_screen(canvas, [(text, (W - text.width) // 2, GAMEOVER_TEXT_Y)])
 
+def victory_screen(canvas, layers):
+    """A 320x224 painting with opaque lettering on top: the painting uses all sixteen BG palettes and the lettering is
+    16x16 sprites (one shared sprite palette), which sit over the background with no blending. `layers` are
+    (RGBA lettering, x, y, 'top'|'bottom'): the two 16-line sprite rows start at the glyph top, or end at its
+    bottom, so the rows of the stacked lines of text never share a scanline (16 sprites per line at most)."""
+    s = Screen()
+    s.preview_source = canvas
+    paint_cells(s, canvas, list(range(16)))
+    cuts = []
+    for image, tx, ty, align in layers:
+        a = np.asarray(image.convert('RGBA'))
+        ys, xs = np.nonzero(a[..., 3] >= 128)
+        x0, x1, y0, y1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
+        top = ty + y0
+        start = top if align == 'top' else top + (y1 - y0) - 32
+        for sy in (start, start + 16):
+            for sx in range(tx + x0, tx + x1, 16):
+                piece = Image.new('RGBA', (16, 16))
+                for y in range(16):
+                    for x in range(16):
+                        px, py = sx + x - tx, sy + y - ty
+                        if 0 <= px < a.shape[1] and 0 <= py < a.shape[0] and a[py, px, 3] >= 128:
+                            piece.putpixel((x, y), tuple(int(v) for v in a[py, px]))
+                if piece.getbbox(): cuts.append((sx, sy, piece))
+    pal = palette_for([c[2] for c in cuts], 15)
+    s.sprite_palettes[0] = pal
+    s.pieces = []
+    for sx, sy, piece in cuts:
+        s.pieces.append((sx, sy, len(s.sprite_patterns), 0))
+        s.sprite_patterns.append(planar_sprite(indexed(piece, pal)))
+    # preview: the sprites over the background
+    prev = np.zeros((H, W, 3), np.uint8)
+    for cy in range(ROWS):
+        for cx in range(COLS):
+            prev[cy * 8:cy * 8 + 8, cx * 8:cx * 8 + 8] = vce_rgb(s.palettes[s.pal[cy, cx]])[s.index[cy * 8:cy * 8 + 8, cx * 8:cx * 8 + 8]]
+    for (sx, sy, piece) in cuts:
+        arr = np.asarray(piece)
+        idx = indexed(piece, pal)
+        for y in range(16):
+            for x in range(16):
+                if idx[y, x] and 0 <= sy + y < H and 0 <= sx + x < W: prev[sy + y, sx + x] = vce_rgb(pal)[idx[y, x]]
+    s.sprite_preview = prev
+    return s
+
 def glow_screen(canvas, layers, dim=1.0):
     """A 320x224 painting with lettering added on top as light.
 
@@ -536,15 +580,15 @@ def bake(root, work, out, previews, cblock_frame):
             x0,y0=(art.width-W)//2,(art.height-H)//2
             canvas=art.crop((x0,y0,x0+W,y0+H))
             layers=[]
-            for rid,cy in ((0xF6172502,160),(0xF629241D,184)):
+            for rid,cy,align in ((0xF6172502,160,'bottom'),(0xF629241D,184,'top')):
                 label=get(rid).convert('RGBA')
-                layers.append((label,(W-label.width)//2,cy-label.height//2))
-            scr=glow_screen(canvas,layers,dim=0.8)
-            scr.preview(previews/f'ui_victory_{name}.png')
+                layers.append((label,(W-label.width)//2,cy-label.height//2,align))
+            scr=victory_screen(canvas,layers)
+            Image.fromarray(scr.sprite_preview).resize((W*3,H*3),Image.NEAREST).save(previews/f'ui_victory_{name}.png')
             # each painting is its own small extent of victory.bin (about 45 KB): the disc read at a stage's end is not the whole UI
             own=Archive()
             rec=scr.emit(own,f'victory_{name}')
-            rec['extra']=own.add('ui_victory_extra',ramp_table(RING_BRIGHT_DIM)+scr.glow)
+            rec['extra']=own.add('ui_victory_extra',ramp_table(RING_BRIGHT_DIM)+struct.pack('<H',len(scr.pieces))+b''.join(struct.pack('<HHHH',*p) for p in scr.pieces))
             victory.append((rec,own.finish()))
     # Per-screen extra blobs.
     patches = b''.join(struct.pack('<HHHH', *p) for p in title.patches)

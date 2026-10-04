@@ -14,7 +14,7 @@ static char story_text[256];
 static uint8_t race_colour;
 /* Put wide box and glyphs in the race's unused VRAM. No sprite-cache pages
  * are needed for the box, and its 56-character width matches the dot clock. */
-PCE_HUD static void race_box(void) {
+__attribute__((noinline,section(".ram_bank111.text"))) static void race_box(void) {   /* bank $6f: $7c is full */
     uint32_t record[4];uint16_t bytes;
     extern uint8_t buffer[2048];
     uint32_t a=PCE_RACE_DIALOG_WIDE+(uint16_t)race_colour*18;
@@ -85,10 +85,21 @@ STORY_CODE static void draw(void) {
     /* Blank every BG cell under the box except the four 2x2 corner blocks; the corner pieces stay in front of the
      * scenery so their rounded edges show the scenery, not a hole. */
     bool platform=pce_metrics.stage!=2&&pce_metrics.stage<6;
-    if(pce_metrics.stage==2){race_colour=colour&3;overlay_call(0x7c,race_box);}
+    if(pce_metrics.stage==2){race_colour=colour&3;overlay_call(0x6f,race_box);}
     else if(!platform){video_panel(5,y,24,2);video_panel(3,y+2,28,2);video_panel(5,y+4,24,2);}
     video_sat_begin();
-    if(avatar!=65535)video_sprite(avatar,pce_metrics.stage==2?(box_x-26)*2:box_x-26,box_y-8,false,16);
+    if(avatar!=65535) {
+        video_sprite(avatar,pce_metrics.stage==2?(box_x-26)*2:box_x-26,box_y-8,false,16);
+        /* Cache slots from 15 up share one hardware palette, which another portrait's upload overwrote since this one was
+         * cached: load the speaker's own colours again. */
+        extern const PceScene *video_scene_ptr;extern uint8_t sprite_slot_of[480];
+        uint8_t slot=sprite_slot_of[avatar];
+        if(slot<48) {
+            uint32_t entry;uint8_t colors[32];
+            arcade_read(2,video_scene_ptr->sprites+(uint32_t)avatar*16+8,&entry,4);
+            arcade_read(2,entry,colors,32);pce_vce_copy_palette(16+(slot<15?slot:15),colors,1);
+        }
+    }
     uint8_t first=sat_count;
     uint16_t box=pce_dialog_base[pce_metrics.stage-1]+(colour&3)*2;
     if(pce_metrics.stage!=2){video_sprite(box,box_x,box_y,false,16);video_sprite(box+1,box_x+112,box_y,false,16);}

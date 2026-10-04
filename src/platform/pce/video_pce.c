@@ -17,6 +17,12 @@ static uint16_t cache_ids[PCE_BG_MAX_TILES] PCE_WORK;
 static uint16_t cache_refs[PCE_BG_MAX_TILES] PCE_WORK;
 uint16_t columns[33][30] PCE_WORK;
 static uint16_t first_column, last_column;
+/* A tile slot whose last column has scrolled out stays unavailable until the next call: the scroll that drops the column only
+ * takes effect at the next VBlank, and until then the old picture (the left edge column) is still displayed from these tiles.
+ * Reusing the slot at once showed another column's tiles there on busy frames (several columns a step, a nearly full cache). */
+#define HOLD 0x4000
+static uint16_t held[48] PCE_WORK;
+static uint8_t held_count;
 static uint16_t free_cursor;
 uint8_t buffer[2048] PCE_STAGE;
 uint8_t sprite_occupancy[240], sprite_line_lo, sprite_line_hi, sprite_line_ok, sprite_exact;
@@ -106,7 +112,7 @@ PCE_RENDER void video_scene(const PceScene *s) {
     memset(sprite_slot_of,0xff,sizeof sprite_slot_of);
     sprite_screen_height=224;sprite_exact=1;   /* 224-line mode everywhere: playfield rows 28-29 are simply not shown */
     timing(false);
-    memset(cache_refs, 0, sizeof cache_refs);
+    memset(cache_refs, 0, sizeof cache_refs);held_count=0;
     memset(cache_ids, 0xff, sizeof cache_ids);
     memset(columns, 0xff, sizeof columns);
     memset(sprite_ids, 0xff, sizeof sprite_ids);
@@ -135,6 +141,17 @@ static inline void directory_set(uint16_t id,uint16_t slot) {
     r[2]=a;r[3]=a>>8;r[4]=30+(id>>15);
     r[0]=slot;r[0]=slot>>8;
 }
+PCE_RENDER static void column_release(const uint16_t *refs) {
+    for (uint8_t y = 0; y < 30; ++y) {
+        uint16_t slot = refs[y];
+        if (slot == 0xffff || --cache_refs[slot]) continue;
+        if (held_count < 48) {cache_refs[slot] = HOLD; held[held_count++] = slot;}
+    }
+}
+PCE_RENDER static void held_free(void) {
+    for (uint8_t k = 0; k < held_count; ++k) cache_refs[held[k]] -= HOLD;
+    held_count = 0;
+}
 /* A column's 30 BAT entries are written with the VDC address increment set to
  * 64 words, so only one address is programmed. IRQs stay masked meanwhile. */
 PCE_RENDER static bool column_load(uint16_t world) {
@@ -148,7 +165,7 @@ PCE_RENDER static bool column_load(uint16_t world) {
             slot=free_cursor;
             uint16_t checked=0;
             while(cache_refs[slot]) {
-                if(++checked==PCE_BG_MAX_TILES)return false;
+                if(++checked==PCE_BG_MAX_TILES){if(!held_count)return false;held_free();checked=0;}   /* a full cache gives its held slots up */
                 if(++slot==PCE_BG_MAX_TILES)slot=0;
             }
             free_cursor=slot+1;if(free_cursor==PCE_BG_MAX_TILES)free_cursor=0;
@@ -189,22 +206,21 @@ PCE_RENDER static bool column_load(uint16_t world) {
 void video_restore(void) { first_column=last_column=0xffff; }
 PCE_RENDER bool video_background(uint16_t camera) {
     uint16_t column = camera >> 3;
+    held_free();
     if (first_column == 0xffff || column + 32 < first_column || column > last_column) {
-        memset(cache_refs, 0, sizeof cache_refs);
+        memset(cache_refs, 0, sizeof cache_refs);held_count=0;
         memset(columns, 0xff, sizeof columns);
         first_column = column; last_column = column;
         for (uint8_t k = 0; k < 33; ++k) if (!column_load(column + k)) return false;
         last_column = column + 32;
     } else {
         while (column < first_column) {
-            uint16_t *refs = columns[last_column % 33];
-            for (uint8_t y = 0; y < 30; ++y) if (refs[y] != 0xffff) --cache_refs[refs[y]];
+            column_release(columns[last_column % 33]);
             --first_column; --last_column;
             if (!column_load(first_column)) return false;
         }
         while (first_column < column) {
-            uint16_t *refs = columns[first_column % 33];
-            for (uint8_t y = 0; y < 30; ++y) if (refs[y] != 0xffff) --cache_refs[refs[y]];
+            column_release(columns[first_column % 33]);
             ++first_column; ++last_column;
             if (!column_load(last_column)) return false;
         }

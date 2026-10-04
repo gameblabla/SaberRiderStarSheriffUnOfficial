@@ -9,11 +9,14 @@
 typedef struct __attribute__((packed)) {uint16_t time;uint8_t kind,n;int16_t y;uint16_t gap;uint8_t pattern,drop;} Event;
 typedef struct {int16_t x,y;uint8_t kind,hp,pattern,drop;uint16_t clock;uint8_t charge;} Foe;
 typedef struct {int16_t x,y;int8_t vx,vy;uint8_t on,enemy;} Bolt;
+/* An explosion runs 30 steps through the source's frames (space.c FX_EXPL, half a second; five are visible); t 0 is a free slot. */
+typedef struct {int16_t x,y;uint8_t t,small;} Expl;
 static Foe foes[8];
 static Bolt bolts[12];
+static Expl expl[10] PCE_WORK;   /* the console RAM is full: this lives in the work bank */
 static Event next_event;
 static uint16_t flight_clock,spawn_clock,beam_clock,power_timer;
-static uint8_t event_index,event_count,pending,gun_clock,hurt,power,bombs;
+static uint8_t event_index,event_count,pending,gun_clock,hurt,power,bombs,boss_die,boss_gone,noise;
 static int16_t ship_x,ship_y,pickup_x,pickup_y,space_boss_y;
 static uint8_t pickup,port_hp[7];
 static const uint8_t port_y[7] __attribute__((section(".ram_bank115.rodata")))={25,24,24,23,36,32,41};
@@ -22,7 +25,7 @@ SPACE_CODE static void event_load(void) {
     if(event_index<event_count)arcade_read(2,pce_scenes[6].track+1+(uint16_t)event_index*10,&next_event,10);
 }
 SPACE_CODE void space_start(void) {
-    memset(foes,0,sizeof foes);memset(bolts,0,sizeof bolts);
+    memset(foes,0,sizeof foes);memset(bolts,0,sizeof bolts);memset(expl,0,sizeof expl);boss_die=boss_gone=0;
     flight_clock=spawn_clock=beam_clock=power_timer=0;event_index=pending=gun_clock=hurt=pickup=0;
     pce_campaign.power_cd=pce_campaign.timer=0;
     power=1;bombs=3;ship_x=48;ship_y=112;space_boss_y=80;
@@ -33,8 +36,22 @@ SPACE_CODE void space_start(void) {
 SPACE_CODE static void bolt(int16_t x,int16_t y,int8_t vx,int8_t vy,bool enemy) {
     for(uint8_t k=0;k<12;++k)if(!bolts[k].on){bolts[k]=(Bolt){x,y,vx,vy,1,enemy};return;}
 }
+SPACE_CODE static void blast(int16_t x,int16_t y,bool small) {
+    for(uint8_t k=0;k<10;++k)if(!expl[k].t){expl[k]=(Expl){x,y,1,small};return;}
+}
+SPACE_CODE static uint8_t random(void) {noise=noise*37+11;return noise>>2;}
+/* A ship going up (space.c blast): a fireball and smaller ones round it, a bigger ship more of them. Fighters and gunships
+ * yell and burst (the source's sfx 5 and 6, one CD ADPCM event); a mine only bursts. */
 SPACE_CODE static void foe_kill(Foe *f) {
-    f->kind=0;++pce_campaign.score;audio_effect(4);
+    int16_t x=f->x,y=f->y;
+    blast(x,y,false);
+    if(f->kind<=3)audio_effect(4);
+    else {
+        blast(x-10,y+(random()&7)-4,true);blast(x+10,y+(random()&7)-4,true);
+        if(f->kind==5){blast(x-24,y-8,false);blast(x+22,y+8,false);}
+        audio_effect(8);
+    }
+    f->kind=0;++pce_campaign.score;
     if(f->drop){pickup=f->drop;pickup_x=f->x;pickup_y=f->y;}
 }
 SPACE_CODE static void spawn(void) {
@@ -109,7 +126,7 @@ SPACE_CODE static void space_tick(void) {
         pce_campaign.boss_kind=5;beam_clock=0;audio_music(11);
         memset(foes,0,sizeof foes);
     }
-    if(pce_campaign.boss_kind) {
+    if(pce_campaign.boss_kind&&!boss_die) {
         ++beam_clock;
         pce_campaign.boss_round=pce_campaign.boss_hp<396?2:pce_campaign.boss_hp<792?1:0;
         if(pce_campaign.boss_round==2&&beam_clock%300>=180)space_boss_y+=ship_y<space_boss_y+28?-1:1;
@@ -118,6 +135,7 @@ SPACE_CODE static void space_tick(void) {
             bolt(135,space_boss_y+port_y[k],-3,ship_y<space_boss_y+port_y[k]?-1:1,true);
         if(beam_clock%300>220&&!hurt&&dist(ship_y,space_boss_y+28)<8){hurt=90;campaign_hurt();}
     }
+    for(uint8_t k=0;k<10;++k)if(expl[k].t){expl[k].x-=1;if(++expl[k].t>30)expl[k].t=0;}
     for(uint8_t k=0;k<12;++k) {
         Bolt *b=&bolts[k];if(!b->on)continue;
         b->x+=b->vx;b->y+=b->vy;
@@ -151,27 +169,39 @@ SPACE_CODE static void space_tick(void) {
         }
         if(pickup_x<0)pickup=0;
     }
-    if(pce_campaign.boss_kind&&!pce_campaign.boss_hp){pce_campaign.result=1;pce_campaign.story=0;pce_campaign.event=1;}
-}
-SPACE_CODE void space_frame(void) {
-    for(uint8_t i=0;i<pce_control.elapsed&&!pce_campaign.event&&!pce_campaign.result&&pce_campaign.state==CAM_PLAY;++i) {
-        space_tick();pce_control.pressed=0;
+    /* The cruiser breaks up (space.c PH_BOSS_DIE): its fire stops, fireballs burst over the hull to the big bang, then the ship is gone. */
+    if(pce_campaign.boss_kind&&!pce_campaign.boss_hp) {
+        if(!boss_die) {
+            boss_die=72;audio_effect(17);
+            for(uint8_t k=0;k<12;++k)bolts[k].on=bolts[k].on&&!bolts[k].enemy;
+        } else {
+            --boss_die;
+            if(!(boss_die%5))blast(136+random()%112,space_boss_y+random()%56,random()&1);
+            if(!boss_die){boss_gone=1;blast(192,space_boss_y+32,false);pce_campaign.result=1;pce_campaign.story=0;pce_campaign.event=1;}
+        }
     }
-    video_background((flight_clock>>3)&255);video_sat_begin();
+}
+/* The drawing is in the HUD bank ($7c), which has the room: the steps stay here. */
+PCE_HUD void space_frame(void) {
+    for(uint8_t i=0;i<pce_control.elapsed&&!pce_campaign.event&&!pce_campaign.result&&pce_campaign.state==CAM_PLAY;++i) {
+        overlay_call(0x73,space_tick);pce_control.pressed=0;
+    }
+    video_background(flight_clock>>3);   /* the 512-dot nebula wraps by itself: no jump back to its start */video_sat_begin();
     if(!hurt||(flight_clock&4))video_sprite(3,ship_x,ship_y,false,16);
-    if(pce_campaign.boss_kind)video_sprite(6,128,space_boss_y+32,false,16);
+    if(pce_campaign.boss_kind&&!boss_gone)video_sprite(6,128,space_boss_y+32,false,16);
     for(uint8_t k=0;k<12;++k)if(bolts[k].on)
         if(!video_sprite_optional(bolts[k].enemy?1:0,bolts[k].x,bolts[k].y,false,16))bolts[k].on=0;
     for(uint8_t k=0;k<8;++k)if(foes[k].kind) {
         Foe *f=&foes[k];
-        if(!video_sprite_optional(f->kind<=3?8:f->kind==5?5:4,f->x,f->y,true,16)){f->kind=0;continue;}
+        if(!video_sprite_optional(f->kind<=3?8:f->kind==5?5:4,f->x,f->y,false,16)){f->kind=0;continue;}   /* the art faces left, the way they fly */
         if(f->charge>20&&(flight_clock&4))video_sprite_optional(1,f->x-20,f->y,false,16);
     }
     if(pickup)video_sprite_optional(8+pickup,pickup_x,pickup_y,false,16);
-    if(pce_campaign.boss_kind&&beam_clock%300>220)
+    for(uint8_t k=0;k<10;++k)if(expl[k].t)video_sprite_optional(12+(expl[k].small?5:0)+(expl[k].t-1)/6,expl[k].x,expl[k].y,false,16);
+    if(pce_campaign.boss_kind&&!boss_die&&beam_clock%300>220)
         for(uint8_t x=16;x<128;x+=16)video_sprite_optional(1,x,space_boss_y+28,false,16);
     hud7=(Hud7){pce_metrics.hp,pce_campaign.lives,power,bombs,pce_campaign.powers,pce_campaign.boss_kind!=0,(uint8_t)flight_clock,pce_campaign.boss_hp};
-    overlay_call(0x7c,hud7_draw);
+    overlay_call(0x70,hud7_draw);
     video_sat_end();
     pce_metrics.player_x=ship_x;pce_metrics.player_y=ship_y;
 }

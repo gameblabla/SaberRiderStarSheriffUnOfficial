@@ -179,7 +179,10 @@ BOSS_CODE void boss_tick(void) {
     if(kind==1)horse_step();else hyper_step();
     /* the ship grows as it comes in from the distance: its far and mid passes use smaller hulls, the fight the full one */
     if(boss_phase>=4)hull_seen_full=1;
-    uint8_t want=kind==1?(boss_phase>=2?0:boss_phase==1?1:2):(hull_seen_full?0:boss_phase>=2?1:2);
+    /* The Hyperjumper's front pose (phases 9-11: drops in facing the hero, fires down, leaves upward) is the fourth record, in
+     * Arcade RAM like the others: it replaces the side hull while the ship is off screen above (phase 8 -> 9) and goes back
+     * the same way (11 -> 3). The wreck keeps the pose it was hit in. */
+    uint8_t want=kind==1?(boss_phase>=2?0:boss_phase==1?1:2):(boss_phase>=9&&boss_phase<=11)?3:(hull_seen_full?0:boss_phase>=2?1:2);
     if(want!=hull_level){hull_level=want;hull_ready=0;}
     uint8_t vulnerable=kind==1?boss_phase==2:boss_phase>=4&&boss_phase<=11;
     if(!vulnerable)return;
@@ -205,7 +208,10 @@ BOSS_CODE void boss_tick(void) {
         }
     }
 }
-BOSS_DRAW static void hull(bool flip) {
+static bool hull_flip;
+/* The hull's 32x32 pieces: the sprite-allocation bank ($74) has the room, the race core's bank is full. */
+__attribute__((noinline,section(".ram_bank116.text"))) static void hull_body(void) {
+    bool flip=hull_flip;
     if(!hull_ready)overlay_call(0x6f,hull_load);
     sprite_pinned[14]=sprite_pinned[47]=250;
     for(uint8_t k=0;k<hull_count;++k) {
@@ -222,8 +228,9 @@ BOSS_DRAW static void hull(bool flip) {
             VDC_SPRITE_FG|14|VDC_SPRITE_WIDTH_32|VDC_SPRITE_HEIGHT_32|(flip?VDC_SPRITE_FLIP_X:0)};
     }
 }
+BOSS_DRAW static void hull(bool flip) {hull_flip=flip;overlay_call(0x74,hull_body);}
 BOSS_DRAW void boss_draw(void) {
-    bool flip=boss_phase==1?true:boss_dir;
+    bool flip=hull_level==3?false:boss_phase==1?true:boss_dir;   /* the front pose is not mirrored */
     if(boss_phase==12) {
         if(boss_y<250&&(boss_time&1))hull(flip);
         for(uint8_t k=0;k<2;++k) {

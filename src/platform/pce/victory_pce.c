@@ -10,7 +10,7 @@ extern uint8_t previous;
 
 /* A stage is cleared. The stage's jingle (CD-DA track 6, started once by the caller) plays over the held last frame, the
  * picture whitens as in the main game, and the stage's painting follows: the centred 320x224 of the original with
- * MISSION ACCOMPLISHED added as pulsing light (frontend.py glow_screen, the same bit-plane trick as GAME OVER) under
+ * MISSION ACCOMPLISHED as opaque sprites on top (frontend.py victory_screen) under
  * the victory music (track 7). Any button leaves it. The painting is read only after the jingle (a disc read stops CD-DA). */
 VICTORY_CODE void frontend_victory(void) {
     previous=0;
@@ -31,16 +31,17 @@ VICTORY_CODE void frontend_victory(void) {
     ui_fade(8);ui_fade(7);video_display(true);
     audio_music_once(7);
     pce_ui_state=5;   /* (the BIOS call can take a while: input is read from here on) */
-    static const uint8_t pulse[8]={0,1,2,3,3,2,1,0};
-    uint32_t glow=pce_ui[id].extra+PCE_UI_RAMP_BYTES;
-    uint8_t level=7,shown=0;bool leaving=false;
+    /* The lettering: opaque 16x16 sprites over the painting (frontend.py victory_screen), from the screen's extra blob. */
+    static uint16_t pieces[1+32*4];
+    uint32_t table=pce_ui[id].extra+PCE_UI_RAMP_BYTES;
+    arcade_read(2,table,pieces,sizeof pieces);
+    uint8_t count=pieces[0];
+    uint8_t level=7;bool leaving=false;
     for(uint16_t t=0;;++t) {
         video_wait();ui_read_keys();
-        if(!level&&!leaving&&!(t&7)&&pulse[(t>>3)&7]!=shown) {
-            shown=pulse[(t>>3)&7];
-            arcade_read(2,glow+(uint32_t)shown*PCE_UI_GAMEOVER_SLOTS*32,buffer,PCE_UI_GAMEOVER_SLOTS*32);
-            pce_vce_copy_palette(PCE_UI_GAMEOVER_SLOT,buffer,PCE_UI_GAMEOVER_SLOTS);
-        }
+        video_sat_begin();
+        for(uint8_t k=0;k<count;++k)ui_sprite(pieces[1+k*4],pieces[2+k*4],pieces[3+k*4],0,false);
+        video_sat_end();
         if(!(t%3)) {
             if(!leaving&&level){ui_fade(--level);}
             else if(leaving){ui_fade(++level);if(level==7)break;}

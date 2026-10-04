@@ -10,14 +10,15 @@ extern volatile uint16_t pce_scroll_x;
 /* The stage's title card (game.c title_draw), shown from the moment a stage is asked for through its disc read: black, an
  * amber rule above and below, "STAGE n" in amber, the name typing in, the sub-title following. The font is already in VRAM
  * (loader_font); the card stays up for the whole read (loader_scene), which writes Arcade RAM only. */
-static const char s1[] CARD_DATA="STAGE 1",n1[] CARD_DATA="THE FRONTIER TOWN",t1[] CARD_DATA="OUTRIDERS IN THE STREETS";
-static const char s2[] CARD_DATA="STAGE 2",n2[] CARD_DATA="THE ALL GALAXY GRAND PRIX",t2[] CARD_DATA="NEW BORDERLAND CIRCUIT";
-static const char s3[] CARD_DATA="STAGE 3",n3[] CARD_DATA="HYPERJUMPER PASS",t3[] CARD_DATA="OUTRIDER SKY RAID";
-static const char s4[] CARD_DATA="STAGE 4",n4[] CARD_DATA="THE RED PALM JUNGLE",t4[] CARD_DATA="OUTRIDER WATCHTOWERS";
-static const char s5[] CARD_DATA="STAGE 5",n5[] CARD_DATA="THE CAVERN LABORATORY",t5[] CARD_DATA="OUTRIDER HIDEOUT";
-static const char s6[] CARD_DATA="STAGE 6",n6[] CARD_DATA="POWER STRIDE",t6[] CARD_DATA="RENEGADES AT THE YUMA OUTPOST";
-static const char s7[] CARD_DATA="STAGE 6 - FINAL PHASE",n7[] CARD_DATA="THE BATTLE CRUISER",t7[] CARD_DATA="OUTRIDER SPACE";
-static const char *const card_text[7][3] CARD_DATA={{s1,n1,t1},{s2,n2,t2},{s3,n3,t3},{s4,n4,t4},{s5,n5,t5},{s6,n6,t6},{s7,n7,t7}};
+static const char card_text[] CARD_DATA=
+    "STAGE 1\0THE FRONTIER TOWN\0OUTRIDERS IN THE STREETS\0"
+    "STAGE 2\0THE ALL GALAXY GRAND PRIX\0NEW BORDERLAND CIRCUIT\0"
+    "STAGE 3\0HYPERJUMPER PASS\0OUTRIDER SKY RAID\0"
+    "STAGE 4\0THE RED PALM JUNGLE\0OUTRIDER WATCHTOWERS\0"
+    "STAGE 5\0THE CAVERN LABORATORY\0OUTRIDER HIDEOUT\0"
+    "STAGE 6\0POWER STRIDE\0RENEGADES AT THE YUMA OUTPOST\0"
+    "STAGE 6 - FINAL PHASE\0THE BATTLE CRUISER\0OUTRIDER SPACE";
+static const char loading[] CARD_DATA="NOW LOADING";
 #define RULE_TILE 0x100   /* a character of two amber scanlines, built in free VRAM at word 0x1000 */
 
 CARD_CODE static void put(uint8_t row,const char *text,uint8_t palette,uint8_t shown) {
@@ -28,7 +29,9 @@ CARD_CODE static void put(uint8_t row,const char *text,uint8_t palette,uint8_t s
 }
 CARD_CODE void frontend_card(void) {
     uint8_t stage=pce_control.stage;if(stage<1||stage>7)stage=1;
-    const char *const *text=card_text[stage-1];
+    const char *text[3],*walk=card_text;
+    for(uint8_t k=0;k<(stage-1)*3;++k){while(*walk++);}
+    for(uint8_t k=0;k<3;++k){text[k]=walk;while(*walk++);}
     video_display(false);pce_raster_enabled=0;
     video_mode_ui();
     pce_vce_set_color(0,0);
@@ -53,5 +56,8 @@ CARD_CODE void frontend_card(void) {
         video_wait();video_wait();
     }
     put(16,text[2],13,255);
+    /* Only once the title and sub-title are complete: the disc read that follows is what the card waits on. */
+    video_wait();video_wait();
+    put(20,loading,15,255);
     video_wait();
 }

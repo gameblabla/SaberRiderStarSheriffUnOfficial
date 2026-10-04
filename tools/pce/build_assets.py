@@ -26,6 +26,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[2]
 CAR_WIDTHS = (16, 24, 32, 40, 52, 64)   # baked widths of the race cars
+SPIN_FRAMES = 12                         # poses of a full turn of the spinning buggy (one is the upright car)
 MECH_SIZES = (24, 32, 40, 48, 56, 64, 72, 80)   # baked widths of the Ramrod mechs; the cockpit scales between them
 sys.path[:0] = [str(ROOT / 'tools/saturn'), str(ROOT / 'tools/dc')]
 import levl
@@ -96,10 +97,8 @@ def cblock_whole_frame(path, frame):
     return im
 
 CAMERA_WALL = {(123,123,132),(148,148,148),(173,173,173),(90,90,107),(58,66,82)}
-def key_wall(im):
-    """The security camera's cell carries a patch of the building wall behind its bracket. That wall is a different grey from
-    the background tiles it sits on (and from each building), so the patch showed as a coloured block. The wall greys
-    connected to the cell's left and bottom edges are made transparent: the scenery shows through instead."""
+def camera_wall_mask(im):
+    """The wall greys of the security camera's cell that are connected to its left and bottom edges (True)."""
     a = np.array(im.convert('RGBA')); h, w = a.shape[:2]
     seen = np.zeros((h, w), bool)
     stack = [(y, 0) for y in range(h)] + [(h - 1, x) for x in range(w)]
@@ -108,8 +107,41 @@ def key_wall(im):
         if not (0 <= y < h and 0 <= x < w) or seen[y, x] or tuple(int(v) for v in a[y, x, :3]) not in CAMERA_WALL: continue
         seen[y, x] = True
         stack += [(y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)]
-    a[seen, 3] = 0
+    return seen
+
+def key_wall(im):
+    """The security camera's cell carries a patch of the building wall behind its bracket. That wall is a different grey from
+    the background tiles it sits on (and from each building), so the patch showed as a coloured block. The wall greys
+    connected to the cell's left and bottom edges are made transparent: the scenery shows through instead (the background
+    then carries that wall itself: see camera_wall_background)."""
+    a = np.array(im.convert('RGBA'))
+    a[camera_wall_mask(im), 3] = 0
     return Image.fromarray(a)
+
+def camera_wall_background(out, work):
+    """The level's background has sky where the camera's cell stands (the source draws the wall as part of the camera's art),
+    so with the cell's wall made transparent there was a hole beside the camera. The wall is continued into the background
+    here, from the wall directly below the cell, which is the same surface and the same greys."""
+    d = (work / '211F5D78.levl').read_bytes(); aid = struct.unpack_from('<I', d, 4)[0]
+    first = struct.unpack_from('<I', d, 0x34 + 24 + 4)[0]
+    art = work / 'srgb' / f'{aid:08X}.srgb'
+    whole = bool(struct.unpack_from('<I', d, 0x34 + 24 + 20)[0] & 8)
+    mask = camera_wall_mask(cblock_whole_frame(art, first) if whole else cblock_frame(art, first))
+    h, w = mask.shape
+    px = np.array(out)
+    meta = json.loads((work / 'stage1.json').read_text())
+    for t in meta['triggers']:
+        if t['type'] != 16: continue
+        x0, y0 = t['waypoints'][0]
+        for y in range(h):
+            for x in range(w):
+                if not mask[y, x]: continue
+                cur = px[y0 + y, x0 + x]
+                if not (int(cur[2]) > int(cur[0]) + 30): continue        # only where the background shows sky
+                src = px[y0 + y + h, x0 + x]                             # the wall below the cell
+                if int(src[2]) > int(src[0]) + 30: continue
+                px[y0 + y, x0 + x] = src
+    return Image.fromarray(px)
 
 HORSE_FRAMES = 5
 
@@ -274,6 +306,40 @@ def race_sky(archive, previews, sand):
     Image.fromarray(preview).save(previews / 'stage2.png')
     return dict(pal=pal_off, tiles=tile_off, map=map_off, cols=64, tile_count=len(tiles))
 
+NIGHT_TINT = {'FarMountains': (58, 62, 118), 'Mountains': (66, 70, 130), 'NearMountains': (76, 80, 142), 'MidBG': (88, 90, 150),
+              'Cars MidBG': (88, 90, 150), 'Playfield': (112, 110, 168), 'Platforms': (116, 114, 172), 'Cars': (116, 114, 172),
+              'ForegroundStuff': (100, 98, 156), 'ForegroundStuf2': (52, 52, 92)}
+
+def continuous_layer(ly, bank, width):
+    """A parallax layer (0 < parallax < 1) as one image the width of the level.
+
+    The source scrolls such a layer slower than the camera: at camera x the screen shows the layer from parallax * x. A flat
+    background cannot do that, so each 256-dot span used to be drawn as the layer looks at the camera standing at the span's
+    start, and where two spans meet the layer jumped by (1 - parallax) * 256 dots: a seam across the buildings, with a piece
+    of a van twice. The jump is still there (the layer shifts 1 dot a dot, in steps) but it is now put where the layer is
+    empty (a gap between two buildings, open sky between hills) or, failing one, where it hides the fewest dots: the band of
+    the layer repeated at the jump is empty, so nothing shows twice."""
+    p = ly.parallax
+    full = levl.render_layer(ly, bank, 0.0, max(ly.w * bank.tw, width), 240, None)
+    occupied = np.concatenate(([0], np.cumsum((full[..., 3] >= 128).sum(0))))
+    n = width // 256
+    shift = [int(round((1 - p) * 256 * k)) for k in range(n)]
+    cuts = [0]
+    for k in range(1, n):
+        best = None
+        for cand in range(256 * k - 112, 256 * k + 112):
+            lo, hi = max(cand - shift[k], 0), max(min(cand - shift[k - 1], full.shape[1]), 0)
+            cost = int(occupied[hi] - occupied[min(lo, hi)]) if hi > lo else 0
+            if best is None or (cost, abs(cand - 256 * k)) < best[:2]: best = (cost, abs(cand - 256 * k), cand)
+        cuts.append(best[2])
+    cuts.append(width)
+    out = np.zeros((240, width, 4), np.uint8)
+    for k in range(n):
+        for x in range(cuts[k], cuts[k + 1]):
+            u = x - shift[k]
+            if 0 <= u < full.shape[1]: out[:, x] = full[:, u]
+    return out
+
 def platform_background(stage, work):
     level, files = levl.load_dump(work / f'stage{stage}.layers')
     banks = {i: levl.png_bank(path, i) if path else levl.load_bank(work / 'srgb' / f'{i:08X}.srgb')
@@ -281,6 +347,12 @@ def platform_background(stage, work):
     width = math.ceil(level.width / 256) * 256
     out = Image.new('RGBA', (width, 240), (0, 0, 0, 255))
     foreground = Image.new('RGBA',(width,240))
+    continuous = {}
+    after = False
+    for ly in level.layers:
+        if ly.name == 'PlayerSprites': after = True
+        if ly.is_tilemap and not after and 0 < ly.parallax < 1 and ly.extra != 1:
+            continuous[ly.name] = continuous_layer(ly, banks[ly.cblock], width)
     for x in range(0,width,256):
         pixels=np.zeros((240,256,4),np.uint8)
         front=np.zeros_like(pixels);after_player=False
@@ -291,12 +363,19 @@ def platform_background(stage, work):
             if not ly.is_tilemap:continue
             if stage in (1,3) and ly.name=='SkyBG':continue
             bank=banks[ly.cblock]
-            if after_player:
-                front=levl.render_layer(ly,bank,x,256,240,front)
-            else:
-                pixels=levl.render_layer(ly,bank,levl.layer_offset(ly,x),256,240,pixels)
+            if after_player: layer=levl.render_layer(ly,bank,x,256,240,None)
+            elif ly.name in continuous: layer=continuous[ly.name][:,x:x+256].copy()
+            else: layer=levl.render_layer(ly,bank,levl.layer_offset(ly,x),256,240,None)
+            if stage==3:
+                # Stage 3 is the night variant of level 1: each layer is drawn in the night colour of night.c night_layer_tint
+                # (the source multiplies the layer by r/255, g/255, b/255).
+                tint=np.array(NIGHT_TINT.get(ly.name,(100,100,160)),np.int32)
+                layer[...,:3]=(layer[...,:3].astype(np.int32)*tint//255).astype(np.uint8)
+            if after_player: front=np.where(layer[...,3:4]>=128,layer,front)
+            else: pixels=np.where(layer[...,3:4]>=128,layer,pixels)
         out.paste(Image.fromarray(pixels),(x,0))
         foreground.paste(Image.fromarray(front),(x,0))
+    if stage == 1: out = camera_wall_background(out, work)
     return out,foreground
 
 def add_sprites(archive, sprites, previews):
@@ -485,9 +564,7 @@ def make_scene(stage, work, previews, shared):
         # and at 3/4 and 1/2 size for the mid and far passes (the ship flies in from the distance): three records,
         # reloaded into the same pattern pages when the ship changes layer.
         hull_records=b''
-        for scale in (1.0,0.75,0.5):
-            hull=im if scale==1.0 else im.resize((round(im.width*scale),round(im.height*scale)),Image.Resampling.LANCZOS)
-            hull_anchor=tuple(round(v*scale) for v in anchor)
+        def hull_record(hull,hull_anchor):
             pal=palette_for([hull]);idx=indexed(hull,pal);patterns=[];pieces=[]
             for y in range(0,hull.height,32):
                 for x in range(0,hull.width,32):
@@ -497,11 +574,22 @@ def make_scene(stage, work, previews, shared):
                     pieces.append((x-hull_anchor[0],y-hull_anchor[1],len(patterns)))
                     for row in (0,16):
                         for col in (0,16):patterns.append(planar_sprite(cell[row:row+16,col:col+16]))
-            assert len(patterns)<=96
+            assert len(patterns)<=96 and len(pieces)<=28,(len(patterns),len(pieces))
             bp=a.add('boss_big_palette',pal.tobytes())
             bd=a.add('boss_big_pieces',b''.join(struct.pack('<hhH',*r) for r in pieces))
             bt=a.add('boss_big_patterns',b''.join(patterns))
-            hull_records+=struct.pack('<IIIHB',bp,bd,bt,len(patterns)*128,len(pieces))
+            return struct.pack('<IIIHB',bp,bd,bt,len(patterns)*128,len(pieces))
+        for scale in (1.0,0.75,0.5):
+            hull=im if scale==1.0 else im.resize((round(im.width*scale),round(im.height*scale)),Image.Resampling.LANCZOS)
+            hull_records+=hull_record(hull,tuple(round(v*scale) for v in anchor))
+        if name=='hyperjumper':
+            # The Hyperjumper's front pose (it drops in facing the hero, fires straight down and leaves upward; night.c front_pose)
+            # is a record of its own, the fourth: the front view is 201x140 in the source and is drawn at 0.8 so that its pieces
+            # fit the same 96 patterns. It stays in Arcade RAM and replaces the side hull in the pattern pages while the ship is
+            # off screen (boss_pce.c hull_level 3).
+            front=Image.open(ROOT/'assets/hyperjumper/front_idle.png').convert('RGBA')
+            front=front.resize((round(front.width*0.8),round(front.height*0.8)),Image.Resampling.LANCZOS)
+            hull_records+=hull_record(front,(front.width//2,front.height//2))
         meta['boss_big_offset']=a.add('boss_big',hull_records)
         # Two independently cached metasprites preserve the native art and anchor.
         sprites.append((name+'_left',im.crop((0,0,split,im.height)),anchor))
@@ -605,6 +693,10 @@ def make_scene(stage, work, previews, shared):
         sprites.append(('battle_cruiser',im,(0,32)))
         sprites+=atlas(ROOT/'assets/space/atlas.png','drone')+atlas(ROOT/'assets/space/atlas.png','mine')
         sprites+=atlas(ROOT/'assets/space/atlas.png','cap')
+        # The ships' explosions (space.c blast: six frames of 64x64, a big one and smaller ones round it; the sixth is a fade too faint
+        # to keep): ids 12-16 at 48 dots, 17-21 at 32
+        sprites+=atlas(ROOT/'assets/space/atlas.png','expl',48)[:5]
+        sprites+=[(f'expl_small{n}',im,anchor) for n,(_,im,anchor) in enumerate(atlas(ROOT/'assets/space/atlas.png','expl',32)[:5])]
         meta['track_offset']=a.add('space_timeline',timeline.bake(ROOT/'src/space.c'))
         hud=hudart.Hud(sprites)
         hudart.space_hud(hud,hudart.Fonts(work,cblock_frame),Image.open(ROOT/'assets/space/atlas.png').convert('RGBA'))
@@ -630,6 +722,19 @@ def make_scene(stage, work, previews, shared):
         for frame in (0, 1, 3, 4):
             c, anchor = car('buggy', frame, CAR_WIDTHS[-1])
             sprites.append((f'buggy_steer{frame}', c, anchor))
+        # The spin-out (mode7.c render_player: one whole turn, easing out): the buggy at SPIN_FRAMES-1 angles of a full turn, each
+        # rotated at the car's true shape and then stretched to the 512-dot clock. A rotated car is wider than one sprite object
+        # can hold (32 pieces), so each pose is two objects (left and right half, drawn at the same point), as the flying bosses.
+        bx, by, bw, bh, bn = rows7['buggy']
+        base = im.crop((bx + (bn // 2) * bw, by, bx + (bn // 2 + 1) * bw, by + bh))
+        base = base.resize((CAR_WIDTHS[-1], round(bh * CAR_WIDTHS[-1] / bw)), Image.Resampling.NEAREST)
+        for k in range(1, SPIN_FRAMES):
+            r = base.rotate(-360 * k / SPIN_FRAMES, resample=Image.Resampling.NEAREST, expand=True)
+            r = r.resize((r.width * 2, r.height), Image.Resampling.NEAREST)
+            half = r.width // 2
+            ax, ay = r.width // 2, r.height // 2 + base.height // 2     # the car's centre stays where the upright car's is
+            sprites.append((f'buggy_spin{k}_left', r.crop((0, 0, half, r.height)), (ax, ay)))
+            sprites.append((f'buggy_spin{k}_right', r.crop((half, 0, r.width, r.height)), (ax - half, ay)))
         env = dict(os.environ, SABER_ASSETS=str(ROOT / 'assets'), SABER_FRAMES='1', SABER_M7MAP=str(work/'race.pgm'))
         run([ROOT/'build/headless/saber_headless', ROOT/'SaberRider/data', 2], env=env)
         race = np.asarray(Image.open(work/'race.pgm'), np.uint8) // 20
@@ -683,7 +788,7 @@ def make_scene(stage, work, previews, shared):
         for i,(name,im,(ax,ay)) in enumerate(sprites):
             if i<hud0 or aim0<=i<meta['presentation']['end']:   # gameplay, aim and motion poses (not the HUD)
                 sprites[i]=(name,im,(ax,ay-16))
-        if stage in (1,3):   # no foreground layer at all: whatever is left of it flickers
+        if stage in (1,3,4):   # no foreground layer at all: whatever is left of it flickers
             foreground=Image.new('RGBA',foreground.size);print(f'  stage {stage}: foreground removed', flush=True)
         else: foreground=thin_foreground(foreground)
         entries=presentation.add_foreground(foreground,sprites)
@@ -748,7 +853,7 @@ def main():
     h.append('extern const uint16_t pce_hud_base[7];')
     c.append('const uint16_t pce_hud_base[7]={'+','.join(str(m.get('hud',0)) for m in scenes)+'};')
     for m in scenes: h += m.get('hud_macros',[])
-    h += [f'#define PCE_CAR_STEPS {len(CAR_WIDTHS)}', '#define PCE_CAR_STEER (3+7*PCE_CAR_STEPS)', 'extern const uint8_t pce_car_widths[PCE_CAR_STEPS];']
+    h += [f'#define PCE_CAR_STEPS {len(CAR_WIDTHS)}', '#define PCE_CAR_STEER (3+7*PCE_CAR_STEPS)', '#define PCE_CAR_SPIN (PCE_CAR_STEER+4)', f'#define PCE_CAR_SPIN_FRAMES {SPIN_FRAMES}', 'extern const uint8_t pce_car_widths[PCE_CAR_STEPS];']
     h += [f'#define PCE_MECH_STEPS {len(MECH_SIZES)}', f'#define PCE_MECH_ARM (3+3*PCE_MECH_STEPS*8)', 'extern const uint8_t pce_mech_sizes[PCE_MECH_STEPS];']
     c.append('const uint8_t pce_car_widths[PCE_CAR_STEPS]={'+','.join(map(str,CAR_WIDTHS))+'};')
     c.append('const uint8_t pce_mech_sizes[PCE_MECH_STEPS]={'+','.join(map(str,MECH_SIZES))+'};')
