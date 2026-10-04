@@ -318,3 +318,24 @@ Reports: `build/pce/{verification,campaign-verification,foreground-verification,
 presentation-verification,audio-verification,adpcm2-verification}.json`.
 Screenshots: `build/pce/presentation-review/` and campaign captures.
 Actual audio captures: `build/pce/audio-review/*.wav`.
+
+## Dialogue restoration and sprite budgets (2026-10-04)
+
+- Platform dialogue panels use BG tiles and opaque-backed font glyphs. Only
+  four rounded corners remain sprites: 4 SAT entries instead of 42, and at
+  most 2 scanline width units instead of 14. Portraits and actors stay visible.
+- Closing restores the original panel's world columns, font and reserved BG
+  palette from preloaded Arcade RAM. Sprite cache pins survive the closing
+  DMA; retained foreground is re-admitted without overwriting live corners.
+- Sprites start each 16-line strip at its first opaque pixel, retaining every
+  indexed pixel and the original anchor in both facings. Exact scanline counts
+  replace conservative platform bands; retained foreground records and reset
+  paths now use the same representation. Hardware sprite limits remain on.
+- `make -f Makefile.pce test-dialog` checks panel paging and complete BAT/font/
+  palette restoration at three scroll phases, including a camera catch-up
+  across a column, plus pause/resume without stale menu text. Review images: `build/pce/dialog-review/`.
+- Accurate-core checks passed: native-disc regression, campaign scenarios,
+  menus/all sixteen aim poses, foreground priority, 160 herd SAT cases and
+  32 HUD cases. Each convoy still presents 300 new frames in 300 VBlanks;
+  continuous firing after the three convoys peaks at 9/7/7 width units and
+  both rightmost background columns match the resident cache.

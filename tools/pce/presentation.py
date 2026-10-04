@@ -92,6 +92,14 @@ def add_art(root,work,stage,sprites,frame):
     dialog=len(sprites)
     for rid in BOX_TILESETS:
         box=dialog_box([get(rid,n) for n in range(9)])
+        if stage in (1,3,4,5):
+            # BG characters carry the panel and text. Only rounded corners
+            # remain sprites, preserving the scenery through their alpha.
+            corners=Image.new('RGBA',box.size)
+            for x in (0,BOX_W-16):
+                for y in (0,BOX_H-16):
+                    corners.paste(box.crop((x,y,x+16,y+16)),(x,y))
+            box=corners
         for half in range(2):
             add(f'dialog_box{rid:08X}_{half}',box.crop((half*BOX_W//2,0,(half+1)*BOX_W//2,BOX_H)))
     hud=[];digits=[];aim=[];motion=[];pending=[];pose=[];up_tip=[];art_muzzle=[]

@@ -85,7 +85,9 @@ added tones. A death voice finishes before reload; blocking loaders stop the
 DDA timer and every PSG channel.
 The runtime counts and rejects asset reads while music is active.
 
-The ordinary VDC renders baked backgrounds and bounded sprite caches. The
+The ordinary VDC renders baked backgrounds and bounded sprite caches.
+Platform backgrounds reserve palette 15 for text/dialogue and 32 characters
+at `$4000–$41ff` for panel tiles, leaving 896 background cache characters. The
 allocator admits complete objects against 64 SAT entries and 16 width units
 per scanline. HUD digits/icons precede the foreground sprites in SAT priority, followed by
 actors/projectiles. Foreground art shares one sprite palette and a separate
@@ -128,9 +130,8 @@ Runtime code is `ui_pce.c` (renderer bank, shared services), `frontend_pce.c`
 Platform stages run at 60 Hz. The draw path uses block-move Arcade reads
 (`TAI`), a resident cache that skips the Arcade lookup for cached sprites,
 an assembly sprite emitter, retained foreground parts (`foreground_pce.c`),
-8-line band admission for the 16-sprites-per-line limit (exact per-line counts in
-the race, cockpit and space stages), segment-wise SAT upload, and a +64
-address-increment BAT column writer. The race floor and Ramrod cockpit were not
+exact scanline admission for the 16 width units per line limit, segment-wise
+SAT upload, and a +64 address-increment BAT column writer. The race floor and Ramrod cockpit were not
 sped up.
 
 ## Verification and remaining work
@@ -166,7 +167,11 @@ coarse rival progress, rather than reproducing the source's free-world vehicle
 simulation. Pursuit attacks and platform boss patterns are simplified. Ramrod
 uses coarse range/aim combat and a baked floor. The space timeline retains its
 combat events with smaller pools; radio messages, several original attack
-patterns and decorative effects still need fuller adaptation. Dialogue uses a compact bottom panel with original 2D speaker portraits.
+patterns and decorative effects still need fuller adaptation. Platform dialogue
+uses a top BG panel and four rounded sprite corners, with
+original 2D speaker portraits. Closing restores its saved world columns, font
+and palette from Arcade RAM; displayed sprite generations remain pinned through
+SAT DMA.
 The full options UI, later movie replacement sequences and six-button mappings
 remain to be implemented. Dense scenes can drop optional sprites under the
 hardware limits and still need visual playtesting.

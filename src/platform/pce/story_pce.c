@@ -29,6 +29,38 @@ PCE_HUD static void race_box(void) {
         for(uint8_t x=0;x<56;++x)video_vdc(2,((uint16_t*)buffer)[(uint16_t)row*56+x]);
     }
 }
+/* Platform panels use BG characters, leaving only four alpha corners in
+ * the SAT. Their font and palette are restored from the preloaded archive. */
+static uint16_t story_column;
+static uint8_t platform_colour,platform_y;
+PCE_MISSION static void platform_box(void) {
+    uint8_t colour=platform_colour,y=platform_y;
+    uint32_t record[4];uint16_t bytes;
+    extern uint8_t buffer[2048];
+    extern volatile uint16_t pce_scroll_x;
+    uint32_t a=pce_dialog_bg[pce_metrics.stage-1]+(uint16_t)(colour&3)*18;
+    arcade_read(2,a,record,16);arcade_read(2,a+16,&bytes,2);
+    arcade_read(2,record[0],buffer,32);pce_vce_copy_palette(15,buffer,1);
+    pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
+    arcade_vram(record[1],0x4000,bytes);
+    arcade_vram(record[3],PCE_FONT_WORD,3072);
+    arcade_read(2,record[2],buffer,336);
+    story_column=pce_scroll_x>>3;
+    for(uint8_t row=0;row<6;++row)for(uint8_t x=0;x<28;++x) {
+        if((x<2||x>=26)&&(row<2||row>=4))continue;
+        video_vdc(0,(uint16_t)(y+row)*64+((story_column+3+x)&63));
+        video_vdc(2,((uint16_t*)buffer)[(uint16_t)row*28+x]);
+    }
+}
+PCE_MISSION void story_graphics_restore(void) {
+    if(pce_metrics.stage==2||pce_metrics.stage>=6)return;
+    extern const PceScene *video_scene_ptr;
+    uint8_t colors[32];
+    arcade_read(2,video_scene_ptr->pal+15*32,colors,32);pce_vce_copy_palette(15,colors,1);
+    pce_vce_set_color(255,0x1ff);
+    pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
+    arcade_vram(pce_dialog_original_font[pce_metrics.stage-1],PCE_FONT_WORD,3072);
+}
 /* Typewriter: the lines are kept NUL-terminated in story_text and revealed a character at a time. */
 static char *line_text[4];static uint8_t line_row[4],line_count,type_line,type_col,type_clock;
 STORY_CODE static uint32_t pointer(uint32_t a) {
@@ -38,9 +70,9 @@ extern vdc_sprite_t sat[2][64];
 extern uint8_t cut_phase;
 extern uint8_t sat_page,sat_count;
 extern volatile uint16_t pce_scroll_x;
-/* Saturn-style dialogue: the box is two sprite halves in the page's colour,
- * drawn behind the background layer; the BG cells under it are blank, so the
- * Saturn-font text characters sit on top of the box. */
+/* Platform panels and opaque-backed glyphs are BG tiles. Their four rounded
+ * sprite corners retain the scenery behind them; other modes keep their own
+ * panel renderer. */
 STORY_CODE static void draw(void) {
     uint32_t a=pointer(story_address+1+(uint16_t)pce_campaign.page*4);
     uint16_t avatar;uint8_t colour;
@@ -65,7 +97,7 @@ STORY_CODE static void draw(void) {
     for(uint8_t k=first;k<sat_count;++k) {
         vdc_sprite_t *e=&sat[sat_page][k];
         bool corner=(e->x==left||e->x==left+208)&&(e->y==top||e->y==top+32);
-        if(!corner)e->attr&=~VDC_SPRITE_FG;
+        if(!platform&&!corner)e->attr&=~VDC_SPRITE_FG;
     }
     /* The world stands still behind the text: the hero (behind the box, which comes first in the SAT), the actors
      * (the cutscene outrider stays put) and the boss stay on screen. */
@@ -75,8 +107,8 @@ STORY_CODE static void draw(void) {
         if(!pce_campaign.diagnostic)overlay_call(0x70,combat_draw);
     }
     video_sat_end();
-    /* Platform stages: the cells go blank right after the VBlank that brings the box sprites (see the restore). */
-    if(platform){video_wait();video_panel_blank(y);}
+    /* Publish the BG panel after the VBlank that brings its sprite corners. */
+    if(platform){video_wait();platform_colour=colour;platform_y=y;overlay_call(0x6f,platform_box);}
     char *line=story_text;uint8_t lines=0;
     for(char *c=line;;++c){if(*c=='\n'||!*c){++lines;if(!*c)break;}}
     /* One line sits mid-box; two lines get a blank row between them. */
@@ -115,6 +147,9 @@ STORY_CODE void story_start(void) {
     /* The race and the cockpits keep their HUD in sprites: let the last two displayed generations go (their cache slots
      * stay pinned through the SAT DMA) so the box and the avatar find slots in the same frame. */
     if(pce_metrics.stage==2||pce_metrics.stage>=6)for(uint8_t k=0;k<3;++k){video_sat_begin();video_sat_end();video_wait();}
+    /* Resuming from Run invalidates the BAT. Remove the menu's cells before
+     * reopening a panel, including the cells outside its restoration area. */
+    if(pce_metrics.stage!=2&&pce_metrics.stage<6)video_background(camera);
     draw();
 }
 STORY_CODE void story_step(void) {
@@ -125,15 +160,18 @@ STORY_CODE void story_step(void) {
     pce_campaign.timer=0;
     if(++pce_campaign.page<page_count)draw();
     else {
-        /* The box and avatar were cached over pattern pages that retained foreground chunks own;
-         * release them and make the foreground re-admit every chunk. */
-        memset(sprite_used,0,sizeof sprite_used);memset(sprite_pinned,0,sizeof sprite_pinned);
+        /* Retained scenery must re-admit its chunks. Platform panels now need
+         * only four corner patterns: keep the displayed generation pinned until
+         * the closing SAT DMA, so uploads cannot overwrite its live graphics. */
+        if(pce_metrics.stage==2||pce_metrics.stage>=6) {
+            memset(sprite_used,0,sizeof sprite_used);memset(sprite_pinned,0,sizeof sprite_pinned);
+        }
         foreground_reset();
         pce_campaign.state=CAM_PLAY;
         if(pce_metrics.stage!=2&&pce_metrics.stage<6) {
             /* Put the blanked cells back and swap the sprites in one go: a full background reload takes several frames,
              * uncovering the box column by column while its in-front corner pieces linger. */
-            pce_panel_restore=story_y;overlay_call(0x7b,play_draw);
+            pce_panel_column=story_column;pce_panel_restore=story_y;overlay_call(0x7b,play_draw);
         } else if(pce_metrics.stage==2)video_race_sky();   /* the sky cells the box blanked and the text covered */
         else video_restore();
     }

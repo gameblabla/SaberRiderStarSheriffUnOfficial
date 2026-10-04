@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image
 
 ARCADE_BYTES = 0x1e0000 # final 128 KiB is the renderer's tile directory
-BG_TILES = 928
+BG_TILES = 896 # reserve $4000-$41ff for dialogue BG characters
 BG_WORD = 0x0800
 SPR_WORD = 0x4800
 SAT_WORD = 0x7f00
@@ -64,11 +64,18 @@ def pack_sprite(image, anchor=(0, 0), palette=None):
     if palette is None: palette = palette_for([image])
     idx = indexed(image, palette)
     h, w = idx.shape
-    idx = np.pad(idx, ((0, -h % 16), (0, -w % 16)))
+    # Start each horizontal strip at its first opaque pixel. A padded source
+    # cell can otherwise straddle three hardware columns despite fitting two.
+    # Keep strips on their original Y grid: this preserves foreground bands,
+    # source placement and hardware mirroring exactly.
     patterns, pieces = [], []
-    for y in range(0, idx.shape[0], 16):
-        for x in range(0, idx.shape[1], 16):
-            cell = idx[y:y + 16, x:x + 16]
+    for y in range(0, h, 16):
+        strip = idx[y:y + 16]
+        occupied = np.flatnonzero(strip.any(axis=0))
+        if not len(occupied): continue
+        for x in range(int(occupied[0]), int(occupied[-1]) + 1, 16):
+            cell = strip[:, x:x + 16]
+            cell = np.pad(cell, ((0, 16-cell.shape[0]), (0, 16-cell.shape[1])))
             if not cell.any(): continue
             pieces.append((x - anchor[0], y - anchor[1], len(patterns)))
             patterns.append(planar_sprite(cell))

@@ -272,5 +272,9 @@ PCE_BOSS void play_draw(void) {
      * read the cells now, queue the SAT, and write them right after that VBlank, before the beam reaches the panel. */
     if(pce_panel_restore)video_panel_restore_prepare(pce_panel_restore);
     video_sat_end();
-    if(pce_panel_restore){video_wait();video_panel_restore_apply();pce_panel_restore=0;}
+    if(pce_panel_restore) {
+        video_wait();
+        overlay_call(0x6f,story_graphics_restore);
+        video_panel_restore_apply();pce_panel_restore=0;
+    }
 }

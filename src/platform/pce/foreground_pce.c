@@ -22,7 +22,7 @@ uint8_t fg_count,fg_entered;
 uint16_t fg_camera;
 static uint16_t window_lo, window_hi, last_camera;
 static bool window_valid;
-extern uint8_t sat_count,sprite_screen_height;
+extern uint8_t sat_count,sprite_screen_height,sprite_exact;
 extern vdc_sprite_t sat[2][64];
 extern uint8_t sprite_occupancy[240];
 extern void fg_emit(void);
@@ -64,7 +64,7 @@ FG_CODE static void enter(const PceScene *s,uint16_t index) {
         p->y_word=sat[0][k].y;
         p->x_world=sat[0][k].x+(entry[0]-96);
         p->pattern=sat[0][k].pattern;p->attribute=sat[0][k].attr;
-        p->band_first=lo>>3;p->band_last=(hi-1)>>3;p->slot=slot;p->index=index;
+        p->band_first=sprite_exact?lo:lo>>3;p->band_last=sprite_exact?hi-1:(hi-1)>>3;p->slot=slot;p->index=index;
     }
 }
 static void drop(uint16_t lo,uint16_t hi) {
@@ -90,7 +90,7 @@ FG_CODE void foreground_prepare_body(void) {
     if(window_lo<need_lo) {drop(window_lo,need_lo);window_lo=need_lo;}
     if(window_hi>need_hi) {drop(need_hi,window_hi);window_hi=need_hi;}
     fg_entered=entered;
-    if(entered) {sat_count=0;memset(sprite_occupancy,0,32);}
+    if(entered) {sat_count=0;memset(sprite_occupancy,0,sprite_exact?240:32);}
 }
 void foreground_prepare(void) { overlay_call(0x74,foreground_prepare_body); }
 void foreground_draw(void) { video_front_begin();fg_emit(); }

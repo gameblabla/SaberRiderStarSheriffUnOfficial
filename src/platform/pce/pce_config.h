@@ -26,7 +26,7 @@
 #define PCE_BG_WORD 0x0800
 #define PCE_SPR_WORD 0x4800
 #define PCE_SAT_WORD 0x7f00
-#define PCE_BG_MAX_TILES 928
+#define PCE_BG_MAX_TILES 896
 #define PCE_FONT_WORD 0x4200
 #define PCE_SPR_BYTES 0x6e00
 

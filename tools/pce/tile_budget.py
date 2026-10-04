@@ -22,7 +22,7 @@ def presence(grid):
         p[np.unique(grid[:, x]), lo:hi + 1] = True
     return p
 
-def limit_tiles(cells, indices, groups, palettes, cols, cap):
+def limit_tiles(cells, indices, groups, palettes, cols, cap, reserved=()):
     """cells: (n, 8, 8, 4) source RGBA; indices: (n, 8, 8) palette indices; groups: (n,) palette numbers
     (band * 4 + k); all row-major. Returns (indices, groups, merged cells), copies."""
     indices = np.array(indices, np.uint8); groups = np.array(groups, np.uint8)
@@ -53,6 +53,7 @@ def limit_tiles(cells, indices, groups, palettes, cols, cap):
             band = int(groups[i]) // 4
             best = None
             for pal in range(band * 4, band * 4 + 4):
+                if pal in reserved:continue
                 cost = ((colours[pal][None] - source[i][:, None]) ** 2).sum(-1)      # (64 pixels, 16 indices)
                 err = cost[ar[None], uniq[near]].sum(1)
                 k = int(err.argmin())

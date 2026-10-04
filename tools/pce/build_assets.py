@@ -162,18 +162,21 @@ def native_background(image, archive, previews, name):
     groups = np.zeros(len(cells), np.uint8)
     palette = []
     row_band = np.repeat(np.minimum(np.arange(30) // 8,3), w // 8)
+    dialog_palette=name in ('stage1','stage3','stage4','stage5')
     for band in range(0 if name=='stage2' else 4):
         select = np.nonzero(row_band == band)[0]
         m = means[select]
-        centers = m[np.linspace(0, len(m) - 1, 4, dtype=int)]
+        count=3 if dialog_palette and band==3 else 4
+        centers = m[np.linspace(0, len(m) - 1, count, dtype=int)]
         for _ in range(8):
             g = ((m[:, None] - centers[None]) ** 2).sum(-1).argmin(1)
-            for k in range(4):
+            for k in range(count):
                 if (g == k).any(): centers[k] = m[g == k].mean(0)
         groups[select] = band * 4 + g
-        for k in range(4):
+        for k in range(count):
             group = cells[select[g == k]]
             palette.append(palette_for([Image.fromarray(group.reshape(-1, 8, 4))]) if len(group) else np.zeros(16, '<u2'))
+    if dialog_palette:palette.append(np.zeros(16,'<u2')) # palette 15 belongs to dialogue/font
     if name=='stage2':
         # A 128x32 four-color source gives <=256 distinct 2x2 source cells
         # after 4x nearest expansion, fitting the 288-character sky budget.
@@ -187,7 +190,7 @@ def native_background(image, archive, previews, name):
     preview = np.zeros_like(rgba)
     cell_idx = np.stack([indexed(Image.fromarray(cell), palette[int(groups[i])]) for i, cell in enumerate(cells)])
     if name != 'stage2':
-        cell_idx, groups, merged = tile_budget.limit_tiles(cells, cell_idx, groups, palette, w // 8, BG_TILES - 4)
+        cell_idx, groups, merged = tile_budget.limit_tiles(cells, cell_idx, groups, palette, w // 8, BG_TILES - 4, reserved=(15,) if dialog_palette else ())
         if merged: print(f'{name}: redrew {merged} cells with neighbouring characters to fit the {BG_TILES}-tile cache', flush=True)
     for i, cell in enumerate(cells):
         pal = int(groups[i]); idx = cell_idx[i]
@@ -309,6 +312,33 @@ def atlas(path, kind, max_width=None):
             ax, ay = round(ax * max_width / w), round(ay * max_width / w)
         out.append((f'{kind}{n}', im, (ax, ay)))
     return out
+
+def platform_dialog(archive, work):
+    records=[]
+    original=[]
+    masks=[]
+    for ch in range(32,128):
+        im=cblock_frame(work/'srgb'/'12072E60.srgb',ch-0x21) if ch>32 else Image.new('RGBA',(8,8))
+        mask=np.asarray(im)[...,3]>=64
+        masks.append(mask);original.append(planar_tile((mask*15).astype(np.uint8)))
+    for rid in presentation.BOX_TILESETS:
+        box=presentation.dialog_box([cblock_frame(work/'srgb'/f'{rid:08X}.srgb',n) for n in range(9)])
+        palette=palette_for([box],colors=14);pixels=indexed(box,palette)
+        fill=int(pixels[24,112]);palette[15]=0x1ff
+        tiles=[];lookup={};mapping=[]
+        for y in range(0,48,8):
+            for x in range(0,224,8):
+                tile=planar_tile(pixels[y:y+8,x:x+8])
+                if tile not in lookup:lookup[tile]=len(tiles);tiles.append(tile)
+                mapping.append(0xf400+lookup[tile])
+        assert len(tiles)<=32,'Platform dialogue overlaps the font'
+        pal=archive.add(f'dialog{rid}_palette',palette.tobytes())
+        pat=archive.add(f'dialog{rid}_patterns',b''.join(tiles))
+        bat=archive.add(f'dialog{rid}_map',struct.pack('<168H',*mapping))
+        font=archive.add(f'dialog{rid}_font',b''.join(planar_tile(np.where(m,15,fill).astype(np.uint8)) for m in masks))
+        records.append(struct.pack('<4IH',pal,pat,bat,font,len(tiles)*32))
+    archive.add('dialog_bg',b''.join(records))
+    archive.add('dialog_original_font',b''.join(original))
 
 def race_dialog(archive, work):
     """Wide BAT dialogue; glyphs occupy unused race BAT rows 24..47.
@@ -543,6 +573,7 @@ def make_scene(stage, work, previews, shared):
         meta['hud']=hud.base;meta['hud_macros']=hud.macros('H2')
         collision = 0
     # Append presentation art after fixed gameplay IDs to retain mission IDs.
+    if stage in (1,3,4,5):platform_dialog(a,work)
     meta['presentation']=presentation.add_art(ROOT,work,stage,sprites,cblock_frame)
     meta['foreground_offset']=0;meta['foreground_count']=0
     if stage in (1,3,4,5):
@@ -610,6 +641,9 @@ def main():
     h.append('extern const int8_t pce_muzzle[4][9][2];')
     c.append('const int8_t pce_muzzle[4][9][2]={'+','.join('{'+','.join('{%d,%d}'%(row[2*k],row[2*k+1]) for k in range(9))+'}' for row in muzzle)+'};')
     h+=ui_h;c+=ui_c
+    for name in ('dialog_bg','dialog_original_font'):
+        h.append(f'extern const uint32_t pce_{name}[7];')
+        c.append(f'const uint32_t pce_{name}[7]={{'+','.join(str(m['records'].get(name,{}).get('offset',0))+'UL' for m in scenes)+'};')
     h.append('extern const uint16_t pce_hud_base[7];')
     c.append('const uint16_t pce_hud_base[7]={'+','.join(str(m.get('hud',0)) for m in scenes)+'};')
     for m in scenes: h += m.get('hud_macros',[])
@@ -626,7 +660,7 @@ def main():
     # Runtime work buffers are separate from BIOS/compiler console RAM.
     manifest = dict(format='PCE1', toolchain=str((ROOT.parent/'PCE/llvm-mos8').resolve()),
                     source='Current host pack decoder and active stage construction', scenes=scenes,
-                    vram=dict(bat=4096, bg_cache=29696, font=3072, sprites=24576,
+                    vram=dict(bat=4096, bg_cache=BG_TILES*32, dialog=1024, font=3072, sprites=24576,
                               clipped_sprites=3584, sat=512),
                     facing_policy='One canonical facing; mirror placement and SAT bit 0x0800 at runtime',
                     adaptations=['One baked background; source parallax anchored per 256-pixel sector',

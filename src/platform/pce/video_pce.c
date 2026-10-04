@@ -104,7 +104,7 @@ PCE_RENDER void video_scene(const PceScene *s) {
     foreground_reset();
     scene = s;video_scene_ptr=s;sat_previous=64;video_nsprites=s->nsprites;
     memset(sprite_slot_of,0xff,sizeof sprite_slot_of);
-    sprite_screen_height=224;sprite_exact=!s->collision;   /* 224-line mode everywhere: playfield rows 28-29 are simply not shown */
+    sprite_screen_height=224;sprite_exact=1;   /* 224-line mode everywhere: playfield rows 28-29 are simply not shown */
     timing(false);
     memset(cache_refs, 0, sizeof cache_refs);
     memset(cache_ids, 0xff, sizeof cache_ids);

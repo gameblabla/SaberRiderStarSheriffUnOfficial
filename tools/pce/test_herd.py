@@ -45,9 +45,26 @@ def verify(out):
             assert e.memory(on,1)==e.memory(locked,1)==b'\0'
             assert e.memory(voices+16,2)==b'\0\0'
             assert c.metrics(e)['disc_reads']==reads
-            e.input(32);e.run(60);e.input(0)
+            # Include continuous firing during camera catch-up after the herd:
+            # the right edge must remain loaded and SAT widths must still fit.
+            e.input(32|1);e.run(60);e.input(0)
             assert c.metrics(e)['camera_x']>frozen
-            reports.append(dict(trigger=trigger['zone'][0],stop=stop[0],spawn_camera=start['camera_x'],locked_camera=frozen,passed=True))
+            scroll=int.from_bytes(e.memory(symbol(out/'app.elf','pce_scroll_x'),2),'little')
+            columns=struct.unpack('<990H',e.memory(symbol(out/'app.elf','columns'),1980))
+            bat=struct.unpack('<2048H',bytes.fromhex(e.call('asread','vram0',0,4096)['hex']))
+            for world in range((scroll>>3)+31,(scroll>>3)+33):
+                for row in range(30):
+                    assert bat[row*64+(world&63)]&4095==128+columns[(world%33)*30+row],('right edge',i,world,row)
+            sat=bytes.fromhex(e.call('asread','sat0',0,512)['hex'])
+            lines=[0]*224
+            for y,x,pattern,attr in struct.iter_unpack('<4H',sat):
+                if not y:continue
+                y=(y&1023)-64;h=(16,32,64,64)[(attr>>12)&3]
+                for line in range(max(y,0),min(y+h,224)):lines[line]+=2 if attr&0x100 else 1
+            assert max(lines)<=16
+            c.capture(e,f'herd-{i+1}-after')
+            reports.append(dict(trigger=trigger['zone'][0],stop=stop[0],spawn_camera=start['camera_x'],locked_camera=frozen,
+                                post_herd_peak=max(lines),right_edge_cells=60,passed=True))
     (out/'herd-verification.json').write_text(json.dumps(reports,indent=2)+'\n');print(reports)
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--out',type=Path,default=Path('build/pce'));verify(p.parse_args().out.resolve())
