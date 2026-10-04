@@ -213,6 +213,7 @@ PCE_RENDER bool video_background(uint16_t camera) {
     return true;
 }
 PCE_RENDER void video_text(uint8_t x, uint8_t y, const char *text) {
+    if(pce_raster_enabled)x*=2;
     uint16_t dest = pce_raster_enabled ? (uint16_t)(48+y)*128+x :
         (uint16_t)y*64+(((pce_scroll_x>>3)+x)&63);
     while (*text) {
@@ -220,7 +221,10 @@ PCE_RENDER void video_text(uint8_t x, uint8_t y, const char *text) {
         if (c < 32 || c > 127) c = '?';
         video_vdc(0, dest);
         dest=pce_raster_enabled?dest+1:(dest&~63U)|((dest+1)&63);
-        video_vdc(2, 0xf000 | ((PCE_FONT_WORD >> 4) + c - 32));
+        if(pce_raster_enabled) {
+            uint16_t glyph=0xe0c0+(uint16_t)(c-32)*2;
+            video_vdc(2,glyph);video_vdc(2,glyph+1);++dest;
+        } else video_vdc(2, 0xf000 | ((PCE_FONT_WORD >> 4) + c - 32));
     }
 }
 __attribute__((noinline)) void video_number(uint8_t x, uint8_t y, uint16_t n) {
@@ -346,7 +350,7 @@ __attribute__((noinline,section(".ram_bank109.text"))) static void race_sky_load
             uint16_t slot;
             for(slot=0;slot<used&&cache_ids[slot]!=id;++slot) {}
             if(slot==used) {
-                if(used>=288) {pce_control.ok=0;return;}
+                if(used>=256) {pce_control.ok=0;return;}
                 cache_ids[used++]=id;
                 uint16_t word=0x3000+slot*16;
                 pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;

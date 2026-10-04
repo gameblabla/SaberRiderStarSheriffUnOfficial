@@ -11,6 +11,24 @@
 static uint32_t story_address;
 static uint8_t page_count,story_y;   /* story_y: BG row of the box's top */
 static char story_text[256];
+static uint8_t race_colour;
+/* Put wide box and glyphs in the race's unused VRAM. No sprite-cache pages
+ * are needed for the box, and its 56-character width matches the dot clock. */
+PCE_HUD static void race_box(void) {
+    uint32_t record[4];uint16_t bytes;
+    extern uint8_t buffer[2048];
+    uint32_t a=PCE_RACE_DIALOG_WIDE+(uint16_t)race_colour*18;
+    arcade_read(2,a,record,16);arcade_read(2,a+16,&bytes,2);
+    arcade_read(2,record[0],buffer,32);pce_vce_copy_palette(14,buffer,1);
+    pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
+    arcade_vram(record[1],0x4000,bytes);
+    arcade_vram(record[3],0x0c00,6144);
+    arcade_read(2,record[2],buffer,672);
+    for(uint8_t row=0;row<6;++row) {
+        video_vdc(0,(uint16_t)(53+row)*128+6);
+        for(uint8_t x=0;x<56;++x)video_vdc(2,((uint16_t*)buffer)[(uint16_t)row*56+x]);
+    }
+}
 /* Typewriter: the lines are kept NUL-terminated in story_text and revealed a character at a time. */
 static char *line_text[4];static uint8_t line_row[4],line_count,type_line,type_col,type_clock;
 STORY_CODE static uint32_t pointer(uint32_t a) {
@@ -35,12 +53,13 @@ STORY_CODE static void draw(void) {
     /* Blank every BG cell under the box except the four 2x2 corner blocks; the corner pieces stay in front of the
      * scenery so their rounded edges show the scenery, not a hole. */
     bool platform=pce_metrics.stage!=2&&pce_metrics.stage<6;
-    if(!platform){video_panel(5,y,24,2);video_panel(3,y+2,28,2);video_panel(5,y+4,24,2);}
+    if(pce_metrics.stage==2){race_colour=colour&3;overlay_call(0x7c,race_box);}
+    else if(!platform){video_panel(5,y,24,2);video_panel(3,y+2,28,2);video_panel(5,y+4,24,2);}
     video_sat_begin();
-    if(avatar!=65535)video_sprite(avatar,box_x-26,box_y-8,false,16);
+    if(avatar!=65535)video_sprite(avatar,pce_metrics.stage==2?(box_x-26)*2:box_x-26,box_y-8,false,16);
     uint8_t first=sat_count;
     uint16_t box=pce_dialog_base[pce_metrics.stage-1]+(colour&3)*2;
-    video_sprite(box,box_x,box_y,false,16);video_sprite(box+1,box_x+112,box_y,false,16);
+    if(pce_metrics.stage!=2){video_sprite(box,box_x,box_y,false,16);video_sprite(box+1,box_x+112,box_y,false,16);}
     uint16_t left=0xffff,top=0xffff;
     for(uint8_t k=first;k<sat_count;++k){if(sat[sat_page][k].x<left)left=sat[sat_page][k].x;if(sat[sat_page][k].y<top)top=sat[sat_page][k].y;}
     for(uint8_t k=first;k<sat_count;++k) {

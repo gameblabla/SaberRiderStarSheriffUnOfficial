@@ -36,7 +36,7 @@ CREDITS_CODE void frontend_continue(void) {
     if(pce_control.ok){--pce_continues;pce_campaign.lives=pce_options.lives;pce_campaign.powers=2;}
     previous=ui_held;
 }
-/* GAME OVER: the Saturn's Nemesis painting filling the screen, the lettering added as light by OR-ing bit planes
+/* GAME OVER: the supplied Nemesis painting filling the screen, the lettering added as light by OR-ing bit planes
  * (frontend.py); its pulse rewrites the few palettes under the letters. Faded in and out. */
 CREDITS_CODE void frontend_game_over(void) {
     previous=0;audio_stop();

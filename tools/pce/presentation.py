@@ -84,6 +84,7 @@ def add_art(root,work,stage,sprites,frame):
         rid=namehash('dialog_avatar_'+name);path=work/'srgb'/f'{rid:08X}.srgb'
         if not path.exists():continue
         im=get(rid).resize((32,32),Image.Resampling.NEAREST)
+        if stage==2:im=im.resize((64,32),Image.Resampling.NEAREST)
         portraits[name]=add('portrait_'+name,im)
         portraits[f'{rid:08X}']=portraits[name]
     # Dialogue box: two halves per colour (a sprite object holds at most 32

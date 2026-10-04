@@ -425,8 +425,8 @@ GAMEOVER_GLOW_SLOTS = (12, 13, 14, 15)    # BG palettes of the cells under the l
 GAMEOVER_PULSE = (1.0, 0.84, 0.67, 0.51)  # glow strength per pulse step (step 0 = the palettes as loaded)
 GAMEOVER_GLOW = (0, 0.28, 0.62, 1.0)      # additive light of each text level (0 = none)
 
-def gameover_screen(get):
-    """The Saturn painting filling the 320x224 screen (centre crop) with the lettering added on top as light.
+def gameover_screen(get, artwork=None):
+    """The supplied painting filling the 320x224 screen with the lettering added on top as light.
 
     The translucency is done with the bit planes (PCE_ISSUES / Transparency notes): the cells under the lettering
     keep the painting in the low two bit planes (black + 3 colours of its own) and the lettering sits in the high
@@ -434,7 +434,7 @@ def gameover_screen(get):
     light of text level 1, 2 and 3 - so the hardware's index OR is an additive blend, with no masking. Pulsing the
     lettering is rewriting the tail of those few palettes (`s.glow` holds every step)."""
     s = Screen()
-    art = get(GAMEOVER_ART).convert('RGBA')
+    art = (artwork if artwork is not None else get(GAMEOVER_ART)).convert('RGBA')
     w = round(art.width * H / art.height)
     canvas = art.resize((w, H), Image.Resampling.LANCZOS).crop(((w - W) // 2, 0, (w - W) // 2 + W, H)).convert('RGBA')
     s.preview_source = canvas
@@ -512,7 +512,8 @@ def bake(root, work, out, previews, cblock_frame):
         return cblock_frame(work / 'srgb' / f'{rid:08X}.srgb', n)
     archive = Archive()
     title = title_screen(get); select = select_screen(get); options = options_screen(get)
-    panel = options_screen(get, header=False); gameover = gameover_screen(get)
+    panel = options_screen(get, header=False)
+    gameover = gameover_screen(get, Image.open(root / 'assets/pce/gameover.png'))
     for name, scr in (('title', title), ('select', select), ('options', options), ('panel', panel),
                       ('gameover', gameover)):
         scr.preview(previews / f'ui_{name}.png')

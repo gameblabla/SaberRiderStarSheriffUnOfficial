@@ -19,6 +19,7 @@ static uint16_t race_x=4696,race_y=4096;
 static int16_t test_x=128,test_y=144;
 static uint8_t simulation_tick;
 static uint8_t effect_demo,menu_hero,menu_mode;
+void race_briefing_frame(void);
 static const int8_t sine[32] PCE_TABLE={0,25,49,71,90,106,117,125,127,125,117,106,90,71,49,25,0,-25,-49,-71,-90,-106,-117,-125,-127,-125,-117,-106,-90,-71,-49,-25};
 PCE_FLOW static bool change_stage(uint8_t n) {
     overlay_call(0x71,frontend_loading);
@@ -40,7 +41,12 @@ PCE_FLOW static bool change_stage(uint8_t n) {
         if(stage!=6&&stage!=7)overlay_call(0x69,play_start);
     }
     if(!pce_campaign.diagnostic) {
-        if(stage==2){overlay_call(0x79,race_start);pce_control.elapsed=0;overlay_call(0x79,race_frame);}
+        if(stage==2){
+            overlay_call(0x79,race_start);pce_control.elapsed=0;
+            /* The briefing freezes the world. Finish the first floor before
+             * opening it, otherwise the initialization checkerboard stays up. */
+            overlay_call(0x7c,race_briefing_frame);
+        }
         else if(stage==6)overlay_call(0x72,mech_start);
         else if(stage==7)overlay_call(0x73,space_start);
         if(stage!=1&&stage!=7) {pce_campaign.story=0;overlay_call(0x71,story_start);}

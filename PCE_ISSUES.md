@@ -271,9 +271,35 @@ Implementation status below does not replace the user's visual/audio acceptance.
 - [ ] Not reproduced: the black screen after "select a hero, die once, start a new game, select another hero". Tried the
       continue timeout, game over, title and every hero pair, and the hero change from the run menu after dying; all showed the
       stage. If it still happens, the exact sequence (and whether a CONTINUE was used) would help.
-- [ ] The game-over picture: the pasted image never arrived, so the PCE game-over screen is unchanged; re-attach it to use it.
-- [ ] The race's dialogue box is half the screen wide (the box and font are 256-clock art on a 512-dot screen).
-- [ ] Stage loads read 12-sector chunks now (the CD buffer is 24 KiB: `$76-$78`; banks `$79-$7c` are code).
+- [x] The game-over picture: resolved in the fifteenth pass using the local `go_320.png`.
+- [x] The race's half-width dialogue: resolved in the fifteenth pass.
+- [x] Stage loads read 12-sector chunks now (the CD buffer is 24 KiB: `$76-$78`; banks `$79-$7c` are code).
+
+## Fifteenth pass (2026-10-04, remaining issues from the session log)
+
+- [x] The supplied Nemesis picture was available locally as `go_320.png`; it is now tracked at
+      `assets/pce/gameover.png` and used by the PCE baker. The original GAME OVER lettering still pulses through
+      palette changes, with its fade and one-shot jingle. The asset is a Makefile dependency.
+- [x] A held confirmation could cross the GAME OVER fade into the title: `frontend_start` reset `previous` to zero,
+      so the same press selected START again. It now samples the held buttons before loading the title and requires
+      a fresh press. The regression exercises lethal damage, the death animation, GAME OVER, the title, a different
+      hero and responsive gameplay for all four heroes; it also checks the lettering changes while the painting stays still.
+      This fixes a demonstrated input leak; the original report's persistent black screen has not been reproduced.
+- [x] Race dialogue now spans 448 of the 512 dots, with horizontally doubled source glyphs and portraits. The box
+      uses background characters rather than exhausting the SAT. Its 32-character reservation is at VRAM word
+      `$4000`, below the normal font; the doubled font occupies unused BAT rows 24-47 (`$0c00-$17ff`). Sky characters
+      are limited to 256 below `$4000`; the measured sky needs 48. Palette 14 is reserved for the dialogue, with the
+      white glyph ink at index 15; sky palette 0 and floor palette 15 stay independent. Closing the dialogue restores
+      the sky. `test_campaign.py` checks the actual 56-character box width.
+- [x] The race briefing used to freeze the initialization checkerboard before a complete floor was ready. Stage
+      initialization now completes and presents one floor with zero simulation steps before opening the briefing.
+
+Validation: `make -f Makefile.pce test` passed in full (native port, campaign, herd, herd rendering, all three
+60 FPS profiles, foreground, presentation, audio and both ADPCM checks), plus ELF bank checks. Restart cases use
+normal difficulty, default lives and full music volume, holding confirmation through the fade and checking that
+the title waits for a fresh press. Emulator screenshots are
+at `build/pce/{race-dialog-review.png,presentation-review/gameover-*.png,presentation-review/restart-*.png}`.
+The floor's existing redraw cadence and physical hardware acceptance remain as documented above.
 
 Remaining integration/acceptance work:
 

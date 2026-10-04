@@ -310,6 +310,40 @@ def atlas(path, kind, max_width=None):
         out.append((f'{kind}{n}', im, (ax, ay)))
     return out
 
+def race_dialog(archive, work):
+    """Wide BAT dialogue; glyphs occupy unused race BAT rows 24..47.
+
+    The box uses at most 32 characters at $4000, below the normal font.
+    Sky characters stay below $4000 and sprite patterns start at $4800.
+    """
+    records=[]
+    for rid in presentation.BOX_TILESETS:
+        box=presentation.dialog_box([cblock_frame(work/'srgb'/f'{rid:08X}.srgb',n) for n in range(9)])
+        box=box.resize((448,48),Image.Resampling.NEAREST)
+        palette=palette_for([box],colors=14)
+        # The flat centre colour is also the opaque background of each glyph.
+        pixels=indexed(box,palette)
+        fill=int(pixels[24,224]);palette[15]=0x1ff
+        tiles=[];lookup={};mapping=[]
+        for y in range(0,48,8):
+            for x in range(0,448,8):
+                tile=planar_tile(pixels[y:y+8,x:x+8])
+                if tile not in lookup:lookup[tile]=len(tiles);tiles.append(tile)
+                mapping.append(0xe400+lookup[tile])
+        assert len(tiles)<=32,'Race dialogue overlaps normal font'
+        font=[]
+        for ch in range(32,128):
+            im=cblock_frame(work/'srgb'/'12072E60.srgb',ch-0x21) if ch>32 else Image.new('RGBA',(8,8))
+            mask=np.repeat(np.asarray(im)[...,3]>=64,2,axis=1)
+            glyph=np.where(mask,15,fill).astype(np.uint8)
+            font.extend(planar_tile(glyph[:,x:x+8]) for x in (0,8))
+        pal=archive.add(f'dialog{rid}_palette',palette.tobytes())
+        pat=archive.add(f'dialog{rid}_patterns',b''.join(tiles))
+        bat=archive.add(f'dialog{rid}_map',struct.pack('<336H',*mapping))
+        glyphs=archive.add(f'dialog{rid}_font',b''.join(font))
+        records.append(struct.pack('<4IH',pal,pat,bat,glyphs,len(tiles)*32))
+    archive.add('dialog_wide',b''.join(records))
+
 def make_scene(stage, work, previews, shared):
     a = Archive()
     meta = dict(stage=stage)
@@ -501,6 +535,7 @@ def make_scene(stage, work, previews, shared):
         road = np.zeros(1024, np.uint8); road[496:528] = 7; road[498:526] = 2; road[511:513] = 3
         row = np.array([int(blocks[m, 0, 0]) | (int(cls[m]) << 4) for m in range(11)], np.uint8)
         a.add('pursuit_row', row[road].tobytes(), 1024)
+        race_dialog(a,work)
         hud=hudart.Hud(sprites)
         sheet=im
         bx,by,bw,bh,bn=[int(v) for v in next(r for r in (ROOT/'assets/mode7.txt').read_text().splitlines() if r.split()[0]=='buggy').split()[1:6]]
@@ -585,7 +620,7 @@ def main():
     c.append('const uint8_t pce_actor_ids[33] = {'+','.join(map(str,scenes[0]['actor_ids']))+'};')
     (out/'assets.c').write_text('\n'.join(c)+'\n')
     h += ['#define PCE_HERO_FRAMES 9', '#define PCE_SHOT_ID 36', '#define PCE_ENEMY_SHOT_ID 37', '#define PCE_BLAST_ID 38']
-    for name in ('pair_characters','floor_palette','floor_geometry','race_map','pursuit_row'):
+    for name in ('pair_characters','floor_palette','floor_geometry','race_map','pursuit_row','dialog_wide'):
         h.append(f"#define PCE_RACE_{name.upper()} {scenes[1]['records'][name]['offset']}UL")
     (out/'assets.h').write_text('\n'.join(h)+'\n')
     # Runtime work buffers are separate from BIOS/compiler console RAM.

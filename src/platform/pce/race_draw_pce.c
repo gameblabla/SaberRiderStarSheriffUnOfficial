@@ -5,6 +5,11 @@
 #define RACE_SIN_SECTION ".ram_bank124.rodata"
 #include "race_math.h"
 #include "race_pce.h"
+PCE_HUD void race_briefing_frame(void) {
+    uint16_t commits=pce_metrics.floor_commits;
+    do {overlay_call(0x79,race_frame);} while(pce_metrics.floor_commits==commits);
+    video_wait();
+}
 #include "floor_pce.h"
 /* The race's sprites and HUD. The screen runs at the 512-dot clock, so every x here is in dots (256 is the middle) and
  * every picture was stretched to twice its width at build time (tools/pce/hudart.py, build_assets.py). Cars are drawn

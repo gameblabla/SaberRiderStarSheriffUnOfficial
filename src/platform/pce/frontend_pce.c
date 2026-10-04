@@ -218,7 +218,9 @@ UI_CODE static void options(void) {
  * and pce_control.hero the choice. */
 UI_CODE void frontend_start(void) {
     uint8_t checkpoint=pce_control.stage,chosen=pce_control.hero;
-    previous=0;pce_metrics.ready=0;
+    /* A button held through GAME OVER's fade must not start the title or
+     * confirm a hero again. Wait for a fresh press on the new screen. */
+    previous=~pce_joypad_read();pce_metrics.ready=0;
     if(!loader_ui()){pce_control.ok=0;return;}
     for(;;) {
         uint8_t choice=title(checkpoint!=0);

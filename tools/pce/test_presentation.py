@@ -74,6 +74,42 @@ def verify(out):
                 e.input(0);e.run(30)
             assert t.metrics(e)['disc_reads']==reads,'Aim/HUD must use preloaded graphics'
         report['aim_cases']=16;report['hud_heroes']=4;report['platform_vertical_scroll']=0
+        # Restart through the actual game-over/title/selection flow. One seeded
+        # lethal projectile still runs the normal death animation and life logic.
+        e.write(options,bytes([1,3,3,3]))  # Normal difficulty, default lives and full music volume.
+        for old,new in ((3,0),(0,1),(1,2),(2,3)):
+            m=t.metrics(e);assert m['hero']==old
+            t.seed(e,'dialogs_done',255,1);t.field(e,'state',0)
+            t.field(e,'lives',0);e.write(conts,b'\0')
+            e.write(t.address+34,b'\x01\x00')
+            t.seed(e,'safe_timer',0,1)
+            e.write(symbol(out/'app.elf','shots'),struct.pack('<4h5B',m['player_x'],m['player_y'],0,0,1,1,0,0,0))
+            t.until(e,lambda:e.memory(ui,1)==b'\4',limit=6000)
+            e.run(180);picture(e,f'gameover-{old}')
+            # The text pulse must change palettes while the painting stays put.
+            frame=np.asarray(Image.open(captures/f'gameover-{old}.png')).copy()
+            changed=False
+            for pulse in range(8):
+                e.run(8);e.screenshot(captures/f'gameover-{old}-pulse.png')
+                next_frame=np.asarray(Image.open(captures/f'gameover-{old}-pulse.png'))
+                assert np.array_equal(frame[:160],next_frame[:160]),'Painting must stay still'
+                changed|=not np.array_equal(frame[168:200],next_frame[168:200])
+            assert changed,'GAME OVER lettering must pulse'
+            e.input(1);t.until(e,lambda:e.memory(ui,1)==b'\1',limit=12000,step=10)
+            e.run(90)
+            assert e.memory(ui,1)==b'\1','Held GAME OVER confirmation must not select START'
+            e.input(0);e.run(30)
+            t.press(e,1);t.until(e,lambda:e.memory(ui,1)==b'\2')
+            e.run(90)
+            for _ in range(abs(new-old)):t.press(e,32 if new>old else 128)
+            e.run(60);t.press(e,1)
+            t.until(e,lambda:e.memory(ui,1)==b'\0' and e.memory(t.address+5,1)==b'\1',limit=12000)
+            e.run(120);m=t.metrics(e)
+            assert m['hero']==new and m['hp']==2 and t.state(e)['lives']==3
+            picture(e,f'restart-{old}-to-{new}')
+            x=m['player_x'];e.input(32);e.run(30);e.input(0)
+            assert t.metrics(e)['player_x']>x,'Restarted hero must respond to input'
+        report['new_game_after_death']='four hero changes through game over, title and hero selection; visible, responsive gameplay'
     (out/'presentation-verification.json').write_text(json.dumps(report,indent=2)+'\n');print(report)
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--out',type=Path,default=Path('build/pce'));a=p.parse_args();verify(a.out.resolve())

@@ -129,7 +129,16 @@ class Campaign(Test):
             self.hit_platform_boss(e,1)
             self.until(e,lambda:self.state(e)['state']==2,limit=600);self.capture(e,'campaign-town-clear')
             self.results['town']=self.state(e)
-            self.press(e,1);self.until(e,lambda:self.metrics(e)['stage']==2 and self.metrics(e)['ready']);self.dialogs(e)
+            self.press(e,1);self.until(e,lambda:self.metrics(e)['stage']==2 and self.metrics(e)['ready'])
+            assert self.state(e)['state']==1
+            e.run(120);self.capture(e,'campaign-race-dialog')
+            # The race's dialogue spans 448 dots, with two 8-dot BAT
+            # characters per source glyph. It used to occupy only 224 dots.
+            bat=bytes.fromhex(e.call('asread','vram0',(53*128+6)*2,112)['hex'])
+            words=struct.unpack('<56H',bat)
+            assert all(w>>12==14 for w in words),words
+            self.results['race_dialog_width']=448
+            self.dialogs(e)
             assert self.state(e)['lives']==3,'Lives must carry into the next stage'
             # Drive the race against its seven rivals (the countdown, then the car on the circuit), seed only the final lap.
             app=self.out/'app.elf'
@@ -211,8 +220,19 @@ class Campaign(Test):
             e.write(symbol(self.out/'app.elf','bolts'),struct.pack('<2h2b2B',130,by+14,0,0,1,0));e.run(120);self.dialogs(e)
             self.until(e,lambda:self.state(e)['state']==2);self.press(e,1)
             assert self.state(e)['state']==4;self.capture(e,'campaign-ending');self.results['ending']=self.state(e)
+            # Leave credits and deliberately start a new game. RUN held across
+            # a frontend transition must no longer confirm the title for us.
+            ui=symbol(self.out/'app.elf','pce_ui_state')
+            self.until(e,lambda:e.memory(ui,1)!=b'\0',limit=6000)
+            for _ in range(40):
+                if e.memory(ui,1)==b'\1':break
+                self.press(e,1);e.run(120)
+            self.until(e,lambda:e.memory(ui,1)==b'\1',limit=6000)
+            self.press(e,1);self.until(e,lambda:e.memory(ui,1)==b'\2')
+            self.press(e,1)
+            self.until(e,lambda:e.memory(ui,1)==b'\0' and self.metrics(e)['stage']==1 and self.metrics(e)['ready'],limit=6000)
             # A zero-lives collision must reach game over, with no underflow.
-            self.stage(e,1);self.field(e,'lives',0);e.write(self.address+34,b'\x01\x00');self.seed(e,'pce_continues',0,1)
+            self.field(e,'lives',0);e.write(self.address+34,b'\x01\x00');self.seed(e,'pce_continues',0,1)
             self.seed(e,'safe_timer',0,1)
             px=self.metrics(e)['player_x'];py=self.metrics(e)['player_y']
             e.write(symbol(self.out/'app.elf','shots'),struct.pack('<4h2B',px,py,0,0,1,1));e.run(120)
