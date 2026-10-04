@@ -304,7 +304,11 @@ static void draw_car_shadow(Mode7 *m, real sx, real sy, real rx, real d, uint8_t
     if (sx + rx < 0 || sx - rx > r_int(m->sw) || sy + ry < r_int(HORIZON) || sy - ry > r_int(m->sh)) return;
     enum { N = 16 };
     RVertex v[N + 1]; int idx[N * 3];
+#ifdef PLAT_SATURN
+    RFColor c = { 0, 0, 0, R(1) };
+#else
     RFColor c = { R(0.0f), R(0.0f), R(0.0f), r_mul(R(0.35f), r_div(r_int(alpha), R(255))) };
+#endif
     v[0].position = (RFPoint){ sx, sy }; v[0].color = c;
     for (int i = 0; i < N; i++) {
         real a = r_mul(r_div(r_int(i), r_int(N)), TWO_PI);
@@ -312,7 +316,11 @@ static void draw_car_shadow(Mode7 *m, real sx, real sy, real rx, real d, uint8_t
         v[i + 1].color = c;
     }
     for (int i = 0; i < N; i++) { idx[i * 3] = 0; idx[i * 3 + 1] = 1 + i; idx[i * 3 + 2] = 1 + (i + 1) % N; }
+#ifdef PLAT_SATURN
+    r_set_draw_blend(m->ren, R_BLEND_NONE);
+#else
     r_set_draw_blend(m->ren, R_BLEND_BLEND);
+#endif
     r_geometry(m->ren, NULL, v, N + 1, idx, N * 3);
 }
 
@@ -327,7 +335,11 @@ static void draw_player_shadow(Mode7 *m, real sx, real sy)
     if (sx + rx < 0 || sx - rx > r_int(m->sw) || sy + ry < r_int(HORIZON) || sy - ry > r_int(m->sh)) return;
     enum { N = 16 };
     RVertex v[N + 1]; int idx[N * 3];
+#ifdef PLAT_SATURN
+    RFColor c = { 0, 0, 0, R(1) };
+#else
     RFColor c = { R(0.0f), R(0.0f), R(0.0f), R(0.35f) };
+#endif
     v[0].position = (RFPoint){ sx, sy }; v[0].color = c;
     for (int i = 0; i < N; i++) {
         real a = r_mul(r_div(r_int(i), r_int(N)), TWO_PI);
@@ -335,7 +347,11 @@ static void draw_player_shadow(Mode7 *m, real sx, real sy)
         v[i + 1].color = c;
     }
     for (int i = 0; i < N; i++) { idx[i * 3] = 0; idx[i * 3 + 1] = 1 + i; idx[i * 3 + 2] = 1 + (i + 1) % N; }
+#ifdef PLAT_SATURN
+    r_set_draw_blend(m->ren, R_BLEND_NONE);
+#else
     r_set_draw_blend(m->ren, R_BLEND_BLEND);
+#endif
     r_geometry(m->ren, NULL, v, N + 1, idx, N * 3);
 }
 
@@ -1212,7 +1228,7 @@ static void render_sprites(Mode7 *m)
             real w = 20 * clampf(r_mul(items[i].scale, R(1.6f)), R(0.5f), R(1.5f)), top = items[i].sy - m->spr[e->spr].h * items[i].scale - R(5);
             real f = r_div(e->hp, e->hp_max);
             r_set_draw_blend(m->ren, R_BLEND_BLEND);
-            r_set_draw_color(m->ren, 0, 0, 0, 150); RFRect bg = { r_floorr(items[i].sx - w / 2 - R(1)), r_floorr(top - R(1)), w + R(2), R(4) }; r_fill_rect(m->ren, &bg);
+            r_set_draw_color(m->ren, 0, 0, 0, HUD_ALPHA(150)); RFRect bg = { r_floorr(items[i].sx - w / 2 - R(1)), r_floorr(top - R(1)), w + R(2), R(4) }; r_fill_rect(m->ren, &bg);
             r_set_draw_color(m->ren, f > R(0.5f) ? 90 : 240, f > R(0.25f) ? 220 : 80, 60, 255); RFRect fg = { r_floorr(items[i].sx - w / 2), r_floorr(top), r_mul(w, f), R(2) }; r_fill_rect(m->ren, &fg);
         }
         if (e->kind == K_BOSS && e->state != B_DYING) {   /* the target: red corner brackets around the leader, pulsing */

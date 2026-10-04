@@ -1363,9 +1363,9 @@ static void render_hud(Space *s, Font *small)
         real w = R(170), x0 = s->sw * R(0.5f) - w / 2 + R(20), f = clampf(r_div(s->boss.hp, s->boss.hp_max), 0, R(1));
         if (s->phase == PH_BOSS_IN) f = r_mul(f, clampf(r_div(s->phase_t, BOSS_IN_DUR), 0, R(1)));
         if (small) font_draw(small, "BATTLE CRUISER", x0, R(4), 255, 170, 120);
-        rect(ren, x0, R(14), w, R(5), 0, 0, 0, 200);
+        rect(ren, x0, R(14), w, R(5), 0, 0, 0, HUD_ALPHA(200));
         rect(ren, x0, R(14), r_floorr(r_mul(w, f)), R(5), 230, 60 + (uint8_t)r_trunc(120 * f), 40, 255);
-        rect(ren, x0 + r_mul(w, R(0.33f)), R(14), R(1), R(5), 255, 255, 255, 120); rect(ren, x0 + r_mul(w, R(0.66f)), R(14), R(1), R(5), 255, 255, 255, 120);
+        rect(ren, x0 + r_mul(w, R(0.33f)), R(14), R(1), R(5), 255, 255, 255, HUD_ALPHA(120)); rect(ren, x0 + r_mul(w, R(0.66f)), R(14), R(1), R(5), 255, 255, 255, HUD_ALPHA(120));
     }
 }
 

@@ -1033,7 +1033,7 @@ static void render_aim(Ramrod *r)
             r_fill_rects(ren, q, 8);
             /* its armour, over the brackets */
             real f = clampf(r_div(m->hp, m->hp_max), 0, R(1)), w = r_max(R(16), x1 - x0);
-            r_set_draw_color(ren, 0, 0, 0, 160); RFRect bg = { x0, y0 - R(5), w, R(3) }; r_fill_rect(ren, &bg);
+            r_set_draw_color(ren, 0, 0, 0, HUD_ALPHA(160)); RFRect bg = { x0, y0 - R(5), w, R(3) }; r_fill_rect(ren, &bg);
             r_set_draw_color(ren, 255, 90, 60, 255); RFRect fg = { x0, y0 - R(5), r_mul(w, f), R(3) }; r_fill_rect(ren, &fg);
         }
     }

@@ -4,6 +4,7 @@
 #include "assets.h"
 #include "font.h"
 #include "gfx.h"
+#include "hud.h"
 #include "namehash.h"
 #include "enemies.h"   /* player_damage */
 #include <stdio.h>
@@ -520,7 +521,7 @@ void dark_draw_hud(const DarkApril *d, Ren *ren, int sw)
     real bw = R(96), x = r_int(sw) - bw - R(10), y = R(20);
     if (f) font_draw(f, "DARK APRIL", r_int(r_trunc(x)), R(8), 225, 200, 250);
     r_set_draw_blend(ren, R_BLEND_BLEND);
-    r_set_draw_color(ren, 10, 8, 26, 200);
+    r_set_draw_color(ren, 10, 8, 26, HUD_ALPHA(200));
     RFRect bg = { x - R(1), y - R(1), bw + R(2), R(7) };
     r_fill_rect(ren, &bg);
     r_set_draw_color(ren, 170, 60, 240, 255);
