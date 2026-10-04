@@ -14,16 +14,19 @@ previous native decoder. Build-time expansion removes predictor arithmetic,
 adaptation-table reads and packed-code extraction from the interrupt. No disc
 reads or runtime decompression are needed when starting an effect.
 
-`src/platform/pce/audio_pcm.S` is the resident timer entry plus a banked playback
-service. The BIOS timer hook jumps to it, so it returns with RTI. It preserves
-A/X and MPR3/MPR6, leaves Y untouched, and uses private direct-page state at
+`src/platform/pce/audio_pcm.S` is the resident timer entry plus a playback
+service in the always-mapped work bank `$6b`. The BIOS timer hook jumps to it,
+so it returns with RTI. It preserves A and MPR6, leaves X/Y and MPR3 untouched,
+and uses private direct-page state at
 `$2080–$20a0`. It touches no compiler registers, VDC registers or raster scheduling.
 MPR6 is saved once per interrupt across both voices. Streams cross `$dfff` into
 `$c000` in the next bank; looping restores both the start pointer and start bank.
 The timer stops when both channels are idle, and `audio_pcm_stop()` stops every
 voice before blocking loads.
 
-Audio code and 7,006 shot/power DAC bytes share bank `$75`. Impact and gallop
+Audio controls and 7,006 shot/power DAC bytes share bank `$75`.
+The two fixed voice paths are unrolled in `$6b`, avoiding per-voice calls,
+indexed state access and interrupt-time overlay switching. Impact and gallop
 occupy 23,041 bytes across `$7d–$7f`. The linker checks bank capacity. The loader
 retains its 56 KiB scratch buffer in `$76–$7c`, preserving audio across loads.
 The existing CD-DA music and CD hardware ADPCM character voices remain separate.
@@ -36,20 +39,20 @@ handler percentages include the wrapper but still exclude BIOS dispatch.
 | --- | --- | --- | --- |
 | Previous optimized runtime decoder | 17.21% | 31.24% | 37.59% |
 | Exact DAC bytes decoded during build | 10.26% | 17.30% | 24.34% |
+| Unrolled delivery in the work bank | 8.70% | 14.37% | 18.47% |
 
-The new one-voice handler measured 17.29%, down from 23.56%. The two-voice
-handler uses **35.2% fewer cycles**. These are isolated delivery costs, not
-whole-game frame-rate guarantees. Reproduce with
-`python3 tools/pce/profile_audio.py --out build/pce` (`audio-profile.json`).
+The current one-voice handler measured 12.80%. The two-voice handler uses
+24.1% fewer cycles than the first predecoded driver (24.34%), retaining the
+same DAC bytes, sample rate and loop behavior. These exclude BIOS dispatch.
+Reproduce with `python3 tools/pce/profile_audio.py --out build/pce`.
 
-`profile_gameplay.py` measures a seeded first-herd encounter with held fire for
-300 video frames. Counting render-loop iterations (rather than simulation
-ticks, which catch up after missed frames), the previous driver completed 75
-draws; the new driver completed 113: approximately **15.0 to 22.6 fps** when
-normalized to 60 video frames per second. Audio handler time fell from 37.35%
-to 24.23%. This seeded encounter still drops frames; it is not a worst-case
-measurement for every scene.
-Run `python3 tools/pce/profile_gameplay.py --out build/pce` to reproduce.
+The herd renderer now sustains 60 Hz with held fire in all three seeded
+encounters: 300 completed draws and 300 new presentations at VBlank over
+300 video frames, with no essential sprite overflows. Playback accounts for
+about 18.47% of cycles in these encounters. The previous render-loop measurement
+was 113/300 draws (22.6 fps). See `PCE_HERD_60FPS.md` for the scenario, visual
+and sound equivalence checks, and reproduction commands. Other gameplay
+scenarios are covered by functional tests, rather than this performance claim.
 
 `build/pce/audio-review/` contains actual emulator WAV captures for isolated
 effects, concurrent voices, the looping gallop, and stop checks.

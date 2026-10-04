@@ -19,8 +19,8 @@ static bool range(uint32_t a, uint16_t n) {
     return a < PCE_ARCADE_BYTES && n <= PCE_ARCADE_BYTES - a;
 }
 extern volatile uint16_t arcade_tai_src, arcade_tai_dst, arcade_tai_len;
-extern volatile uint8_t arcade_vdc_words;
-void arcade_tai(void), arcade_vdc_chunk(void);
+extern volatile uint16_t arcade_vdc_len;
+void arcade_tai(void), arcade_vdc_copy(void);
 bool arcade_read(uint8_t port, uint32_t address, void *out, uint16_t size) {
     if (!range(address, size) || !arcade_seek(port, address)) return false;
     if (!size) return true;
@@ -50,13 +50,8 @@ bool arcade_vram(uint32_t address, uint16_t word, uint16_t size) {
     *(volatile uint8_t*)0x20f7=VDC_REG_VRAM_DATA;
     *IO_VDC_INDEX = VDC_REG_VRAM_DATA;
     __attribute__((leaf)) asm volatile("plp" ::: "p","memory");
-    /* 16-word chunks keep IRQ latency short; each runs with IRQs masked. */
-    while (size) {
-        uint8_t words = size >= 32 ? 16 : size >> 1;
-        arcade_vdc_words = words;
-        arcade_vdc_chunk();
-        size -= (uint16_t)words << 1;
-    }
+    /* Native loop uses 64-byte TIA bursts through Arcade bank $40. */
+    if(size) {arcade_vdc_len=size;arcade_vdc_copy();}
     return true;
 }
 uint8_t arcade_selftest(void) {

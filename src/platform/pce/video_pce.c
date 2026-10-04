@@ -6,6 +6,7 @@
 
 volatile PceTelemetry pce_metrics;
 volatile uint8_t pce_ticks, pce_raster_enabled, pce_floor_page, pce_raster_row;
+volatile uint16_t pce_draws;
 volatile uint8_t pce_vdc_index;
 volatile uint16_t pce_scroll_x, pce_scroll_y;
 volatile uint8_t pce_scroll_hold;
@@ -20,6 +21,7 @@ static uint16_t free_cursor;
 uint8_t buffer[2048] PCE_STAGE;
 uint8_t sprite_occupancy[240], sprite_line_lo, sprite_line_hi, sprite_line_ok, sprite_exact;
 extern void sprite_lines_reserve(void), sprite_lines_release(void);
+extern void sprite_lines_clear(void),sprite_cache_begin(void);
 uint8_t clipped_pattern[128];
 uint8_t clipped_count;
 uint8_t sprite_screen_height=224;
@@ -225,15 +227,13 @@ __attribute__((noinline)) void video_number(uint8_t x, uint8_t y, uint16_t n) {
     for (uint8_t k = 0; k < 5; ++k) { text[4-k] = '0' + n % 10; n /= 10; }
     text[5] = 0; video_text(x, y, text);
 }
-PCE_RENDER void video_sat_begin(void) {
+PCE_FLOW static void sat_begin_body(void) {
+    ++sprite_epoch;
     sat_count = clipped_count = 0;front_start=64;front_keep=0;
-    memset(sprite_occupancy, 0, sprite_exact?240:32);
-    for(uint8_t i=0;i<48;++i) {
-        if(sprite_used[i])sprite_pinned[i]=2;
-        else if(sprite_pinned[i])--sprite_pinned[i];
-        sprite_used[i]=0;
-    }
+    sprite_lines_clear();
+    sprite_cache_begin();
 }
+PCE_RENDER void video_sat_begin(void) {overlay_call(0x6e,sat_begin_body);}
 PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8_t scale) {
     bool fast=scale==16&&pce_metrics.stage!=6;
     if(fast) {
@@ -285,6 +285,12 @@ PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8
 }
 void video_front_mark(void) {front_keep=sat_count;}
 void video_front_begin(void) {front_start=sat_count;}
+extern volatile uint16_t sat_copy_word,sat_copy_src,sat_copy_len;
+extern void sat_copy(void);
+__attribute__((noinline)) static void sat_transfer(uint16_t word,const void *src,uint16_t bytes) {
+    sat_copy_word=word;sat_copy_src=(uint16_t)src;sat_copy_len=bytes;
+    overlay_call(0x6e,sat_copy);
+}
 /* HUD, then foreground occluders, then actors: lower SAT slots win. Segments
  * are uploaded in that order straight from the build order, without moving
  * entries in RAM. Slots left from the previous frame are hidden by Y=0. */
@@ -294,24 +300,22 @@ PCE_RENDER void video_sat_end(void) {
         if(peak>pce_metrics.max_units)pce_metrics.max_units=peak;}
     for(uint8_t k=sat_count;k<sat_previous;++k)s[k].y=0;
     pce_vdc_index = 2; *(volatile uint8_t *)0x20f7 = 2;
-    /* The library copy sets MAWR with st0/st2 pairs. A VBlank IRQ between them restores index 2
-     * from the shadow, so the MAWR high byte becomes a stray VRAM write and the segment lands a
-     * word late (or on another page). Block transfers are atomic anyway; keep the setup atomic too. */
-    pce_cpu_irq_disable();
+    /* Atomic address/index setup, then <=64-byte transfers with IRQ service
+     * between them. HBlank/VBlank restore index 2 and leave MAWR untouched. */
     if(front_start<sat_count) {
         uint8_t fg=sat_count-front_start;
-        if(front_keep)pce_vdc_copy_to_vram(PCE_SAT_WORD,s,(uint16_t)front_keep*8);
-        pce_vdc_copy_to_vram(PCE_SAT_WORD+(uint16_t)front_keep*4,s+front_start,(uint16_t)fg*8);
+        if(front_keep)sat_transfer(PCE_SAT_WORD,s,(uint16_t)front_keep*8);
+        sat_transfer(PCE_SAT_WORD+(uint16_t)front_keep*4,s+front_start,(uint16_t)fg*8);
         if(front_start>front_keep)
-            pce_vdc_copy_to_vram(PCE_SAT_WORD+(uint16_t)(front_keep+fg)*4,s+front_keep,(uint16_t)(front_start-front_keep)*8);
-    } else if(sat_count)pce_vdc_copy_to_vram(PCE_SAT_WORD,s,(uint16_t)sat_count*8);
+            sat_transfer(PCE_SAT_WORD+(uint16_t)(front_keep+fg)*4,s+front_keep,(uint16_t)(front_start-front_keep)*8);
+    } else if(sat_count)sat_transfer(PCE_SAT_WORD,s,(uint16_t)sat_count*8);
     if(sat_previous>sat_count)
-        pce_vdc_copy_to_vram(PCE_SAT_WORD+(uint16_t)sat_count*4,s+sat_count,(uint16_t)(sat_previous-sat_count)*8);
+        sat_transfer(PCE_SAT_WORD+(uint16_t)sat_count*4,s+sat_count,(uint16_t)(sat_previous-sat_count)*8);
     sat_previous=sat_count;
-    pce_cpu_irq_enable();
     video_vdc(VDC_REG_SATB_START, PCE_SAT_WORD);
     pce_scroll_hold=0;   /* the new SAT is queued: from the next VBlank both it and the scroll apply */
     pce_metrics.sat_count = sat_count;
+    ++pce_draws;
 }
 PCE_RENDER void video_race_init(void) {
     pce_raster_enabled = 1;

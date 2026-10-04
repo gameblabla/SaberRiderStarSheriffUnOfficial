@@ -14,8 +14,8 @@ def profile(out):
     reports=[];elf=out/'app.elf';state=symbol(elf,'pce_pcm_voices')
     irq_start=(104<<13)+(symbol(elf,'pce_pcm_irq')&8191)
     irq_end=(104<<13)+(symbol(elf,'pce_pcm_irq_end')&8191)
-    service_start=(117<<13)+(symbol(elf,'pce_pcm_service')&8191)
-    service_end=(117<<13)+(symbol(elf,'pce_pcm_service_end')&8191)
+    service_start=(107<<13)+(symbol(elf,'pce_pcm_service')&8191)
+    service_end=(107<<13)+(symbol(elf,'pce_pcm_service_end')&8191)
     with tempfile.TemporaryDirectory(prefix='audio-profile-',dir=out) as base,Emulator(out/'saber_rider.cue',base) as e:
         boot(e,symbol(elf,'pce_metrics'));e.run(120)
         def call(name,arg=0):

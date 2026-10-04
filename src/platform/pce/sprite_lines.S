@@ -9,6 +9,144 @@
 .global sprite_lines_reserve, sprite_lines_release
 .extern sprite_occupancy, sprite_line_lo, sprite_line_hi, sprite_line_ok, sprite_exact
 .comm sprite_band_last,1
+.comm sprite_line_cells,1
+.comm sprite_line_add,1
+.comm sprite_wide_left,1
+.comm sprite_wide_span,1
+.comm sprite_last_lo,1
+.comm sprite_last_free,1
+/* Admit up to sprite_line_cells 32-wide cells with an identical Y span.
+ * Computing the maximum once gives exactly the same admissions as repeated
+ * reserve/reserve/release, including partially occupied edge scanlines. */
+.global sprite_lines_wide, sprite_line_cells
+.section .ram_bank110.text,"ax",@progbits
+sprite_lines_wide:
+    stz sprite_last_free
+    lda sprite_line_hi
+    dec
+    ldx sprite_exact
+    bne 1f
+    lsr
+    lsr
+    lsr
+1:
+    sta sprite_band_last
+    lda sprite_line_lo
+    ldx sprite_exact
+    bne 1f
+    lsr
+    lsr
+    lsr
+1:
+    tax
+    tay
+    /* In band mode X is the divided start, not sprite_line_lo. */
+    stx sprite_wide_span
+    sec
+    lda sprite_band_last
+    sbc sprite_wide_span
+    inc
+    sta sprite_wide_span
+    sta sprite_wide_left
+    cla
+.Lwmax:
+    ldx sprite_wide_left
+    cpx #4
+    bcc .Lwmax_tail
+    pha
+    tya
+    tax
+    pla
+    .rept 4
+        cmp sprite_occupancy,x
+        bcs 1f
+        lda sprite_occupancy,x
+1:
+        inx
+    .endr
+    pha
+    txa
+    tay
+    lda sprite_wide_left
+    sec
+    sbc #4
+    sta sprite_wide_left
+    pla
+    bra .Lwmax
+.Lwmax_tail:
+    ldx sprite_wide_left
+    beq .Lwcapacity
+    pha
+    tya
+    tax
+    pla
+.Lwmax_one:
+    cmp sprite_occupancy,x
+    bcs 1f
+    lda sprite_occupancy,x
+1:
+    inx
+    dec sprite_wide_left
+    bne .Lwmax_one
+.Lwcapacity:
+    /* A is at most 16; carry was changed by CPX, so set it explicitly. */
+    eor #$ff
+    clc
+    adc #17
+    lsr
+    cmp sprite_line_cells
+    bcc 1f
+    lda sprite_line_cells
+1:
+    sta sprite_line_cells
+    beq .Lwout
+    asl
+    sta sprite_line_add
+    lda sprite_line_lo
+    ldx sprite_exact
+    bne 1f
+    lsr
+    lsr
+    lsr
+1:
+    tax
+    lda sprite_wide_span
+    sta sprite_wide_left
+.Lwadd:
+    lda sprite_wide_left
+    cmp #4
+    bcc .Lwadd_tail
+    .set line, 0
+    .rept 4
+        lda sprite_occupancy+line,x
+        clc
+        adc sprite_line_add
+        sta sprite_occupancy+line,x
+        .set line, line+1
+    .endr
+    inx
+    inx
+    inx
+    inx
+    lda sprite_wide_left
+    sec
+    sbc #4
+    sta sprite_wide_left
+    bra .Lwadd
+.Lwadd_tail:
+    lda sprite_wide_left
+    beq .Lwout
+.Lwadd_one:
+    lda sprite_occupancy,x
+    clc
+    adc sprite_line_add
+    sta sprite_occupancy,x
+    inx
+    dec sprite_wide_left
+    bne .Lwadd_one
+.Lwout:
+    rts
+.section .ram_bank106.text,"ax",@progbits
 sprite_lines_reserve:
     stz sprite_line_ok
     lda sprite_exact
@@ -49,6 +187,7 @@ sprite_lines_reserve:
 .Ldone:
     rts
 sprite_lines_release:
+    stz sprite_last_free
     lda sprite_exact
     beq 1f
     jmp .Lexact_release
@@ -73,6 +212,14 @@ sprite_lines_release:
 .Lout:
     rts
 .Lexact_reserve:
+    lda sprite_line_hi
+    sec
+    sbc sprite_line_lo
+    cmp #16
+    bne 1f
+    jmp sprite_lines_sixteen
+1:
+    stz sprite_last_free
     ldx sprite_line_lo
 .Lxcheck:
     lda sprite_occupancy,x
@@ -98,6 +245,72 @@ sprite_lines_release:
     cpx sprite_line_hi
     bcc .Lxsub
     rts
+
+/* Clear four lines per branch, with normal interruptible stores so the
+ * timer's sample deadline is unaffected. Exact scanline counts are retained. */
+.section .ram_bank107.text,"ax",@progbits
+.global sprite_lines_sixteen
+/* Ordinary sprite pieces cover exactly sixteen scanlines. Eliminate two
+ * counted loops while keeping the check-before-commit transaction. */
+sprite_lines_sixteen:
+    ldx sprite_line_lo
+    cpx sprite_last_lo
+    bne .Lsixteen_scan
+    lda sprite_last_free
+    beq .Lsixteen_scan
+    dec sprite_last_free
+    jmp .Lsixteen_add
+.Lsixteen_scan:
+    cla
+    .set line, 0
+    .rept 16
+        cmp sprite_occupancy+line,x
+        bcs 1f
+        lda sprite_occupancy+line,x
+1:
+        .set line, line+1
+    .endr
+    cmp #16
+    bcs .Lsixteen_full
+    eor #$ff
+    clc
+    adc #17
+    dec
+    sta sprite_last_free
+    stx sprite_last_lo
+    bra .Lsixteen_add
+.Lsixteen_full:
+    rts
+.Lsixteen_add:
+    .set line, 0
+    .rept 16
+        inc sprite_occupancy+line,x
+        .set line, line+1
+    .endr
+    inc sprite_line_ok
+    rts
+.section .text.irq,"ax",@progbits
+.global sprite_lines_clear
+sprite_lines_clear:
+    stz sprite_last_free
+    ldx #31
+    lda sprite_exact
+    beq 1f
+    ldx #239
+1:
+.Lclear:
+    stz sprite_occupancy,x
+    dex
+    stz sprite_occupancy,x
+    dex
+    stz sprite_occupancy,x
+    dex
+    stz sprite_occupancy,x
+    dex
+    cpx #255
+    bne .Lclear
+    rts
+.section .ram_bank106.text,"ax",@progbits
 
 /* Re-emit the retained foreground parts. Records are FgPart (14 bytes): the
  * first eight are a SAT entry whose X is the world-space X word. Parts that

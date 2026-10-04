@@ -11,11 +11,24 @@
 extern uint8_t sat_count,sat_page;
 extern vdc_sprite_t sat[2][64];
 extern uint8_t sprite_line_lo,sprite_line_hi,sprite_line_ok;
-extern void sprite_lines_reserve(void),sprite_lines_release(void);
+extern void sprite_lines_reserve(void),sprite_lines_release(void),sprite_lines_wide(void);
+extern uint8_t sprite_line_cells;
+extern uint8_t sprite_exact;
+typedef struct {uint16_t x,y,top,bottom;uint8_t ntop,nbottom,cells;} HerdEmit;
+_Static_assert(sizeof(HerdEmit)==11,"herd_emit.S parameter layout changed");
+HerdEmit herd_emit_args;
+extern void herd_emit(void),herd_prepare(void);
+typedef struct {int16_t x,y;uint8_t first,last;} HerdHorse;
+_Static_assert(sizeof(HerdHorse)==6,"herd_prepare.S record layout changed");
+HerdHorse herd_horses[8];
+uint8_t herd_live,herd_horse_count,herd_cells,herd_same;
 uint8_t herd_on,herd_locked;
 int16_t herd_y;
 uint16_t herd_lead;
-static uint8_t shown,cur;
+static uint8_t shown,cur,prefetch;
+static uint16_t prefetched;
+static uint16_t warm_ids[7];
+static uint8_t warm_slots[7],warm_count;
 #define BUFFER_PAGE(b) (28+(b)*10)
 HERD_CODE void herd_reserve(void) {
     uint8_t colors[32];
@@ -28,6 +41,7 @@ HERD_CODE void herd_reserve(void) {
         pattern_owner[p]=48;
     }
     sprite_pinned[47]=250;herd_on=1;shown=0xff;cur=0;
+    prefetch=0xff;prefetched=0;warm_count=0;
     arcade_read(2,play_scene->horse,colors,32);
     pce_vce_copy_palette(16+15,colors,1);
 }
@@ -42,35 +56,99 @@ HERD_CODE void herd_spawn(void) {
     }
     herd_reserve();
 }
+/* Streaming runs in the flow overlay; the renderer and IRQs remain mapped. */
+PCE_FLOW static void herd_stream(void) {
+    uint8_t want=(frame>>2)%5;
+    if(want!=shown) {
+        /* Finish a partially prefetched frame after a missed simulation tick.
+         * Only publish a complete alternate buffer. */
+        if(prefetch!=want)prefetched=0;
+        cur^=1;
+        if(prefetched<5120) {
+            pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
+            arcade_vram(play_scene->horse+32+(uint32_t)want*5120+prefetched,
+                PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(cur)*256+(prefetched>>1),5120-prefetched);
+        }
+        shown=want;prefetch=(want+1)%5;prefetched=0;
+    }
+    /* Start reusing the previous buffer after its final display VBlank,
+     * and prepare the next complete animation in three bounded slices. */
+    uint8_t phase=frame&3;
+    uint16_t target=phase==1?1728:phase==2?3424:phase==3?5120:0;
+    if(target>prefetched) {
+        pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
+        arcade_vram(play_scene->horse+32+(uint32_t)prefetch*5120+prefetched,
+            PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(cur^1)*256+(prefetched>>1),target-prefetched);
+        prefetched=target;
+    }
+}
+/* Use the offscreen approach to retain the two firing poses, four straight
+ * muzzle frames and projectile. Their nine pattern pages fit beside the HUD
+ * and both displayed idle generations, with the herd's buffers reserved. */
+PCE_FLOW static void herd_warm(void) {
+    if(warm_count<7) {
+        uint8_t i=warm_count,stage=pce_metrics.stage-1;
+        uint16_t id=i<2?pce_motion_base[stage]+hero*3+i:
+            i<6?pce_flash_base[stage]+4+i-2:36;
+        if(video_sprite(id,-256,240,false,16)) {
+            uint8_t slot=sprite_slot_of[id];
+            if(slot<48&&sprite_ids[slot]==id){warm_ids[i]=id;warm_slots[i]=slot;++warm_count;}
+        }
+    }
+    for(uint8_t i=0;i<warm_count;++i)if(sprite_ids[warm_slots[i]]==warm_ids[i])sprite_pinned[warm_slots[i]]=250;
+}
 /* Draw every horse; releases the pages once the last one has gone. */
 HERD_CODE void herd_draw(void) {
-    uint8_t live=0;
-    for(uint8_t k=0;k<8;++k)if(actors[k].active&&actors[k].type==11)++live;
-    if(!live) {
+    overlay_call(0x6e,herd_prepare);
+    if(!herd_live) {
         for(uint8_t p=28;p<48;++p)pattern_owner[p]=0;
+        for(uint8_t i=0;i<warm_count;++i)if(sprite_ids[warm_slots[i]]==warm_ids[i])
+            sprite_pinned[warm_slots[i]]=sprite_used[warm_slots[i]]?2:0;
         sprite_pinned[47]=0;herd_on=herd_locked=0;audio_pcm_gallop(false);return;
     }
     audio_pcm_gallop(true);
     sprite_pinned[47]=250;
-    uint8_t want=(frame>>2)%5;
-    if(want!=shown) {
-        cur^=1;
-        pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-        arcade_vram(play_scene->horse+32+(uint32_t)want*5120,PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(cur)*256,5120);
-        shown=want;
-    }
+    overlay_call(0x6e,herd_stream);
+    overlay_call(0x6e,herd_warm);
     uint16_t code=(PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(cur)*256)>>5;
-    for(uint8_t k=0;k<8;++k) {
-        if(!actors[k].active||actors[k].type!=11)continue;
-        int16_t sx=actors[k].b.x-camera-72,sy=actors[k].b.y-48;
-        for(uint8_t c=0;c<4;++c) {
+    bool shared=herd_horse_count&&herd_same&&sat_count+2*herd_cells<=64&&
+        (sprite_exact||!(herd_horses[0].y&7));
+    uint8_t remaining[2]={0,0};
+    for(uint8_t k=0;k<herd_horse_count;++k) {
+        const HerdHorse *horse=&herd_horses[k];
+        int16_t sx=horse->x,sy=horse->y;
+        uint8_t first=horse->first,last=horse->last;
+        uint8_t cells=last-first,accepted[2]={0,0};
+        /* Batch disjoint spans with enough SAT slots. Unaligned band-mode
+         * spans share an edge band, so preserve interleaved admission there
+         * and near a full SAT. The first columns still win. */
+        bool batch=sat_count+2*cells<=64&&(sprite_exact||!(sy&7));
+        if(batch)for(uint8_t part=0;part<2;++part) {
+            int16_t y=sy+(part?64:0),h=part?16:64;
+            int16_t lo=y<0?0:y,hi=y+h>224?224:y+h;
+            if(hi<=lo||!cells)continue;
+            uint8_t available;
+            if(shared&&k)available=remaining[part];
+            else {
+                sprite_line_lo=lo;sprite_line_hi=hi;sprite_line_cells=shared?herd_cells:cells;
+                overlay_call(0x6e,sprite_lines_wide);available=sprite_line_cells;
+            }
+            accepted[part]=available<cells?available:cells;
+            if(shared)remaining[part]=available-accepted[part];
+        }
+        if(batch) {
+            herd_emit_args=(HerdEmit){sx+32*first+32,sy+64,code+16*first,
+                code+64+4*first,accepted[0],accepted[1],cells};
+            if(cells)herd_emit();
+            continue;
+        }
+        for(uint8_t c=first;c<last;++c) {
             int16_t x=sx+32*c;
-            if(x<=-32||x>=256)continue;
             for(uint8_t part=0;part<2;++part) {
                 int16_t y=part?sy+64:sy,h=part?16:64,lo=y<0?0:y,hi=y+h>224?224:y+h;
                 if(sat_count>=64||hi<=lo)continue;
                 sprite_line_lo=lo;sprite_line_hi=hi;
-                sprite_lines_reserve();                         /* two units a line: the cell is 32 wide */
+                sprite_lines_reserve();
                 if(!sprite_line_ok)continue;
                 sprite_lines_reserve();
                 if(!sprite_line_ok){sprite_lines_release();continue;}

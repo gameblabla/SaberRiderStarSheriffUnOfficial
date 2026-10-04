@@ -5,14 +5,54 @@
 #include "overlay_pce.h"
 #include "campaign_pce.h"
 #include "play_internal.h"
+#include "sprite_cache_pce.h"
 #define PRESENT __attribute__((noinline,section(".ram_bank116.text")))
-PRESENT void presentation_frame(void) {
+/* Retain the HUD while its graphics, palettes and counters are unchanged.
+ * Only replay onto an empty SAT/scanline prefix, so admission is identical. */
+extern vdc_sprite_t sat[2][64];
+extern uint8_t sat_count,sat_page,sprite_exact,sprite_occupancy[240];
+extern uint8_t sprite_last_free,fg_entered;
+static vdc_sprite_t hud_sat[32];
+static uint8_t hud_lines[64],hud_slots[3],hud_count,hud_exact,hud_ready;
+static uint16_t hud_ids[3];
+static uint8_t hud_hero,hud_hp,hud_lives,hud_powers;
+extern volatile uint16_t hud_copy_src,hud_copy_dst,hud_copy_len;
+extern void hud_copy(void);
+extern volatile uint8_t hud_copy_opcode;
+PCE_FLOW static void hud_transfer(void *dst,const void *src,uint16_t n) {
+    hud_copy_opcode=0x73;
+    hud_copy_src=(uint16_t)src;hud_copy_dst=(uint16_t)dst;hud_copy_len=n;hud_copy();
+}
+PCE_FLOW void presentation_frame(void) {
     const uint16_t *base=pce_present_base[pce_metrics.stage-1];
-    if(base[0]) {
-        uint8_t hp=pce_metrics.hp>3?3:pce_metrics.hp;
-        video_sprite(base[1]+pce_campaign.lives%10,29,14,false,16);
-        video_sprite(base[1]+pce_campaign.powers%10,60,14,false,16);
-        video_sprite(base[0]+pce_control.hero*4+hp,0,0,false,16);
+    if(!base[0])return;
+    uint8_t hp=pce_metrics.hp>3?3:pce_metrics.hp;
+    bool empty=!sat_count;
+    uint8_t lines=sprite_exact?64:32;
+    if(empty&&fg_entered)for(uint8_t i=0;i<lines;++i)if(sprite_occupancy[i]){empty=false;break;}
+    bool hit=empty&&hud_ready&&hud_exact==sprite_exact&&hud_hero==pce_control.hero&&hud_hp==hp&&
+        hud_lives==pce_campaign.lives&&hud_powers==pce_campaign.powers;
+    if(hit)for(uint8_t i=0;i<3;++i)if(sprite_ids[hud_slots[i]]!=hud_ids[i]){hit=false;break;}
+    if(hit) {
+        hud_transfer(sat[sat_page],hud_sat,(uint16_t)hud_count*8);
+        hud_transfer(sprite_occupancy,hud_lines,lines);
+        sprite_last_free=0;
+        sat_count=hud_count;
+        for(uint8_t i=0;i<3;++i)sprite_used[hud_slots[i]]=1;
+        return;
+    }
+    uint16_t ids[3]={base[1]+pce_campaign.lives%10,base[1]+pce_campaign.powers%10,
+        base[0]+pce_control.hero*4+hp};
+    bool ok=video_sprite(ids[0],29,14,false,16);
+    ok=video_sprite(ids[1],60,14,false,16)&&ok;
+    ok=video_sprite(ids[2],0,0,false,16)&&ok;
+    hud_ready=0;
+    if(empty&&ok&&sat_count&&sat_count<=32) {
+        for(uint8_t i=0;i<3;++i){hud_ids[i]=ids[i];hud_slots[i]=sprite_slot_of[ids[i]];}
+        hud_hero=pce_control.hero;hud_hp=hp;hud_lives=pce_campaign.lives;hud_powers=pce_campaign.powers;
+        hud_count=sat_count;hud_exact=sprite_exact;
+        hud_transfer(hud_sat,sat[sat_page],(uint16_t)hud_count*8);
+        hud_transfer(hud_lines,sprite_occupancy,lines);hud_ready=1;
     }
 }
 /* Every live actor, optional ones last (a herd or a distant enemy that does not fit the SAT is simply not drawn). */
@@ -33,7 +73,7 @@ PRESENT void actors_draw(void) {
     }
     if(herd_on)overlay_call(0x6f,herd_draw);
 }
-void presentation_draw(void) {overlay_call(0x74,presentation_frame);video_front_mark();}
+void presentation_draw(void) {overlay_call(0x6e,presentation_frame);video_front_mark();}
 
 static uint8_t panel_x,panel_y,panel_w,panel_h;
 PRESENT static void panel_draw(void) {

@@ -19,7 +19,7 @@ def verify(out):
             x=trigger['zone'][0]-40
             e.write(symbol(out/'app.elf','player'),struct.pack('<4h4B',x,160,0,0,0,0,4,4))
             c.seed(e,'camera',x-120)
-            e.write(symbol(out/'app.elf','actors'),bytes(8*17))
+            e.write(symbol(out/'app.elf','actors'),bytes(8*19))
             c.seed(e,'safe_timer',250,1);c.seed(e,'dialogs_done',255,1)
             c.press(e,8);e.input(32)
             c.until(e,lambda:e.memory(on,1)==b'\1',limit=600,step=1)

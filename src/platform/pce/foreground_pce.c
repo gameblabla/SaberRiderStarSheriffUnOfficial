@@ -18,7 +18,7 @@ typedef struct {
     uint16_t index;
 } FgPart;
 FgPart fg_parts[FG_MAX] PCE_WORK;
-uint8_t fg_count;
+uint8_t fg_count,fg_entered;
 uint16_t fg_camera;
 static uint16_t window_lo, window_hi, last_camera;
 static bool window_valid;
@@ -89,6 +89,7 @@ FG_CODE void foreground_prepare_body(void) {
     while(window_hi<need_hi) {enter(s,window_hi);++window_hi;entered=1;}
     if(window_lo<need_lo) {drop(window_lo,need_lo);window_lo=need_lo;}
     if(window_hi>need_hi) {drop(need_hi,window_hi);window_hi=need_hi;}
+    fg_entered=entered;
     if(entered) {sat_count=0;memset(sprite_occupancy,0,32);}
 }
 void foreground_prepare(void) { overlay_call(0x74,foreground_prepare_body); }

@@ -64,9 +64,12 @@ Stage callbacks share the `$6000` CPU window: platform `$69`, floor `$6d`, flow
 and presentation/sprite allocation `$74`. The resident trampoline preserves the previous
 mapping across nested callbacks. Work and staging use `$6b/$6c`. CD transfers
 use `$76–$7c` (56 KiB), copying through MPR6 into Arcade RAM before music starts.
-Audio code and shot/power DAC bytes occupy `$75`; impact/gallop DAC bytes
+Audio controls and shot/power DAC bytes occupy `$75`; impact/gallop DAC bytes
 occupy `$7d–$7f`.
-The timer IRQ saves and restores MPR3/MPR6 while using these banks.
+The unrolled playback service uses the always-mapped `$6b` work bank.
+The timer IRQ saves and restores MPR6 while leaving MPR3 and X/Y unchanged.
+The herd renderer passes strict 60 Hz presentation checks for all three
+stampedes with continuous firing; see [PCE_HERD_60FPS.md](PCE_HERD_60FPS.md).
 
 The final 128 KiB of Arcade RAM is reserved for the background tile directory.
 Scenes preload their graphics, collision, triggers, dialogs and mission tables.

@@ -6,9 +6,23 @@
 .extern pce_ticks, pce_raster_enabled, pce_floor_page, pce_raster_row
 .extern pce_scroll_x, pce_scroll_y, pce_vdc_index
 .extern pce_floor_pending, pce_scroll_hold
+.extern pce_draws
+.comm pce_visible_draw,1
+.comm pce_presented,2
 pce_vblank:
     pha
     inc pce_ticks
+    /* Observe queued SAT generations at the hardware presentation boundary.
+     * Completion can straddle an emulator frame boundary without missing
+     * VBlank, so draw-loop totals alone cannot establish display cadence. */
+    lda pce_draws
+    cmp pce_visible_draw
+    beq 1f
+    sta pce_visible_draw
+    inc pce_presented
+    bne 1f
+    inc pce_presented+1
+1:
     lda pce_vdc_index
     pha
     lda pce_raster_enabled
