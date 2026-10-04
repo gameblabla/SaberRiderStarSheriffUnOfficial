@@ -164,6 +164,12 @@ Implementation status below does not replace the user's visual/audio acceptance.
       is on screen the foreground is left out altogether. Horses are drawn at 5/8 size (~15 pieces a frame), 150 px
       apart; with the foreground out the SAT stays at 30-52 of 64 and nothing is refused.
 
+## Ninth pass (2026-10-04, playtest feedback)
+
+- [x] Levels 1 and 3 have no foreground layer at all any more (even thinned it flickered). Stage 4 keeps its thinned
+      one; `test_foreground.py` now checks foreground priority on stage 4 and asserts stages 1/3 carry none.
+      The horse herd stays; with the SAT free of foreground it holds 33-52 of 64 entries, nothing refused.
+
 Remaining integration/acceptance work:
 
 - [ ] Integrate the reference ROM's two-channel, scanline-delivered 2-bit ADPCM

@@ -9,18 +9,22 @@ from emulator import Emulator,boot,symbol
 from test_campaign import Campaign
 
 def verify(out):
-    t=Campaign(out);scene=json.loads((out/'manifest.json').read_text())['scenes'][0]
-    blob=(out/'s1.bin').read_bytes();table=scene['records']['sprite_table']['offset']
+    t=Campaign(out);# Stages 1 and 3 have no foreground layer any more (it flickered); stage 4 keeps a thinned one.
+    scenes=json.loads((out/'manifest.json').read_text())['scenes'];scene=scenes[3]
+    assert scenes[0]['foreground_count']==0 and scenes[2]['foreground_count']==0
+    blob=(out/'s4.bin').read_bytes();table=scene['records']['sprite_table']['offset']
+    fg_table=scene['records']['foreground_sprites']['offset'];fg_x=[struct.unpack_from('<hhH',blob,fg_table+6*k)[0] for k in range(scene['foreground_count'])]
+    mid=fg_x[len(fg_x)//2]
     first=next(i for i,s in enumerate(scene['sprites']) if s['name'].startswith('foreground_'))
     checked=foreground=0
     with tempfile.TemporaryDirectory(prefix='foreground-',dir=out) as base,Emulator(out/'saber_rider.cue',base) as e:
-        boot(e,t.address);t.seed(e,'dialogs_done',255,1)
+        boot(e,t.address);t.stage(e,4);t.dialogs(e);t.seed(e,'dialogs_done',255,1)
         t.press(e,8);e.run(120)
         e.write(symbol(out/'app.elf','trigger_remaining'),bytes(100))
         e.write(symbol(out/'app.elf','actors'),bytes(8*17));e.write(symbol(out/'app.elf','shots'),bytes(24*10))
         t.seed(e,'safe_timer',0,1);t.press(e,8)
-        for world_x,direction in ((3048,0),(3032,128)):
-            t.move(e,world_x,177)
+        for world_x,direction in ((mid+40,0),(mid+24,128)):
+            t.move(e,world_x,150)
             if direction:t.press(e,direction,3)
             e.run(120);t.capture(e,f'foreground-{direction}');t.press(e,8);e.run(120)
             d=t.metrics(e)

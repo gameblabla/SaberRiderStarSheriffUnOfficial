@@ -415,7 +415,9 @@ def make_scene(stage, work, previews, shared):
         for i,(name,im,(ax,ay)) in enumerate(sprites):
             if i<hud0 or aim0<=i<meta['presentation']['end']:   # gameplay, aim and motion poses (not the HUD)
                 sprites[i]=(name,im,(ax,ay-16))
-        foreground=thin_foreground(foreground)
+        if stage in (1,3):   # no foreground layer at all: whatever is left of it flickers
+            foreground=Image.new('RGBA',foreground.size);print(f'  stage {stage}: foreground removed', flush=True)
+        else: foreground=thin_foreground(foreground)
         entries=presentation.add_foreground(foreground,sprites)
         meta['foreground_offset']=a.add('foreground_sprites',b''.join(struct.pack('<hhH',*v) for v in entries))
         meta['foreground_count']=len(entries)
