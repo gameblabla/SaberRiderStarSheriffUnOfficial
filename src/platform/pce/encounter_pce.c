@@ -21,7 +21,7 @@ PCE_COMBAT void encounter_init(void) {
     const PceScene *scene=play_scene;
     uint8_t counts[3];arcade_read(2,scene->rules,counts,3);
     stop_count=counts[2]>4?4:counts[2];stop_done=0;herd_on=herd_locked=0;
-    arcade_read(2,scene->rules+3+(uint16_t)counts[0]*14+(uint16_t)counts[1]*12,stop_zones,stop_count*8);
+    arcade_read(2,scene->rules+3+(uint16_t)counts[0]*16+(uint16_t)counts[1]*12,stop_zones,stop_count*8);
     for(uint8_t k=0;k<scene->ntr;++k) {
         arcade_read(2,scene->triggers+(uint32_t)k*sizeof trigger,&trigger,sizeof trigger);
         if(k<60) {trigger_cache[k]=trigger;trigger_lo[k]=trigger.type==10?32767:trigger.cx-trigger.hx-8;trigger_hi[k]=trigger.cx+trigger.hx+8;}

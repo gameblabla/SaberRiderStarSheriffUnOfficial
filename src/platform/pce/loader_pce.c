@@ -1,14 +1,13 @@
 #include "loader_pce.h"
 #include "arcade_pce.h"
 #include "video_pce.h"
-#include "samples.h"
 #include "audio_pcm.h"
 #include "campaign_pce.h"
 
 static bool music_active;
 volatile uint8_t pce_music_status;
 
-static uint8_t voice_hero,voice_priority;
+static uint8_t voice_priority;
 #define DISC_SECTOR(name) extern char __cd_##name##__sector[]
 DISC_SECTOR(s1_bin); DISC_SECTOR(s2_bin); DISC_SECTOR(s3_bin);
 DISC_SECTOR(s4_bin); DISC_SECTOR(s5_bin); DISC_SECTOR(s6_bin);
@@ -38,11 +37,11 @@ bool loader_voice(uint8_t hero) {
     uint32_t sector=hero==0?(uint32_t)__cd_voice0_bin__sector:hero==1?(uint32_t)__cd_voice1_bin__sector:
         hero==2?(uint32_t)__cd_voice2_bin__sector:(uint32_t)__cd_voice3_bin__sector;
     pce_sector_t s={.lo=sector,.md=sector>>8,.hi=sector>>16};
-    uint16_t bytes=voice_samples[hero][4][0]+voice_samples[hero][4][1];
+    uint16_t bytes=audio_pcm_voice_bytes(hero);
     pce_cdb_adpcm_reset();++pce_metrics.disc_reads;
     uint8_t error=pce_cdb_adpcm_read_from_cd(s,((uint32_t)bytes+2047)>>11,0);
     if(error){pce_metrics.load_error=error;return false;}
-    voice_hero=hero;return true;
+    return true;
 }
 bool loader_font(void) {
     if(music_active){++pce_metrics.forbidden_reads;return false;}
@@ -110,16 +109,17 @@ static void music_start(uint8_t track,uint8_t mode) {
 void audio_music(uint8_t track) { music_start(track,PCE_CDB_CDDA_PLAY_REPEAT); }
 void audio_music_once(uint8_t track) { music_start(track,PCE_CDB_CDDA_PLAY_ONE_SHOT); }
 void audio_effect(uint8_t tone) {
-    if(tone==2||tone==5||tone==6||tone==7||tone==8) {
-        /* 7/8: enemy hit / death yells share the hero's ADPCM bank and never cut a hero voice. */
-        uint8_t event=tone==2?0:tone==5?1:tone==6?2:tone==7?3:4,priority=event>2?1:event+1;
-        if((pce_cdb_adpcm_status()&ADPCM_STOPPED)||priority>=voice_priority) {
+    /* 2 jump, 5 hurt, 6 death, 7/8 enemy hit / death yells, 9 alarm "!", 10 dialogue line, 11 fall: CD ADPCM voices
+     * (the bank picks a variant); a hero voice is never cut by a lower-priority one. */
+    if(tone==2||(tone>=5&&tone<=11)) {
+        audio_pcm_voice(tone);
+        if((pce_cdb_adpcm_status()&ADPCM_STOPPED)||pce_voice.priority>=voice_priority) {
             pce_cdb_adpcm_stop();
-            pce_cdb_adpcm_play(voice_samples[voice_hero][event][0],voice_samples[voice_hero][event][1],12,PCE_CDB_ADPCM_ONE_SHOT);
-            voice_priority=priority;
+            pce_cdb_adpcm_play(pce_voice.address,pce_voice.bytes,12,PCE_CDB_ADPCM_ONE_SHOT);
+            voice_priority=pce_voice.priority;
         }
+        return;
     }
-    if(tone==2||tone==5||tone==6||tone==7||tone==8)return;
     audio_pcm_play(tone==1?0:tone==4?1:2);
 }
 void audio_tick(void) {}

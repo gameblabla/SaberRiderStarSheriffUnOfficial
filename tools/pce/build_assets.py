@@ -324,7 +324,9 @@ def make_scene(stage, work, previews, shared):
         stops=meta['stops'] if stage==1 else []
         rules=bytes([len(zones),len(deaths),len(stops)])
         # Dialogue zone + camera focus x (0 = none) + ticks to hold before / after the text (60 Hz).
-        rules+=b''.join(struct.pack('<4hhHH',*z['zone'],z['focus'][0],round(z['hold'][0]*60/1000),round(z['hold'][1]*60/1000)) for z in zones)
+        # + the voice tone (audio_effect) the script's first line names: the sample plays when the box opens.
+        voices={0:0,0xFDB525F9:10}
+        rules+=b''.join(struct.pack('<4hhHHH',*z['zone'],z['focus'][0],round(z['hold'][0]*60/1000),round(z['hold'][1]*60/1000),voices[z['sfx']]) for z in zones)
         rules+=b''.join(struct.pack('<6h',*z) for z in deaths)
         rules+=b''.join(struct.pack('<4h',*z) for z in stops)
         meta['rules_offset']=a.add('flow_zones',rules)

@@ -7,6 +7,11 @@
 #include <string.h>
 Ren *rnull_renderer(void);
 static int value(real x) { return (int)lroundf(x); }
+/* The voice sample a dialogue script names on its first line (played when the box opens). */
+static unsigned sfx_of(unsigned text) {
+    Dialog d;
+    return text&&dialog_open(&d,text)?d.pending_sfx:0;
+}
 int main(int argc, char **argv) {
     if (argc != 4) return 2;
     int stage = atoi(argv[2]);
@@ -47,9 +52,9 @@ int main(int argc, char **argv) {
     }
     fprintf(f, "],\"dialogs\":[");
     for(int k=0;k<4;++k) {
-        fprintf(f,"%s{\"id\":%u,\"zone\":[%d,%d,%d,%d],\"focus\":[%d,%d],\"hold\":[%d,%d]}",k?",":"",g->dialogs[k].text,
+        fprintf(f,"%s{\"id\":%u,\"zone\":[%d,%d,%d,%d],\"focus\":[%d,%d],\"hold\":[%d,%d],\"sfx\":%u}",k?",":"",g->dialogs[k].text,
                 value(g->dialogs[k].cx),value(g->dialogs[k].cy),value(g->dialogs[k].hx),value(g->dialogs[k].hy),
-                value(g->dialogs[k].focus_x),value(g->dialogs[k].focus_y),value(g->dialogs[k].t_in*1000),value(g->dialogs[k].t_out*1000));
+                value(g->dialogs[k].focus_x),value(g->dialogs[k].focus_y),value(g->dialogs[k].t_in*1000),value(g->dialogs[k].t_out*1000),sfx_of(g->dialogs[k].text));
         if(g->dialogs[k].text) {
             Dialog d;
             if(dialog_open(&d,g->dialogs[k].text)) {

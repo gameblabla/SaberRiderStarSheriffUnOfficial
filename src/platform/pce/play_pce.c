@@ -148,7 +148,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     if((pce_campaign.boss_kind||herd_locked)&&player.x>(int16_t)camera+248)player.x=camera+248;   /* boss arena / herd: the screen is locked */
     if((player.coll&4)&&!pce_death){safe_x=player.x;safe_y=player.y;}
     if(player.y>272&&!pce_death) {
-        campaign_hurt();
+        campaign_hurt();audio_effect(11);   /* the fall voice replaces the hurt yell */
         if(!pce_death){player=(Body){.x=safe_x,.y=safe_y};safe_timer=120;}
     }
     if((keys&KEY_1)&&!fire_timer) {
@@ -186,7 +186,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
         if(a->type==28) {
             /* The cutscene outrider (hp 2 waiting, 1 alarmed, 0 running): once it is on screen it freezes for a second
              * facing the hero, then turns and runs off to the right. */
-            if(a->hp==2){int16_t d=camera+128-a->b.x;if(d<0)d=-d;if(d<128){a->hp=1;a->timer=62;}}
+            if(a->hp==2){int16_t d=camera+128-a->b.x;if(d<0)d=-d;if(d<128){a->hp=1;a->timer=62;audio_effect(9);}}
             else if(a->hp==1){if(!--a->timer){a->hp=0;a->flip=0;}}
             a->b.vx=a->hp?0:512;physics(&a->b);
             if(!a->hp){++a->anim;if(a->b.x>(int16_t)camera+272)a->active=0;}
@@ -230,6 +230,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     if(camera>(uint16_t)(scene->width-256))camera=scene->width-256;
     pce_metrics.player_x=player.x;pce_metrics.player_y=player.y;pce_metrics.camera_x=camera;pce_metrics.hero=hero;
 }
+uint16_t hero_sprite;
 __attribute__((noinline)) void play_draw(void) {
     /* The hardware scroll stays put until this frame's SAT is uploaded (see irq.S). */
     pce_scroll_hold=1;
@@ -257,6 +258,7 @@ __attribute__((noinline)) void play_draw(void) {
         if(keys&KEY_LEFT)facing=1;
         if(keys&KEY_RIGHT)facing=0;
     }
+    hero_sprite=id;   /* what the dialogue overlay draws while the world is frozen */
     if(!safe_timer||(frame&4)||pce_death)video_sprite(id,player.x-camera,player.y-16,facing,16);
     if(flash_time)video_sprite(pce_flash_base[stage]+(flash_diag?0:4)+4-flash_time,player.x+flash_dx-camera,player.y+flash_dy-16,false,16);
     /* Essential projectiles precede optional distant enemies. */

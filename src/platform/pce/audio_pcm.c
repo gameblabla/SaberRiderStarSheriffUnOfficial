@@ -1,9 +1,11 @@
 #include "audio_pcm.h"
 #include "overlay_pce.h"
 #include "pcm.h"
+#include "samples.h"
 #define PCM_CODE __attribute__((noinline,section(".ram_bank117.text")))
 /* Assembly reserves $2080-$20a0; the linker protects it from compiler ZP. */
-static uint8_t request;
+static uint8_t request,voice_seed;
+PceVoice pce_voice;
 PCM_CODE static void stop_all(void) {
     pce_cpu_irq_disable();
     *IO_TIMER_CONTROL=0;*IO_IRQ_ACK=0;pce_pcm_active=0;
@@ -39,3 +41,17 @@ void audio_pcm_play(uint8_t sample) {
     request=sample;overlay_call(0x75,start);
 }
 __attribute__((noinline)) void audio_pcm_gallop(bool on) {request=on?3:4;overlay_call(0x75,start);}
+/* tone (audio_effect) -> voice event: jump hurt death fall enemy_hit enemy_death alarm dialogue line */
+PCM_CODE static void voice_pick(void) {
+    static const uint8_t tone_event[12]={0,0,0,0,0,1,2,4,5,6,7,3};
+    const uint8_t *group=voice_groups[tone_event[request]];
+    uint8_t k=group[0];
+    voice_seed=voice_seed*37+11;
+    if(group[1]>1)k+=(voice_seed>>3)%group[1];
+    pce_voice.address=voice_samples[pce_voice.hero][k][0];
+    pce_voice.bytes=voice_samples[pce_voice.hero][k][1];
+    pce_voice.priority=group[2];
+}
+PCM_CODE static void voice_size(void) {pce_voice.bytes=voice_total[pce_voice.hero];}
+void audio_pcm_voice(uint8_t tone) {request=tone;overlay_call(0x75,voice_pick);}
+uint16_t audio_pcm_voice_bytes(uint8_t hero) {pce_voice.hero=hero;overlay_call(0x75,voice_size);return pce_voice.bytes;}

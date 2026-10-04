@@ -13,6 +13,7 @@ extern uint16_t camera,frame;
 extern uint8_t hero,facing,safe_timer;
 extern int16_t safe_x,safe_y;
 extern uint8_t slide_time;
+extern uint16_t hero_sprite;   /* the sprite id play_draw last chose for the hero */
 extern uint8_t cut_phase;   /* story camera pan around a level dialogue (combat_pce.c); 0 = none */
 extern int16_t probe_x,probe_y;extern uint8_t probe_left;
 void spawn_clear(void);

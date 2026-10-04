@@ -37,7 +37,7 @@ def verify(out):
             return dict(file=str(path.relative_to(out)),peak=int(np.abs(pcm.astype(np.int32)).max()),
                 rms=float(np.sqrt(np.mean(pcm.astype(np.float64)**2))),
                 tail_rms=float(np.sqrt(np.mean(pcm[-4410:].astype(np.float64)**2))))
-        for tone,name in [(1,'shoot'),(2,'jump'),(5,'hurt'),(6,'death'),(4,'impact')]:
+        for tone,name in [(1,'shoot'),(2,'jump'),(5,'hurt'),(6,'death'),(7,'enemy_hit'),(8,'enemy_death'),(9,'alarm'),(10,'dialogue_oh_no'),(11,'fall'),(4,'impact')]:
             call(e,stop);e.run(120)
             quiet=capture(e,'quiet-'+name,12);assert quiet['rms']<10,quiet
             saved_bank=e.call('registers')['registers']['MPR6'];call(e,effect,tone)
@@ -60,6 +60,15 @@ def verify(out):
                 reports[name]=capture(e,name,180)
             assert reports[name]['rms']>20,reports[name]
             assert reports[name]['tail_rms']<10,reports[name]
+        # Every variant of a voice event is reachable (the PC game picks hurt / death / yells at random).
+        voice=symbol(elf,'pce_voice.0');variants={}   # LTO splits the struct: .0 is the ADPCM address
+        for tone,count in [(5,3),(6,2),(7,3),(8,3),(9,1),(10,1),(11,1)]:
+            seen=set()
+            for _ in range(40):
+                call(e,effect,tone);seen.add(int.from_bytes(e.memory(voice,2),'little'));call(e,stop)
+            assert len(seen)==count,(tone,seen)
+            variants[tone]=len(seen)
+        reports['voice_variants']=variants
         # Stop a shot while active, as every loader does before CD operations.
         call(e,effect,1);assert e.call('registers')['registers']['TIMS']==1
         call(e,stop);assert not any(left(e,ch) for ch in range(2)) and e.call('registers')['registers']['TIMS']==0
@@ -100,7 +109,7 @@ def verify(out):
             for _ in range(hero):campaign.press(e,16)
             campaign.press(e,8);campaign.until(e,lambda:e.memory(metrics+5,1)==b'\1');e.run(120)
             assert campaign.metrics(e)['hero']==hero
-            for tone,event in [(2,'jump'),(5,'hurt'),(6,'death')]:
+            for tone,event in [(2,'jump'),(5,'hurt'),(6,'death'),(7,'enemy_hit'),(8,'enemy_death'),(9,'alarm'),(10,'dialogue_oh_no'),(11,'fall')]:
                 call(e,stop);e.run(120);call(e,effect,tone)
                 registers=e.call('registers')['registers']
                 assert registers['Playing']==1,(name,event,'ADPCM did not start')

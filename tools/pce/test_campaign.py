@@ -67,10 +67,17 @@ class Campaign(Test):
             cut=symbol(self.out/'app.elf','cut_phase');peak=0
             e.input(32);self.until(e,lambda:self.state(e)['state']==1,limit=1000);e.input(0)
             assert self.metrics(e)['player_x']>x
+            def below_box():
+                # Sprites on the ground (screen y >= 110) lie below the box, which sits at the top: hero, actors.
+                sat=bytes.fromhex(e.call('asread','vram0',0xfe00,512)['hex'])
+                return sum(1 for k in range(64) if (struct.unpack_from('<4H',sat,k*8)[0]&0x3ff)-64>=110)
+            e.run(30);assert below_box(),'The hero must stay on screen while the dialogue runs'
             self.capture(e,'campaign-dialog');self.dialogs(e)    # the opening dialogue (x 192)
             e.input(32);self.until(e,lambda:self.state(e)['state']==1,limit=1500,step=10);e.input(0)
             assert self.metrics(e)['camera_x']>=600,self.metrics(e)
             assert e.memory(cut,1)[0]==4
+            assert e.call('registers')['registers']['Playing']==1,'The dialogue voice line plays when the box opens'
+            e.run(30);assert below_box(),'The outrider must stay on screen while the text runs'
             self.capture(e,'campaign-outrider');self.dialogs(e)
             def panned():
                 nonlocal peak

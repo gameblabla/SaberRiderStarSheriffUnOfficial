@@ -195,6 +195,28 @@ Implementation status below does not replace the user's visual/audio acceptance.
       idle while the camera pans, "!" when the camera arrives, the "!" held through the text, runs off after it -
       the sequence traced from the PC game (`headless` run of the same level data).
 
+## Twelfth pass (2026-10-04, playtest feedback)
+
+- [x] The hero (and every actor and the boss) vanished while a dialogue box was open: the story overlay emptied the
+      SAT and drew only the avatar and box. Platform stages now keep them in the SAT (`hero_sprite` = the id
+      `play_draw` last chose) and the box sits at the top of the screen like the race stage's, because a bottom box
+      (y 144-208) covers exactly where the hero stands. The box cells, arrow and the restore after the text follow
+      `story_y`.
+- [x] More PC voices (all from the PC game's own sample table, `tools/pce/build_audio.py`, CD ADPCM banks of
+      37-43 KB per hero; the variant is picked at random as in `src/audio.c`):
+      hero hurt x3 and death x2 (Saber/April/Colt: the generated grunts; Fireball: the sfx 5 / sfx 6 yells), a fall voice
+      (pit), enemy hit x3 (sfx 5 yells), enemy death x3 (a hit yell plus a death yell 3 frames later, mixed at build
+      time as the PC layers them), the cutscene Outrider's "!" alarm (sfx 22, `E105C92A`) and the level-1 dialogue
+      voice line `FDB525F9` ("Oh no! The Star Sheriffs!!!"), which the dialogue script names on its first line and
+      which plays when the box opens (`voice` field of the 16-byte flow-zone record; `export.c` writes `sfx`).
+      `audio_effect` tones: 7/8 enemy hit/death, 9 alarm, 10 dialogue line, 11 fall; the bank logic moved into
+      audio bank `$75` (`voice_pick`), the BIOS call stays resident.
+- [x] `test_audio.py` plays every new event on all four heroes and checks all variants are reachable;
+      `test_campaign.py` checks the hero/actors stay in the SAT during dialogue and the voice line is playing.
+- Known, not fixed: when the horse herd tramples the hero on a frame where the horses fill a scanline, one
+      essential sprite can be refused (`essential_overflow` +1, one frame). It depends on the gait phase (reproduces on
+      the previous commit at other timings); `test_herd.py` now keeps the hero invulnerable on the run to the lock.
+
 Remaining integration/acceptance work:
 
 - [ ] Integrate the reference ROM's two-channel, scanline-delivered 2-bit ADPCM

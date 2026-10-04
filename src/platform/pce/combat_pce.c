@@ -6,7 +6,7 @@
 static uint8_t dialogs_done,ndialog,ndeath,boss_phase,boss_flash;
 static uint16_t boss_time,arena_time;
 static int16_t boss_x,boss_y;
-typedef struct { int16_t zone[4],focus; uint16_t before,after; } DialogZone;
+typedef struct { int16_t zone[4],focus; uint16_t before,after,voice; } DialogZone;
 static DialogZone dialog_zones[4];
 static int16_t death_zones[8][6];
 /* Level dialogue with a camera focus (the outrider who spots the heroes): the hero comes to a stop, the camera pans
@@ -64,7 +64,7 @@ PCE_COMBAT static void cut_step(void) {
             cut_target=t<0?0:t>(int16_t)limit?limit:t;cut_phase=2;
         }break;
     case 2:if(cut_pan(cut_target)){cut_phase=3;cut_wait=dialog_zones[cut_k].before;}break;
-    case 3:if(cut_wait)--cut_wait;else {cut_phase=4;pce_campaign.event=1;}break;
+    case 3:if(cut_wait)--cut_wait;else {cut_phase=4;pce_campaign.event=1;if(dialog_zones[cut_k].voice)audio_effect(dialog_zones[cut_k].voice);}break;
     case 4:cut_phase=5;cut_wait=dialog_zones[cut_k].after;break;   /* the text has closed */
     case 5:if(cut_wait)--cut_wait;else cut_phase=6;break;
     default:{
@@ -84,7 +84,7 @@ PCE_COMBAT void combat_tick(void) {
     for(uint8_t k=0;k<ndialog;++k)if(!(dialogs_done&(1<<k))&&zone(dialog_zones[k].zone)) {
         dialogs_done|=1<<k;pce_campaign.story=k;
         if(dialog_zones[k].focus){cut_k=k;cut_phase=1;overlay_call(0x6f,encounters);}   /* the scene's own actors exist from the start (idle while the camera pans) */
-        else pce_campaign.event=1;
+        else {pce_campaign.event=1;if(dialog_zones[k].voice)audio_effect(dialog_zones[k].voice);}
         return;
     }
     for(uint8_t k=0;k<ndeath;++k)if(zone(death_zones[k])&&!safe_timer) {

@@ -4,11 +4,12 @@
 #include "video_pce.h"
 #include "presentation_pce.h"
 #include "play_pce.h"
+#include "play_internal.h"
 #include "sprite_cache_pce.h"
 #include <string.h>
 #define STORY_CODE __attribute__((noinline,section(".ram_bank113.text")))
 static uint32_t story_address;
-static uint8_t page_count;
+static uint8_t page_count,story_y;   /* story_y: BG row of the box's top */
 static char story_text[256];
 /* Typewriter: the lines are kept NUL-terminated in story_text and revealed a character at a time. */
 static char *line_text[4];static uint8_t line_row[4],line_count,type_line,type_col,type_clock;
@@ -27,7 +28,8 @@ STORY_CODE static void draw(void) {
     uint16_t avatar;uint8_t colour;
     arcade_read(2,a,&avatar,2);arcade_read(2,a+2,&colour,1);
     arcade_read(2,a+3,story_text,sizeof story_text);story_text[255]=0;
-    uint8_t y=pce_metrics.stage==2?5:20;
+    /* The box sits at the top on the race and the platform stages (the hero stands where a bottom box would be). */
+    uint8_t y=story_y=pce_metrics.stage<6?5:20;
     /* BG cells sit (scroll & 7) pixels left of their grid on a scrolling playfield. */
     int16_t box_x=24-(pce_raster_enabled?0:(pce_scroll_x&7)),box_y=y*8-(pce_metrics.stage!=2&&pce_metrics.stage<6?16:0);   /* platform sprites are baked 16 lines low */
     /* Blank every BG cell under the box except the four 2x2 corner blocks; the corner pieces stay in front of the
@@ -46,8 +48,13 @@ STORY_CODE static void draw(void) {
         bool corner=(e->x==left||e->x==left+208)&&(e->y==top||e->y==top+32);
         if(!corner)e->attr&=~VDC_SPRITE_FG;
     }
-    /* The camera-pan scene keeps its actors on screen (the outrider stays put while the text runs). */
-    if(cut_phase)overlay_call(0x74,actors_draw);
+    /* The world stands still behind the text: the hero (behind the box, which comes first in the SAT), the actors
+     * (the cutscene outrider stays put) and the boss stay on screen. */
+    if(platform) {
+        video_sprite(hero_sprite,player.x-camera,player.y-16,facing,16);
+        overlay_call(0x74,actors_draw);
+        if(!pce_campaign.diagnostic)overlay_call(0x70,combat_draw);
+    }
     video_sat_end();
     /* Platform stages: the cells go blank right after the VBlank that brings the box sprites (see the restore). */
     if(platform){video_wait();video_panel_blank(y);}
@@ -77,7 +84,7 @@ STORY_CODE static bool typing(void) {
     return type_line<line_count;
 }
 STORY_CODE static void arrow(bool on) {
-    video_text(28,pce_metrics.stage==2?9:24,on?"\x7f":" ");
+    video_text(28,story_y+4,on?"\x7f":" ");
 }
 STORY_CODE void story_start(void) {
     uint32_t dir=pce_scenes[pce_metrics.stage-1].story;
@@ -86,7 +93,7 @@ STORY_CODE void story_start(void) {
     story_address=pointer(dir+1+((uint16_t)pce_control.hero*count+pce_campaign.story)*4);
     arcade_read(2,story_address,&page_count,1);
     pce_campaign.page=0;pce_campaign.state=CAM_STORY;pce_campaign.timer=0;
-    if(!cut_phase){video_sat_begin();video_sat_end();}   /* in the camera scene the actors must stay in the SAT */
+    if(pce_metrics.stage==2||pce_metrics.stage>=6){video_sat_begin();video_sat_end();}   /* platform stages keep their sprites in the SAT */
     draw();
 }
 STORY_CODE void story_step(void) {
@@ -105,7 +112,7 @@ STORY_CODE void story_step(void) {
         if(pce_metrics.stage!=2&&pce_metrics.stage<6) {
             /* Put the blanked cells back and swap the sprites in one go: a full background reload takes several frames,
              * uncovering the box column by column while its in-front corner pieces linger. */
-            pce_panel_restore=20;play_draw();
+            pce_panel_restore=story_y;play_draw();
         } else video_restore();
     }
 }
