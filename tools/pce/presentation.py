@@ -12,11 +12,13 @@ def namehash(s):
     for c in b[:0:-1]:h^=c|((~c<<8)&0xffffffff)
     return h&0xffffffff
 
-def sky(stage,size):
-    top,bottom=((36,100,190),(116,190,250)) if stage==1 else ((14,8,34),(66,36,90))
-    w,h=size;v=np.linspace(top,bottom,h).astype(np.uint8)
-    a=np.zeros((h,w,4),np.uint8);a[:,:,:3]=v[:,None,:];a[:,:,3]=255
-    return Image.fromarray(a)
+# Fixed backdrop colours: blue cyan by day, dark purple at night.
+SKY_COLOURS = {1: (72, 182, 218), 3: (36, 0, 72)}
+
+def sky_color(stage):
+    """One VCE backdrop colour per stage, loaded with the scene palette."""
+    from formats import vce_colors
+    return int(vce_colors(SKY_COLOURS.get(stage, (0, 0, 0))))
 
 def add_foreground(image,sprites):
     entries=[];cache={}

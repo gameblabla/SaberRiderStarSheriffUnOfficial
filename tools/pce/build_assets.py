@@ -18,6 +18,7 @@ import story
 import timeline
 import presentation
 import tile_budget
+import palfit
 import hudart
 import floor_tables
 import frontend
@@ -202,44 +203,24 @@ def thin_foreground(fg):
 def native_background(image, archive, previews, name):
     w = (image.width + 7) // 8 * 8
     canvas = Image.new('RGBA', (w, 240), (0, 0, 0, 255)); canvas.paste(image)
-    # Four vertical color bands, four palettes each. Group by per-cell mean
-    # color; each group keeps 15 colors plus a common black backdrop.
     rgba = np.asarray(canvas)
     cells = rgba.reshape(30, 8, w // 8, 8, 4).transpose(0, 2, 1, 3, 4).reshape(-1, 8, 8, 4)
-    means = cells[..., :3].mean((1, 2))
-    groups = np.zeros(len(cells), np.uint8)
-    palette = []
-    row_band = np.repeat(np.minimum(np.arange(30) // 8,3), w // 8)
-    dialog_palette=name in ('stage1','stage3','stage4','stage5')
-    for band in range(0 if name=='stage2' else 4):
-        select = np.nonzero(row_band == band)[0]
-        m = means[select]
-        count=3 if dialog_palette and band==3 else 4
-        centers = m[np.linspace(0, len(m) - 1, count, dtype=int)]
-        for _ in range(8):
-            g = ((m[:, None] - centers[None]) ** 2).sum(-1).argmin(1)
-            for k in range(count):
-                if (g == k).any(): centers[k] = m[g == k].mean(0)
-        groups[select] = band * 4 + g
-        for k in range(count):
-            group = cells[select[g == k]]
-            palette.append(palette_for([Image.fromarray(group.reshape(-1, 8, 4))]) if len(group) else np.zeros(16, '<u2'))
-    if dialog_palette:palette.append(np.zeros(16,'<u2')) # palette 15 belongs to dialogue/font
-    if name=='stage2':
-        # A 128x32 four-color source gives <=256 distinct 2x2 source cells
-        # after 4x nearest expansion, fitting the 288-character sky budget.
-        p=palette_for([canvas.crop((0,0,512,128))],colors=4)
-        p[5:]=p[1];palette=[p]*16
-    if name!='stage2':
+    dialog_palette=name in ('stage1','stage3','stage4','stage5')   # palette 15 belongs to the dialogue box and the font
+    # The 16 palettes and the palette of every cell are optimised together (palfit.py), not by vertical bands of mean colour.
+    palette, groups = palfit.fit_palettes(cells, 16, fixed=(15,) if dialog_palette else ())
+    palette = [palette[k] for k in range(16)]
+    if not dialog_palette:
         # The renderer forces BG colour 255 (palette 15, index 15) to white for the text font, so a baked cell must
-        # never pick it: the bottom band's last palette used to show white pixels (y>=192) wherever it did.
-        palette[15]=palette[15].copy();palette[15][15]=palette[15][14]
+        # never pick it: the last palette's last colour repeats its neighbour.
+        palette[15] = palette[15].copy(); palette[15][15] = palette[15][14]
+    # Transparent sky pixels all reveal VCE entry 0, independent of the cell's palette.
+    backdrop = presentation.sky_color(int(name[5:]))
     tiles, tile_lookup, names = [], {}, []
     preview = np.zeros_like(rgba)
-    cell_idx = np.stack([indexed(Image.fromarray(cell), palette[int(groups[i])]) for i, cell in enumerate(cells)])
-    if name != 'stage2':
-        cell_idx, groups, merged = tile_budget.limit_tiles(cells, cell_idx, groups, palette, w // 8, BG_TILES - 4, reserved=(15,) if dialog_palette else ())
-        if merged: print(f'{name}: redrew {merged} cells with neighbouring characters to fit the {BG_TILES}-tile cache', flush=True)
+    cell_idx = palfit.index_cells(cells, np.asarray(palette), groups)
+    cell_idx, groups, merged = tile_budget.limit_tiles(cells, cell_idx, groups, palette, w // 8, BG_TILES - 4, reserved=(15,) if dialog_palette else ())
+    if merged: print(f'{name}: redrew {merged} cells with neighbouring characters to fit the {BG_TILES}-tile cache', flush=True)
+    palette[0][0] = backdrop
     for i, cell in enumerate(cells):
         pal = int(groups[i]); idx = cell_idx[i]
         encoded = planar_tile(idx)
@@ -247,7 +228,8 @@ def native_background(image, archive, previews, name):
         if key not in tile_lookup: tile_lookup[key] = len(tiles); tiles.append(encoded)
         names.append((tile_lookup[key], pal))
         y, x = divmod(i, w // 8)
-        preview[y * 8:y * 8 + 8, x * 8:x * 8 + 8, :3] = vce_rgb(palette[pal])[idx]
+        preview[y * 8:y * 8 + 8, x * 8:x * 8 + 8, :3] = np.where(
+            idx[..., None] > 0, vce_rgb(palette[pal])[idx], vce_rgb(backdrop))
         preview[y * 8:y * 8 + 8, x * 8:x * 8 + 8, 3] = 255
     if len(tiles) > 65535: raise ValueError(f'{name}: too many background characters')
     n = np.asarray(names, np.uint16).reshape(30, w // 8, 2).transpose(1, 0, 2)
@@ -255,7 +237,7 @@ def native_background(image, archive, previews, name):
     pal_off = archive.add('bg_palette', np.asarray(palette, '<u2').tobytes())
     tile_off = archive.add('bg_patterns', b''.join(tiles))
     map_off = archive.add('bg_columns', mapping)
-    Image.fromarray(preview[:, :min(w, 1024)]).save(previews / f'{name}.png')
+    Image.fromarray(preview).save(previews / f"{name}.png")
     return dict(pal=pal_off, tiles=tile_off, map=map_off, cols=w // 8, tile_count=len(tiles))
 
 def race_sky(archive, previews, sand):
@@ -356,8 +338,7 @@ def platform_background(stage, work):
     for x in range(0,width,256):
         pixels=np.zeros((240,256,4),np.uint8)
         front=np.zeros_like(pixels);after_player=False
-        if stage in (1,3):
-            pixels[:]=np.asarray(presentation.sky(stage,(256,240)))
+        # Stages 1 and 3 leave the sky transparent for the fixed scene backdrop.
         for ly in level.layers:
             if ly.name=='PlayerSprites':after_player=True
             if not ly.is_tilemap:continue

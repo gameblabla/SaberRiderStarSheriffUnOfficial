@@ -3,7 +3,7 @@
 The renderer keeps 33 BAT columns resident and caches each distinct 8x8 character once, so a window
 with more distinct characters than the cache holds leaves its rightmost column unloaded (garbage while
 scrolling). When a stage is over budget, single-use characters in the crowded windows are dropped: the
-cell is redrawn with the character (and one of the four palettes of its colour band) from the nearby
+cell is redrawn with the character (and the palette) from the nearby
 columns that matches the original pixels best. Cheapest first, and only while a window still gains.
 """
 import numpy as np
@@ -32,6 +32,7 @@ def limit_tiles(cells, indices, groups, palettes, cols, cap, reserved=()):
     inverse = inverse.reshape(-1).astype(np.int64)
     if presence(inverse.reshape(rows, cols)).sum(0).max() <= cap: return indices, groups, 0
     colours = [vce_rgb(p).astype(np.int32) for p in palettes]
+    candidates = [p for p in range(len(palettes)) if p not in reserved]   # any palette: the cells are no longer grouped in bands
     colours[15][15] = 4096        # BG colour 255 is the text font's white at runtime: never a candidate for a baked cell
     source = np.where(cells[..., 3:4] >= 128, cells[..., :3], 0).reshape(n, 64, 3).astype(np.int32)
     ar = np.arange(64)
@@ -50,10 +51,8 @@ def limit_tiles(cells, indices, groups, palettes, cols, cap, reserved=()):
             i = cell_of[a]; x = i % cols
             near = np.unique(grid[:, max(x - REACH, 0):x + REACH + 1]); near = near[near != a]
             if not len(near): continue
-            band = int(groups[i]) // 4
             best = None
-            for pal in range(band * 4, band * 4 + 4):
-                if pal in reserved:continue
+            for pal in candidates:
                 cost = ((colours[pal][None] - source[i][:, None]) ** 2).sum(-1)      # (64 pixels, 16 indices)
                 err = cost[ar[None], uniq[near]].sum(1)
                 k = int(err.argmin())
