@@ -5,7 +5,7 @@
 .global pce_vblank, pce_hblank
 .extern pce_ticks, pce_raster_enabled, pce_floor_page, pce_raster_row
 .extern pce_scroll_x, pce_scroll_y, pce_vdc_index
-.extern pce_floor_pending
+.extern pce_floor_pending, pce_scroll_hold
 pce_vblank:
     pha
     inc pce_ticks
@@ -27,11 +27,16 @@ pce_vblank:
     st2 #0
     bra .Ldone
 .Lnormal:
+    /* A platform draw holds the hardware scroll until its SAT is uploaded (video_sat_end releases
+     * it), so the background and the sprites always change on the same frame. */
+    lda pce_scroll_hold
+    bne 1f
     st0 #7
     lda pce_scroll_x
     sta 2
     lda pce_scroll_x+1
     sta 3
+1:
     st0 #8
     st1 #0
     st2 #0

@@ -45,7 +45,7 @@ __attribute__((noinline,section(".ram_bank113.text"))) void sprite_generic(void)
             }
             uint16_t word=0x7800+(uint16_t)clipped_count++*64;
             pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-            pce_vdc_copy_to_vram(word,clipped_pattern,128);
+            pce_cpu_irq_disable();pce_vdc_copy_to_vram(word,clipped_pattern,128);pce_cpu_irq_enable();
             pce_metrics.uploads+=128;vram_pattern=word>>5;
         }
         sat[sat_page][sat_count++] = (vdc_sprite_t){py + 64, px + 32,

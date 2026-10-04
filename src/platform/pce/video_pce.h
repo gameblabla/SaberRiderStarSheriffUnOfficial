@@ -17,6 +17,8 @@ void video_wait(void);
 void video_mode_ui(void);
 void video_display(bool enable);
 void video_scroll(uint16_t x, uint16_t y);
+extern volatile uint16_t pce_scroll_x;
+extern volatile uint8_t pce_scroll_hold;
 void video_scene(const PceScene *scene);
 bool video_background(uint16_t camera);
 void video_restore(void);

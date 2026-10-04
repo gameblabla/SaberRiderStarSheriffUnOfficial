@@ -8,6 +8,7 @@ volatile PceTelemetry pce_metrics;
 volatile uint8_t pce_ticks, pce_raster_enabled, pce_floor_page, pce_raster_row;
 volatile uint8_t pce_vdc_index;
 volatile uint16_t pce_scroll_x, pce_scroll_y;
+volatile uint8_t pce_scroll_hold;
 volatile uint8_t pce_floor_pending;
 static const PceScene *scene;
 const PceScene *video_scene_ptr;
@@ -293,6 +294,10 @@ PCE_RENDER void video_sat_end(void) {
         if(peak>pce_metrics.max_units)pce_metrics.max_units=peak;}
     for(uint8_t k=sat_count;k<sat_previous;++k)s[k].y=0;
     pce_vdc_index = 2; *(volatile uint8_t *)0x20f7 = 2;
+    /* The library copy sets MAWR with st0/st2 pairs. A VBlank IRQ between them restores index 2
+     * from the shadow, so the MAWR high byte becomes a stray VRAM write and the segment lands a
+     * word late (or on another page). Block transfers are atomic anyway; keep the setup atomic too. */
+    pce_cpu_irq_disable();
     if(front_start<sat_count) {
         uint8_t fg=sat_count-front_start;
         if(front_keep)pce_vdc_copy_to_vram(PCE_SAT_WORD,s,(uint16_t)front_keep*8);
@@ -303,7 +308,9 @@ PCE_RENDER void video_sat_end(void) {
     if(sat_previous>sat_count)
         pce_vdc_copy_to_vram(PCE_SAT_WORD+(uint16_t)sat_count*4,s+sat_count,(uint16_t)(sat_previous-sat_count)*8);
     sat_previous=sat_count;
+    pce_cpu_irq_enable();
     video_vdc(VDC_REG_SATB_START, PCE_SAT_WORD);
+    pce_scroll_hold=0;   /* the new SAT is queued: from the next VBlank both it and the scroll apply */
     pce_metrics.sat_count = sat_count;
 }
 PCE_RENDER void video_race_init(void) {
