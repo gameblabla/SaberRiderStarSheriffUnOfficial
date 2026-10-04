@@ -19,7 +19,7 @@ def verify(out):
             x=trigger['zone'][0]-40
             e.write(symbol(out/'app.elf','player'),struct.pack('<4h4B',x,160,0,0,0,0,4,4))
             c.seed(e,'camera',x-120)
-            e.write(symbol(out/'app.elf','actors'),bytes(8*19))
+            e.write(symbol(out/'app.elf','actors'),bytes(8*21))
             c.seed(e,'safe_timer',250,1);c.seed(e,'dialogs_done',255,1)
             c.press(e,8);e.input(32)
             # The hero stays invulnerable on the run to the lock: being trampled on the one frame where the horses

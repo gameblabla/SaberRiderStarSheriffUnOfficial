@@ -12,7 +12,8 @@
  * Q8 values; a 16-bit fixed-point world coordinate would overflow after 127px. */
 Body player;
 Actor actors[8] PCE_WORK;
-Shot shots[24] PCE_WORK;
+Shot shots[NSHOTS] PCE_WORK;
+Body *phys_body;int16_t cell_x,cell_y;uint8_t cell_value;
 static uint8_t collision[32][32] PCE_WORK;
 static uint16_t column_tags[32];
 const PceScene *play_scene;
@@ -87,14 +88,53 @@ PCE_CODE static void physics(Body *b) {
     }
     b->x=x-4;b->y=y-9;b->coll=hit;b->ground=tile;
 }
-PCE_CODE static void shoot(int16_t x,int16_t y,int16_t vx,int16_t vy,bool enemy) {
+PCE_CODE static void shoot(int16_t x,int16_t y,int16_t vx,int16_t vy) {
     uint8_t active=0;
-    for(uint8_t k=0;k<24;++k)if(shots[k].active&&shots[k].enemy==enemy)++active;
-    if(active>=(enemy?(pce_campaign.boss_kind?2:4):4))return;
-    for(uint8_t k=0;k<24;++k) if(!shots[k].active) {
-        shots[k]=(Shot){x,y,vx,vy,1,enemy};return;
+    for(uint8_t k=0;k<NSHOTS;++k)if(shots[k].active&&!shots[k].enemy)++active;
+    if(active>=4)return;
+    for(uint8_t k=0;k<NSHOTS;++k) if(!shots[k].active) {
+        shots[k]=(Shot){x,y,vx<<8,vy<<8,1,0,0,0,0};return;
     }
 }
+/* Enemy shots (called from enemy_pce.c). Q8 px a step: 166 px/s (shield 200), 0.7 x that along a diagonal. */
+uint16_t rng=0xACE1;
+const Actor *fire_actor;uint8_t fire_aim;int8_t fire_mx,fire_my;bool fire_fast;
+PCE_CODE static Shot *new_shot(int16_t x,int16_t y,uint8_t enemy) {
+    uint8_t live=0;
+    for(uint8_t k=0;k<NSHOTS;++k)if(shots[k].active&&shots[k].enemy)++live;
+    if(live>=(pce_campaign.boss_kind?3:5))return 0;
+    for(uint8_t k=0;k<NSHOTS;++k)if(!shots[k].active) {
+        shots[k]=(Shot){x,y,0,0,1,enemy,0,0,0};return &shots[k];
+    }
+    return 0;
+}
+PCE_CODE void fire_call(void) {
+    static const int8_t dir_x[8]={-1,-1,0,1,1,1,0,-1},dir_y[8]={0,-1,-1,-1,0,1,1,1};
+    uint8_t aim=fire_aim;
+    Shot *s=new_shot(fire_actor->b.x+fire_mx,fire_actor->b.y+fire_my,1);if(!s)return;
+    int16_t v=aim&1?(fire_fast?597:496):(fire_fast?853:708);
+    s->vx=dir_x[aim]>0?v:dir_x[aim]<0?-v:0;
+    s->vy=dir_y[aim]>0?v:dir_y[aim]<0?-v:0;
+}
+PCE_CODE static uint8_t distance8(int16_t a,int16_t b) {
+    int16_t n=a-b;if(n<0)n=-n;
+    return n>255?255:n;
+}
+PCE_CODE void grenade_call(void) {
+    /* aimed ahead of a hero walking towards the thrower (enemies.c update_kneeler); facing: the hero looks left */
+    const Actor *a=fire_actor;
+    int16_t py=player.y+8,bx=a->b.x,by=a->b.y;
+    uint8_t dx=distance8((bx<player.x?60:0)-bx,facing?60-player.x:-6-player.x);
+    if(dx<80)dx=80;if(dx>200)dx=200;
+    int16_t dy=distance8(py,by)>>2;if(py<by)dy=-((dy<<3)+(dy<<1));
+    uint8_t r;{uint8_t carry=rng&1;rng>>=1;if(carry)rng^=0xB400;r=(uint8_t)(rng^(rng>>8));}
+    int16_t spd=(int16_t)(r%6)+(((dx-dy)*7)>>3)-3;
+    if(spd<60)spd=60;if(spd>160)spd=160;
+    Shot *s=new_shot(bx+(a->aim?14:-15),by-4,2);if(!s)return;
+    s->vx=(spd<<2)+(spd>>2);if(!a->aim)s->vx=-s->vx;   /* Q8 px a step = speed/60*256; aim 0 = left, 4 = right */
+}
+PCE_CODE void phys_call(void) {physics(phys_body);}
+PCE_CODE void cell_call(void) {cell_value=cell(cell_x,cell_y);}
 PCE_CODE void play_init(uint8_t stage,uint8_t selected) {
     scene=&pce_scenes[stage-1];hero=selected;camera=frame=0;
     facing=fire_timer=safe_timer=crouch=slide_time=death_time=jumping=jump_time=pce_death=0;drop_y=-32767;
@@ -170,59 +210,11 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
              * 14 px ring around the ball's centre (0,16): the source's own air muzzles (16,18) (11,7) (0,2). */
             air[0]=up||down?(side?11:0):16;air[1]=up?(side?7:2):down?(side?25:30):18;muzzle=air;
         }
-        shoot(player.x+(facing?-muzzle[0]:muzzle[0]),player.y+muzzle[1],vx,vy,false);
+        shoot(player.x+(facing?-muzzle[0]:muzzle[0]),player.y+muzzle[1],vx,vy);
         flash_time=4;flash_diag=side&&(up||down);flash_dx=facing?-muzzle[0]:muzzle[0];flash_dy=muzzle[1];   /* the source's 4-frame flash at the barrel */fire_timer=pce_campaign.boost&&hero==3?4:12;audio_effect(1);
     }
     if(!(frame&3)&&!(pce_metrics.stage==4&&pce_campaign.boss_round==2))overlay_call(0x6f,encounters);
-    for(uint8_t k=0;k<8;++k) {
-        Actor *a=&actors[k];if(!a->active)continue;
-        if(((a->b.x<(int16_t)camera-80||(a->b.x>(int16_t)camera+384&&a->type!=11))&&a->type!=28)||a->b.y>272){a->active=0;continue;}
-        if(a->type>=12&&a->type<=23)continue;
-        if(a->type>=24&&a->type<=27) {
-            const int16_t speeds[4]={2016,1142,2352,1344};
-            advance(&a->b.x,&a->b.fx,a->flip?-speeds[a->type-24]:speeds[a->type-24]);continue;
-        }
-        if(a->type==11){advance(&a->b.x,&a->b.fx,a->flip?-512:512);continue;}   /* the herd gallops at the source's 120 px/s */
-        if(a->type==28) {
-            /* The cutscene outrider (hp 2 waiting, 1 alarmed, 0 running): once it is on screen it freezes for a second
-             * facing the hero, then turns and runs off to the right. */
-            if(a->hp==2){int16_t d=camera+128-a->b.x;if(d<0)d=-d;if(d<128){a->hp=1;a->timer=62;audio_effect(9);}}
-            else if(a->hp==1){if(!--a->timer){a->hp=0;a->flip=0;}}
-            a->b.vx=a->hp?0:512;physics(&a->b);
-            if(!a->hp){++a->anim;if(a->b.x>(int16_t)camera+272)a->active=0;}
-            continue;
-        }
-        if(a->dead){if(++a->dead>24)a->active=0;continue;}
-        /* Walkers keep the heading they spawned with and turn round at walls and cars; the rest face the hero. */
-        if(a->type>=6)a->flip=player.x<a->b.x;
-        a->b.vx=a->type<6?(a->flip?-512:512):0;
-        if(a->type>=2&&a->timer+24>(pce_options.difficulty==0?120:pce_options.difficulty==1?90:62))a->b.vx=0;   /* a shooter plants its feet for 24 steps, then runs on */
-        physics(&a->b);
-        if(a->b.coll&3)a->flip^=1;
-        if(a->b.vx)++a->anim;
-        if(a->timer)--a->timer;else if(a->type>=2&&(a->type!=31||pce_campaign.boss_kind)&&(a->flip==(player.x<a->b.x))) {
-            shoot(a->b.x+(a->flip?-16:16),a->b.y-8,a->flip?-3:3,0,true);a->timer=pce_options.difficulty==0?120:pce_options.difficulty==1?90:62;
-        }
-    }
-    for(uint8_t k=0;k<24;++k) {
-        Shot *s=&shots[k];if(!s->active)continue;
-        s->x+=s->vx;s->y+=s->vy;
-        if(s->x<(int16_t)camera-16||s->x>(int16_t)camera+272||s->y<0||s->y>240){s->active=0;continue;}
-        if(s->enemy) {
-            if(!safe_timer&&s->x>player.x-8&&s->x<player.x+8&&s->y>player.y-14&&s->y<player.y+25) {
-                s->active=0;safe_timer=120;audio_effect(5);
-                campaign_hurt();
-                if(pce_campaign.diagnostic&&!pce_metrics.hp)pce_metrics.hp=3;
-            }
-        } else for(uint8_t j=0;j<8;++j) {
-            Actor *a=&actors[j];
-            if(a->active&&!a->dead&&!(a->type>=11&&a->type<=28)&&s->x>a->b.x-10&&s->x<a->b.x+10&&s->y>a->b.y-18&&s->y<a->b.y+24) {
-                s->active=0;if(a->type>=30&&facing==a->flip)a->hp=1;
-                if(!--a->hp)actor_kill(a);else audio_effect(7);
-                audio_effect(4);break;
-            }
-        }
-    }
+    overlay_call(0x73,world_update);
     if(pce_campaign.boss_kind)camera=scene->width-256;
     else if(!cut_phase&&!herd_locked&&player.x>120&&(uint16_t)(player.x-120)>camera) {
         uint16_t gap=player.x-120-camera;camera+=gap>4?4:gap;   /* catches up at most 4 px a step (after a lock) */
@@ -252,18 +244,23 @@ __attribute__((noinline)) void play_draw(void) {
         id=pce_present_base[stage][2]+hero*16;
         if(!side)id+=14+direction;
         else {
-            id+=direction;
-            if(grounded&&player.vx)id+=2+direction*6+(frame/6)%6;
+            /* Row layout: 0/1 standing up/down, 2-7 running up, 8-13 running down, 14/15 straight up/down. */
+            if(player.vx)id+=2+direction*6+(frame/6)%6;
+            else id+=direction;
         }
         if(keys&KEY_LEFT)facing=1;
         if(keys&KEY_RIGHT)facing=0;
     }
     hero_sprite=id;   /* what the dialogue overlay draws while the world is frozen */
     if(!safe_timer||(frame&4)||pce_death)video_sprite(id,player.x-camera,player.y-16,facing,16);
-    if(flash_time)video_sprite(pce_flash_base[stage]+(flash_diag?0:4)+4-flash_time,player.x+flash_dx-camera,player.y+flash_dy-16,false,16);
-    /* Essential projectiles precede optional distant enemies. */
-    for(uint8_t k=0;k<24;++k) if(shots[k].active)
-        video_sprite(shots[k].enemy?37:36,shots[k].x-camera,shots[k].y-16,false,16);
+    /* The galloping herd comes right after the hero, ahead of shots and enemies: where the SAT or a scanline is full it
+     * is what the optional sprites give way to, so the horses never flicker. */
+    if(herd_on)overlay_call(0x6f,herd_draw);
+    /* Essential projectiles precede optional distant enemies (while the herd runs they give way to the horses). */
+    bool (*draw)(uint16_t,int16_t,int16_t,bool,uint8_t)=herd_on?video_sprite_optional:video_sprite;
+    if(flash_time)draw(pce_flash_base[stage]+(flash_diag?0:4)+4-flash_time,player.x+flash_dx-camera,player.y+flash_dy-16,false,16);
+    for(uint8_t k=0;k<NSHOTS;++k) if(shots[k].active)
+        draw(shots[k].enemy?37:36,shots[k].x-camera,shots[k].y-16,false,16);
     if(!pce_campaign.diagnostic)overlay_call(0x70,combat_draw);
     overlay_call(0x74,actors_draw);
     /* While the herd is on screen the SAT has no room for the foreground pieces as well: they would come and go with

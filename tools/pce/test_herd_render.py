@@ -43,8 +43,8 @@ def verify(out):
             for case in range(80):
                 camera=2000;count=rng.choice([0,20,50,60,63,64]);page=case&1
                 horses=[(camera+rng.choice([-200,-60,40,72,180,290,328,500]),rng.choice([-32,32,48,55,160,230,270])) for _ in range(rng.randrange(1,6))]
-                actors=b''.join(struct.pack('<4h11B',x,y,0,0,0,0,4,4,1,11,1,0,1,0,0) for x,y in horses)
-                seed('actors',actors+bytes(19*(8-len(horses))))
+                actors=b''.join(struct.pack('<4h13B',x,y,0,0,0,0,4,4,1,11,1,0,1,0,0,0,0) for x,y in horses)
+                seed('actors',actors+bytes(21*(8-len(horses))))
                 seed('camera',struct.pack('<H',camera));seed('frame',b'\0\0')
                 seed('sat_count',bytes([count]));seed('sat_page',bytes([page]));seed('sprite_exact',bytes([exact]))
                 occ=bytes(rng.randrange(17) for _ in range(240)) if case%3==0 else bytes([rng.randrange(17)])*240
@@ -66,7 +66,7 @@ def verify(out):
         horse=int.from_bytes(e.memory(scene+48,4),'little')
         source=(out/'s1.bin').read_bytes()[horse+32:horse+32+5*5120]
         assert len(source)==25600
-        seed('actors',struct.pack('<4h11B',2072,160,0,0,0,0,4,4,1,11,1,0,1,0,0)+bytes(7*19))
+        seed('actors',struct.pack('<4h13B',2072,160,0,0,0,0,4,4,1,11,1,0,1,0,0,0,0)+bytes(7*21))
         seed('shown',b'\xff');seed('prefetch',b'\xff');seed('prefetched',b'\0\0')
         seed('sat_page',b'\0');seed('sprite_exact',b'\1')
         for tick in list(range(24))+[26,28,33,40,41,42,43,44]:

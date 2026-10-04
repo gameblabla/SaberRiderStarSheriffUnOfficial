@@ -31,6 +31,7 @@ uint16_t generic_id;int16_t generic_x,generic_y;uint8_t generic_flip,generic_sca
 static uint8_t front_start,front_keep,sat_previous=64;
 int16_t sprite_emit_x,sprite_emit_y;
 uint16_t sprite_emit_id,video_nsprites;
+uint8_t sprite_optional;   /* set by video_sprite_optional: a refusal is not an essential overflow */
 uint8_t sprite_emit_flip,sprite_fast_miss,sprite_emit_ok;
 extern void sprite_fast(void);
 extern void sprite_generic(void);
@@ -240,7 +241,7 @@ PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8
         sprite_emit_id=id;sprite_emit_x=x;sprite_emit_y=y;sprite_emit_flip=flip?8:0;
         overlay_call(0x74,sprite_fast);
         if(!sprite_fast_miss) {
-            if(!sprite_emit_ok)++pce_metrics.essential_overflow;
+            if(!sprite_emit_ok&&!sprite_optional)++pce_metrics.essential_overflow;
             return sprite_emit_ok;
         }
     }
@@ -254,7 +255,7 @@ PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8
         count = entry[12];
         if (!count || count > 32 || entry[13]) return false;
         slot=sprite_slot(id,count);
-        if(slot==48){++pce_metrics.essential_overflow;return false;}
+        if(slot==48){if(!sprite_optional)++pce_metrics.essential_overflow;return false;}
         if (sprite_ids[slot] != id) {
             uint32_t pat = (uint32_t)entry[0] | (uint32_t)entry[1]<<8 | (uint32_t)entry[2]<<16 | (uint32_t)entry[3]<<24;
             uint32_t pal = (uint32_t)entry[8] | (uint32_t)entry[9]<<8 | (uint32_t)entry[10]<<16 | (uint32_t)entry[11]<<24;
@@ -274,7 +275,7 @@ PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8
     if(fast) {
         overlay_call(0x74,sprite_fast);
         if(sprite_fast_miss)return false;
-        if(!sprite_emit_ok)++pce_metrics.essential_overflow;
+        if(!sprite_emit_ok&&!sprite_optional)++pce_metrics.essential_overflow;
         return sprite_emit_ok;
     }
     sprite_used[slot] = 1;

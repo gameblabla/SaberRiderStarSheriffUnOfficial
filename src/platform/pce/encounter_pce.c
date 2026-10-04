@@ -20,7 +20,7 @@ static int16_t trigger_lo[60] PCE_STAGE,trigger_hi[60] PCE_STAGE;
 PCE_COMBAT void encounter_init(void) {
     const PceScene *scene=play_scene;
     uint8_t counts[3];arcade_read(2,scene->rules,counts,3);
-    stop_count=counts[2]>4?4:counts[2];stop_done=0;herd_on=herd_locked=0;
+    stop_count=counts[2]>4?4:counts[2];stop_done=0;herd_on=herd_locked=herd_pending=0;
     arcade_read(2,scene->rules+3+(uint16_t)counts[0]*16+(uint16_t)counts[1]*12,stop_zones,stop_count*8);
     for(uint8_t k=0;k<scene->ntr;++k) {
         arcade_read(2,scene->triggers+(uint32_t)k*sizeof trigger,&trigger,sizeof trigger);
@@ -29,7 +29,21 @@ PCE_COMBAT void encounter_init(void) {
         if(trigger.type>=24&&trigger.type<=27)trigger_remaining[k]=0;   /* background airships: not drawn here, so never spawned */
     }
 }
+/* The convoy is instantiated lazily: the source drops all of its horses at once (12-13, 99 px apart), but the actor pool
+ * holds eight, so each horse is created when its place in the column comes within a few horses of the screen. The
+ * column marches at the horses' own speed (2 px a step, 8 per call), so `herd_next` is where the next one would be. */
+uint8_t herd_pending;int16_t herd_next;
+__attribute__((noinline,section(".ram_bank116.text"))) void herd_feed(void) {
+    herd_next-=8;
+    while(herd_pending&&herd_next<(int16_t)camera+328+(int16_t)herd_lead+200) {
+        uint8_t i=0;while(i<8&&actors[i].active)++i;
+        if(i==8)break;
+        actors[i]=(Actor){.b={.x=herd_next,.y=(((herd_y+30-48)+4)&~7)+48},.active=1,.type=11,.hp=1,.flip=1};
+        herd_next+=99;--herd_pending;
+    }
+}
 PCE_MISSION void encounters(void) {
+    if(herd_pending)overlay_call(0x74,herd_feed);
     const PceScene *scene=play_scene;
     uint8_t k=0;
     int16_t px=player.x+4;
@@ -49,7 +63,7 @@ PCE_MISSION void encounters(void) {
              * of 12 horses at once, 99 px apart, behind the right screen edge, running at the hero at 120 px/s; here
              * five, 192 px apart, so at most two are on screen and two fit a scanline beside the hero. */
             if(!play_scene->horse||t->wp[0][0]<=30000){trigger_remaining[k]=0;continue;}
-            herd_y=t->wp[0][1];herd_lead=t->interval*5/2;overlay_call(0x6f,herd_spawn);
+            herd_y=t->wp[0][1];herd_lead=t->interval*5/2;herd_pending=(uint8_t)t->remaining+1;herd_next=camera+328+herd_lead+16;overlay_call(0x6f,herd_spawn);overlay_call(0x74,herd_feed);
             trigger_remaining[k]=0;continue;
         }
         if(herd_on)continue;   /* nothing else is called in while the herd runs */
@@ -70,7 +84,7 @@ PCE_MISSION void encounters(void) {
             if(y>30000)y=256;else if(y< -30000)y=-32;
             if(y< -999)y=-1000-y;
             if(edge&&t->type<6){probe_x=x+8;probe_y=y+19;probe_left=player.x<x;overlay_call(0x69,spawn_clear);y=probe_y-19;}
-            actors[i]=(Actor){.b={.x=t->type>=11&&t->type<=27?x:x+8,.y=t->type>=11&&t->type<=27?y:y+19},.active=1,.type=t->type,.hp=t->type==28?2:t->type>=30?(pce_options.difficulty==0?4:pce_options.difficulty==1?6:8):1,.timer=t->type<6?36:60,.flip=player.x<x};
+            actors[i]=(Actor){.b={.x=t->type>=11&&t->type<=27?x:x+8,.y=t->type>=11&&t->type<=27?y:y+19},.active=1,.type=t->type,.hp=t->type==28?2:t->type>=30?(pce_options.difficulty==0?4:pce_options.difficulty==1?6:8):1,.timer=t->type>=30&&t->type<=31?60:0,.flip=player.x<x,.aim=4,.mode=1};
             if(trigger_remaining[k]>0)--trigger_remaining[k];
             ++trigger_spawned[k];trigger_timers[k]=t->interval;break;
         }

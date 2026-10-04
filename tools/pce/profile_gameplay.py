@@ -17,10 +17,12 @@ def profile(out,herd_number=1,require_60=False):
         # spawns/animates all horses. Held fire keeps the second voice active.
         e.write(symbol(elf,'player'),struct.pack('<4h4B',x,160,0,0,0,0,4,4))
         c.seed(e,'camera',x-120);c.seed(e,'dialogs_done',255,1)
-        e.write(symbol(elf,'actors'),bytes(8*19));c.seed(e,'safe_timer',250,1)
+        e.write(symbol(elf,'actors'),bytes(8*21));c.seed(e,'safe_timer',250,1)
         c.press(e,8);e.input(32)
         herd=symbol(elf,'herd_on');locked=symbol(elf,'herd_locked')
-        c.until(e,lambda:e.memory(locked,1)==b'\1',limit=1000,step=1)
+        def reached():
+            c.seed(e,'safe_timer',250,1);return e.memory(locked,1)==b'\1'
+        c.until(e,reached,limit=1000,step=1)
         frame=symbol(elf,'pce_draws');count=lambda:int.from_bytes(e.memory(frame,2),'little')
         # Lock is set inside play_tick, before its scrolling draw completes.
         # Start at a completed locked-scene draw, then begin firing immediately.

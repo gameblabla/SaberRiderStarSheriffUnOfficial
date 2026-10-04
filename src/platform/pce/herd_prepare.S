@@ -1,4 +1,4 @@
-/* Collect visible horse columns once. Actor is 19 bytes; records are six
+/* Collect visible horse columns once. Actor is 21 bytes; records are six
  * bytes (screen X, screen Y, first/last column). All scratch is private ZP. */
 .section .ram_bank110.text,"ax",@progbits
 .global herd_prepare
@@ -112,9 +112,9 @@ herd_prepare:
 .Lnext:
     txa
     clc
-    adc #19
+    adc #21
     tax
-    cpx #152
+    cpx #168
     beq 1f
     jmp .Lactor
 1:

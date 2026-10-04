@@ -9,6 +9,7 @@
 #define PRESENT __attribute__((noinline,section(".ram_bank116.text")))
 /* Retain the HUD while its graphics, palettes and counters are unchanged.
  * Only replay onto an empty SAT/scanline prefix, so admission is identical. */
+extern uint16_t warm_ids[7];extern uint8_t warm_slots[7],warm_count;
 extern vdc_sprite_t sat[2][64];
 extern uint8_t sat_count,sat_page,sprite_exact,sprite_occupancy[240];
 extern uint8_t sprite_last_free,fg_entered;
@@ -43,6 +44,9 @@ PCE_FLOW void presentation_frame(void) {
     }
     uint16_t ids[3]={base[1]+pce_campaign.lives%10,base[1]+pce_campaign.powers%10,
         base[0]+pce_control.hero*4+hp};
+    /* A changed HUD icon (14 pieces = 4 contiguous pages) must find room beside the herd's reserved pages: the retained
+     * firing poses give theirs up for it (the herd re-warms them over the next frames), or the icon would be refused. */
+    if(herd_on)for(uint8_t i=0;i<warm_count;++i)if(sprite_ids[warm_slots[i]]==warm_ids[i])sprite_pinned[warm_slots[i]]=0;
     bool ok=video_sprite(ids[0],29,14,false,16);
     ok=video_sprite(ids[1],60,14,false,16)&&ok;
     ok=video_sprite(ids[2],0,0,false,16)&&ok;
@@ -67,11 +71,21 @@ PRESENT void actors_draw(void) {
             if(a->dead)id=base+(kind==0?6:kind==1?18:24)+(a->dead-1)/4;
             else if(!(a->b.coll&4)&&kind<2)id=base+30+kind*2+((frame>>3)&1);   /* dropping: the fall cells, not a frozen run frame */
             else if(a->b.vx&&kind<2)id=base+kind*12+(a->anim>>2)%6;
+            else if(kind==2) {
+                if(a->type==8||a->type==9) {
+                    /* the kneeler crouches and, from the 24th step of a throw, plays its three throwing cells */
+                    uint8_t throw=a->timer>=24?(a->timer-24)/6:3;
+                    id=base+(throw<3?41+throw:40);
+                } else {
+                    static const uint8_t pose[8]={0,1,2,1,0,3,4,3};   /* the standing aim cells: level, up-diagonal, up, down-diagonal, down */
+                    uint8_t p=pose[a->aim&7];
+                    id=base+34+(p==0&&a->anim?5:p);
+                }
+            }
         }
         if(a->type==28)id+=a->hp==2?0:a->hp==1?1:2+(a->anim>>2)%6;   /* the blue Outrider: stand, alarm, run */
         video_sprite_optional(id,a->b.x-camera,a->b.y-16,a->flip,16);   /* a refused draw is skipped for the frame, never a removal */
     }
-    if(herd_on)overlay_call(0x6f,herd_draw);
 }
 void presentation_draw(void) {overlay_call(0x6e,presentation_frame);video_front_mark();}
 

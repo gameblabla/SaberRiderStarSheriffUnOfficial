@@ -16,12 +16,12 @@ static int16_t death_zones[8][6];
 uint8_t cut_phase;
 static uint8_t cut_k;
 static uint16_t cut_wait,cut_target;
-PCE_COMBAT static int16_t distance(int16_t a,int16_t b) { int16_t n=a-b;return n<0?-n:n; }
+static inline __attribute__((always_inline)) int16_t distance(int16_t a,int16_t b) { int16_t n=a-b;return n<0?-n:n; }
 PCE_COMBAT static bool zone(const int16_t *z) {
     return distance(player.x+4,z[0])<=z[2]+8&&distance(player.y+9,z[1])<=z[3]+23;
 }
 PCE_COMBAT static void bullet(int16_t x,int16_t y,int16_t vx,int16_t vy) {
-    for(uint8_t k=0;k<24;++k)if(!shots[k].active){shots[k]=(Shot){x,y,vx,vy,1,1};break;}
+    for(uint8_t k=0;k<NSHOTS;++k)if(!shots[k].active){shots[k]=(Shot){x,y,vx<<8,vy<<8,1,1,0,0,0};break;}
 }
 PCE_COMBAT void combat_start(void) {
     boss_phase=boss_flash=dialogs_done=ndialog=ndeath=cut_phase=0;boss_time=arena_time=0;
@@ -47,7 +47,7 @@ PCE_COMBAT static void power_strike(void) {
             uint16_t damage=(maximum*(hero?25:18)+99)/100;
             pce_campaign.boss_hp=pce_campaign.boss_hp>damage?pce_campaign.boss_hp-damage:0;
         }
-        if(!hero){for(uint8_t k=0;k<24;++k)if(shots[k].enemy)shots[k].active=0;safe_timer=150;}
+        if(!hero){for(uint8_t k=0;k<NSHOTS;++k)if(shots[k].enemy)shots[k].active=0;safe_timer=150;}
     } else pce_campaign.boost=hero==2?480:600;
     pce_campaign.power_cd=1200;audio_effect(4);
 }
@@ -104,7 +104,7 @@ PCE_COMBAT void combat_tick(void) {
             if(stage==4&&++arena_time<1440) {
                 if(arena_time==1){pce_campaign.story=1;pce_campaign.event=1;}
                 if(!(arena_time%120))for(uint8_t k=0;k<8;++k)if(!actors[k].active) {
-                    actors[k]=(Actor){.b={.x=camera+240,.y=170},.active=1,.type=2,.hp=1,.timer=60};break;
+                    actors[k]=(Actor){.b={.x=camera+240,.y=170},.active=1,.type=2,.hp=1,.flip=1,.aim=4,.mode=1};break;
                 }
             } else {
                 boss_begin(stage==1||stage==5?1:2);
@@ -140,7 +140,7 @@ PCE_COMBAT void combat_tick(void) {
         if(!safe_timer&&distance(player.x,boss_x)<(kind==3?14:44)&&distance(player.y,boss_y)<(kind==3?28:25)) {
             safe_timer=120;campaign_hurt();
         }
-        for(uint8_t k=0;k<24;++k) {
+        for(uint8_t k=0;k<NSHOTS;++k) {
             Shot *s=&shots[k];if(!s->active||s->enemy||boss_phase<3)continue;
             if(distance(s->x,boss_x)<(kind==3?12:44)&&distance(s->y,boss_y)<(kind==3?24:22)) {
                 s->active=0;if(pce_campaign.boss_hp)--pce_campaign.boss_hp;boss_flash=6;audio_effect(4);
@@ -159,10 +159,15 @@ PCE_COMBAT void combat_tick(void) {
         }
     }
     /* The robot-horse herd tramples every humanoid in its way, as in the main game. */
-    for(uint8_t k=0;k<8;++k)if(actors[k].active&&actors[k].type==11)
+    uint8_t humanoids=0,horses=0;
+    for(uint8_t k=0;k<8;++k)if(actors[k].active) {
+        uint8_t t=actors[k].type;
+        if(t==11)++horses;else if(!actors[k].dead&&!(t>=12&&t<=28))++humanoids;
+    }
+    if(horses&&humanoids)for(uint8_t k=0;k<8;++k)if(actors[k].active&&actors[k].type==11)
         for(uint8_t j=0;j<8;++j)if(actors[j].active&&!actors[j].dead&&actors[j].type!=11&&!(actors[j].type>=12&&actors[j].type<=28)
             &&distance(actors[j].b.x,actors[k].b.x)<48&&distance(actors[j].b.y,actors[k].b.y)<40)actor_kill(&actors[j]);
-    for(uint8_t k=0;k<8;++k)if(actors[k].active&&!actors[k].dead&&!(actors[k].type>=12&&actors[k].type<=28)&&distance(player.x,actors[k].b.x)<(actors[k].type==11?44:14)&&distance(player.y,actors[k].b.y)<(actors[k].type==11?40:24)) {
+    if(horses||humanoids)for(uint8_t k=0;k<8;++k)if(actors[k].active&&!actors[k].dead&&!(actors[k].type>=12&&actors[k].type<=28)&&distance(player.x,actors[k].b.x)<(actors[k].type==11?44:14)&&distance(player.y,actors[k].b.y)<(actors[k].type==11?40:24)) {
         if(slide_time)actor_kill(&actors[k]);      /* a slide knocks enemies down */
         else if(!safe_timer){safe_timer=120;campaign_hurt();}
     }

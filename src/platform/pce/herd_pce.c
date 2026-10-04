@@ -27,8 +27,8 @@ int16_t herd_y;
 uint16_t herd_lead;
 static uint8_t shown,cur,prefetch;
 static uint16_t prefetched;
-static uint16_t warm_ids[7];
-static uint8_t warm_slots[7],warm_count;
+uint16_t warm_ids[7];
+uint8_t warm_slots[7],warm_count;
 #define BUFFER_PAGE(b) (28+(b)*10)
 HERD_CODE void herd_reserve(void) {
     uint8_t colors[32];
@@ -45,15 +45,8 @@ HERD_CODE void herd_reserve(void) {
     arcade_read(2,play_scene->horse,colors,32);
     pce_vce_copy_palette(16+15,colors,1);
 }
-/* The source drops a column of 12 horses at once, 99 px apart, behind the right screen edge, running at the hero at
- * 120 px/s; here five, 192 px apart, so at most two are on screen and two fit a scanline beside the hero. */
+/* Starts the convoy: the first horses are created by herd_feed (encounter_pce.c), the rest as the column nears. */
 HERD_CODE void herd_spawn(void) {
-    int16_t x0=camera+256+72+herd_lead;
-    for(uint8_t h=0,i=0;h<5;++h) {
-        while(i<8&&actors[i].active)++i;
-        if(i==8)break;
-        actors[i]=(Actor){.b={.x=x0+h*192,.y=herd_y+30},.active=1,.type=11,.hp=1,.flip=1};
-    }
     herd_reserve();
 }
 /* Streaming runs in the flow overlay; the renderer and IRQs remain mapped. */
@@ -100,7 +93,7 @@ PCE_FLOW static void herd_warm(void) {
 /* Draw every horse; releases the pages once the last one has gone. */
 HERD_CODE void herd_draw(void) {
     overlay_call(0x6e,herd_prepare);
-    if(!herd_live) {
+    if(!herd_live&&!herd_pending) {
         for(uint8_t p=28;p<48;++p)pattern_owner[p]=0;
         for(uint8_t i=0;i<warm_count;++i)if(sprite_ids[warm_slots[i]]==warm_ids[i])
             sprite_pinned[warm_slots[i]]=sprite_used[warm_slots[i]]?2:0;

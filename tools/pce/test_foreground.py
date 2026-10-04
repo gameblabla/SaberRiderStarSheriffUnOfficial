@@ -21,7 +21,7 @@ def verify(out):
         boot(e,t.address);t.stage(e,4);t.dialogs(e);t.seed(e,'dialogs_done',255,1)
         t.press(e,8);e.run(120)
         e.write(symbol(out/'app.elf','trigger_remaining'),bytes(100))
-        e.write(symbol(out/'app.elf','actors'),bytes(8*17));e.write(symbol(out/'app.elf','shots'),bytes(24*10))
+        e.write(symbol(out/'app.elf','actors'),bytes(8*21));e.write(symbol(out/'app.elf','shots'),bytes(16*13))
         t.seed(e,'safe_timer',0,1);t.press(e,8)
         for world_x,direction in ((mid+40,0),(mid+24,128)):
             t.move(e,world_x,150)

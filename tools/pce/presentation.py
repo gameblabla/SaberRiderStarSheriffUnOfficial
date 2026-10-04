@@ -179,6 +179,13 @@ def add_art(root,work,stage,sprites,frame):
             d=(work/f'{crhc}.levl').read_bytes();aid=struct.unpack_from('<I',d,4)[0];ox,oy=struct.unpack_from('<ff',d,8)
             for k,n in enumerate(cells):
                 add(f'{name}_fall{k}',frame(work/'srgb'/f'{aid:08X}.srgb',n),(round(ox),round(oy)))
+        # The sniper body's standing-aim cells (also the kneeler's and the shield's), right-facing: the source's
+        # character.c aim table -> level 16, up-diagonal 14, up 12, down-diagonal 18, down 20, level recoil 17;
+        # then the kneeler's crouch 30 and its three throwing cells 31-33 (enemy_base + 34..43).
+        d=(work/'D39700C4.levl').read_bytes();aid=struct.unpack_from('<I',d,4)[0];ox,oy=struct.unpack_from('<ff',d,8)
+        for name,n in [('sniper_aim0',16),('sniper_aim1',14),('sniper_aim2',12),('sniper_aim3',18),('sniper_aim4',20),('sniper_recoil',17),
+                       ('kneel',30),('kneel_throw0',31),('kneel_throw1',32),('kneel_throw2',33)]:
+            add(name,frame(work/'srgb'/f'{aid:08X}.srgb',n),(round(ox),round(oy)))
     return dict(portraits=portraits,dialog=dialog,hud=hud,digits=digits,aim=aim,motion=motion,pose=pose,up_tip=up_tip,art_muzzle=art_muzzle,flash=flash,enemy=enemy,end=len(sprites))
 
 def emit_tables(out,scenes,h,c):

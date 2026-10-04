@@ -59,5 +59,5 @@ refused:
         sprite_line_lo=py<0?0:py;sprite_line_hi=py+16>224?224:py+16;
         sprite_lines_release();
     }
-    clipped_count=clip_begin;++pce_metrics.essential_overflow;generic_ok=0;
+    clipped_count=clip_begin;{extern uint8_t sprite_optional;if(!sprite_optional)++pce_metrics.essential_overflow;}generic_ok=0;
 }

@@ -32,6 +32,7 @@ def limit_tiles(cells, indices, groups, palettes, cols, cap):
     inverse = inverse.reshape(-1).astype(np.int64)
     if presence(inverse.reshape(rows, cols)).sum(0).max() <= cap: return indices, groups, 0
     colours = [vce_rgb(p).astype(np.int32) for p in palettes]
+    colours[15][15] = 4096        # BG colour 255 is the text font's white at runtime: never a candidate for a baked cell
     source = np.where(cells[..., 3:4] >= 128, cells[..., :3], 0).reshape(n, 64, 3).astype(np.int32)
     ar = np.arange(64)
     merged = 0

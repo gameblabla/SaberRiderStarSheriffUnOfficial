@@ -217,6 +217,26 @@ Implementation status below does not replace the user's visual/audio acceptance.
       essential sprite can be refused (`essential_overflow` +1, one frame). It depends on the gait phase (reproduces on
       the previous commit at other timings); `test_herd.py` now keeps the hero invulnerable on the run to the lock.
 
+## Thirteenth pass (2026-10-04, playtest feedback)
+
+- [x] Aiming down-right while running sometimes drew the straight-up pose: the running down-diagonal strip was indexed one cell
+      too far (frame 5 landed on the straight-up cell).
+- [x] BG palette glitch (white pixels from y 192): the renderer forces BG colour 255 (palette 15 index 15) to white for the text
+      font, but the bottom band's last palette used it as an ordinary colour. The baker now keeps index 15 of palette 15 unused
+      (`build_assets.native_background`, `tile_budget`).
+- [x] Horse herd: the convoy is the source's 12-13 horses 99 px apart (was 5, 192 apart), instantiated lazily as the column nears
+      (`herd_feed`: the actor pool holds eight). The herd is drawn right after the hero, before shots and enemies, so it is what
+      the SAT / scanline budget gives way to (muzzle flash and shots are optional while it runs). Horses are y-aligned to the 8-line
+      band so the batched emitter takes them; 60 Hz still holds in all three herds (`profile_gameplay.py --require-60`).
+- [x] Herd trample bug (one essential sprite refused for a frame): a hit changes the HUD heart icon (14 pieces = 4 contiguous
+      pages) and no such block was free beside the herd's 20 reserved pages; the retained firing poses now give theirs up when the
+      HUD rebuilds. `test_herd.py` no longer needs an invulnerable hero for this.
+- [x] Enemies follow the source (enemies.c, whole 1/60 s steps, `enemy_pce.c` + `shots_pce.c`): grunts fire ONE shot per life, on the 16th
+      step of a 24-step stand, with the hero ahead of them (4% a step); snipers aim in eight directions at the hero (settle 13 steps,
+      then 1% a step), with the sniper body's own aim cells; kneelers (types 8/9, previously drawn as snipers) crouch and lob grenades
+      on the source's parabola (7% a step, 24 steps of wind-up); shield snipers keep their pace. Shots move in Q8 px/step (166 /
+      200 px/s, 0.7 x on diagonals), hit boxes are the source's. Actors are 21 bytes now (`aim`, `mode`), shots 13 (`NSHOTS` 16).
+
 Remaining integration/acceptance work:
 
 - [ ] Integrate the reference ROM's two-channel, scanline-delivered 2-bit ADPCM

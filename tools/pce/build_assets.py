@@ -175,6 +175,10 @@ def native_background(image, archive, previews, name):
         # after 4x nearest expansion, fitting the 288-character sky budget.
         p=palette_for([canvas.crop((0,0,512,128))],colors=4)
         p[5:]=p[1];palette=[p]*16
+    if name!='stage2':
+        # The renderer forces BG colour 255 (palette 15, index 15) to white for the text font, so a baked cell must
+        # never pick it: the bottom band's last palette used to show white pixels (y>=192) wherever it did.
+        palette[15]=palette[15].copy();palette[15][15]=palette[15][14]
     tiles, tile_lookup, names = [], {}, []
     preview = np.zeros_like(rgba)
     cell_idx = np.stack([indexed(Image.fromarray(cell), palette[int(groups[i])]) for i, cell in enumerate(cells)])

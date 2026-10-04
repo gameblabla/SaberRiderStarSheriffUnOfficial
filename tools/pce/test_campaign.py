@@ -96,17 +96,17 @@ class Campaign(Test):
             # step on each axis; it used to leave a fixed point that missed the gun by up to 13 px.
             m=self.metrics(e);table=symbol(self.out/'app.elf','pce_muzzle')
             mx,my=struct.unpack('<2b',e.memory(table+(m['hero']*9+5)*2,2))
-            e.write(symbol(self.out/'app.elf','shots'),bytes(24*10))
+            e.write(symbol(self.out/'app.elf','shots'),bytes(16*13))
             e.input(4);e.run(4);e.input(4|16|32|1)
             for _ in range(30):
                 previous_tick=int.from_bytes(e.memory(symbol(self.out/'app.elf','frame'),2),'little')
                 e.run(1)
                 ticks=(int.from_bytes(e.memory(symbol(self.out/'app.elf','frame'),2),'little')-previous_tick)&65535
-                raw=e.memory(symbol(self.out/'app.elf','shots'),24*10)
-                found=[struct.unpack_from('<4h2B',raw,k*10) for k in range(24) if raw[k*10+8]]
+                raw=e.memory(symbol(self.out/'app.elf','shots'),16*13)
+                found=[struct.unpack_from('<4h2B',raw,k*13) for k in range(16) if raw[k*13+8]]
                 if found:break
             e.input(0)
-            assert found and found[0][2:4]==(6,-6),found
+            assert found and found[0][2:4]==(6<<8,-6<<8),found
             m=self.metrics(e)
             # A rendered frame may service multiple gameplay ticks. Both
             # direction keys keep the body still; account for each possible
@@ -145,8 +145,8 @@ class Campaign(Test):
                 self.capture(e,f'campaign-boss{stage}')
                 if stage==4:
                     self.press(e,8);e.run(120)
-                    actor=struct.pack('<4h9B',self.metrics(e)['camera_x']+80,161,0,0,0,0,4,4,1,2,1,250,1)
-                    e.write(symbol(self.out/'app.elf','actors'),actor+bytes(7*17))
+                    actor=struct.pack('<4h13B',self.metrics(e)['camera_x']+80,161,0,0,0,0,4,4,1,6,1,0,1,0,0,4,0)   # a sniper stands where it is
+                    e.write(symbol(self.out/'app.elf','actors'),actor+bytes(7*21))
                     self.press(e,8)
                 # Inject an ordinary player projectile inside the active hit box.
                 self.hit_platform_boss(e)
