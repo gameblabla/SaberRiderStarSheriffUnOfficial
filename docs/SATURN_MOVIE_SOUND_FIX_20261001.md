@@ -102,3 +102,46 @@ Changes (`src/platform/saturn/aud_sat.c`):
 `tools/saturn/tests/resident_audio.c` now poisons the ring, the table end and the bank end and asserts they are zero
 after a movie end / scene prepare. Mednafen menu run (title -> briefing -> select -> stage 1): stage load time and
 per-second audio levels match the build without the change.
+
+## Follow-up 2026-10-04: release playback while holding the last frame
+
+The briefing deliberately keeps its `Video` open while the player reads the
+text. Previously, `video_sat.c` only marked `done` at FILM `END`/`ERROR`;
+PCM slot key-off, decoder/stream cleanup and `aud_movie_end()` waited for
+`video_close()`. The last sound ring could therefore keep looping throughout
+the held image, despite the previous commit's ring clearing on close.
+
+Playback completion now detaches the renderer's decode hook, drains/stops film
+audio through `film_audio_reset()`, closes any data stream, restores the game
+sound driver, and releases the RAM clip and decoder buffers. FILM `PAUSE` also
+finishes playback as a held still image; the Saturn video API has no resumable
+movie-pause operation. Power-attack buffers retain their existing spare-cache
+policy so repeated powers still have decoder RAM available. The `Video` keeps
+its dimensions and VDP1 surface for drawing until the screen closes it.
+Closing this finished object performs no second audio reset or driver restart.
+Early skips and discarded preloads use the same cleanup path.
+
+The local VDP1 manual, `../Saturn/docs/ST-013-R3-061694.txt`, introduction
+(lines 218–226, 263–264), distinguishes texture/command VRAM from the erased
+framebuffer. Accordingly, the fix keeps the RGB555 movie texture reserved and
+draws it each frame: it does not rely on framebuffer contents surviving erase
+or swap. The existing movie sound handoff and running idle sound CPU remain in
+use.
+
+Validation:
+
+- `python3 tools/saturn/tests/run_movie_lifecycle.py`: passed against the actual
+  video backend with hardware/decoder stubs. Covers END/ERROR/PAUSE, RAM and
+  streamed clips, buffer release/reuse, preserved pixels and dimensions,
+  idempotent completion/close, early skip and discarded preload.
+- `python3 tools/saturn/tests/movie_hold.py`: passed in Mednafen on the normal
+  menu route (intro skip -> briefing -> wait at last frame). The decode hook and
+  user pointer detach, film audio pointers clear, and the game driver is ready.
+  The movie texture remains READY and identical for another 120 fields;
+  retained-image SHA256 is
+  `1e3be6103bd9c784a46c0159c225954aeec1b5f9de239e4e17afaba5000fe00f`.
+- Resident-audio and CD-loading host regressions passed.
+- `source ~/.yaul.env && make -j8 -f Makefile.saturn`: passed, including the
+  no-soft-float check; rebuilt `build/saturn/saber_rider.bin` and `.cue`.
+
+Hardware has not been retested for this change.

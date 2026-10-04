@@ -60,6 +60,7 @@ void rsat_bench(void);   /* SABER_RBENCH */
  * is idle; drawn by rsat_video_draw (a record, like any draw) */
 bool rsat_video_open(int w, int h, void (*hook)(void *ud, volatile uint16_t *px, int pitch), void *ud);
 void rsat_video_close(void);
+void rsat_video_hold(void);   /* detach decoding, retaining the last frame for drawing */
 /* aud_sat.c: a clip has the SCSP from its start to its close (the game's sound driver stops, then starts again);
  * music: the clip doesn't read the disc (played from RAM), the CD-DA music plays on under it */
 void aud_movie_begin(bool music);

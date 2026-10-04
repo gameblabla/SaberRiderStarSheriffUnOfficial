@@ -67,6 +67,35 @@ static void spares_release(void)
 
 static void stop_sound(void) { film_audio_reset(); }
 
+static void release_buffers(Video *v)
+{
+    if (v->keep_bufs && !spare_work && !spare_samples) {
+        spare_work = v->work; spare_samples = v->sample_mem;
+    } else {
+        free(v->work); free(v->sample_mem);
+    }
+    v->work = NULL; v->sample_mem = NULL;
+    free(v->ram); v->ram = NULL;
+}
+
+/* Playback ownership ends independently of the displayed image. Briefings
+ * retain their last frame until video_close(), without looping the PCM tail
+ * or keeping the decoder, file and RAM clip alive during the text. */
+static void finish_video(Video *v)
+{
+    if (v->done) return;
+    v->done = true;
+    if (v->surface) rsat_video_hold();
+    film_buff_io_clear();
+    stop_sound();
+    if (v->stream) {
+        fclose(v->stream); v->stream = NULL;
+        cd_sat_stream_stop();
+    }
+    if (v->surface) aud_movie_end();
+    release_buffers(v);
+}
+
 /* Called by render_sat.c after VDP1 has finished the previous list and before
  * it submits the next one.  Never decode more than the frame that is due: once
  * isDisplayReady is acknowledged we break, so that frame stays in VDP1 memory
@@ -84,7 +113,7 @@ static void hook(void *ud, volatile uint16_t *px, int pitch)
     p->vramBuffSize = pitch * v->h * 2;
 
     for (int pass = 0; pass < 4 && v->work->play_status != END &&
-         v->work->play_status != ERROR; pass++) {
+         v->work->play_status != ERROR && v->work->play_status != PAUSE; pass++) {
         cpk_task(v->work);
         /* The refill path owns any transfer it starts.  Do not wait on a DMA
          * channel here: with the game I/O backend most ticks start no DMA,
@@ -94,8 +123,9 @@ static void hook(void *ud, volatile uint16_t *px, int pitch)
             break;
         }
     }
-    if (v->work->play_status == END || v->work->play_status == ERROR)
-        v->done = true;
+    if (v->work->play_status == END || v->work->play_status == ERROR ||
+        v->work->play_status == PAUSE)
+        finish_video(v);
 }
 
 static uint32_t movie_read(void *user, void *dst, uint32_t len)
@@ -129,8 +159,8 @@ static void io_set(Video *v)
 static void video_free(Video *v)
 {
     if (v->stream) fclose(v->stream);
-    if (v->keep_bufs && !spare_work && !spare_samples) { spare_work = v->work; spare_samples = v->sample_mem; v->work = NULL; v->sample_mem = NULL; }
-    free(v->ram); free(v->sample_mem); free(v->work); free(v);
+    release_buffers(v);
+    free(v);
 }
 
 static void movie_name(const char *path, char name[16])
@@ -141,7 +171,7 @@ static void movie_name(const char *path, char name[16])
     strcpy(name + n, ".CPK");
 }
 
-/* the clip starts: the game's sound driver stops (aud_sat.c) and the film player has the SCSP until video_close */
+/* The film player owns the SCSP until playback finishes or the clip closes. */
 static bool activate_video(Video *v)
 {
     if (v->surface) return true;
@@ -319,11 +349,7 @@ void video_size(const Video *v, int *w, int *h)
 void video_close(Video *v)
 {
     if (!v) return;
-    bool playing = v->surface;
+    finish_video(v);
     if (v->surface) rsat_video_close();
-    film_buff_io_clear();
-    stop_sound();
-    if (playing) aud_movie_end();
-    if (v->stream) cd_sat_stream_stop();
     video_free(v);
 }

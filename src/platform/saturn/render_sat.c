@@ -1182,11 +1182,16 @@ bool rsat_video_open(int w, int h, void (*hook)(void *ud, volatile uint16_t *px,
     return true;
 }
 
+void rsat_video_hold(void)
+{
+    vid_hook = NULL; vid_ud = NULL;
+}
+
 void rsat_video_close(void)
 {
     slave_idle();
     if (vid_state == VID_NONE) return;
-    vid_hook = NULL; vid_ud = NULL;
+    rsat_video_hold();
     vid_state = VID_CLOSING; vid_frame = frame_no;
 }
 
