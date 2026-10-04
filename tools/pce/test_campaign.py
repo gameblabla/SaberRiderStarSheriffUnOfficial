@@ -47,16 +47,22 @@ class Campaign(Test):
         self.press(e,8);e.run(120)
         e.write(symbol(self.out/'app.elf','player'),struct.pack('<4h4B',x,y,0,0,0,0,4,4))
         self.press(e,8)
-    def hit_platform_boss(self,e):
+    def hit_platform_boss(self,e,hp=1):
         self.press(e,8);e.run(120)
-        self.field(e,'boss_hp',1);self.seed(e,'boss_phase',3,1);self.seed(e,'boss_time',0)
-        bx=self.metrics(e)['camera_x']+180;by=96
-        if self.state(e)['boss_kind']==3:
-            bx=int.from_bytes(e.memory(symbol(self.out/'app.elf','boss_x'),2),'little')
-            by=int.from_bytes(e.memory(symbol(self.out/'app.elf','player')+2,2),'little')
-        self.seed(e,'boss_x',bx);self.seed(e,'boss_y',by)
+        kind=self.state(e)['boss_kind']
+        # The flying bosses take hits in their fighting phases only (gunship 2, Hyperjumper 4-11); Dark April always.
+        self.field(e,'boss_hp',hp);self.seed(e,'boss_phase',{1:2,2:5,3:3}[kind],1);self.seed(e,'boss_time',0)
+        # A shot at the boss's own centre (the flying bosses steer themselves; Dark April follows the hero's height).
+        bx=int.from_bytes(e.memory(symbol(self.out/'app.elf','boss_x'),2),'little')
+        by=int.from_bytes(e.memory(symbol(self.out/'app.elf','boss_y'),2),'little')
+        if kind==3:by=int.from_bytes(e.memory(symbol(self.out/'app.elf','player')+2,2),'little');self.seed(e,'boss_y',by)
         e.write(symbol(self.out/'app.elf','shots'),struct.pack('<4h2B',bx,by,0,0,1,0))
         self.press(e,8);e.run(60)
+        if hp==1 and kind!=3:
+            # The wreck falls and burns for 228 steps before the stage clears.
+            def gone():
+                st=self.state(e);return st['boss_hp']==0 or st['state']!=0 or st['boss_kind']!=kind
+            self.until(e,gone,limit=1500)
     def run(self):
         with tempfile.TemporaryDirectory(prefix='campaign-',dir=self.out) as base,Emulator(self.out/'saber_rider.cue',base) as e:
             boot(e,self.address);e.run(120)
@@ -117,9 +123,10 @@ class Campaign(Test):
                        for age in range(ticks+2)),(found[0],px,py,mx,my,ticks)
             # Town boss arrival, player-shot damage, then native clear decision.
             self.move(e,9800);self.until(e,lambda:self.state(e)['boss_kind']==1,limit=600)
-            self.seed(e,'boss_phase',3,1);self.seed(e,'boss_time',0);self.field(e,'boss_hp',2)
+            # The gunship takes a hit in its sweep phase (hit points drop by one), then the next one burns it out.
             self.seed(e,'safe_timer',250,1)
-            self.move(e,9780,96);e.input(1);self.until(e,lambda:self.state(e)['result']==1 or self.state(e)['state']==2,limit=2000);e.input(0)
+            self.hit_platform_boss(e,2);assert self.state(e)['boss_hp']==1,self.state(e)
+            self.hit_platform_boss(e,1)
             self.until(e,lambda:self.state(e)['state']==2,limit=600);self.capture(e,'campaign-town-clear')
             self.results['town']=self.state(e)
             self.press(e,1);self.until(e,lambda:self.metrics(e)['stage']==2 and self.metrics(e)['ready']);self.dialogs(e)

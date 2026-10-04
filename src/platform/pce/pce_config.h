@@ -12,6 +12,7 @@
 #define PCE_MISSION __attribute__((noinline, section(".ram_bank111.text")))
 #define PCE_COMBAT __attribute__((noinline, section(".ram_bank112.text")))
 #define PCE_TABLE __attribute__((section(".ram_bank106.rodata")))
+#define PCE_BOSS __attribute__((noinline, section(".ram_bank123.text")))   /* $7b: spare code bank beside the CD buffer */
 #define PCE_RENDER __attribute__((noinline, section(".ram_bank106.text")))
 #define PCE_WORK __attribute__((section(".ram_bank107.work")))
 #define PCE_STAGE __attribute__((section(".ram_bank108.stage")))

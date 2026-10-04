@@ -338,14 +338,16 @@ def make_scene(stage, work, previews, shared):
 
         sprites = list(shared)
         if stage in (1,5):
+            # The Black Hornet gunship: the boss character's whole frame 0 (208x112, origin 107,46; the cannon points
+            # left) at 5/8 size, so it costs about 25 sprite pieces.
             d=(work/'2A02BD4F.levl').read_bytes();aid=struct.unpack_from('<I',d,4)[0]
-            first=struct.unpack_from('<I',d,0x34+2*24+4)[0]
-            im=cblock_frame(work/'srgb'/f'{aid:08X}.srgb',first)
-            im=im.resize((96,48),Image.Resampling.NEAREST)
-            sprites.append(('gunship',im,(48,24)))
+            im=cblock_whole_frame(work/'srgb'/f'{aid:08X}.srgb',0)
+            im=im.resize((130,70),Image.Resampling.LANCZOS)
+            sprites.append(('gunship',im,(67,29)))
         else:
-            im=Image.open(ROOT/'assets/hyperjumper/side_normal.png').convert('RGBA').resize((96,48),Image.Resampling.NEAREST)
-            sprites.append(('hyperjumper',im,(48,24)))
+            # The Hyperjumper's side view (130x108, nose left) at 3/4 size.
+            im=Image.open(ROOT/'assets/hyperjumper/side_normal.png').convert('RGBA').resize((98,81),Image.Resampling.LANCZOS)
+            sprites.append(('hyperjumper',im,(49,40)))
         sprites.append(('dark_april',shared[18][1],shared[18][2]))
         meta['actor_ids']=[255]*33
         for t in range(1,33):meta['actor_ids'][t]=39 if t in (1,3,4) else 40 if t in (2,5,28) else 41

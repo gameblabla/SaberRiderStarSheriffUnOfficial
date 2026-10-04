@@ -237,6 +237,15 @@ Implementation status below does not replace the user's visual/audio acceptance.
       on the source's parabola (7% a step, 24 steps of wind-up); shield snipers keep their pace. Shots move in Q8 px/step (166 /
       200 px/s, 0.7 x on diagonals), hit boxes are the source's. Actors are 21 bytes now (`aim`, `mode`), shots 13 (`NSHOTS` 16).
 
+- [x] Bosses follow the source timelines (`boss_pce.c`, new code bank `$7b`): the level-1 gunship (stages 1 and 5) makes its far-layer and mid-layer
+      passes (6.5 px a step), then sweeps - flies in at 2.3 px a step to a hold at the screen edge, holds 80 steps with its diagonal
+      lasers, leaves on the far side and returns from the other (the only phase it takes hits in), its rider covering the other side
+      (silent for steps 160-184 of a round), no contact damage; the Hyperjumper (stages 3 and 4) runs the source's far/mid pass, side
+      in-hold-out, low ground pass (jump it or slide), drop-in fire-down and exit cycle with its hull hurting on contact. Both burn
+      out for 228 steps (the wreck falls) before the stage clears. The gunship is now the boss character's own whole frame 0 at 5/8
+      size (the old art was a stretched 16x16 cell) and the Hyperjumper keeps its aspect (3/4 size). Code space: the CD buffer is
+      40 KiB ($76-$7a, was 56 KiB) so banks $7b/$7c are spare code banks (`PCE_BOSS`, `link.ld`, `check_elf.py`).
+
 Remaining integration/acceptance work:
 
 - [ ] Integrate the reference ROM's two-channel, scanline-delivered 2-bit ADPCM

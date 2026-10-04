@@ -3,9 +3,10 @@
 #include "overlay_pce.h"
 #include "arcade_pce.h"
 #include "loader_pce.h"
-static uint8_t dialogs_done,ndialog,ndeath,boss_phase,boss_flash;
-static uint16_t boss_time,arena_time;
-static int16_t boss_x,boss_y;
+static uint8_t dialogs_done,ndialog,ndeath;
+static uint16_t arena_time;
+extern int16_t boss_x,boss_y;extern uint8_t boss_phase,boss_flash,boss_max;extern uint16_t boss_time;
+void boss_start(void),boss_tick(void),boss_draw(void);
 typedef struct { int16_t zone[4],focus; uint16_t before,after,voice; } DialogZone;
 static DialogZone dialog_zones[4];
 static int16_t death_zones[8][6];
@@ -21,7 +22,7 @@ PCE_COMBAT static bool zone(const int16_t *z) {
     return distance(player.x+4,z[0])<=z[2]+8&&distance(player.y+9,z[1])<=z[3]+23;
 }
 PCE_COMBAT static void bullet(int16_t x,int16_t y,int16_t vx,int16_t vy) {
-    for(uint8_t k=0;k<NSHOTS;++k)if(!shots[k].active){shots[k]=(Shot){x,y,vx<<8,vy<<8,1,1,0,0,0};break;}
+    for(uint8_t k=0;k<NSHOTS;++k)if(!shots[k].active){shots[k]=(Shot){x,y,vx,vy,1,1,0,0,0};break;}
 }
 PCE_COMBAT void combat_start(void) {
     boss_phase=boss_flash=dialogs_done=ndialog=ndeath=cut_phase=0;boss_time=arena_time=0;
@@ -35,15 +36,16 @@ PCE_COMBAT void combat_start(void) {
 PCE_COMBAT static void boss_begin(uint8_t kind) {
     camera=play_scene->width-256;pce_metrics.camera_x=camera;
     pce_campaign.boss_kind=kind;
-    pce_campaign.boss_hp=kind==3?30:kind==1?66:60;
-    boss_time=0;boss_phase=kind==3?3:1;boss_x=camera+240;boss_y=80;
+    boss_time=0;boss_x=camera+240;boss_y=80;
+    if(kind==3){pce_campaign.boss_hp=boss_max=30;boss_phase=3;}
+    else overlay_call(0x7b,boss_start);   /* the flying bosses: boss_pce.c */
     audio_music(8);
 }
 PCE_COMBAT static void power_strike(void) {
     if(hero<2) {
         for(uint8_t k=0;k<8;++k)if(actors[k].active&&!(actors[k].type>=12&&actors[k].type<=28)){actors[k].active=0;++pce_campaign.score;}
         if(pce_campaign.boss_hp) {
-            uint16_t maximum=pce_campaign.boss_kind==3?30:pce_campaign.boss_kind==1?66:60;
+            uint16_t maximum=boss_max;
             uint16_t damage=(maximum*(hero?25:18)+99)/100;
             pce_campaign.boss_hp=pce_campaign.boss_hp>damage?pce_campaign.boss_hp-damage:0;
         }
@@ -112,40 +114,23 @@ PCE_COMBAT void combat_tick(void) {
             }
         }
     } else {
-        ++boss_time;if(boss_flash)--boss_flash;
         uint8_t kind=pce_campaign.boss_kind;
         if(kind==3) {
+            /* Dark April: runs at the hero's heels and fires level */
+            ++boss_time;if(boss_flash)--boss_flash;
             boss_x+=player.x<boss_x?-1:1;
             if(boss_x<(int16_t)camera+32)boss_x=camera+32;
             if(boss_x>(int16_t)camera+224)boss_x=camera+224;
             boss_y=player.y;
-            if(!(boss_time%45))bullet(boss_x,boss_y-8,player.x<boss_x?-4:4,0);
-        } else {
-            if(boss_phase<3) {
-                boss_x=camera+256-(boss_time*3);boss_y=boss_phase==1?48:72;
-                if(boss_time>=90){++boss_phase;boss_time=0;}
-            } else if(boss_phase==3) {
-                boss_x=camera+180+(int16_t)((boss_time/4)%32);boss_y=96;
-                if(!(boss_time%30))bullet(boss_x-28,boss_y+12,-3,2);
-                if(boss_time>=180){boss_phase=4;boss_time=0;}
-            } else if(boss_phase==4) {
-                boss_x=camera+288-(boss_time*4);boss_y=155;
-                if(boss_time>=80){boss_phase=5;boss_time=0;}
-            } else {
-                boss_x=camera+128;boss_y=62;
-                if(!(boss_time%24))bullet(camera+40+(boss_time%176),boss_y+24,0,4);
-                if(boss_time>=144){boss_phase=3;boss_time=0;}
+            if(!(boss_time%45))bullet(boss_x,boss_y-8,(player.x<boss_x?-4:4)<<8,0);
+            if(!safe_timer&&distance(player.x,boss_x)<14&&distance(player.y,boss_y)<28){safe_timer=120;campaign_hurt();}
+            for(uint8_t k=0;k<NSHOTS;++k) {
+                Shot *s=&shots[k];if(!s->active||s->enemy)continue;
+                if(distance(s->x,boss_x)<12&&distance(s->y,boss_y)<24) {
+                    s->active=0;if(pce_campaign.boss_hp)--pce_campaign.boss_hp;boss_flash=6;audio_effect(4);
+                }
             }
-        }
-        if(!safe_timer&&distance(player.x,boss_x)<(kind==3?14:44)&&distance(player.y,boss_y)<(kind==3?28:25)) {
-            safe_timer=120;campaign_hurt();
-        }
-        for(uint8_t k=0;k<NSHOTS;++k) {
-            Shot *s=&shots[k];if(!s->active||s->enemy||boss_phase<3)continue;
-            if(distance(s->x,boss_x)<(kind==3?12:44)&&distance(s->y,boss_y)<(kind==3?24:22)) {
-                s->active=0;if(pce_campaign.boss_hp)--pce_campaign.boss_hp;boss_flash=6;audio_effect(4);
-            }
-        }
+        } else overlay_call(0x7b,boss_tick);
         if(!pce_campaign.boss_hp) {
             if(pce_metrics.stage==4) {
                 ++pce_campaign.score;pce_campaign.boss_round=2;
@@ -179,8 +164,8 @@ PCE_COMBAT void combat_draw(void) {
         pce_campaign.timer+=pce_control.elapsed;
         if(pce_campaign.timer>=114){power_strike();pce_campaign.state=CAM_PLAY;video_restore();}
     }
-    if(pce_campaign.boss_kind&&pce_campaign.boss_hp&&(!boss_flash||(frame&2)))
-        video_sprite(pce_campaign.boss_kind==3?43:42,boss_x-camera,boss_y-16,player.x<boss_x,16);
+    if(pce_campaign.boss_kind==3&&pce_campaign.boss_hp&&(!boss_flash||(frame&2)))video_sprite(43,boss_x-camera,boss_y-16,player.x<boss_x,16);
+    else if(pce_campaign.boss_kind&&pce_campaign.boss_kind!=3&&pce_campaign.boss_hp)overlay_call(0x7b,boss_draw);
     if(pce_campaign.boss_kind){video_text(1,1,"BOSS");video_number(6,1,pce_campaign.boss_hp);}
 
 }
