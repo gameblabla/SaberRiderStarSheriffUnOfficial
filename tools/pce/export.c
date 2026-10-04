@@ -60,6 +60,9 @@ int main(int argc, char **argv) {
             }
         }
     }
+    fprintf(f, "],\"stops\":[");
+    for(int k=0;k<g->nstops;++k)fprintf(f,"%s[%d,%d,%d,%d]",k?",":"",
+        value(g->stops[k].cx),value(g->stops[k].cy),abs(value(g->stops[k].hx)),abs(value(g->stops[k].hy)));
     fprintf(f, "],\"deathzones\":[");
     for(int k=0;k<g->ndeath;++k)fprintf(f,"%s[%d,%d,%d,%d,%d,%d]",k?",":"",
         value(g->deathzones[k].cx),value(g->deathzones[k].cy),value(g->deathzones[k].hx),value(g->deathzones[k].hy),

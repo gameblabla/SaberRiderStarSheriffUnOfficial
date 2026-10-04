@@ -321,10 +321,12 @@ def make_scene(stage, work, previews, shared):
         meta['trigger_offset']=a.add('triggers',b''.join(triggers));meta['ntr']=len(triggers)
         zones=meta['dialogs'] if stage==1 else []
         deaths=meta['deathzones'] if stage==1 else []
-        rules=bytes([len(zones),len(deaths)])
+        stops=meta['stops'] if stage==1 else []
+        rules=bytes([len(zones),len(deaths),len(stops)])
         # Dialogue zone + camera focus x (0 = none) + ticks to hold before / after the text (60 Hz).
         rules+=b''.join(struct.pack('<4hhHH',*z['zone'],z['focus'][0],round(z['hold'][0]*60/1000),round(z['hold'][1]*60/1000)) for z in zones)
         rules+=b''.join(struct.pack('<6h',*z) for z in deaths)
+        rules+=b''.join(struct.pack('<4h',*z) for z in stops)
         meta['rules_offset']=a.add('flow_zones',rules)
         if stage==1: meta['horse_offset']=horse_frames(work,a)
 

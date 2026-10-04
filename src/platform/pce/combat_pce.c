@@ -27,10 +27,10 @@ PCE_COMBAT void combat_start(void) {
     boss_phase=boss_flash=dialogs_done=ndialog=ndeath=cut_phase=0;boss_time=arena_time=0;
     pce_campaign.boss_kind=pce_campaign.boss_round=0;pce_campaign.boss_hp=0;
     pce_campaign.result=pce_campaign.event=0;pce_campaign.boost=pce_campaign.power_cd=0;
-    uint8_t count[2];arcade_read(2,play_scene->rules,count,2);
+    uint8_t count[3];arcade_read(2,play_scene->rules,count,3);
     ndialog=count[0]>4?4:count[0];ndeath=count[1]>8?8:count[1];
-    arcade_read(2,play_scene->rules+2,dialog_zones,(uint16_t)ndialog*sizeof(DialogZone));
-    arcade_read(2,play_scene->rules+2+(uint16_t)ndialog*sizeof(DialogZone),death_zones,(uint16_t)ndeath*12);
+    arcade_read(2,play_scene->rules+3,dialog_zones,(uint16_t)ndialog*sizeof(DialogZone));
+    arcade_read(2,play_scene->rules+3+(uint16_t)ndialog*sizeof(DialogZone),death_zones,(uint16_t)ndeath*12);
 }
 PCE_COMBAT static void boss_begin(uint8_t kind) {
     camera=play_scene->width-256;pce_metrics.camera_x=camera;
@@ -83,7 +83,7 @@ PCE_COMBAT void combat_tick(void) {
     }
     for(uint8_t k=0;k<ndialog;++k)if(!(dialogs_done&(1<<k))&&zone(dialog_zones[k].zone)) {
         dialogs_done|=1<<k;pce_campaign.story=k;
-        if(dialog_zones[k].focus){cut_k=k;cut_phase=1;encounters();}   /* the scene's own actors exist from the start (idle while the camera pans) */
+        if(dialog_zones[k].focus){cut_k=k;cut_phase=1;overlay_call(0x6f,encounters);}   /* the scene's own actors exist from the start (idle while the camera pans) */
         else pce_campaign.event=1;
         return;
     }

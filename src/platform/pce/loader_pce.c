@@ -2,7 +2,6 @@
 #include "arcade_pce.h"
 #include "video_pce.h"
 #include "samples.h"
-#include "pcm.h"
 #include "audio_pcm.h"
 #include "campaign_pce.h"
 
@@ -27,7 +26,7 @@ static uint32_t sector_of(uint8_t stage) {
     default: return (uint32_t)__cd_s7_bin__sector;
     }
 }
-void audio_stop(void) {
+__attribute__((noinline)) void audio_stop(void) {
     if (music_active) pce_cdb_cdda_pause();
     music_active = false;
     voice_priority=0;
@@ -60,17 +59,17 @@ static bool loader_archive(uint32_t sector,uint32_t remaining,bool keep_display)
     pce_cdb_irq_disable(PCE_CDB_MASK_VBLANK_NO_BIOS | PCE_CDB_MASK_HBLANK_NO_BIOS);
     uint32_t address=0;
     while (remaining) {
-        /* $75-$7c are a 64 KiB CD transfer buffer. Only MPR6 changes;
+        /* $76-$7c are a 56 KiB CD transfer buffer. Only MPR6 changes;
          * code, IRQs, the stack and all live loader state remain mapped. */
-        uint8_t sectors = remaining >= 65536UL ? 32 : remaining >> 11;
+        uint8_t sectors = remaining >= 57344UL ? 28 : remaining >> 11;
         pce_sector_t s = {.lo=sector, .md=sector>>8, .hi=sector>>16};
         ++pce_metrics.disc_reads;
-        uint8_t error = pce_cdb_cd_read(s, PCE_CDB_BANK_MPR6, 0x75, sectors);
+        uint8_t error = pce_cdb_cd_read(s, PCE_CDB_BANK_MPR6, 0x76, sectors);
         if (error) { pce_metrics.load_error = error; return false; }
         uint16_t chunk_sectors = sectors;
         for (uint8_t bank = 0; chunk_sectors; ++bank) {
             uint16_t size = chunk_sectors >= 4 ? 8192 : chunk_sectors << 11;
-            pce_bank6_set(0x75 + bank);
+            pce_bank6_set(0x76 + bank);
             bool ok = arcade_write(0, address, (const void *)0xc000, size);
             pce_bank6_set(0x6c);
             if (!ok) { pce_metrics.load_error = 0xfe; return false; }
@@ -124,18 +123,3 @@ void audio_effect(uint8_t tone) {
     audio_pcm_play(tone==1?0:tone==4?1:2);
 }
 void audio_tick(void) {}
-void audio_pcm_play(uint8_t sample) {
-    if(sample>2)return;
-    pce_cpu_irq_disable();
-    *IO_TIMER_CONTROL=0;
-    pce_pcm_left=pcm_samples[sample][1];
-    pce_pcm_bankid=pcm_samples[sample][0];
-    uint16_t address=0xc000;
-    pce_pcm_read[1]=address;pce_pcm_read[2]=address>>8;
-    *IO_PSG_VOLUME=0xff;*IO_PSG_CH_SELECT=0;
-    *IO_PSG_CH_CONTROL=0;*IO_PSG_CH_VOLUME=0xff;
-    *IO_PSG_CH_CONTROL=0xdf;*IO_PSG_CH_SAMPLE=16;
-    *IO_TIMER_COUNTER=0;*IO_IRQ_ACK=0;
-    pce_irq_enable(IRQ_TIMER);*IO_TIMER_CONTROL=1;
-    pce_cpu_irq_enable();
-}

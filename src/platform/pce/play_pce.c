@@ -145,7 +145,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     if(player.coll&4)jumping=0;else if(jumping&&jump_time<255)++jump_time;
     /* The screen only scrolls forwards: the left edge is a wall. */
     if(!cut_phase&&player.x<(int16_t)camera+8){player.x=camera+8;if(player.vx<0)player.vx=0;}
-    if((pce_campaign.boss_kind||herd_on)&&player.x>(int16_t)camera+248)player.x=camera+248;   /* boss arena / herd: the screen is locked */
+    if((pce_campaign.boss_kind||herd_locked)&&player.x>(int16_t)camera+248)player.x=camera+248;   /* boss arena / herd: the screen is locked */
     if((player.coll&4)&&!pce_death){safe_x=player.x;safe_y=player.y;}
     if(player.y>272&&!pce_death) {
         campaign_hurt();
@@ -173,7 +173,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
         shoot(player.x+(facing?-muzzle[0]:muzzle[0]),player.y+muzzle[1],vx,vy,false);
         flash_time=4;flash_diag=side&&(up||down);flash_dx=facing?-muzzle[0]:muzzle[0];flash_dy=muzzle[1];   /* the source's 4-frame flash at the barrel */fire_timer=pce_campaign.boost&&hero==3?4:12;audio_effect(1);
     }
-    if(!(frame&3)&&!(pce_metrics.stage==4&&pce_campaign.boss_round==2))overlay_call(0x70,encounters);
+    if(!(frame&3)&&!(pce_metrics.stage==4&&pce_campaign.boss_round==2))overlay_call(0x6f,encounters);
     for(uint8_t k=0;k<8;++k) {
         Actor *a=&actors[k];if(!a->active)continue;
         if(((a->b.x<(int16_t)camera-80||(a->b.x>(int16_t)camera+384&&a->type!=11))&&a->type!=28)||a->b.y>272){a->active=0;continue;}
@@ -224,7 +224,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
         }
     }
     if(pce_campaign.boss_kind)camera=scene->width-256;
-    else if(!cut_phase&&!herd_on&&player.x>120&&(uint16_t)(player.x-120)>camera) {
+    else if(!cut_phase&&!herd_locked&&player.x>120&&(uint16_t)(player.x-120)>camera) {
         uint16_t gap=player.x-120-camera;camera+=gap>4?4:gap;   /* catches up at most 4 px a step (after a lock) */
     }
     if(camera>(uint16_t)(scene->width-256))camera=scene->width-256;

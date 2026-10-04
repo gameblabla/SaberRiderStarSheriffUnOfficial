@@ -8,6 +8,7 @@ __ram_bank113 = 0x6000;
 __ram_bank114 = 0x6000;
 __ram_bank115 = 0x6000;
 __ram_bank116 = 0x6000;
+__ram_bank117 = 0x6000;
 INCLUDE binary-scd.ld
 __pce_app_entry = ABSOLUTE(_start);
-ASSERT(__zp_bss_start + __zp_bss_size <= 0xf820c0, "Floor scratch overlaps compiler zero page")
+ASSERT(__zp_bss_start + __zp_bss_size <= 0xf82080, "Audio state overlaps compiler zero page")

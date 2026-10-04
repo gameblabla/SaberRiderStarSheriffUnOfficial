@@ -5,7 +5,7 @@ Codes are low pair first: +small, +large, -small, -large. Predictor is unsigned
 16-bit, starts at 0x8000 and saturates; the ring-buffer output is its high byte.
 The adaptation tables come from ROM bank 3, as read by native code C6A1-C8BD.
 A JSON sidecar carries the sample count expected by the demo's length table.
-This is a host compressor, not an installed scanline audio driver for the game.
+The game uses these tables/streams in its timer-driven PSG DDA decoder.
 """
 import argparse
 import array

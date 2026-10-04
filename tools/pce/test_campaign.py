@@ -92,14 +92,22 @@ class Campaign(Test):
             e.write(symbol(self.out/'app.elf','shots'),bytes(24*10))
             e.input(4);e.run(4);e.input(4|16|32|1)
             for _ in range(30):
+                previous_tick=int.from_bytes(e.memory(symbol(self.out/'app.elf','frame'),2),'little')
                 e.run(1)
+                ticks=(int.from_bytes(e.memory(symbol(self.out/'app.elf','frame'),2),'little')-previous_tick)&65535
                 raw=e.memory(symbol(self.out/'app.elf','shots'),24*10)
                 found=[struct.unpack_from('<4h2B',raw,k*10) for k in range(24) if raw[k*10+8]]
                 if found:break
             e.input(0)
             assert found and found[0][2:4]==(6,-6),found
             m=self.metrics(e)
-            assert (found[0][0]-6,found[0][1]+6)==(m['player_x']+mx,m['player_y']+my),(found[0],m,mx,my)
+            # A rendered frame may service multiple gameplay ticks. Both
+            # direction keys keep the body still; account for each possible
+            # projectile update since the last sample of the empty pool,
+            # including a tick already entered at that sample.
+            px,py=struct.unpack('<2h',e.memory(symbol(self.out/'app.elf','player'),4))
+            assert any((found[0][0]-6*age,found[0][1]+6*age)==(px+mx,py+my)
+                       for age in range(ticks+2)),(found[0],px,py,mx,my,ticks)
             # Town boss arrival, player-shot damage, then native clear decision.
             self.move(e,9800);self.until(e,lambda:self.state(e)['boss_kind']==1,limit=600)
             self.seed(e,'boss_phase',3,1);self.seed(e,'boss_time',0);self.field(e,'boss_hp',2)

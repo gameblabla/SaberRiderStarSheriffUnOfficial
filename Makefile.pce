@@ -24,7 +24,7 @@ $(OUT)/ipl.bin: tools/pce/ipl.py ../PCE/huc/src/isolink/main.c | $(OUT)
 $(OUT)/ipl_font.h: tools/pce/ipl_font.py | $(OUT)
 	python3 $< $@
 
-$(PCE_AUDIO) &: tools/pce/build_audio.py tools/pce/adpcm.py src/audio.c $(wildcard SaberRider/data/*.pck assets/voice/*.wav) | $(OUT)
+$(PCE_AUDIO) &: tools/pce/build_audio.py tools/pce/adpcm.py tools/pce/adpcm2.py ../PCE/Sound/adpcm_build_14_2bit.pce src/audio.c $(wildcard SaberRider/data/*.pck assets/voice/*.wav) | $(OUT)
 	python3 $< --out $(OUT)
 
 src/platform/pce/floor_geometry.h: tools/pce/floor_tables.py
@@ -51,13 +51,16 @@ $(OUT)/saber_rider.cue: $(OUT)/ipl.bin $(OUT)/ipl.elf $(OUT)/app.elf $(PCE_ASSET
 test: all
 	python3 tools/pce/test_port.py --out $(OUT)
 	python3 tools/pce/test_campaign.py --out $(OUT)
+	python3 tools/pce/test_herd.py --out $(OUT)
 	python3 tools/pce/test_foreground.py --out $(OUT)
 	python3 tools/pce/test_presentation.py --out $(OUT)
 	python3 tools/pce/test_audio.py --out $(OUT)
 	python3 tools/pce/test_adpcm2.py --out $(OUT)
+	python3 tools/pce/test_software_adpcm.py --out $(OUT)
 
 test-campaign: all
 	python3 tools/pce/test_campaign.py --out $(OUT)
+	python3 tools/pce/test_herd.py --out $(OUT)
 
 test-presentation: all
 	python3 tools/pce/test_presentation.py --out $(OUT)
@@ -66,3 +69,4 @@ test-presentation: all
 test-audio: all
 	python3 tools/pce/test_audio.py --out $(OUT)
 	python3 tools/pce/test_adpcm2.py --out $(OUT)
+	python3 tools/pce/test_software_adpcm.py --out $(OUT)

@@ -13,10 +13,15 @@ static uint16_t trigger_timers[100];
 static int8_t trigger_remaining[100];
 static uint8_t trigger_spawned[100];
 static Trigger trigger;
+static int16_t stop_zones[4][4];
+static uint8_t stop_count,stop_done;
 static Trigger trigger_cache[60] PCE_STAGE;
 static int16_t trigger_lo[60] PCE_STAGE,trigger_hi[60] PCE_STAGE;
 PCE_COMBAT void encounter_init(void) {
     const PceScene *scene=play_scene;
+    uint8_t counts[3];arcade_read(2,scene->rules,counts,3);
+    stop_count=counts[2]>4?4:counts[2];stop_done=0;herd_on=herd_locked=0;
+    arcade_read(2,scene->rules+3+(uint16_t)counts[0]*14+(uint16_t)counts[1]*12,stop_zones,stop_count*8);
     for(uint8_t k=0;k<scene->ntr;++k) {
         arcade_read(2,scene->triggers+(uint32_t)k*sizeof trigger,&trigger,sizeof trigger);
         if(k<60) {trigger_cache[k]=trigger;trigger_lo[k]=trigger.type==10?32767:trigger.cx-trigger.hx-8;trigger_hi[k]=trigger.cx+trigger.hx+8;}
@@ -24,20 +29,27 @@ PCE_COMBAT void encounter_init(void) {
         if(trigger.type>=24&&trigger.type<=27)trigger_remaining[k]=0;   /* background airships: not drawn here, so never spawned */
     }
 }
-PCE_COMBAT void encounters(void) {
+PCE_MISSION void encounters(void) {
     const PceScene *scene=play_scene;
     uint8_t k=0;
     int16_t px=player.x+4;
+    if(herd_on)for(uint8_t j=0;j<stop_count;++j) {
+        const int16_t *z=stop_zones[j];
+        if(!(stop_done&(1<<j))&&px>=z[0]-z[2]-8&&px<=z[0]+z[2]+8&&
+           player.y+9>=z[1]-z[3]-23&&player.y+9<=z[1]+z[3]+23) {
+            stop_done|=1<<j;herd_locked=1;
+        }
+    }
     for(const Trigger *t=trigger_cache;k<scene->ntr;++k,++t) {
         if(px<trigger_lo[k]||px>trigger_hi[k]||!trigger_remaining[k]) continue;
         if(player.y+9<t->cy-t->hy-23||player.y+9>t->cy+t->hy+23) continue;
         if(trigger_timers[k]) {trigger_timers[k]=trigger_timers[k]>4?trigger_timers[k]-4:0;continue;}
         if(t->type==11) {
-            /* The robot-horse herd (a cutscene: the camera stays put until it has passed). The source drops a column
+            /* The herd begins before the separately exported camera-stop zone. The source drops a column
              * of 12 horses at once, 99 px apart, behind the right screen edge, running at the hero at 120 px/s; here
              * five, 192 px apart, so at most two are on screen and two fit a scanline beside the hero. */
             if(!play_scene->horse||t->wp[0][0]<=30000){trigger_remaining[k]=0;continue;}
-            herd_y=t->wp[0][1];overlay_call(0x6f,herd_spawn);
+            herd_y=t->wp[0][1];herd_lead=t->interval*5/2;overlay_call(0x6f,herd_spawn);
             trigger_remaining[k]=0;continue;
         }
         if(herd_on)continue;   /* nothing else is called in while the herd runs */

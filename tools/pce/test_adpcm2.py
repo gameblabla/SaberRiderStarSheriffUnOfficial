@@ -39,7 +39,7 @@ def verify(out):
                 assert e.memory(0x207e,1)[0]==index
                 cases+=1;checked+=count
     report=dict(native_decoder_cases=cases,samples_compared=checked,passed=True,
-                hardware_playback='not installed in game',cpu_budget='not measured')
+                hardware_playback='two timer-driven software ADPCM DDA channels; see test_audio.py',cpu_budget='not measured')
     (out/'adpcm2-verification.json').write_text(json.dumps(report,indent=2)+'\n');print(report)
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--out',type=Path,default=Path('build/pce'));a=p.parse_args();verify(a.out.resolve())

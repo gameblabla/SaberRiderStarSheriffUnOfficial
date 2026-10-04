@@ -2,6 +2,7 @@
 #include "sprite_cache_pce.h"
 #include "arcade_pce.h"
 #include "overlay_pce.h"
+#include "audio_pcm.h"
 /* The robot-horse herd (level 1's stampede) at the source's full size. A frame is 128x80, drawn as VDC big sprite
  * cells: four columns of a 32x64 and a 32x16 sprite (8 SAT entries a horse, not 33 pieces). The frame patterns are
  * streamed from the scene into pages of the sprite cache that the herd reserves for its length, into one of two
@@ -11,8 +12,9 @@ extern uint8_t sat_count,sat_page;
 extern vdc_sprite_t sat[2][64];
 extern uint8_t sprite_line_lo,sprite_line_hi,sprite_line_ok;
 extern void sprite_lines_reserve(void),sprite_lines_release(void);
-uint8_t herd_on;
+uint8_t herd_on,herd_locked;
 int16_t herd_y;
+uint16_t herd_lead;
 static uint8_t shown,cur;
 #define BUFFER_PAGE(b) (28+(b)*10)
 HERD_CODE void herd_reserve(void) {
@@ -32,7 +34,7 @@ HERD_CODE void herd_reserve(void) {
 /* The source drops a column of 12 horses at once, 99 px apart, behind the right screen edge, running at the hero at
  * 120 px/s; here five, 192 px apart, so at most two are on screen and two fit a scanline beside the hero. */
 HERD_CODE void herd_spawn(void) {
-    int16_t x0=camera+256+72+195;
+    int16_t x0=camera+256+72+herd_lead;
     for(uint8_t h=0,i=0;h<5;++h) {
         while(i<8&&actors[i].active)++i;
         if(i==8)break;
@@ -46,8 +48,9 @@ HERD_CODE void herd_draw(void) {
     for(uint8_t k=0;k<8;++k)if(actors[k].active&&actors[k].type==11)++live;
     if(!live) {
         for(uint8_t p=28;p<48;++p)pattern_owner[p]=0;
-        sprite_pinned[47]=0;herd_on=0;return;
+        sprite_pinned[47]=0;herd_on=herd_locked=0;audio_pcm_gallop(false);return;
     }
+    audio_pcm_gallop(true);
     sprite_pinned[47]=250;
     uint8_t want=(frame>>2)%5;
     if(want!=shown) {

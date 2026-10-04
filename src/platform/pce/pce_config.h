@@ -17,7 +17,7 @@
 #define PCE_STAGE __attribute__((section(".ram_bank108.stage")))
 /* $68 resident, $69 platform/$6d floor overlays share MPR3, $6a renderer.
  * $6b work, $6c staging. BIOS remains in MPR7; MPR0 is hardware, MPR1 RAM.
- * CD scratch is $75-$7c. No stack, return address or IRQ lives there. */
+ * Audio code is $75; CD scratch is $76-$7c. No stack, return address or IRQ lives there. */
 #define PCE_BAT_WORD 0x0000
 #define PCE_BG_WORD 0x0800
 #define PCE_SPR_WORD 0x4800

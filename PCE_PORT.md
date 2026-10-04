@@ -63,14 +63,19 @@ Stage callbacks share the `$6000` CPU window: platform `$69`, floor `$6d`, flow
 `$6e`, race `$6f`, platform combat `$70`, story `$71`, Ramrod `$72`, space `$73`,
 and presentation/sprite allocation `$74`. The resident trampoline preserves the previous
 mapping across nested callbacks. Work and staging use `$6b/$6c`. CD transfers
-use `$75–$7c`, copying through MPR6 into Arcade RAM before music starts.
-Resident PCM samples occupy `$7d–$7f` and remain outside that scratch area.
+use `$76–$7c` (56 KiB), copying through MPR6 into Arcade RAM before music starts.
+Software ADPCM code/tables occupy `$75`; packed samples occupy `$7d–$7f`.
+The timer IRQ saves and restores MPR3/MPR6 while using these banks.
 
 The final 128 KiB of Arcade RAM is reserved for the background tile directory.
 Scenes preload their graphics, collision, triggers, dialogs and mission tables.
-CD-DA and the selected hero's hardware ADPCM bank coexist with timer-driven
-5-bit PSG DDA effects at approximately 6.99 kHz. Original gun/impact/special
-samples replace square waves. Jump, hurt and death use ADPCM voices without
+CD-DA and the selected hero's hardware ADPCM bank coexist with two timer-driven
+Build 14 software ADPCM voices on PSG DDA channels 0–1 at approximately
+6.99 kHz: gunfire/impact/power share channel 0; the looping horse gallop uses
+channel 1. A new one-shot effect replaces the previous one-shot. Each decoder uses
+the supplied ROM’s exact 16-bit predictor and adaptation tables. Its high five
+bits drive one PSG channel, allowing a one-shot effect to overlap the gallop.
+Jump, hurt and death use ADPCM voices without
 added tones. A death voice finishes before reload; blocking loaders stop the
 DDA timer and every PSG channel.
 The runtime counts and rejects asset reads while music is active.
@@ -191,9 +196,11 @@ python3 tools/pce/adpcm2.py build/pce/work/sfx/C66E1894.wav build/pce/shot-2bit.
 `test_adpcm2.py` compares the host decoder and encoded streams with the ROM's
 native HuC6280 routine in 48 seeded cases. This establishes format compatibility,
 not the reported 17% CPU budget. The ROM consumes samples through a scanline
-IRQ and two weighted DDA channels. That delivery method has not been integrated
-with the game's race raster; the shipped game uses the requested 5-bit PCM
-fallback. See `PCE_AUDIO_REFERENCE.md` for exact locations.
+IRQ and two weighted DDA channels. The game instead decodes two independent
+streams on the timer IRQ, keeping the race raster scheduler separate.
+`test_software_adpcm.py` compares 4,430 native game decoder outputs and states
+with the codec; `test_audio.py` checks concurrent delivery, loop reset, stopping,
+and audible native output. See `PCE_AUDIO_REFERENCE.md` for exact locations.
 
 The frontend-only `tools/pce/emulator-audio.patch` adds `sound_capture` and
 `register_set` RPC commands for these checks; it does not change emulated
