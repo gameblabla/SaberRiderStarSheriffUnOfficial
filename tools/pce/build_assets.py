@@ -336,7 +336,7 @@ def road_assets(sand, previews):
             ids[r, c] = lookup[enc]
     assert len(tiles) <= 256, f'Road picture needs {len(tiles)} characters'
     sand = np.asarray(sand, float)
-    haze = sand * 0.72 + np.array((200, 220, 255.)) * 0.28
+    haze = np.array((216, 144, 108.))   # (already one of the mountains' colours)
     asphalt_a, asphalt_b = np.array((66, 66, 78.)), np.array((80, 80, 94.))
     red, white = np.array((226, 44, 40.)), np.array((236, 236, 244.))
     phase_a = [sand, red, white, asphalt_a, white]
@@ -418,7 +418,7 @@ def race_sky(archive, previews, sand):
     HORIZON = 128   # the sky's feet: the road's far rows are fully hazed down to here (road_assets), so the sky and its mountains fill that stretch (irq.S starts the road's scanlines at 128)
     def word(c): return int(vce_colors(np.clip(np.asarray(c, float), 0, 255).astype(np.uint8)))
     zenith, pale = np.array((12, 60, 188.)), np.array((200, 220, 255.))
-    haze = np.asarray(sand, float) * 0.72 + pale * 0.28
+    haze = np.array((216, 144, 108.))   # the ground's colour at the horizon, one of the mountains' own
     # The hardware has 8 levels a channel, so shades picked one by one wander in hue (a teal band appeared). The shades are
     # instead the lattice points of a straight walk from the zenith to the horizon colour, 12 steps of at most one level a
     # channel, and the dither between neighbours is then a one-level difference.
@@ -441,7 +441,7 @@ def race_sky(archive, previews, sand):
         for dy in range(8):
             y = r * 8 + dy
             for x in range(8):
-                if y >= HORIZON: tile[dy, x] = 15
+                if y >= HORIZON - 16: tile[dy, x] = 15   # the last sixteen lines (scanlines 112-127; screenshot rows 123-138) are the ground's haze colour wherever there is no mountain: no sky shows under the mountains' feet
                 else:
                     pos = (y / (HORIZON - 1)) ** 1.45 * 12
                     k = min(int(pos), 11); frac = pos - k
@@ -457,7 +457,7 @@ def race_sky(archive, previews, sand):
     # wrapping at the panorama's 512 dots. They get a hardware palette of their own (palette 9: the gradient's shades that reach down here, and the range's
     # own colours fitted to it), flat shaded, so the tiles repeat enough for the 256 characters of the sky.
     rgb = vce_rgb(palette)
-    strip = race_mountains(np.asarray(sand, float) * 0.72 + pale * 0.28, MTN_TOP, HORIZON)
+    strip = race_mountains(haze, MTN_TOP, HORIZON)
     region = pixels[MTN_TOP:HORIZON].copy()
     shades = sorted(set(int(v) for v in np.unique(region)))
     solid = strip[..., 3] > 0
@@ -597,10 +597,11 @@ def add_sprites(archive, sprites, previews):
     hud=[im for name,im,_ in sprites if name.startswith('hudp_')]
     hud_palette=palette_for(hud,unique=True) if hud else None
     power_palette={}
-    for h in range(4):   # the portrait's 13 colours, then white and black for the name beside it (all of a hero's parts share the palette)
+    for h in range(4):   # the portrait's 14 colours, then white for the name beside it (all of a hero's parts share the palette)
         parts=[im for name,im,_ in sprites if name.startswith(f'pwr{h}_') and not name.endswith('name')]
         if not parts: continue
-        pal=palette_for(parts,13);pal[14]=vce_colors(np.array((255,255,255),np.uint8));pal[15]=0
+        face=parts[0].crop((0,0,64,50))   # the face counts ten times in the choice of colours: it is small and its skin tones and eyes would otherwise be lost to the clothes
+        pal=palette_for(parts+[face]*10,14);pal[15]=vce_colors(np.array((255,255,255),np.uint8))   # (the name's outline takes the darkest entry, the art's own outline colour)
         power_palette[h]=pal
     boss=[im for name,im,_ in sprites if name in ('gunship_left','gunship_right','hyperjumper_left','hyperjumper_right')]
     boss_palette=palette_for(boss) if boss else None

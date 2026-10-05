@@ -261,7 +261,7 @@ def add_art(root,work,stage,sprites,frame):
         for k,(y0,y1) in enumerate(((0,64),(64,128),(128,160))):add(f'pwr{hero}_{k}',port.crop((x0,y0,x0+64,y1)))
     # the hero's name beside it (power_base + 12 + hero): the dialogue font at twice the size, 14 dots a letter, white with a black outline (14 * letters + 4 wide, 18 high)
     if stage in (1,3,4,5,7):
-        for hero,name in enumerate(('SABER RIDER','FIREBALL','APRIL','COLT')):
+        for hero,name in enumerate(('SABER','FIREBALL','APRIL','COLT')):
             w=14*len(name)+4;mask=np.zeros((18,w),bool)
             for i,ch in enumerate(name):
                 if ch==' ':continue

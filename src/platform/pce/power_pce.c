@@ -109,7 +109,7 @@ POWER_CODE void power_frame(void) {
         if(t>=NAME_AT) {   /* the name slides in from the right, centred on the right half of the band */
             uint8_t q=t-NAME_AT;if(q>16)q=16;
             uint16_t f=(uint16_t)q*(32-q);
-            static const uint8_t name_w[4]={158,116,74,60};
+            static const uint8_t name_w[4]={74,116,74,60};
             uint16_t target=170-name_w[pce_control.hero]/2;
             video_sprite(pb+12+pce_control.hero,256-(int16_t)(((256-target)*f)>>8),103,false,16);
         }
