@@ -131,7 +131,7 @@ ENEMY_CODE void world_update(void) {
         /* The stampede tramples every humanoid in its way: the placed snipers and the rest are simply gone while it runs, which is
          * also what keeps its scenes inside the sprite budget (they are never drawn, uploaded or fired from). */
         if(herd_on&&(a->type<11||a->type>28)) {
-            /* (the first stampede of level 1 alone: its enemies turn and run off to the left, snipers and kneelers in the run of the brown grunt, which has their body) */
+            /* (every stampede: its enemies turn and run off to the left, snipers and kneelers in the run of the brown grunt, which has their body) */
             if(!herd_flee||a->type>10){a->active=0;continue;}
             if(a->dead){if(++a->dead>24)a->active=0;continue;}
             if(a->type>5)a->type=5;

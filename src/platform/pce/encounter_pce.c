@@ -73,7 +73,7 @@ PCE_SCENERY void encounters(void)   /* $78: the mission bank is full */ {
              * the same horse count, 224 px apart, so at most two are on screen and two fit a scanline beside the hero. */
             if(!play_scene->horse||t->wp[0][0]<=30000){trigger_remaining[k]=0;continue;}
             herd_y=t->wp[0][1];herd_lead=t->interval*5/2;herd_pending=(uint8_t)t->remaining+1;if(pce_metrics.stage==1)herd_pending=t->cx<4000?8:t->cx>8000?herd_pending-3:herd_pending;   /* the first convoy runs a third shorter, the last three horses fewer */
-            herd_flee=pce_metrics.stage==1&&t->cx<4000;
+            herd_flee=1;   /* every stampede: its enemies turn and run off to the left (not just the first of level 1) */
             herd_next=camera+328+herd_lead+16;overlay_call(0x6f,herd_spawn);herd_feed();
             trigger_remaining[k]=0;continue;
         }
