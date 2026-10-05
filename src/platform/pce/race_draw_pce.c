@@ -47,7 +47,8 @@ DRAW_CODE static int32_t mulw(int16_t a,int8_t b) {
 }
 /* The ground point in the camera's frame: f ahead, l to the right. The screen row follows from the distance (horizon
  * 113 + 10080 / f); a car's width in dots is 1.17 x the rows below the horizon; the offset from the middle is
- * l * 421 / f = l * rows / 23.9, taken as l * (rows * 0.668 in Q4) >> 4 so that it stays in 16 bits. */
+ * l * 210 / f = l * rows / 48, taken as l * (rows * 0.334 in Q4) >> 4 so that it stays in 16 bits (the road is drawn half as wide as the
+ * focal length of 421 dots gives, so that its picture has sand on both sides). */
 DRAW_CODE static bool project_point(int16_t wx,int16_t wy,int16_t *sx,int16_t *row,int16_t *depth) {
     int16_t rx=wrapdiff(wx,pce_control.x),ry=wrapdiff(wy,pce_control.y);
     if(rx>1900||rx<-1900||ry>1900||ry<-1900)return false;
@@ -59,7 +60,7 @@ DRAW_CODE static bool project_point(int16_t wx,int16_t wy,int16_t *sx,int16_t *r
     if(l>4*f||l<-4*f)return false;
     uint16_t below=10080u/(uint16_t)f;
     *row=113+below;*depth=f;
-    *sx=256+(int16_t)(l*(int16_t)((below*171)>>8)>>6);
+    *sx=256+(int16_t)(l*(int16_t)((below*85)>>8)>>6);
     return true;
 }
 DRAW_CODE static void add(uint8_t kind,int16_t wx,int16_t wy) {
@@ -110,7 +111,7 @@ DRAW_CODE void race_draw(void) {
         }
     }
     for(uint8_t k=0;k<nvis;++k) {
-        uint16_t rows=vis[k].y-113,dots=rows+(rows>>3)+(rows>>5);   /* 11776 / f */
+        uint16_t rows=vis[k].y-113,dots=(rows>>1)+(rows>>4)+(rows>>5);   /* 5888 / f: the road is drawn half as wide as the focal length of 421 dots gives (road_pce.c) */
         uint8_t i=0;
         while(i<PCE_CAR_STEPS-1&&(uint16_t)pce_car_widths[i]*2<dots)++i;
         /* Baked perspective sizes use the cached assembly emitter. Scaling

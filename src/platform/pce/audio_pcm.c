@@ -13,21 +13,32 @@ PCM_CODE static void stop_all(void) {
     for(uint8_t i=0;i<6;++i){*IO_PSG_CH_SELECT=i;*IO_PSG_CH_CONTROL=0;}
     pce_cpu_irq_enable();
 }
+/* The road's per-scanline interrupt has about 300 cycles of slack, so nothing may keep interrupts off for longer than that: the sample's
+ * numbers are read and the voice's record is written with them on (the voice is idle then, which is all the timer handler checks),
+ * and only the PSG channel's set-up, which the handler's channel select would otherwise split, is done with them off. */
 PCM_CODE static void start(void) {
     uint8_t sample=request;
     uint8_t channel=sample==3?1:0;
     volatile PcePcmVoice *v=&pce_pcm_voices[channel];
-    pce_cpu_irq_disable();
-    if(sample==4) {v=&pce_pcm_voices[1];v->left=0;v->loop=0;pce_pcm_active&=1;*IO_PSG_CH_SELECT=1;*IO_PSG_CH_CONTROL=0;}
-    else if(sample!=3||!v->left) {
-        v->left=v->count=pcm_samples[sample][2];v->read=v->start=pcm_samples[sample][1];
-        v->bank=pcm_samples[sample][0];v->last_sample=16;v->start_bank=v->bank;
-        v->loop=sample==3;v->channel=channel;pce_pcm_active|=1<<channel;
-        *IO_PSG_VOLUME=0xff;*IO_PSG_CH_SELECT=channel;
-        *IO_PSG_CH_CONTROL=0;*IO_PSG_CH_VOLUME=0xff;
-        *IO_PSG_CH_CONTROL=0xdf;*IO_PSG_CH_SAMPLE=16;
-        if(!(*IO_TIMER_CONTROL&1)) {*IO_TIMER_COUNTER=0;*IO_IRQ_ACK=0;pce_irq_enable(IRQ_TIMER);*IO_TIMER_CONTROL=1;}
+    if(sample==4) {
+        pce_cpu_irq_disable();
+        v=&pce_pcm_voices[1];v->left=0;v->loop=0;pce_pcm_active&=1;*IO_PSG_CH_SELECT=1;*IO_PSG_CH_CONTROL=0;
+        pce_cpu_irq_enable();
+        return;
     }
+    if(sample==3&&v->left)return;
+    const uint16_t *table=pcm_samples[sample];
+    uint8_t bank=table[0];uint16_t begin=table[1],count=table[2];
+    pce_cpu_irq_disable();pce_pcm_active&=~(1<<channel);pce_cpu_irq_enable();
+    v->left=v->count=count;v->read=v->start=begin;
+    v->bank=bank;v->last_sample=16;v->start_bank=bank;
+    v->loop=sample==3;v->channel=channel;
+    pce_cpu_irq_disable();
+    pce_pcm_active|=1<<channel;
+    *IO_PSG_VOLUME=0xff;*IO_PSG_CH_SELECT=channel;
+    *IO_PSG_CH_CONTROL=0;*IO_PSG_CH_VOLUME=0xff;
+    *IO_PSG_CH_CONTROL=0xdf;*IO_PSG_CH_SAMPLE=16;
+    if(!(*IO_TIMER_CONTROL&1)) {*IO_TIMER_COUNTER=0;*IO_IRQ_ACK=0;pce_irq_enable(IRQ_TIMER);*IO_TIMER_CONTROL=1;}
     pce_cpu_irq_enable();
 }
 void audio_pcm_stop(void) {overlay_call(0x75,stop_all);}

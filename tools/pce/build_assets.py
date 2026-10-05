@@ -292,7 +292,9 @@ def road_assets(sand, previews):
     shows each band of the road in one of two colour phases by choosing which copy of the BAT rows a scanline reads (BYR):
     the copies use the same characters with different palettes. The far rows fade into the haze of the sky."""
     W, C = 1024, 512
-    SLOPE_KERB, SLOPE_ROAD, SLOPE_EDGE, SLOPE_DASH = 5.0, 4.25, 4.0, 0.11   # dots a line: kerb outside, road, white edge line, centre dash
+    SLOPE_KERB, SLOPE_ROAD, SLOPE_EDGE, SLOPE_DASH = 2.5, 2.25, 2.0, 0.055   # dots a line: kerb outside, road, white edge line, centre dash
+    # (half the dots a unit of the source map's widths needs, 120/102 units: the road is narrower than the picture's 1024 dots, so there is sand
+    # on both sides and the car can drive onto it - the sand beyond the picture's edge is the sand of its other edge)
     # 1 sand, 2 kerb, 3 edge line, 4 asphalt, 5 centre dash
     img = np.ones((ROAD_LINES, W), np.uint8)
     ax = np.abs(np.arange(W) - C + 0.5)

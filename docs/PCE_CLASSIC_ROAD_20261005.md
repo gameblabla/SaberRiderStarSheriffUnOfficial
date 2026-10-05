@@ -80,6 +80,26 @@ consecutive frames showed single full-width rows changing). The tables were stab
 * Rule for new code in the race: no uninterruptible block move longer than about 16 bytes (the RCR handler's slack is ~300 cycles,
   and a PCM timer interrupt can queue in front of it).
 
+## Driving onto the sand, and the turbo + fire glitches (2026-10-05, fourth session)
+
+* **Turbo + fire glitches.** Firing calls `audio_pcm_play` (`audio_pcm.c start`), which kept interrupts off for the whole of its
+  compiled body (about 500 cycles: table lookups and sixteen volatile stores), so the road's raster interrupt arrived a scanline late whenever a
+  shot was fired (the instrumented emulator showed 32 late interrupts, all just after `overlay_call` returned from it, in 400 frames of
+  turbo + fire). The sample's numbers are now read and the voice record written with interrupts on (the voice is switched off for that
+  time, which is all the timer handler looks at), and only the PSG set-up is atomic: 28 late interrupts in 212,000 became 6.
+* **The road is half as wide.** The picture was built for a focal length of 421 dots: the kerb (120 units) was 5 dots a line, wider than the
+  picture's 1024 dots from the 100th line down, so there was no sand to show at the bottom of the screen and the last session's +-250 dot
+  limit pinned the road in place as soon as the car left its middle. The picture's slopes are now halved (kerb 2.5, white line 2.25, asphalt
+  2.0 dots a line; `build_assets.py road_assets`), and so is the world-to-dots scale everywhere: `road_pce.c dots_q4` (85/1024), the
+  cars' and shots' `project_point` (85/256) and the cars' baked size (`rows` x 0.59). The road is narrower on the screen but has sand
+  for 400 dots either side of its kerbs at the bottom line, and the BXR window may run past the picture's edge (it wraps into the
+  other edge's sand), so `X_LIMIT` is gone.
+* **The wall.** The window shows the far kerb of the picture again (a ghost at the screen's corner) once the car is about 195 units from the
+  road's middle, so `race_pce.c LAT_LIMIT` (170, 50 beyond the kerb) holds it: `project()` moves the car back along the segment's normal
+  and takes a sixteenth of its speed each step, and the pursuit (a straight road along x 4096) clamps `px`. The ground under the car is the
+  map's own (sand 250 u/s), as before.
+* Bank space: `boss_draw` and `hull` moved from $79 (now full) to $6d (`BOSS_DRAW` in `boss_pce.c`, `overlay_call(0x6d,boss_draw)`).
+
 ## Cost and results
 
 * Measured in the accurate-core emulator with seven rivals and an autopilot: the loop completes about 22 times a second and the

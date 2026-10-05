@@ -16,7 +16,7 @@
  * 11 leaves upward, then the other side. It hurts on contact with its hull and takes hits throughout 4-11.
  * Phase 12 (both): the wreck falls and burns for 228 steps, then the stage clears. */
 #define BOSS_CODE PCE_BOSS
-#define BOSS_DRAW PCE_RACE   /* $79: the race core's bank, idle on the platform stages */
+#define BOSS_DRAW __attribute__((noinline,section(".ram_bank109.text")))   /* $6d: the race road's bank, idle on the platform stages ($79 is full) */
 int16_t boss_x,boss_y;
 uint8_t boss_phase,boss_flash,boss_max;
 uint16_t boss_time;

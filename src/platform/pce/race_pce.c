@@ -20,6 +20,7 @@
 #define RACE_CODE PCE_RACE
 #define N_RIVALS 7
 #define MAX_OFF 0x1800
+#define LAT_LIMIT 170   /* units from the road's middle: 50 beyond the kerb (the far kerb of the picture shows from about 195). The road's picture has sand for that much and no more (road_pce.c) */
 TrackPoint track[256] PCE_STAGE;
 Rival rv[N_RIVALS];
 Mine mines[6];
@@ -73,7 +74,15 @@ RACE_CODE static int16_t project(void) {
     uint16_t s=((uint16_t)bi<<8)+along;
     if(ps>0xc000&&s<0x4000)++lapp;else if(ps<0x4000&&s>0xc000)--lapp;
     ps=s;
-    return ((rx*-sy+ry*sx)>>1)*5>>7;
+    int16_t lat=((rx*-sy+ry*sx)>>1)*5>>7;
+    if(lat>LAT_LIMIT||lat<-LAT_LIMIT) {   /* the edge of the sand: the car slides along it */
+        int16_t over=lat>0?lat-LAT_LIMIT:lat+LAT_LIMIT;
+        if(over>60)over=60;else if(over<-60)over=-60;
+        px=(px+((sy*over*5)>>8))&8191;py=(py-((sx*over*5)>>8))&8191;   /* back along the segment's normal (x5/256 is 1/51 of a unit) */
+        speed-=speed>>4;
+        lat=lat>0?LAT_LIMIT:-LAT_LIMIT;
+    }
+    return lat;
 }
 PCE_HUD static void hurt_car(uint8_t damage) {   /* bank $7c: $79 is full */
     if(hurt||(rphase!=P_RACE&&rphase!=P_PURSUIT&&rphase!=P_BOSS))return;
@@ -206,7 +215,9 @@ RACE_CODE static void race_tick(uint8_t keys) {
         break;
     case P_PURSUIT:
     case P_BOSS:
-        drive(keys);overlay_call(0x7a,foes_shots);overlay_call(0x7a,foes_escorts);overlay_call(0x7a,foes_leader);
+        drive(keys);
+        {int16_t l=wrapdiff(px,4096);if(l>LAT_LIMIT||l<-LAT_LIMIT){px=l>0?4096+LAT_LIMIT:4096-LAT_LIMIT;speed-=speed>>4;}}   /* the pursuit's road is straight along x 4096 */
+        overlay_call(0x7a,foes_shots);overlay_call(0x7a,foes_escorts);overlay_call(0x7a,foes_leader);
         gap_dist=boss.state<2?(uint16_t)hypot16(wrapdiff(px,boss.x),wrapdiff(py,boss.y)):0;
         if(rphase==P_PURSUIT) {
             if(spawn_t)--spawn_t;

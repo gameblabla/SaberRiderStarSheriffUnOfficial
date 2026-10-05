@@ -165,6 +165,6 @@ PCE_COMBAT void combat_draw(void) {
         if(pce_campaign.timer>=114){power_strike();pce_campaign.state=CAM_PLAY;video_restore();}
     }
     if(pce_campaign.boss_kind==3&&pce_campaign.boss_hp&&(!boss_flash||(frame&2)))video_sprite(43,boss_x-camera,boss_y-16,player.x<boss_x,16);
-    else if(pce_campaign.boss_kind&&pce_campaign.boss_kind!=3&&pce_campaign.boss_hp)overlay_call(0x79,boss_draw);
+    else if(pce_campaign.boss_kind&&pce_campaign.boss_kind!=3&&pce_campaign.boss_hp)overlay_call(0x6d,boss_draw);
 
 }
