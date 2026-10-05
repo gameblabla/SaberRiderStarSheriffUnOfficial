@@ -14,6 +14,3 @@ static inline __attribute__((always_inline)) bool space_hull_hit(int16_t x,int16
     return space_hull_top[c]!=255&&y>=space_hull_top[c]&&y<=space_hull_bottom[c];
 }
 
-extern uint8_t dialog_corner_colour,dialog_corner_y;
-void dialog_corners(void);
-void dialog_palette_prepare(void);

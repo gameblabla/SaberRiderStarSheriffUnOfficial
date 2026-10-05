@@ -109,5 +109,9 @@ test-herd: all
 test-dialog: all
 	python3 tools/pce/test_dialog_restore.py --out $(OUT)
 
+# Needs a debug (RETAIL=0) build: it drives the debug stage menu.
+test-dialog-palette:
+	python3 tools/pce/test_dialog_palette.py --out $(OUT)
+
 test-wip: all
 	python3 tools/pce/test_wip.py --out $(OUT)

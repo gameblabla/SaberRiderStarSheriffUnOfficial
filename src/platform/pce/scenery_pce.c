@@ -99,30 +99,5 @@ PCE_SCENERY void space_screen_flash(uint8_t frames) {
     }
 }
 
-uint8_t dialog_corner_colour,dialog_corner_y;
-PCE_SCENERY void dialog_corners(void) {
-    extern vdc_sprite_t sat[2][64];
-    extern uint8_t sat_page,sat_count,sprite_exact,sprite_occupancy[240];
-    uint32_t a=pce_dialog_corners[pce_metrics.stage-1]+(uint16_t)dialog_corner_colour*544;
-    arcade_read(2,a,buffer,32);pce_vce_copy_palette(31,buffer,1);
-    pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-    arcade_vram(a+32,0x4100,512);   /* nine panel characters fit below $4100 */
-    int16_t x=24-(pce_scroll_x&7);uint8_t y=dialog_corner_y*8;
-    for(uint8_t k=0;k<4;++k) {
-        uint8_t sy=y+(k>=2?32:0);
-        sat[sat_page][sat_count++]=(vdc_sprite_t){sy+64,x+(k&1?208:0)+32,0x208+k*2,VDC_SPRITE_FG|15};
-        uint8_t lo=sprite_exact?sy:sy>>3,hi=sprite_exact?sy+16:(sy+16)>>3;
-        for(uint8_t line=lo;line<hi;++line)++sprite_occupancy[line];
-    }
-}
-
-PCE_SCENERY void dialog_palette_prepare(void) {
-    uint32_t pal;
-    extern const PceScene *video_scene_ptr;
-    extern uint8_t herd_on;
-    if(herd_on){arcade_read(2,video_scene_ptr->horse,buffer+512,32);return;}
-    uint16_t id=pce_present_base[pce_metrics.stage-1][0];
-    if(video_scene_ptr->nforeground)arcade_read(2,video_scene_ptr->foreground+4,&id,2);
-    arcade_read(2,video_scene_ptr->sprites+(uint32_t)id*16+8,&pal,4);
-    arcade_read(2,pal,buffer+512,32);
-}
+/* Platform dialogue corners are ordinary cached sprites now (story_pce.c draws the two halves, which hold
+ * only the four rounded corners): no reserved patterns, and shared sprite palette 31 stays the foreground's. */

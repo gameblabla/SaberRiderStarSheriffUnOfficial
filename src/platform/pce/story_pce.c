@@ -91,10 +91,6 @@ PCE_FLOW void story_graphics_restore(void) {   /* bank $6e: $6f is full */
     extern const PceScene *video_scene_ptr;
     uint8_t colors[32];
     arcade_read(2,video_scene_ptr->pal+15*32,colors,32);pce_vce_copy_palette(15,colors,1);
-    if(pce_metrics.stage==6) {   /* the dialogue's corner pieces wrote their colours into palette 31, the arena HUD's: its own are loaded again */
-        uint32_t entry;arcade_read(2,video_scene_ptr->sprites+(uint32_t)pce_hud_base[5]*16+8,&entry,4);
-        arcade_read(2,entry,colors,32);pce_vce_copy_palette(31,colors,1);
-    }
     pce_vce_set_color(255,0x1ff);
     pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
     arcade_vram(pce_dialog_original_font[pce_metrics.stage-1],PCE_FONT_WORD,3072);
@@ -145,10 +141,11 @@ STORY_CODE static void draw(void) {
     }
     uint8_t first=sat_count;
     uint16_t box=pce_dialog_base[pce_metrics.stage-1]+(colour&3)*2;
-    if(platform) {
-        dialog_corner_colour=colour&3;dialog_corner_y=y;
-        overlay_call(0x78,dialog_corners);
-    } else if(pce_metrics.stage!=2){video_sprite(box,box_x,box_y,false,16);video_sprite(box+1,box_x+112,box_y,false,16);}
+    /* The panel's inside is BG cells; its two halves hold only the four rounded corners, so the scenery shows
+     * through them. They are ordinary cached sprites (private slots, their own palettes): the earlier fixed
+     * patterns stole shared palette 31 and recolored every shared-slot sprite (the stage-4 foreground, the
+     * arena HUD) for the whole dialogue. */
+    if(pce_metrics.stage!=2){video_sprite(box,box_x,box_y,false,16);video_sprite(box+1,box_x+112,box_y,false,16);}
     uint16_t left=0xffff,top=0xffff;
     for(uint8_t k=first;k<sat_count;++k){if(sat[sat_page][k].x<left)left=sat[sat_page][k].x;if(sat[sat_page][k].y<top)top=sat[sat_page][k].y;}
     for(uint8_t k=first;k<sat_count;++k) {

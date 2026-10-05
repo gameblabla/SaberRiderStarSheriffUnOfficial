@@ -317,7 +317,7 @@ PCE_BOSS void play_draw(void) {
     if(!herd)foreground_draw();
     /* A closing dialogue's cells return in the frame its sprites leave: the new SAT takes effect at the next VBlank, so
      * read the cells now, queue the SAT, and write them right after that VBlank, before the beam reaches the panel. */
-    if(pce_panel_restore){video_panel_restore_prepare(pce_panel_restore);overlay_call(0x78,dialog_palette_prepare);}
+    if(pce_panel_restore){video_panel_restore_prepare(pce_panel_restore);}
     /* Move the world together; HUD entries precede video_front_mark and stay fixed.
      * Apply after admission so a changing shake never splits horse columns. */
     uint8_t shake_y=herd_on?((frame*13^(frame>>2))&3):0;
@@ -328,7 +328,6 @@ PCE_BOSS void play_draw(void) {
         /* The cells go back first: the beam reaches the panel a few thousand cycles after the VBlank, and the font and palette
          * restore is slower than that (cells still holding text showed black, in a staircase, for one frame). */
         video_wait();
-        vce_copy_now(31,buffer+512,1);
         video_panel_restore_apply();
         overlay_call(0x6e,story_graphics_restore);pce_panel_restore=0;
     }

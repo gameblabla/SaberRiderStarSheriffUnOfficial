@@ -688,7 +688,6 @@ def atlas(path, kind, max_width=None):
 
 def platform_dialog(archive, work):
     records=[]
-    corner_records=[]
     original=[]
     masks=[]
     for ch in range(32,128):
@@ -705,15 +704,14 @@ def platform_dialog(archive, work):
                 tile=planar_tile(pixels[y:y+8,x:x+8])
                 if tile not in lookup:lookup[tile]=len(tiles);tiles.append(tile)
                 mapping.append(0xf400+lookup[tile])
-        assert len(tiles)<=16,'Platform dialogue overlaps dedicated corners'
-        corner_records.append(palette.tobytes()+b''.join(planar_sprite(pixels[y:y+16,x:x+16]) for y in (0,32) for x in (0,208)))
+        # The box's characters sit at $4000, below the font at $4200: at most 16 of them fit.
+        assert len(tiles)<=16,'Platform dialogue box exceeds its reserved VRAM below the font'
         pal=archive.add(f'dialog{rid}_palette',palette.tobytes())
         pat=archive.add(f'dialog{rid}_patterns',b''.join(tiles))
         bat=archive.add(f'dialog{rid}_map',struct.pack('<168H',*mapping))
         font=archive.add(f'dialog{rid}_font',b''.join(planar_tile(np.where(m,15,fill).astype(np.uint8)) for m in masks))
         records.append(struct.pack('<4IH',pal,pat,bat,font,len(tiles)*32))
     archive.add('dialog_bg',b''.join(records))
-    archive.add('dialog_corners',b''.join(corner_records))
     archive.add('dialog_original_font',b''.join(original))
 
 def race_dialog(archive, work):
@@ -1382,7 +1380,7 @@ def main():
     c.append('const uint32_t pce_boss_big[7]={'+','.join(str(m.get('boss_big_offset',0))+'UL' for m in scenes)+'};')
     h.append('extern const uint32_t pce_power_wave[7];')
     c.append('const uint32_t pce_power_wave[7] __attribute__((section(".ram_bank123.rodata")))={'+','.join(str(m['records'].get('power_wave',{}).get('offset',0))+'UL' for m in scenes)+'};')
-    for name in ('dialog_bg','dialog_corners','dialog_original_font'):
+    for name in ('dialog_bg','dialog_original_font'):
         h.append(f'extern const uint32_t pce_{name}[7];')
         c.append(f'const uint32_t pce_{name}[7]={{'+','.join(str(m['records'].get(name,{}).get('offset',0))+'UL' for m in scenes)+'};')
     h.append('extern const uint16_t pce_hud_base[7];')
