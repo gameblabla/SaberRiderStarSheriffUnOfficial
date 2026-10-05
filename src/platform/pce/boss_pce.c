@@ -46,6 +46,28 @@ extern void sprite_lines_reserve(void),sprite_lines_release(void);
 static uint8_t hull_count,hull_ready,hull_level,hull_seen_full,rider_low;
 static uint32_t hull_patterns;   /* the pattern set in VRAM: poses of one ship share it, so only a change of ship reloads it */   /* hull_level: 0 full size, 1 and 2 the mid and far passes */
 static int16_t hull_parts[28][3];
+/* hull_load replaces sprite patterns (and palette 14) that sprites of the SAT on show may still draw from: for the rest of that frame, and while a CD seek holds the
+ * loop up, they showed the new ship's graphics. The VRAM SAT is read back, every entry that draws from the overwritten patterns or palette is hidden, and the
+ * VBlank that takes the edited table is waited for before anything is written. (The cache's pins only protect its own uploads.) */
+PCE_HUD static void hull_hide(void) {
+    const uint16_t lo=PCE_SPR_WORD+16*256,hi=PCE_SPR_WORD+40*256;
+    bool hid=false;
+    for(uint8_t k=0;k<64;++k) {
+        uint16_t e[4],a=PCE_SAT_WORD+k*4;
+        pce_cpu_irq_disable();
+        pce_vdc_index=1;*(volatile uint8_t*)0x20f7=1;*IO_VDC_INDEX=1;*IO_VDC_DATA_LO=a;*IO_VDC_DATA_HI=a>>8;
+        pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;*IO_VDC_INDEX=2;
+        for(uint8_t j=0;j<4;++j){uint8_t l=*IO_VDC_DATA_LO;e[j]=l|(uint16_t)*IO_VDC_DATA_HI<<8;}
+        pce_cpu_irq_enable();
+        if(!(e[0]&1023))continue;
+        uint16_t start=(e[2]&0x3ff)<<5,words=64;
+        if(e[3]&VDC_SPRITE_WIDTH_32)words<<=1;
+        switch((e[3]>>12)&3){case 1:words<<=1;break;case 3:words<<=2;break;}
+        if(!((start<hi&&start+words>lo)||(e[3]&15)==14))continue;
+        video_vdc(0,a);video_vdc(2,0);hid=true;
+    }
+    if(hid){video_vdc(VDC_REG_SATB_START,PCE_SAT_WORD);video_wait();}
+}
 PCE_MISSION static void hull_load(void) {
     uint32_t record[3];uint16_t bytes;uint8_t colors[32];
     uint32_t address=pce_boss_big[pce_metrics.stage-1]+(uint16_t)hull_level*15;
@@ -63,6 +85,7 @@ PCE_MISSION static void hull_load(void) {
     arcade_read(2,record[0],colors,32);pce_vce_copy_palette(30,colors,1);
     arcade_read(2,record[1],hull_parts,hull_count*6);
     if(record[2]!=hull_patterns) {   /* another pose of the ship on show keeps its patterns: only the piece list changed */
+        overlay_call(0x7c,hull_hide);
         pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
         arcade_vram(record[2],PCE_SPR_WORD+16*256,bytes);
         hull_patterns=record[2];

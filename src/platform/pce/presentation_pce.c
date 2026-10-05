@@ -159,5 +159,25 @@ PRESENT static void panel_apply_body(void) {
     *(volatile uint8_t *)0x20f7 = 5;*IO_VDC_INDEX = 5;*IO_VDC_DATA_LO = control;*IO_VDC_DATA_HI = control>>8;
     pce_cpu_irq_enable();
 }
+/* A dialogue's panel cells as platform_box (story_pce.c) leaves them in buffer+1024, row by row; the four 2x2 corner blocks stay with the scenery under the
+ * sprite corners. Written like panel_apply_body, right after the VBlank that brings the sprite corners, so the corners and the panel appear in the same frame
+ * (one cell at a time through video_vdc ran past the end of the VBlank, and the corners showed alone for a frame). */
+__attribute__((noinline,section(".ram_bank115.text"))) static void cells_apply_body(void) {   /* $73: $74 is full */
+    const uint16_t *cells=(const uint16_t*)(buffer+1024);
+    uint8_t y=panel_y;
+    uint16_t control=*(volatile uint16_t *)0x20f3;
+    pce_cpu_irq_disable();
+    *(volatile uint8_t *)0x20f7 = 5;*IO_VDC_INDEX = 5;*IO_VDC_DATA_LO = control;*IO_VDC_DATA_HI = (control>>8)|0x10;
+    for(uint8_t x=0;x<28;++x) {
+        uint8_t first=(x<2||x>=26)?2:0,last=first?4:6;
+        uint16_t address=(uint16_t)(y+first)*64+((pce_panel_column+3+x)&63);
+        *(volatile uint8_t *)0x20f7 = 0;*IO_VDC_INDEX = 0;*IO_VDC_DATA_LO = address;*IO_VDC_DATA_HI = address>>8;
+        *(volatile uint8_t *)0x20f7 = 2;*IO_VDC_INDEX = 2;
+        for(uint8_t row=first;row<last;++row){uint16_t w=cells[(uint16_t)row*28+x];*IO_VDC_DATA_LO=w;*IO_VDC_DATA_HI=w>>8;}
+    }
+    *(volatile uint8_t *)0x20f7 = 5;*IO_VDC_INDEX = 5;*IO_VDC_DATA_LO = control;*IO_VDC_DATA_HI = control>>8;
+    pce_cpu_irq_enable();
+}
+void video_cells_apply(uint8_t y,uint16_t column) {panel_y=y;pce_panel_column=column;overlay_call(0x73,cells_apply_body);}
 void video_panel_restore_prepare(uint8_t y) {panel_y=y;overlay_call(0x74,panel_prepare_body);}
 void video_panel_restore_apply(void) {overlay_call(0x74,panel_apply_body);}

@@ -65,25 +65,20 @@ PCE_X2 static void race_box(void) {   /* bank $77 (the CD buffer's second: $6f a
 /* Platform panels use BG characters, leaving only four alpha corners in
  * the SAT. Their font and palette are restored from the preloaded archive. */
 static uint16_t story_column;
-static uint8_t platform_colour,platform_y;
+static uint8_t platform_colour;
 PCE_MISSION static void platform_box(void) {
-    uint8_t colour=platform_colour,y=platform_y;
+    uint8_t colour=platform_colour;
     uint32_t record[4];uint16_t bytes;
     extern uint8_t buffer[2048];
     extern volatile uint16_t pce_scroll_x,pce_scroll_y;
     uint32_t a=pce_dialog_bg[pce_metrics.stage-1]+(uint16_t)(colour&3)*18;
     arcade_read(2,a,record,16);arcade_read(2,a+16,&bytes,2);
-    arcade_read(2,record[0],buffer,32);vce_copy_now(15,buffer,1);   /* (draw() has just waited for the vertical blank: the colours arrive with the cells) */
+    arcade_read(2,record[0],buffer,32);pce_vce_copy_palette(15,buffer,1);   /* (queued: the VBlank that brings the sprite corners writes it) */
     pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
     arcade_vram(record[1],0x4000,bytes);
     arcade_vram(record[3],PCE_FONT_WORD,3072);
-    arcade_read(2,record[2],buffer,336);
+    arcade_read(2,record[2],buffer+1024,336);   /* the cells go in right after that VBlank (video_cells_apply) */
     story_column=pce_scroll_x>>3;
-    for(uint8_t row=0;row<6;++row)for(uint8_t x=0;x<28;++x) {
-        if((x<2||x>=26)&&(row<2||row>=4))continue;
-        video_vdc(0,(uint16_t)(y+row)*64+((story_column+3+x)&63));
-        video_vdc(2,((uint16_t*)buffer)[(uint16_t)row*28+x]);
-    }
 }
 PCE_FLOW void story_graphics_restore(void) {   /* bank $6e: $6f is full */
     if(pce_metrics.stage==2||pce_metrics.stage==7)return;
@@ -164,9 +159,10 @@ STORY_CODE static void draw(void) {
         if(!pce_campaign.diagnostic)overlay_call(0x70,combat_draw);
         foreground_draw();
     }
+    /* The panel's graphics, palette and cells are prepared before the SAT is queued; the cells are written right after the VBlank that brings the sprite corners. */
+    if(platform){platform_colour=colour;overlay_call(0x6f,platform_box);}
     video_sat_end();
-    /* Publish the BG panel after the VBlank that brings its sprite corners. */
-    if(platform){video_wait();platform_colour=colour;platform_y=y;overlay_call(0x6f,platform_box);}
+    if(platform){video_wait();video_cells_apply(y,story_column);}
     char *line=story_text;uint8_t lines=0;
     for(char *c=line;;++c){if(*c=='\n'||!*c){++lines;if(!*c)break;}}
     /* One line sits mid-box; two lines get a blank row between them. */

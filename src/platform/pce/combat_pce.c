@@ -42,8 +42,10 @@ PCE_COMBAT static void boss_begin(uint8_t kind) {
 /* The camera has reached the arena: the flying bosses' set-up and music, behind a still picture. */
 PCE_COMBAT static void boss_arrive(void) {
     boss_wait=0;
+    /* The boss music first (stage 4's finale has had it since its radio scene, as the source's): its CD seek holds the loop up, and the ship's patterns
+     * replace the cache's right after. */
+    if(pce_metrics.stage!=4)audio_music(8);
     overlay_call(0x6f,boss_start);   /* the flying bosses: boss_pce.c */
-    if(pce_metrics.stage!=4)audio_music(8);   /* (stage 4's finale has had it since its radio scene, as the source's) */
 }
 PCE_COMBAT static void power_strike(void) {
     if(hero<2) {
