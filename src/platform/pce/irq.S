@@ -67,7 +67,7 @@ pce_vblank:
     lda #255
     sta pce_raster_row
     st0 #6
-    st1 #144            /* sky band at scanline 80, then the road from 112 */
+    st1 #120            /* the near sky band (the mountains) at scanline 56, then the road from 112 */
     st2 #0
     bra .Ldone
 .Lnormal:

@@ -215,7 +215,8 @@ RACE_CODE static void race_tick(uint8_t keys) {
     switch(rphase) {
     case P_COUNT:
         update_field(true,0);standings();
-        if(phase_t>=180){rphase=P_RACE;phase_t=0;audio_effect(1);}
+        if(phase_t%60==1)audio_effect(20);   /* 3, 2, 1: a pip each */
+        if(phase_t>=180){rphase=P_RACE;phase_t=0;audio_effect(21);}   /* GO */
         break;
     case P_RACE: {
         ++race_time;

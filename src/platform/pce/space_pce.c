@@ -72,22 +72,23 @@ SPACE_CODE static void spawn(void) {
         if(!--pending){++event_index;event_load();}return;
     }
 }
-PCE_SCENERY static void space_contact(void) {
-    if(space_hull_hit(ship_x+12,ship_y-space_boss_y)) {
+__attribute__((noinline,minsize,section(".ram_bank114.text"))) static void space_contact(void) {   /* bank $72: $78 is full */
+    if(space_hull_hit(ship_x+12-space_hull_x,ship_y-space_boss_y)) {
         if(!hurt){hurt=90;campaign_hurt();}
-        while(ship_x>16&&space_hull_hit(ship_x+12,ship_y-space_boss_y))--ship_x;
+        while(ship_x>16&&space_hull_hit(ship_x+12-space_hull_x,ship_y-space_boss_y))--ship_x;
     }
 }
+#define BOSS_STEP __attribute__((noinline,minsize,section(".ram_bank119.text")))   /* the cruiser's show runs in the CD buffer's second bank ($77, overlay_call) */
 /* One shot out of a gun port, aimed at Ramrod: 3 dots a step across, the vertical part follows the aim (dy / 32 for the 100-odd dots between). */
-SPACE_CODE static void port_shot(uint8_t k,int8_t spread) {
+BOSS_STEP static void port_shot(uint8_t k,int8_t spread) {
     int16_t y=space_boss_y+port_y[k]+3,vy=((ship_y-y)>>5)+spread;
-    bolt(port_x[k]-4,y,-3,vy>3?3:vy<-3?-3:vy,true);
+    bolt(port_x[k]-4+space_hull_x,y,-3,vy>3?3:vy<-3?-3:vy,true);
 }
-SPACE_CODE static void foe_in(int16_t x,int16_t y,uint8_t kind,uint8_t hp,uint8_t pattern,uint8_t drop) {
+BOSS_STEP static void foe_in(int16_t x,int16_t y,uint8_t kind,uint8_t hp,uint8_t pattern,uint8_t drop) {
     for(uint8_t k=0;k<8;++k)if(!foes[k].kind){foes[k]=(Foe){x,y,kind,hp,pattern,drop,0,0};return;}
 }
 
-SPACE_CODE static void boss_guns(void) {
+BOSS_STEP static void boss_guns(void) {
     uint8_t round=pce_campaign.boss_round;
     /* the gun ports in turn, one aimed shot every half second: each of the five (seven) fires about every 2.7 s (the strut's three at once from the
      * second stage); they hold their fire under the beam */
@@ -97,8 +98,8 @@ SPACE_CODE static void boss_guns(void) {
     }
     /* the hangar: a swarm of drones out of the bay (5 + the stage, one every 16 steps; the last carries a gift), then the mine rack from the second stage */
     uint16_t cycle=beam_clock%(round==0?600:round==1?520:460);
-    if(cycle<16*(5+round)&&!(cycle&15)){foe_in(212,space_boss_y+69,1,2,1,cycle==16*(4+round)?1+((beam_clock>>9)&1):0);audio_effect(13);}
-    if(round&&cycle==300){foe_in(161,space_boss_y+85,4,3,0,0);foe_in(161,space_boss_y+97,4,3,0,0);}
+    if(cycle<16*(5+round)&&!(cycle&15)){foe_in(212+space_hull_x,space_boss_y+69,1,2,1,cycle==16*(4+round)?1+((beam_clock>>9)&1):0);audio_effect(13);}
+    if(round&&cycle==300){foe_in(161+space_hull_x,space_boss_y+85,4,3,0,0);foe_in(161+space_hull_x,space_boss_y+97,4,3,0,0);}
 }
 static void boss_step(void);
 /* The ship has been shot down (space.c update_world): it bursts, 2.2 s on a spare ship flies back in where the fight is (the flight does not
@@ -139,7 +140,7 @@ SPACE_CODE static void space_tick(void) {
     if(ship_x<16)ship_x=16;if(ship_x>240)ship_x=240;
     if(ship_y<16)ship_y=16;if(ship_y>208)ship_y=208;
     if(pce_campaign.boss_kind&&ship_x>112)ship_x=112;
-    if(sb.ph==4&&space_hull_ready)overlay_call(0x78,space_contact);
+    if(sb.ph==4&&space_hull_ready)overlay_call(0x72,space_contact);
     if((keys&KEY_1)&&!gun_clock) {bolt(ship_x+22,ship_y,6,0,false);gun_clock=8;audio_effect(1);}
     if((pce_control.pressed&KEY_2)&&bombs) {
         --bombs;space_flash=6;hull_flash=12;audio_effect(8);audio_effect(4);
@@ -187,7 +188,7 @@ SPACE_CODE static void space_tick(void) {
                 /* Armoured mines deflect ordinary shots, as in space.c. */
                 if(f->kind>=4){f->hp=f->hp>power?f->hp-power:0;if(!f->hp)foe_kill(f);}
             }
-            if(b->on&&sb.ph==4&&space_hull_hit(b->x,b->y-space_boss_y)) {
+            if(b->on&&sb.ph==4&&space_hull_hit(b->x-space_hull_x,b->y-space_boss_y)) {
                 b->on=0;hull_flash=4;
                 uint16_t damage=power;
                 for(uint8_t j=0;j<7;++j)if(port_hp[j]&&(j<5||pce_campaign.boss_round)&&dist(b->y,space_boss_y+port_y[j])<4) {
@@ -209,7 +210,6 @@ SPACE_CODE static void space_tick(void) {
     }
 }
 /* The cruiser's show runs in the CD buffer's second bank ($77, overlay_call); it calls the scenery bank's hull code the same way. */
-#define BOSS_STEP __attribute__((noinline,minsize,section(".ram_bank119.text")))
 BOSS_STEP static void boss_step(void) {
     switch(sb.ph) {
     case 0:   /* the timeline's end (106 s), once the field is clear or six seconds on: no more events, the music stops, WARNING */
@@ -250,18 +250,25 @@ BOSS_STEP static void boss_step(void) {
     sb.laser=sb.t<wait?0:sb.t<wait+78?1:sb.t<wait+78+fire?2:3;
     sb.gather=sb.laser==1?sb.t-wait:0;
     if(sb.t==wait)audio_effect(18);else if(sb.t==wait+78)audio_effect(19);   /* the PC's charge.wav and beam.wav */
-    if(sb.laser==2&&!hurt&&ship_x<84&&dist(ship_y,space_boss_y+48)<(round>=2?12:7)){hurt=90;campaign_hurt();}
-    /* the bob (frozen while the cannon gathers and fires): 56 +- 8; in the last stage the beam chases Ramrod */
+    if(sb.laser==2&&!hurt&&ship_x<84+space_hull_x&&dist(ship_y,space_boss_y+48)<(round>=2?12:7)){hurt=90;campaign_hurt();}
+    /* the cruiser swings about the whole height of the field (34-106, a lap every 4 s, a pixel a step) and rocks forward and back (the hull moves 0-20 dots to the
+     * right of its place, a lap every 3 s); both stop while the cannon gathers and fires (the beam is cells of the hull), and in the last stage the beam chases Ramrod */
     if(sb.laser==2&&round==2)space_boss_y+=ship_y<space_boss_y+48?-1:1;
-    else if(sb.laser!=1&&!(beam_clock&1)) {
-        uint8_t c=(beam_clock>>2)&127;
-        int16_t want=48+((c<64?c:128-c)>>2);
+    else if(sb.laser==0||sb.laser==3) {
+        uint8_t c=(beam_clock>>1)&127,tri=c<64?c:128-c;
+        int16_t want=34+tri+(tri>>3);
         space_boss_y+=want>space_boss_y?1:want<space_boss_y?-1:0;
+        uint8_t u=(beam_clock/3)&63,rock=u<32?u:64-u;
+        int16_t forward=(rock*5)>>3;
+        if(!(beam_clock&1))space_hull_x+=forward>space_hull_x?1:forward<space_hull_x?-1:0;
     }
     if(space_boss_y<30)space_boss_y=30;if(space_boss_y>120)space_boss_y=120;
-    overlay_call(0x73,boss_guns);   /* the ports and the hangar (in the simulation's bank) */
+    boss_guns();   /* the ports and the hangar */
 }
 /* Scenery and flight drawing share bank $78; simulation stays in $73. */
+PCE_SCENERY void space_dialog_ship(void) {   /* the dialogues (story_pce.c draw) keep Ramrod's ship on view where it flies */
+    if(!pce_death)video_sprite(3,ship_x,ship_y,false,16);
+}
 PCE_SCENERY void space_frame(void) {
     if(sb.ph==3&&!pce_campaign.event&&pce_campaign.state==CAM_PLAY){space_hull_bat();sb.ph=4;sb.t=270;}   /* the greeting has closed: the cells it covered come back, the fight begins */
     for(uint8_t i=0;i<pce_control.elapsed&&!pce_campaign.event&&!pce_campaign.result&&pce_campaign.state==CAM_PLAY;++i) {
@@ -270,6 +277,9 @@ PCE_SCENERY void space_frame(void) {
     if(pce_campaign.boss_kind)space_hull_draw(space_boss_y,hull_flash,boss_gone);
     else video_background(flight_clock>>3);
     video_sat_begin();
+    /* the HUD first: the first sprites of the table are in front of the rest and are admitted first when a scanline is full, so nothing hides it */
+    hud7=(Hud7){pce_metrics.hp,pce_campaign.lives,power,bombs,pce_campaign.powers,pce_campaign.boss_kind!=0,(uint8_t)flight_clock,pce_campaign.boss_hp};
+    overlay_call(0x7c,hud7_draw);
     if(!pce_death&&(!hurt||(flight_clock&4)))video_sprite(3,ship_x,ship_y,false,16);
     for(uint8_t k=0;k<12;++k)if(bolts[k].on)
         if(!video_sprite_optional(bolts[k].enemy?1:0,bolts[k].x,bolts[k].y,false,16))bolts[k].on=0;
@@ -282,7 +292,7 @@ PCE_SCENERY void space_frame(void) {
     for(uint8_t k=0;k<10;++k)if(expl[k].t)video_sprite_optional(12+(expl[k].small?5:0)+(expl[k].t-1)/6,expl[k].x,expl[k].y,false,16);
     /* the nose cannon: sparks drawn into its mouth while it gathers; the beam itself is cells of the playfield (space_beam), set when the state changes */
     if(sb.laser==1) {
-        int16_t reach=(78-sb.gather)>>2,x=84,y=space_boss_y+48;
+        int16_t reach=(78-sb.gather)>>2,x=84+space_hull_x,y=space_boss_y+48;
         video_sprite_optional(1,x+reach,y,false,16);video_sprite_optional(1,x-reach,y,false,16);
         video_sprite_optional(1,x,y+reach,false,16);video_sprite_optional(1,x,y-reach,false,16);
     }
@@ -291,8 +301,6 @@ PCE_SCENERY void space_frame(void) {
         if(boss_die||boss_gone)beam=0;
         if(beam!=sb.beam&&space_hull_ready){space_beam(beam);sb.beam=beam;}
     }
-    hud7=(Hud7){pce_metrics.hp,pce_campaign.lives,power,bombs,pce_campaign.powers,pce_campaign.boss_kind!=0,(uint8_t)flight_clock,pce_campaign.boss_hp};
-    overlay_call(0x7c,hud7_draw);
     video_sat_end();
     space_screen_flash(space_flash);
     pce_metrics.player_x=ship_x;pce_metrics.player_y=ship_y;

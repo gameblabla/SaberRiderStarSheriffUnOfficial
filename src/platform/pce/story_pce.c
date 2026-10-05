@@ -105,7 +105,7 @@ STORY_CODE static uint32_t pointer(uint32_t a) {
 }
 extern vdc_sprite_t sat[2][64];
 extern uint8_t cut_phase;
-void race_dialog_cars(void);
+void race_dialog_cars(void),space_dialog_ship(void);
 extern uint8_t sat_page,sat_count;
 extern volatile uint16_t pce_scroll_x,pce_scroll_y;
 /* Platform panels and opaque-backed glyphs are BG tiles. Their four rounded
@@ -157,6 +157,7 @@ STORY_CODE static void draw(void) {
     /* The world stands still behind the text: the hero (behind the box, which comes first in the SAT), the actors
      * (the cutscene outrider stays put) and the boss stay on screen. */
     if(pce_metrics.stage==2)overlay_call(0x77,race_dialog_cars);   /* the car and the rivals stay on view behind the text */
+    if(pce_metrics.stage==7)overlay_call(0x78,space_dialog_ship);
     if(platform&&pce_metrics.stage<6) {
         video_sprite(hero_sprite,player.x-camera,player.y-16,facing,16);
         overlay_call(0x74,actors_draw);

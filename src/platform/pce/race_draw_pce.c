@@ -61,7 +61,7 @@ DRAW_CODE void race_draw(void) {
             video_sprite(PCE_CAR_SPIN+(pose-1)*2,x,215,false,16);
             video_sprite(PCE_CAR_SPIN+(pose-1)*2+1,x,215,false,16);
         } else {
-            uint16_t id=t<-80?PCE_CAR_STEER:t<-24?PCE_CAR_STEER+1:t>80?PCE_CAR_STEER+3:t>24?PCE_CAR_STEER+2:3+PCE_CAR_STEPS-1;
+            uint16_t id=t<-80?PCE_CAR_STEER:t<-24?PCE_CAR_STEER+1:t>80?PCE_CAR_STEER+3:t>24?PCE_CAR_STEER+2:PCE_CAR_STEER+4;
             video_sprite(id,x,215,false,16);
         }
     }

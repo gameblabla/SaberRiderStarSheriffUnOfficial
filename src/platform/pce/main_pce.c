@@ -16,18 +16,19 @@
 uint8_t previous;
 static uint8_t stage, hero, selected, menu, heading, phase;
 static uint16_t race_x=4696,race_y=4096;
-static uint8_t simulation_tick;
+static uint8_t simulation_tick,resume_phase;   /* resume_phase: the race phase / arena wave a restart after a lost life begins in (change_stage) */
 static uint8_t menu_hero,menu_mode;
 void race_briefing_frame(void);
 static const int8_t sine[32] PCE_TABLE={0,25,49,71,90,106,117,125,127,125,117,106,90,71,49,25,0,-25,-49,-71,-90,-106,-117,-125,-127,-125,-117,-106,-90,-71,-49,-25};
 PCE_FLOW static bool change_stage(uint8_t n) {
+    uint8_t resume=resume_phase;resume_phase=0;
     pce_control.stage=n;overlay_call(0x71,frontend_card);
     pce_metrics.ready=0;stage=n;phase=heading=0;race_x=4696;race_y=4096;
     pce_metrics.phase=0;pce_metrics.camera_x=pce_metrics.hp=0;
     if(!loader_scene(stage))return false;
     if(stage==6)m6_load();   /* Ramrod's arena's code images, into the banks the scene load has just put back */
     if(!loader_voice(hero))return false;
-    pce_control.stage=stage;pce_control.hero=hero;pce_control.phase=0;
+    pce_control.stage=stage;pce_control.hero=hero;pce_control.phase=resume;
     pce_campaign.state=CAM_PLAY;pce_campaign.result=pce_campaign.event=0;pce_campaign.boss_kind=0;
     if(stage==2) {
         overlay_call(0x6d,road_start);if(!pce_control.ok)return false;
@@ -48,9 +49,9 @@ PCE_FLOW static bool change_stage(uint8_t n) {
         }
         else if(stage==6)overlay_call(0x79,M6_START);
         else if(stage==7)overlay_call(0x73,space_start);
-        if(stage==2||stage==6) {pce_campaign.story=0;overlay_call(0x71,story_start);}
+        if((stage==2||stage==6)&&!resume) {pce_campaign.story=0;overlay_call(0x71,story_start);}   /* (a restart in the pursuit or a later wave goes straight on) */
     }
-    audio_music(stage==1?5:stage==2?10:stage==3?13:stage==4?15:stage==5?14:stage==6?16:12);
+    audio_music(stage==1?5:stage==2?(resume?14:10):stage==3?13:stage==4?15:stage==5?14:stage==6?16:12);
     ui_black();ui_fade_in();   /* every stage comes up from black (the common transition) */
     pce_metrics.ready=1;return true;
 }
@@ -124,7 +125,7 @@ PCE_FLOW void flow_main(void) {
                     save_store(stage,hero,0);
                 } else {
                     video_restore();
-                    if(stage==2){overlay_call(0x6d,road_start);if(!pce_control.ok)for(;;){};}
+                    if(stage==2){overlay_call(0x6d,road_start);if(!pce_control.ok)for(;;){};video_display(true);}
                     if(pce_campaign.state==CAM_STORY)overlay_call(0x71,story_start);
                 }
                 previous=keys;simulation_tick=pce_ticks;
@@ -180,11 +181,10 @@ PCE_FLOW void flow_main(void) {
             }
             if(pce_campaign.result==2){
                 if(!(pce_cdb_adpcm_status()&ADPCM_STOPPED)){video_sat_begin();video_sat_end();continue;}
-                uint8_t resume_phase=pce_metrics.phase,resume_wave=pce_campaign.wave;
+                uint8_t resume_phase_of_race=pce_metrics.phase,resume_wave=pce_campaign.wave;
                 ui_fade_out();   /* the stage restarts from black (the platform stages fade in place: play_pce.c) */
-                pce_campaign.result=0;if(!change_stage(stage))for(;;){};
-                if(stage==2&&resume_phase){pce_control.phase=1;overlay_call(0x79,race_start);pce_campaign.state=CAM_PLAY;pce_campaign.timer=0;}
-                if(stage==6){pce_control.phase=resume_wave;overlay_call(0x79,M6_START);pce_campaign.state=CAM_PLAY;}
+                pce_campaign.result=0;resume_phase=stage==2?resume_phase_of_race:stage==6?resume_wave:0;
+                if(!change_stage(stage))for(;;){};
                 simulation_tick=pce_ticks;continue;}
             if(stage==2)overlay_call(0x79,race_frame);
             else if(stage==6)overlay_call(0x79,M6_FRAME);

@@ -136,7 +136,7 @@ static void shots_step(void) {
                 Mech6 *m=&A.mech[j];if(m->st==S_OFF||m->st==S_DYING)continue;
                 int16_t da=s->ang-m->ang;if(da>ARC/2)da-=ARC;else if(da<-ARC/2)da+=ARC;
                 if(s->dist+200>=m->dist&&abs16(da)<(int16_t)(rcp_of(m->dist)<<2)) {   /* within 64 units of its middle (the picture's zoom is 1.6) */
-                    s->life=0;mech_damage(m,1,false);audio_effect(4);burst(m->ang,m->dist,s->z,0,9);
+                    s->life=0;mech_damage(m,1,false);audio_effect(22);burst(m->ang,m->dist,s->z,0,9);   /* (a bolt strikes: the PSG zap, voice 1, no DDA) */
                 }
             }
             for(uint8_t j=0;j<16&&s->life;++j) {   /* bolts shoot plasma down */

@@ -191,6 +191,7 @@ __attribute__((noinline,section(".ram_bank117.text"))) static void effect_body(v
     /* 1 the hero's shot, 2 jump, 5 hurt, 6 death, 7/8 enemy hit / death yells, 9 alarm "!", 10 dialogue line, 11 fall, 12-17 the flying bosses'
      * engine pass, gun, rider's gun, both, blast and big bang: CD ADPCM voices (the bank picks a variant) except the guns, which are PSG; a hero
      * voice is never cut by a lower-priority one. */
+    if(tone>=20){psg_voice=tone>21;psg_script=tone-17;overlay_call(0x75,psg_start);return;}   /* 20 the countdown's pip, 21 GO (voice 0), 22 a bolt striking a Renegade (voice 1): synthesised PSG scripts 3-5 */
     if(tone==1||(tone>=13&&tone<=15)){psg_voice=tone!=1;psg_script=tone==1?0:tone==14?2:1;overlay_call(0x75,psg_start);return;}
     if(tone==2||(tone>=5&&tone<=19)) {
         audio_pcm_voice(tone);

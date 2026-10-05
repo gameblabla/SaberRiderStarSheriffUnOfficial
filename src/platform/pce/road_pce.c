@@ -143,7 +143,7 @@ ROAD_CODE static void road_update(void) {
     road_along=pursuit?(uint8_t)(-camera_y):(uint8_t)((ps>>8)*52+(((ps&255)*52)>>8));
     road_stripes();
     pce_sky_far=(cam_hd>>7)&511;
-    pce_sky_near=((cam_hd>>6)+(camera_y>>4))&511;
+    pce_sky_near=(cam_hd>>6)&511;   /* the mountains turn with the camera and do not slide as the car drives (they are far off) */
     pce_floor_pending=back;
     ++pce_metrics.floor_commits;
 }
@@ -155,8 +155,7 @@ ROAD_CODE static bool road_init(void) {
     /* both buffers start as a straight road ahead (BXR 256: the road's centre in the middle of the screen) */
     for(uint16_t i=0;i<768;++i)((uint8_t*)columns)[i]=0;
     for(uint8_t m=0;m<=DMAX+1;++m){((uint8_t*)columns)[m]=0;((uint8_t*)columns)[m+256]=1;((uint8_t*)columns)[m+128]=0;((uint8_t*)columns)[m+384]=1;}
-    video_display(true);
-    return true;
+    return true;   /* the display stays off: the caller turns it on once the first frame is built (a stage fades in from black; a resume shows it at once) */
 }
 ROAD_CODE void road_start(void) {pce_control.ok=road_init();}
 ROAD_CODE void road_draw(void) {road_update();}

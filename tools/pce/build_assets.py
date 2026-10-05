@@ -386,6 +386,31 @@ def road_tables():
     z = [65535] + [min(65535, round(10080 / k)) for k in range(1, ROAD_LINES + 1)]
     return d, z
 
+MTN_TOP = 56   # the race sky's near layer starts at this scanline (irq.S: the RCR that scrolls the mountains faster than the clouds)
+def race_mountains(haze, top, bottom):
+    """The race's mountain range as an RGBA strip (bottom - top rows, 512 dots, alpha 0 or 255): the PC's mesas and boulders (assets/mode7.png, 2:1 for the
+    512-dot clock) in a far range and a nearer one, both hazed toward the horizon colour and more so at their feet."""
+    im = Image.open(ROOT / 'assets/mode7.png').convert('RGBA')
+    mesa = im.crop((862, 57, 862 + 114, 57 + 54)); rock = im.crop((797, 57, 797 + 64, 57 + 61))
+    rows = bottom - top
+    out = np.zeros((rows, 512, 4), np.float64)
+    def layer(items, haze_t, lift):
+        for src, x, height, flip in items:
+            s = src.transpose(Image.Transpose.FLIP_LEFT_RIGHT) if flip else src
+            w = max(4, round(s.width * height / s.height * 2))
+            a = np.asarray(s.resize((w, height), Image.Resampling.LANCZOS)).astype(np.float64)
+            for dx in (-512, 0, 512):
+                x0 = x + dx - w // 2; y0 = rows - height - lift
+                for yy in range(height):
+                    for xx in range(w):
+                        px, py = x0 + xx, y0 + yy
+                        if 0 <= px < 512 and 0 <= py < rows and a[yy, xx, 3] >= 128:
+                            t = haze_t + max(0, py - (rows - 14)) / 14 * 0.35
+                            out[py, px, :3] = a[yy, xx, :3] * (1 - t) + np.asarray(haze) * t; out[py, px, 3] = 255
+    layer([(mesa, 40, 22, False), (rock, 150, 17, True), (mesa, 262, 26, True), (rock, 372, 19, False), (mesa, 470, 23, False)], 0.55, 3)
+    layer([(mesa, 96, 32, True), (rock, 208, 22, False), (mesa, 318, 36, False), (rock, 432, 26, True)], 0.30, 0)
+    return out
+
 def race_sky(archive, previews, sand):
     """The Grand Prix's sky as plain background tiles: a blue gradient from the zenith to a pale horizon (scanline 113), then
     the haze of the ground out to the floor's first scanline (120). One 15-colour palette: 13 shades of the gradient and the
@@ -424,29 +449,53 @@ def race_sky(archive, previews, sand):
                     tile[dy, x] = k + 1 + (1 if frac * 64 > bayer[y % 8, x] else 0)
         rows.append(tile)
     pixels = np.tile(np.concatenate(rows, axis=0), (1, 64))
-    # Wisps from the source panorama, using its cloud-only stretch. Keep the
-    # blue gradient and omit the planet; the lower band is a distant ridge.
+    # Wisps from the source panorama, using its cloud-only stretch. Keep the blue gradient and omit the planet. The clouds stay in the far layer
+    # (the upper 56 scanlines): the near layer (scanline 56 down, irq.S) scrolls twice as fast and carries the mountains.
     cloud = np.asarray(Image.open(ROOT/'assets/sky_mode7.png').convert('RGB').crop((340,0,768,80)).resize((512,80),Image.Resampling.LANCZOS))
     light = np.maximum(cloud[...,0].astype(float)-35,0) / 220
-    pixels[:80] = np.minimum(13, pixels[:80] + (light*5).astype(np.uint8))
+    pixels[:MTN_TOP] = np.minimum(13, pixels[:MTN_TOP] + (light[:MTN_TOP]*5).astype(np.uint8))
+    # The mountains: the PC's own mesa and boulder art (assets/mode7.png), shrunk and stood in two hazed ranges along the horizon (far, pale; near, warmer),
+    # wrapping at the panorama's 512 dots. They get a hardware palette of their own (palette 9: the gradient's shades that reach down here, and the range's
+    # own colours fitted to it), flat shaded, so the tiles repeat enough for the 256 characters of the sky.
+    rgb = vce_rgb(palette)
+    strip = race_mountains(np.asarray(sand, float) * 0.72 + pale * 0.28, MTN_TOP, HORIZON - 1)
+    region = pixels[MTN_TOP:HORIZON - 1].copy()
+    shades = sorted(set(int(v) for v in np.unique(region)))
+    solid = strip[..., 3] > 0
+    # (the range's colours, by hand on the hardware's lattice: a shaded side stays brown and a lit one gold, which a fit to the haze-blended pixels turned olive;
+    # as many as there are free entries, darkest first)
+    MESA_COLOURS = ((109, 73, 73), (146, 109, 109), (182, 109, 73), (219, 146, 73), (219, 182, 109), (219, 219, 182), (182, 146, 109), (146, 73, 36), (73, 36, 36), (255, 219, 146))
+    mtn_pal = np.zeros(16, '<u2'); mtn_pal[1:16 - len(shades)] = [word(c) for c in MESA_COLOURS[:15 - len(shades)]]
+    mtn_rgb = vce_rgb(mtn_pal[1:16 - len(shades)]).astype(float)
+    pal2 = np.zeros(16, '<u2')
+    for k, v in enumerate(shades): pal2[k + 1] = palette[v]
+    for k, c in enumerate(mtn_pal[1:16 - len(shades)]): pal2[len(shades) + 1 + k] = c
+    remap = np.zeros(16, np.uint8)
+    for k, v in enumerate(shades): remap[v] = k + 1
+    out = remap[region]
+    near = ((strip[..., None, :3] - mtn_rgb[None, None]) ** 2).sum(-1).argmin(-1).astype(np.uint8) + len(shades) + 1
+    out[solid] = near[solid]
+    pixels[MTN_TOP:HORIZON - 1] = out
+    sky_rgb = np.zeros((pixels.shape[0], 512, 3), np.uint8)
+    sky_rgb[:MTN_TOP] = rgb[pixels[:MTN_TOP]]
+    sky_rgb[MTN_TOP:HORIZON - 1] = vce_rgb(pal2)[pixels[MTN_TOP:HORIZON - 1]]
     palette[14] = word(np.asarray(sand)*0.68 + np.array((110,135,180))*0.32)
-    for x in range(512):
-        ridge = round(103 + 5*math.sin(x*2*math.pi/512) + 3*math.sin(x*6*math.pi/512))
-        pixels[ridge:HORIZON,x] = 14
     tiles, lookup, columns = [], {}, []
     for x in range(64):
         column = bytearray()
         for y in range(30):
             enc = planar_tile(pixels[min(y,15)*8:min(y,15)*8+8,x*8:x*8+8])
             if enc not in lookup: lookup[enc]=len(tiles);tiles.append(enc)
-            column += struct.pack('<HB',lookup[enc],0)
+            column += struct.pack('<HB',lookup[enc],9 if MTN_TOP // 8 <= y < 14 else 0)
         columns.append(column)
-    assert len(tiles)<=256, 'Race panorama exceeds sky VRAM'
-    pal_off = archive.add('bg_palette', np.asarray([palette] * 16, '<u2').tobytes())
+    assert len(tiles)<=256, f'Race panorama exceeds sky VRAM: {len(tiles)} characters'
+    pals = [palette] * 16; pals[9] = pal2
+    pal_off = archive.add('bg_palette', np.asarray(pals, '<u2').tobytes())
     tile_off = archive.add('bg_patterns', b''.join(tiles))
     map_off = archive.add('bg_columns', b''.join(columns))
+    print(f'race sky: {len(tiles)} characters, {len(shades)} gradient shades + {15 - len(shades)} mountain colours')
     preview = np.tile(vce_rgb(palette)[pixels[-8:]], (30,1,1))
-    preview[:128] = vce_rgb(palette)[pixels]
+    preview[:128] = sky_rgb[:128]
     Image.fromarray(preview.astype(np.uint8)).save(previews / 'stage2.png')
     return dict(pal=pal_off, tiles=tile_off, map=map_off, cols=64, tile_count=len(tiles))
 
@@ -1102,6 +1151,23 @@ def make_scene(stage, work, previews, shared):
         for frame in (0, 1, 3, 4):
             c, anchor = car('buggy', frame, CAR_WIDTHS[-1])
             sprites.append((f'buggy_steer{frame}', c, anchor))
+        # The player's straight-ahead car (standing still, steering within the dead zone) keeps the two aerials the turning frames show:
+        # they are one source dot wide there, and the nearest-neighbour shrink to 64 dots dropped them. Every destination dot takes
+        # the nearest source dot, or an opaque dot of its footprint when that one is clear (the rows above the body, 0-15, only).
+        bx0, by0, bw0, bh0, bn0 = rows7['buggy']
+        src = im.crop((bx0 + (bn0 // 2) * bw0, by0, bx0 + (bn0 // 2 + 1) * bw0, by0 + bh0))
+        sw = CAR_WIDTHS[-1]; sh = round(bh0 * sw / bw0)
+        keep = Image.new('RGBA', (sw, sh)); sp, kp = src.load(), keep.load()
+        for dy in range(sh):
+            for dx in range(sw):
+                sx0, sx1 = dx * bw0 // sw, max(dx * bw0 // sw, ((dx + 1) * bw0 - 1) // sw)
+                sy = min(bh0 - 1, int((dy + 0.5) * bh0 / sh))
+                px_ = sp[min(bw0 - 1, (2 * dx + 1) * bw0 // (2 * sw)), sy]
+                if px_[3] == 0 and sy < 16:
+                    for xx in range(sx0, sx1 + 1):
+                        if sp[xx, sy][3]: px_ = sp[xx, sy]; break
+                kp[dx, dy] = px_
+        sprites.append(('buggy_steer2', keep.resize((sw * 2, sh), Image.Resampling.NEAREST), (sw, sh)))
         # The spin-out (mode7.c render_player: one whole turn, easing out): the buggy at SPIN_FRAMES-1 angles of a full turn, each
         # rotated at the car's true shape and then stretched to the 512-dot clock. A rotated car is wider than one sprite object
         # can hold (32 pieces), so each pose is two objects (left and right half, drawn at the same point), as the flying bosses.
@@ -1274,7 +1340,7 @@ def main():
     h.append('extern const uint16_t pce_hud_base[7];')
     c.append('const uint16_t pce_hud_base[7]={'+','.join(str(m.get('hud',0)) for m in scenes)+'};')
     for m in scenes: h += m.get('hud_macros',[])
-    h += [f'#define PCE_CAR_STEPS {len(CAR_WIDTHS)}', '#define PCE_CAR_STEER (3+7*PCE_CAR_STEPS)', '#define PCE_CAR_SPIN (PCE_CAR_STEER+4)', f'#define PCE_CAR_SPIN_FRAMES {SPIN_FRAMES}', '#define PCE_CAR_TURBO (PCE_CAR_SPIN+2*(PCE_CAR_SPIN_FRAMES-1))', '#define PCE_CAR_EXPL (PCE_CAR_TURBO+4)', f'#define PCE_CAR_ORB (PCE_CAR_EXPL+10)', f'#define PCE_CAR_POLE (PCE_CAR_ORB+{2*len(ORB_SIZES)})', f'#define PCE_ORB_STEPS {len(ORB_SIZES)}', f'#define PCE_POLE_STEPS {len(POLE_SIZES)}', 'extern const uint8_t pce_car_widths[PCE_CAR_STEPS];']
+    h += [f'#define PCE_CAR_STEPS {len(CAR_WIDTHS)}', '#define PCE_CAR_STEER (3+7*PCE_CAR_STEPS)', '#define PCE_CAR_SPIN (PCE_CAR_STEER+5)', f'#define PCE_CAR_SPIN_FRAMES {SPIN_FRAMES}', '#define PCE_CAR_TURBO (PCE_CAR_SPIN+2*(PCE_CAR_SPIN_FRAMES-1))', '#define PCE_CAR_EXPL (PCE_CAR_TURBO+4)', f'#define PCE_CAR_ORB (PCE_CAR_EXPL+10)', f'#define PCE_CAR_POLE (PCE_CAR_ORB+{2*len(ORB_SIZES)})', f'#define PCE_ORB_STEPS {len(ORB_SIZES)}', f'#define PCE_POLE_STEPS {len(POLE_SIZES)}', 'extern const uint8_t pce_car_widths[PCE_CAR_STEPS];']
     h += [f'#define PCE_M6_STEPS {len(M6_SCALES)}', f'#define PCE_M6_BIG_STEPS {len(M6_BIG_SCALES)}', f"#define PCE_M6_IMAGE {next(m['m6_image'] for m in scenes if 'm6_image' in m)}UL",
           f"#define PCE_M6_BIG {next(m['m6_big'] for m in scenes if 'm6_big' in m)}UL", f"#define PCE_M6_BIGPAL {next(m['m6_bigpal'] for m in scenes if 'm6_bigpal' in m)}UL",
           f"#define PCE_M6_BOLTS {next(m['m6_bolts'] for m in scenes if 'm6_bolts' in m)}UL", f"#define PCE_M6_ARMT {next(m['m6_arm'] for m in scenes if 'm6_arm' in m)}UL", f"#define PCE_M6_ARMPAL {next(m['m6_armpal'] for m in scenes if 'm6_armpal' in m)}UL"]

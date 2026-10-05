@@ -73,6 +73,17 @@ def build(out):
         rows.append((255,0,0,0,0))
         return rows
     psg_rows=[psg_script('C66E1894',-3,30,-3),psg_script('8AEB8147',0,26,-5),psg_script('0AFC505A',0,24,-5)]
+    # Synthesised effects (no source recording): tone level, tone pitch and noise level / clock of every 1/60 s step.
+    def period(hz):return max(1,min(4095,round(3579545/(32*hz))))
+    def synth(steps):
+        rows=[(max(0,min(31,nv)),max(0,min(30,nf)),max(0,min(31,tv)),period(hz)&255,period(hz)>>8) for nv,nf,tv,hz in steps]
+        rows.append((255,0,0,0,0));return rows
+    # 3 2 1: a clean 660 Hz pip with a quick fade (the count-in of a 2D racer); GO: the same pip an octave up, longer, rising in from 660 Hz on a breath of noise
+    pip=synth([(0,0,31 if k<12 else 31-(k-11)*5,660) for k in range(18)])
+    go=synth([(max(0,22-2*k) if k<10 else 0,24-k if k<10 else 0,31 if k<26 else 31-(k-25)*3,min(1320,660+k*110) if k<6 else 1320+(36 if k&2 else 0)) for k in range(34)])
+    # an armour-piercing hit: a bright zap sweeping down from 2.6 kHz on a burst of noise, with a shimmer of a fifth over the first steps and a ring at the end
+    hit=synth([(max(0,28-3*k),max(8,28-2*k),31-k if k<20 else 12-(k-19)*3,int(2600*math.exp(-k*0.075)*(1.5 if (k&1 and k<12) else 1))) for k in range(26)])
+    psg_rows+=[pip,go,hit]
     ph='/* Generated: native PSG effects, 5 bytes a 1/60 s step: noise level, noise clock, tone level, tone period (16 bits); 255 ends. */\n'
     ph+='static const uint8_t psg_scripts[%d][%d] __attribute__((section(".ram_bank117.rodata")))={'%(len(psg_rows),max(len(r) for r in psg_rows)*5)
     ph+=','.join('{'+','.join(str(v) for row in r for v in row)+'}' for r in psg_rows)+'};\n'

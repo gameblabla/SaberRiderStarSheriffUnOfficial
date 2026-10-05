@@ -94,7 +94,7 @@ PCE_X2 void project_entities(void) {
  * box is a BG panel at the top, so nothing here is hidden by it). */
 PCE_X2 void race_dialog_cars(void) {
     project_entities();
-    video_sprite_optional(3+PCE_CAR_STEPS-1,256,215,false,16);
+    video_sprite_optional(PCE_CAR_STEER+4,256,215,false,16);
     for(uint8_t k=0;k<nvis;++k) {
         uint16_t rows=vis[k].y-113,dots=rows+(rows>>3)+(rows>>5);
         uint8_t kind=vis[k].kind;
