@@ -30,11 +30,15 @@ VICTORY_CODE void frontend_victory(void) {
     ui_dark=1;ui_show(id);ui_dark=0;
     audio_music_once(7);
     pce_ui_state=5;   /* (the BIOS call can take a while: input is read from here on) */
-    /* The lettering: opaque 16x16 sprites over the painting (frontend.py victory_screen), from the screen's extra blob. */
-    static uint16_t pieces[1+32*4];
+    /* The lettering: opaque 16x16 sprites over the painting (frontend.py victory_screen), from the screen's extra blob.
+     * MISSION ACCOMPLISHED is 35 pieces on every painting, so the table must hold 35 of them: at 32 the last three were
+     * read from whatever follows in .bss and drawn at rubbish coordinates, which put a black sprite over the painting's
+     * top-left corner (its SAT pattern was VRAM word 16, not one of the lettering's 832+). */
+    static uint16_t pieces[1+36*4];
     uint32_t table=pce_ui[id].extra+PCE_UI_RAMP_BYTES;
     arcade_read(2,table,pieces,sizeof pieces);
     uint8_t count=pieces[0];
+    if(count>36)count=36;   /* a longer painting than the table: draw what fits rather than read past it */
     video_sat_begin();
     for(uint8_t k=0;k<count;++k)ui_sprite(pieces[1+k*4],pieces[2+k*4],pieces[3+k*4],0,false);
     video_sat_end();
