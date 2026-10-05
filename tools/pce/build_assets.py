@@ -1072,6 +1072,9 @@ def make_scene(stage, work, previews, shared):
         sprites+=atlas(ROOT/'assets/space/atlas.png','expl',48)[:5]
         sprites+=[(f'expl_small{n}',im,anchor) for n,(_,im,anchor) in enumerate(atlas(ROOT/'assets/space/atlas.png','expl',32)[:5])]
         meta['track_offset']=a.add('space_timeline',timeline.bake(ROOT/'src/space.c'))
+        # the portraits and dialogue pieces before the HUD (their ids come before the HUD's, so they get slots of their own palette: the box and the speaker's portrait
+        # would otherwise share the HUD's palette and the last one written wins)
+        meta['presentation']=presentation.add_art(ROOT,work,stage,sprites,cblock_frame)
         hud=hudart.Hud(sprites)
         hudart.space_hud(hud,hudart.Fonts(work,cblock_frame),Image.open(ROOT/'assets/space/atlas.png').convert('RGBA'))
         meta['hud']=hud.base;meta['hud_macros']=hud.macros('H7')
@@ -1184,7 +1187,7 @@ def make_scene(stage, work, previews, shared):
         collision = 0
     # Append presentation art after fixed gameplay IDs to retain mission IDs.
     if stage in (1,3,4,5,6):platform_dialog(a,work)
-    if stage != 6: meta['presentation']=presentation.add_art(ROOT,work,stage,sprites,cblock_frame)
+    if stage not in (6,7): meta['presentation']=presentation.add_art(ROOT,work,stage,sprites,cblock_frame)
     meta['foreground_offset']=0;meta['foreground_count']=0
     if stage in (1,3,4,5):
         # Platform playfields now include the source's top 16 lines. Gameplay

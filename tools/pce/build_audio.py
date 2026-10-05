@@ -155,15 +155,18 @@ def build(out):
     # gunship fires on the same step.
     gun=load(sfx/'8AEB8147.wav',0.9,5333);pilot=load(sfx/'0AFC505A.wav',0.9,5333)
     pair=np.zeros(max(len(gun),len(pilot)),np.int32);pair[:len(gun)]+=gun;pair[:len(pilot)]+=pilot;pair=loud(pair,0.65)
-    shared+=[('boss_appear',[load(sfx/'15A00BA1.wav',0.9,4000,4.2,0.5)],['15A00BA1']),
+    shared+=[('boss_appear',[load(sfx/'15A00BA1.wav',0.9,4000,3.4,0.5)],['15A00BA1']),
              ('boss_cannon',[gun],['8AEB8147']),('boss_rider',[pilot],['0AFC505A']),
              ('boss_volley',[pair],['8AEB8147+0AFC505A']),
              ('boss_blast',[load(sfx/'F11FCC31.wav',0.9,5333)],['F11FCC31']),
-             ('boss_down',[load(sfx/'47D886A1.wav',0.9,4000,3.4,0.4)],['47D886A1'])]
+             ('boss_down',[load(sfx/'47D886A1.wav',0.9,4000,3.4,0.4)],['47D886A1']),
+             # the cruiser's nose cannon, the PC's own samples (space.c charge.wav as it gathers, beam.wav as it fires), at the low rates the bank has room for
+             ('boss_charge',[load(ROOT/'assets/space/charge.wav',0.9,4000)],['assets/space/charge.wav']),
+             ('boss_beam',[load(ROOT/'assets/space/beam.wav',0.9,2667)],['assets/space/beam.wav'])]
     voices=[];rows=[]
-    EVENTS=('jump','hurt','death','fall','enemy_hit','enemy_death','alarm','dialogue_oh_no','boss_appear','boss_cannon','boss_rider','boss_volley','boss_blast','boss_down')
-    PRIORITY=(1,2,3,3,1,1,1,4,1,0,0,0,0,2)
-    RATE=(12,12,12,12,12,12,12,12,8,10,10,10,10,8)
+    EVENTS=('jump','hurt','death','fall','enemy_hit','enemy_death','alarm','dialogue_oh_no','boss_appear','boss_cannon','boss_rider','boss_volley','boss_blast','boss_down','boss_charge','boss_beam')
+    PRIORITY=(1,2,3,3,1,1,1,4,1,0,0,0,0,2,1,1)
+    RATE=(12,12,12,12,12,12,12,12,8,10,10,10,10,8,8,4)
     for hero,name in enumerate(('saber','fireball','april','colt')):
         if hero==1:   # Fireball keeps the demo's own samples: jump, sfx 3 as hurt, sfx 4 as death, sfx 15 for a fall
             hurts=['8ADE82B6','8ACB81A0','8AB88092'];own_deaths=['EB3309DC','EB450AED']   # the PC game's own: sfx 3 (hurt), sfx 4 (death: the "ugh")
@@ -180,7 +183,7 @@ def build(out):
                 data=encode([0]*32+[int(v) for v in pcm]+[0]*64)
                 samples.append(dict(event=event,address=len(bank),bytes=len(data),source=source))
                 bank.extend(data)
-        if len(bank)>65535:raise ValueError(f'{name}: ADPCM bank exceeds hardware RAM')
+        if len(bank)>65535:raise ValueError(f'{name}: ADPCM bank exceeds hardware RAM ({len(bank)})')
         total=len(bank)
         bank.extend(bytes(-len(bank)%2048));(out/f'voice{hero}.bin').write_bytes(bank)
         voices.append(dict(hero=hero,bytes=len(bank),samples=samples))

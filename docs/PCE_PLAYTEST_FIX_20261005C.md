@@ -46,3 +46,8 @@ Checked in the accurate emulator (screenshots, VRAM and SAT dumps, audio capture
 * Ramrod's bolts live exactly as many steps as it takes them to reach their target (they used to carry on across the middle to the other side).
 * The Renegades keep a range of 800-1300 units (formerly 360-720), charge far less often, and shoot from there.
 * The arena's end has no victory painting or jingle (`main_pce.c`: CAM_CLEAR skips `frontend_victory` for stage 6 and stops the music itself, which the following disc reads need); the Commander's wave (the third) starts CD track 8, the boss music, once its dialogue is over (`m6_c.c tick`, `Arena6.boss_music`).
+
+## Last boss (the cruiser, stage 7)
+* Dialogue: the box and the speaker's portrait were sprite ids after the HUD's, so they shared the HUD's hardware palette (31) and the last colours written won (garbled portrait, pale box). `build_assets.py` now adds the presentation art before the HUD in stage 7 (as stage 6 does); they get cache slots with their own palettes. Checked in the emulator for the greeting and the farewell.
+* Nose cannon: the gathering and the beam play the PC's own `space/charge.wav` and `space/beam.wav` (CD ADPCM events `boss_charge` 4 kHz, `boss_beam` 2.7 kHz, tones 18 and 19; they were the engine pass and the blast). To fit Saber's 64 KiB voice bank the cruiser's arrival sound (`boss_appear`) is 3.4 s instead of 4.2 s.
+* Break-up: as in space.c the bursts yell now and then (enemy hit / death voices), and the big bang plays as the hull goes (it used to start when the dying began, covering the yells).

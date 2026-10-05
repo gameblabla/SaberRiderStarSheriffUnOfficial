@@ -57,9 +57,9 @@ void audio_pcm_play(uint8_t sample) {
 void audio_pcm_tick(void) {request=5;overlay_call(0x75,start);}   /* the CONTINUE? countdown's tick (sfx 0 of the PC game) */
 __attribute__((noinline)) void audio_pcm_gallop(bool on) {request=on?3:4;overlay_call(0x75,start);}
 /* tone (audio_effect) -> voice event: jump hurt death fall enemy_hit enemy_death alarm dialogue line, then the flying
- * bosses' engine pass, gun, rider's gun, both guns, blast and big bang (tones 12-17) */
+ * bosses' engine pass, gun, rider's gun, both guns, blast and big bang (tones 12-17), the cruiser's cannon gathering and firing (18, 19) */
 PCM_CODE static void voice_pick(void) {
-    static const uint8_t tone_event[18]={0,0,0,0,0,1,2,4,5,6,7,3,8,9,10,11,12,13};
+    static const uint8_t tone_event[20]={0,0,0,0,0,1,2,4,5,6,7,3,8,9,10,11,12,13,14,15};
     const uint8_t *group=voice_groups[tone_event[request]];
     uint8_t k=group[0];
     voice_seed=voice_seed*37+11;

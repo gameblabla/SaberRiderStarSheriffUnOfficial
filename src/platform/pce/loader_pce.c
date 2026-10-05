@@ -192,7 +192,7 @@ __attribute__((noinline,section(".ram_bank117.text"))) static void effect_body(v
      * engine pass, gun, rider's gun, both, blast and big bang: CD ADPCM voices (the bank picks a variant) except the guns, which are PSG; a hero
      * voice is never cut by a lower-priority one. */
     if(tone==1||(tone>=13&&tone<=15)){psg_voice=tone!=1;psg_script=tone==1?0:tone==14?2:1;overlay_call(0x75,psg_start);return;}
-    if(tone==2||(tone>=5&&tone<=17)) {
+    if(tone==2||(tone>=5&&tone<=19)) {
         audio_pcm_voice(tone);
         if((pce_cdb_adpcm_status()&ADPCM_STOPPED)||pce_voice.priority>=voice_priority) {
             pce_cdb_adpcm_stop();

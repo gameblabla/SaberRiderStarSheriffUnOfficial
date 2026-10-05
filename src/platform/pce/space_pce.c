@@ -232,12 +232,12 @@ BOSS_STEP static void boss_step(void) {
         return;
     }
     if(boss_die) {   /* the cruiser breaks up (space.c PH_BOSS_DIE): its fire stops, fireballs burst over the hull to the big bang, then the ship is gone */
-        if(!--boss_die){boss_gone=1;space_boss_y&=~7;blast(164,space_boss_y+48,false);pce_campaign.result=1;pce_campaign.story=0;pce_campaign.event=1;}
-        else if(!(boss_die%5))blast(84+random()%160,space_boss_y+random()%90,random()&1);
+        if(!--boss_die){boss_gone=1;space_boss_y&=~7;blast(164,space_boss_y+48,false);audio_effect(17);pce_campaign.result=1;pce_campaign.story=0;pce_campaign.event=1;}
+        else if(!(boss_die%5)){blast(84+random()%160,space_boss_y+random()%90,random()&1);if(random()%5<2)audio_effect(random()&1?7:8);}   /* (space.c: the bursts yell now and then) */
         return;
     }
     if(!pce_campaign.boss_hp) {
-        boss_die=72;audio_effect(17);sb.t=0;
+        boss_die=72;sb.t=0;
         for(uint8_t k=0;k<12;++k)bolts[k].on=bolts[k].on&&!bolts[k].enemy;
         return;
     }
@@ -249,7 +249,7 @@ BOSS_STEP static void boss_step(void) {
     if(++sb.t>=wait+93+fire)sb.t=0;
     sb.laser=sb.t<wait?0:sb.t<wait+78?1:sb.t<wait+78+fire?2:3;
     sb.gather=sb.laser==1?sb.t-wait:0;
-    if(sb.t==wait)audio_effect(12);else if(sb.t==wait+78)audio_effect(16);
+    if(sb.t==wait)audio_effect(18);else if(sb.t==wait+78)audio_effect(19);   /* the PC's charge.wav and beam.wav */
     if(sb.laser==2&&!hurt&&ship_x<84&&dist(ship_y,space_boss_y+48)<(round>=2?12:7)){hurt=90;campaign_hurt();}
     /* the bob (frozen while the cannon gathers and fires): 56 +- 8; in the last stage the beam chases Ramrod */
     if(sb.laser==2&&round==2)space_boss_y+=ship_y<space_boss_y+48?-1:1;
