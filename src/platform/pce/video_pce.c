@@ -130,7 +130,7 @@ PCE_RENDER void video_display(bool enable) {
 PCE_RENDER void video_scroll(uint16_t x, uint16_t y) { pce_scroll_x = x; pce_scroll_y = y; }
 extern void foreground_reset(void);
 PCE_RENDER void video_scene(const PceScene *s) {
-    foreground_reset();
+    foreground_reset();vce_hold=0;
     scene = s;video_scene_ptr=s;sat_previous=64;video_nsprites=s->nsprites;
     memset(sprite_slot_of,0xff,sizeof sprite_slot_of);
     sprite_screen_height=224;sprite_exact=1;   /* 224-line mode everywhere: playfield rows 28-29 are simply not shown */

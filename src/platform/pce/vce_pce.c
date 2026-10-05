@@ -8,6 +8,7 @@
 uint8_t vce_arg_index,vce_arg_count;
 const void *vce_arg_ptr;
 uint16_t vce_arg_value;
+volatile uint8_t vce_hold;
 extern volatile uint8_t vce_q_head,vce_q_tail,vce_q_idx[4],vce_q_data[4][32];
 /* With the display off: write what is queued now (the VBlank interrupt may be disabled during a disc load, so it is not waited for). */
 PCE_X3 static void drain(void) {
@@ -20,6 +21,7 @@ PCE_X3 static void drain(void) {
 }
 PCE_X3 void vce_copy_body(void) {
     uint8_t index=vce_arg_index,count=vce_arg_count;const uint8_t *source=vce_arg_ptr;
+    if(vce_hold){memcpy(flash_palette+(uint16_t)index*16,source,(uint16_t)count*32);return;}
     if(pce_display_on&&count==1) {
         uint8_t t=vce_q_tail,next=(t+1)&3;
         if(next==vce_q_head){video_wait();t=vce_q_tail;next=(t+1)&3;}
@@ -32,10 +34,12 @@ PCE_X3 void vce_copy_body(void) {
     pce_vce_copy_palette(index,source,count);
 }
 PCE_X3 void vce_set_body(void) {
+    if(vce_hold){flash_palette[((uint16_t)vce_arg_index<<4)|vce_arg_count]=vce_arg_value;return;}
     if(pce_display_on)video_wait();else drain();
     pce_vce_set_color(((uint16_t)vce_arg_index<<4)|vce_arg_count,vce_arg_value);
 }
 PCE_X3 void vce_read_body(void) {
+    if(vce_hold){memcpy((void*)vce_arg_ptr,flash_palette+(uint16_t)vce_arg_index*16,(uint16_t)vce_arg_count*32);return;}
     if(pce_display_on)video_wait();else drain();
     pce_vce_copy_palette_to_ram((void*)vce_arg_ptr,vce_arg_index,vce_arg_count);
 }

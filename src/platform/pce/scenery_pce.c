@@ -6,7 +6,7 @@
 
 extern uint8_t buffer[2048];
 uint8_t space_hull_ready,space_hull_top[24],space_hull_bottom[24];
-static uint16_t flash_palette[512] PCE_STAGE;
+uint16_t flash_palette[512] PCE_STAGE;
 static uint16_t hull_palette[64] PCE_STAGE;
 uint8_t space_flashing;
 static uint8_t hull_lit;   /* the hull palette on the VCE: 0 plain, 1 warmed by a hit (written only when it changes) */
@@ -91,8 +91,10 @@ PCE_SCENERY void space_screen_flash(uint8_t frames) {
             pce_vce_copy_palette_to_ram(flash_palette,0,32);space_flashing=1;
             for(uint16_t i=0;i<512;++i)((uint16_t*)buffer)[i]=0x1ff;
             pce_vce_copy_palette(0,buffer,32);
+            vce_hold=1;   /* from here the palettes are kept in flash_palette, whoever writes them */
         }
     } else if(space_flashing) {
+        vce_hold=0;
         pce_vce_copy_palette(0,flash_palette,32);space_flashing=0;
     }
 }

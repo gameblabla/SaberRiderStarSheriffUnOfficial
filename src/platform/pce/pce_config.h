@@ -46,6 +46,11 @@ _Static_assert(sizeof(uint32_t) == 4, "32-bit asset handles required");
  *  - vce_copy_now is for code that has just returned from video_wait and wants the write at once (a cell restore timed to the beam);
  *  - with the display off everything is immediate. */
 extern volatile uint8_t pce_display_on;
+/* A full-screen palette flash (scenery_pce.c space_screen_flash) holds the VCE white and keeps what the palettes should be in flash_palette: while vce_hold is set,
+ * every write below goes into that copy instead of the chip, every read-back is answered from it, and the flash's end writes the copy out. (A snapshot taken at the
+ * start and put back at the end lost everything written in between: a hull's or a sprite's colours, restored stale, or left white.) video_scene clears it. */
+extern volatile uint8_t vce_hold;
+extern uint16_t flash_palette[512];
 void vce_copy(uint8_t index,const void *source,uint8_t count),vce_set(uint16_t index,uint16_t value),vce_read(void *dest,uint8_t index,uint8_t count);   /* video_pce.c ($6a, always mapped) */
 void vce_copy_now(uint8_t index,const void *source,uint8_t count);
 #ifndef VCE_RAW

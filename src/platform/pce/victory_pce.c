@@ -19,7 +19,7 @@ VICTORY_CODE void frontend_victory(void) {
     for(uint16_t t=0;t<360;++t) {
         video_wait();ui_read_keys();
         if(t>60&&(ui_pressed&(KEY_RUN|KEY_1|KEY_2)))break;
-        if(t>=300&&!(t&7)&&lift<7){ui_lift_level=++lift;overlay_call(0x75,ui_lift);}
+        if(t>=300&&!(t&7)&&lift<7){ui_lift_level=++lift;overlay_call(0x72,ui_lift);}
     }
     audio_stop();
     static const uint8_t stage_offset[7]={0,4,5,9,13,17,18};
