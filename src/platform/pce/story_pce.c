@@ -114,7 +114,7 @@ STORY_CODE static void draw(void) {
     arcade_read(2,a,&avatar,2);arcade_read(2,a+2,&colour,1);
     arcade_read(2,a+3,story_text,sizeof story_text);story_text[255]=0;
     /* The box sits at the top on the platform stages (the hero stands where a bottom box would be) and on the race, at the bottom on the cruiser's. */
-    uint8_t y=story_y=pce_metrics.stage==2||(pce_metrics.stage!=7&&!cut_phase)?3:20;   /* the race's box is BG rows 53-58 (video_text 48+y), at the top; the outrider's scene: the box goes below the actor the camera pans to */
+    uint8_t y=story_y=pce_metrics.stage==2||(pce_metrics.stage!=7&&!cut_phase)?5:20;   /* the race's box is BG rows 53-58 (video_text 48+y), at the top; the outrider's scene: the box goes below the actor the camera pans to */
     /* The cruiser's playfield is scrolled (a multiple of 8 dots down while it greets: space_pce.c): screen row 20 is that many rows on in the BAT. */
     if(pce_metrics.stage==7)y=story_y=(20+(pce_scroll_y>>3))&31;
     /* BG cells sit (scroll & 7) pixels left of their grid on a scrolling playfield. */
