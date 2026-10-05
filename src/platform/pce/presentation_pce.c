@@ -60,11 +60,12 @@ PCE_FLOW void presentation_frame(void) {
     }
 }
 /* Every live actor, optional ones last (a herd or a distant enemy that does not fit the SAT is simply not drawn). */
+uint8_t actors_mode;   /* 0 every actor (the dialogue's redraw), 1 only the scenery props, 2 only the fighters (play_pce.c draws the props first, see there) */
 PRESENT void actors_draw(void) {
     uint8_t stage=pce_metrics.stage-1;
     /* Scenery props (types 12-27: the saloon doors, the security camera...) come after the fighters in the SAT, so they
      * stay behind every fighter; where the SAT or a scanline is full they are what gives way. */
-    for(uint8_t pass=0;pass<2;++pass)
+    for(uint8_t pass=actors_mode==1;pass<(actors_mode==2?1:2);++pass)
     for(Actor *a=actors;a<actors+8;++a) {   /* by pointer: indexing a 21-byte record costs a multiplication each time */
         if(!a->active||(a->type>=12&&a->type<=27)!=pass)continue;
         uint16_t id=pce_actor_ids[a->type];

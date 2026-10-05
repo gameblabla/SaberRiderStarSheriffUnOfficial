@@ -7,6 +7,7 @@
 #include "arcade_pce.h"
 #include "assets.h"
 #include "scenery_pce.h"
+extern uint8_t actors_mode;
 extern uint8_t buffer[2048];
 #include <string.h>
 
@@ -245,6 +246,16 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
     pce_metrics.player_x=player.x;pce_metrics.player_y=player.y;pce_metrics.camera_x=camera;pce_metrics.hero=hero;
 }
 uint16_t hero_sprite;
+/* The entries first..end-1 of the table move behind everything drawn after them (lower slots are in front). */
+PCE_BOSS static void sat_to_end(uint8_t first,uint8_t end) {
+    if(end<=first||sat_count<=end)return;
+    uint8_t n=end-first,m=sat_count-end;
+    vdc_sprite_t *at=sat[sat_page]+first;
+    uint8_t *held=buffer+1024,*d=(uint8_t*)at;
+    memcpy(held,d,n*8);
+    for(uint8_t k=0;k<m;++k,d+=8)memcpy(d,d+n*8,8);
+    memcpy(d,held,n*8);
+}
 PCE_BOSS void play_draw(void) {
     /* The hardware scroll stays put until this frame's SAT is uploaded (see irq.S). */
     pce_scroll_hold=1;
@@ -281,22 +292,21 @@ PCE_BOSS void play_draw(void) {
     if(herd_on)overlay_call(0x6f,herd_draw);
     /* Admission order is priority (priority_pce.c): the boss, the enemies, the enemies' bullets, then the hero's bullets and the
      * muzzle flash, which are the first to go when the SAT or a scanline is full. */
+    /* The scenery props (the security camera...) are admitted first, right after the hero and the herd, so they are the last thing to be refused when the SAT or a
+     * scanline is full (a shot or an extra enemy never makes the camera vanish); their entries then move to the end of the table, behind everything (below). */
+    uint8_t props_first=sat_count;
+    actors_mode=1;overlay_call(0x74,actors_draw);
+    uint8_t props_end=sat_count;
     uint8_t hull_first=sat_count;
     if(!pce_campaign.diagnostic)overlay_call(0x70,combat_draw);
     uint8_t hull_end=sat_count;
     if(pce_campaign.boss_kind){pce_control.phase=0;overlay_call(0x7c,shots_draw_pass);}   /* the bosses' lasers */
-    overlay_call(0x74,actors_draw);
+    actors_mode=2;overlay_call(0x74,actors_draw);actors_mode=0;
     pce_control.phase=1;overlay_call(0x7c,shots_draw_pass);
     if(flash_time)video_sprite_optional(pce_flash_base[stage]+(flash_diag?0:4)+4-flash_time,player.x+flash_dx-camera,player.y+flash_dy-16,false,16);
     /* The Hyperjumper (stages 3 and 4) goes behind every bullet: its sprites move to the end of the SAT (lower slots are in front). */
-    if(pce_campaign.boss_kind==2&&hull_end>hull_first&&sat_count>hull_end) {
-        uint8_t n=hull_end-hull_first,m=sat_count-hull_end;
-        vdc_sprite_t *at=sat[sat_page]+hull_first;
-        uint8_t *held=buffer+1024,*d=(uint8_t*)at;
-        memcpy(held,d,n*8);
-        for(uint8_t k=0;k<m;++k,d+=8)memcpy(d,d+n*8,8);
-        memcpy(d,held,n*8);
-    }
+    if(pce_campaign.boss_kind==2)sat_to_end(hull_first,hull_end);
+    sat_to_end(props_first,props_end);
     /* While the herd is on screen the SAT has no room for the foreground pieces as well: they would come and go with
      * every horse's piece count, so the foreground layer is left out until it has passed. */
     bool herd=false;
