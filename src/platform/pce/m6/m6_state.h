@@ -18,7 +18,7 @@ typedef struct {
     int16_t aim;                         /* the bearing Ramrod faces, 0..21503 (1344 dots of 1/16) */
     int16_t speed,strafe_v,turn_v,lat;   /* walking and side-stepping in 1/8 unit a step, turning in 1/16 dot a step; lat: the side-stepping so far, in 1/8 unit */
     uint16_t wave_t,rng;
-    uint8_t dead_t,cur,sp_w,sp_i,spawned,killed,heat,gun_cd,punch_cd,overheated,gun_idle,hurt,shake,flash_white,flash_red,gun_side,lock,fire_hold,punch_hold,banner,msg,msg_t,left;
+    uint8_t boss_music,dead_t,cur,sp_w,sp_i,spawned,killed,heat,gun_cd,punch_cd,overheated,gun_idle,hurt,shake,flash_white,flash_red,gun_side,lock,fire_hold,punch_hold,banner,msg,msg_t,left;
     int8_t punch_t,punch_side;uint8_t punch_hit;
     int16_t par[4],along;                 /* the floor (m6_c.c m6_floor): the strafing's shift of each of four depth bands (1/16 dot, wrapping at the picture's 4096), and the way walked (1/128 of a texture line, wrapping at 96 lines) */
     uint16_t floor_x,floor_y;            /* the scroll the picture has chosen (m6_d.c) */

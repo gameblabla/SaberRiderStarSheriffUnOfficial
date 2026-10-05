@@ -168,6 +168,7 @@ static bool dead(void) {
 static void tick(void) {
     uint8_t w=pce_campaign.wave;
     if(pce_death&&dead())return;
+    if(w==2&&!A.boss_music){A.boss_music=1;audio_music(8);}   /* the Commander's wave has the boss music (from the moment its dialogue is over) */
     ++A.wave_t;
     if(A.shake)--A.shake;if(A.flash_red)--A.flash_red;if(A.flash_white)--A.flash_white;if(A.banner)--A.banner;
     if(A.msg_t){if(!--A.msg_t)A.msg=0;}

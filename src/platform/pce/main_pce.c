@@ -171,7 +171,7 @@ PCE_FLOW void flow_main(void) {
                 continue;
             }
             if(pce_campaign.state==CAM_CLEAR) {
-                overlay_call(0x72,frontend_victory);
+                if(stage!=6)overlay_call(0x72,frontend_victory);else audio_stop();   /* (the arena runs straight on into the cruiser: no victory painting, and the disc reads that follow want the music stopped) */
                 if(stage==7){pce_campaign.state=CAM_END;continue;}
                 pce_campaign.powers=2;
                 if(!loader_font()||!change_stage(stage+1))for(;;){};
@@ -191,7 +191,7 @@ PCE_FLOW void flow_main(void) {
             else if(stage==7)overlay_call(0x78,space_frame);
             else overlay_call(0x69,play_frame);
             if(pce_campaign.event){pce_campaign.event=0;overlay_call(0x71,story_start);}
-            else if(pce_campaign.result==1){pce_campaign.state=CAM_CLEAR;pce_campaign.result=0;audio_music_once(6);}
+            else if(pce_campaign.result==1){pce_campaign.state=CAM_CLEAR;pce_campaign.result=0;if(stage!=6)audio_music_once(6);}
             continue;
         }
         if(stage==2)render_test(keys,pressed);
