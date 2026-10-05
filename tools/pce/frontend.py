@@ -213,16 +213,6 @@ def title_screen(get):
     for slot, ink in enumerate(((255, 255, 255), (255, 182, 0))):
         s.sprite_palettes[slot][1:3] = ink_outline(ink)[1:]
     s.items = dict(start=(0, n0), option=(n0, n1))
-    word_img = Image.new('RGBA', (80, 16))
-    for i, ch in enumerate('CONTINUE'):
-        g = get(0x4058897F, ord(ch) - 0x21)
-        a = np.asarray(g.convert('RGBA')).copy()
-        lum = a[..., :3].astype(int).sum(-1)
-        a[..., :3] = np.where(lum[..., None] < 150, (0, 33, 66), (255, 255, 255))
-        word_img.alpha_composite(Image.fromarray(a), (i * 8, 6))
-    pc, nc, _ = two_colour_sprites(word_img, None)
-    s.continue_pattern, s.continue_w = len(s.sprite_patterns) + 0, 5
-    s.sprite_patterns += pc
     sprite_patches(s, canvas, first_pattern=len(s.sprite_patterns), first_palette=2, max_pieces=44, max_units=11)
     return s
 
@@ -633,7 +623,6 @@ def bake(root, work, out, previews, cblock_frame):
          f'#define PCE_UI_CREDIT_PAGES {ncredits}',
          f'#define PCE_UI_TITLE_START {title.items["start"][0]}', f'#define PCE_UI_TITLE_START_W {title.items["start"][1]}',
          f'#define PCE_UI_TITLE_OPTION {title.items["option"][0]}', f'#define PCE_UI_TITLE_OPTION_W {title.items["option"][1]}',
-         f'#define PCE_UI_CONTINUE_PATTERN {title.continue_pattern}', f'#define PCE_UI_CONTINUE_W {title.continue_w}',
          f'#define PCE_UI_GAMEOVER_GLOW {glow_off}UL', f'#define PCE_UI_GAMEOVER_SLOT {GAMEOVER_GLOW_SLOTS[0]}',
          f'#define PCE_UI_GAMEOVER_SLOTS {len(GAMEOVER_GLOW_SLOTS)}',
          f'#define PCE_UI_RAMP_BYTES {RINGS * RAMP * 2}',

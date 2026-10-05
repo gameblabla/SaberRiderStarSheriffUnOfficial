@@ -20,17 +20,16 @@ def verify(out):
         assert len(np.unique(im.reshape(-1,3),axis=0))>16,(name,'Blank screen')
     with tempfile.TemporaryDirectory(prefix='presentation-',dir=out) as base,Emulator(out/'saber_rider.cue',base) as e:
         e.run(120);e.input(8);e.run(5);e.input(0)
-        options=symbol(out/'app.elf','pce_options.0');conts=symbol(out/'app.elf','pce_continues')
+        options=symbol(out/'app.elf','pce_options.0')
         t.until(e,lambda:e.memory(ui,1)==b'\1',limit=20000);e.run(360);picture(e,'title')
-        # Options: difficulty to HARD caps lives/continues at 3; music volume cycles.
+        # Options: difficulty to HARD caps lives at 3; music volume cycles.
         t.press(e,64);t.press(e,1);t.until(e,lambda:e.memory(ui,1)==b'\3');e.run(200);picture(e,'options')
         t.press(e,32)                                                # difficulty NORMAL -> HARD
-        assert e.memory(options,4)[0]==2 and e.memory(options,4)[1]==3,e.memory(options,4)
+        assert e.memory(options,3)[0]==2 and e.memory(options,3)[1]==3,e.memory(options,3)
         t.press(e,64);t.press(e,128)                                 # lives 3 -> 2 (left)
-        t.press(e,64);t.press(e,32)                                  # continues stays capped at 3
         t.press(e,64);t.press(e,128);t.press(e,128);e.run(240)       # music HIGH -> MID -> LOW
-        opt=e.memory(options,4)
-        assert opt[0]==2 and opt[1]==2 and opt[2]==3 and opt[3]==1,opt
+        opt=e.memory(options,3)
+        assert opt[0]==2 and opt[1]==2 and opt[2]==1,opt
         picture(e,'options-changed')
         t.press(e,64);t.press(e,1);t.until(e,lambda:e.memory(ui,1)==b'\1');e.run(60)
         t.press(e,1);t.until(e,lambda:e.memory(ui,1)==b'\2');e.run(240);picture(e,'select-saber')
@@ -42,14 +41,7 @@ def verify(out):
         assert m['hero']==3,'Selected Colt must reach actual gameplay'
         assert m['hp']==1,'HARD difficulty gives one heart'
         assert t.state(e)['lives']==opt[1],'Options lives must start the game'
-        report['frontend']='title -> options (difficulty, lives, continues, music) -> hero select -> Colt gameplay'
-        # Continue: a lethal hit with continues left offers CONTINUE and restarts the stage.
-        e.write(conts,bytes([1]));t.field(e,'lives',0);t.seed(e,'safe_timer',0,1);t.seed(e,'dialogs_done',255,1);t.field(e,'state',0)
-        e.write(symbol(out/'app.elf','shots'),struct.pack('<4h2B',m['player_x'],m['player_y'],0,0,1,1))
-        t.until(e,lambda:e.memory(ui,1)==b'\4',limit=3000);e.run(120);picture(e,'continue')
-        t.press(e,1);t.until(e,lambda:e.memory(t.address+5,1)==b'\1' and e.memory(ui,1)==b'\0',limit=6000);e.run(120)
-        assert e.memory(conts,1)==b'\0' and t.state(e)['lives']==opt[1] and t.metrics(e)['hero']==3
-        report['continue']='CONTINUE screen restarts the stage, consumes a continue and restores lives'
+        report['frontend']='title -> options (difficulty, lives, music) -> hero select -> Colt gameplay'
         # Use the existing Run menu to change hero without rebuilding test ROMs.
         for hero in range(4):
             t.press(e,8);current=t.metrics(e)['hero']
@@ -76,11 +68,11 @@ def verify(out):
         report['aim_cases']=16;report['hud_heroes']=4;report['platform_vertical_scroll']=0
         # Restart through the actual game-over/title/selection flow. One seeded
         # lethal projectile still runs the normal death animation and life logic.
-        e.write(options,bytes([1,3,3,3]))  # Normal difficulty, default lives and full music volume.
+        e.write(options,bytes([1,3,3]))  # Normal difficulty, default lives and full music volume.
         for old,new in ((3,0),(0,1),(1,2),(2,3)):
             m=t.metrics(e);assert m['hero']==old
             t.seed(e,'dialogs_done',255,1);t.field(e,'state',0)
-            t.field(e,'lives',0);e.write(conts,b'\0')
+            t.field(e,'lives',0)
             e.write(t.address+34,b'\x01\x00')
             t.seed(e,'safe_timer',0,1)
             e.write(symbol(out/'app.elf','shots'),struct.pack('<4h5B',m['player_x'],m['player_y'],0,0,1,1,0,0,0))

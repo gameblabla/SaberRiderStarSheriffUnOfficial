@@ -2,8 +2,8 @@
 
 The LLVM-MOS implementation is in `src/platform/pce/`; the host asset and disc
 tools are in `tools/pce/`. Boot opens the 320x224 title, then options or four-hero
-selection (the briefing was cut). Select on the title, or the Continue item,
-resumes an existing checkpoint. The disc image
+selection (the briefing was cut). Each game starts from the beginning;
+losing all lives goes directly to GAME OVER. The disc image
 is `build/pce/saber_rider.cue` and must be kept beside its ISO and music files.
 
 This is a playable, bounded campaign adaptation. It includes the seven internal
@@ -106,9 +106,9 @@ prepared. Ramrod uses four baked sizes and overlapping 16-pixel slices.
 ## Front end
 
 `tools/pce/frontend.py` bakes three 320x224 screens (40x28 BG characters, VCE
-7.16 MHz clock): title, hero select, and an options/continue/credits panel.
+7.16 MHz clock): title, hero select, and an options/credits panel.
 Runtime code is `ui_pce.c` (renderer bank, shared services), `frontend_pce.c`
-(title/options/select) and `credits_pce.c` (continue, game over, credits).
+(title/options/select) and `credits_pce.c` (game over, credits).
 
 - Colour limits are avoided with sprites, which have their own palettes: the
   chosen hero's portrait is 16x16 sprite pieces with a free palette each; the
@@ -117,9 +117,9 @@ Runtime code is `ui_pce.c` (renderer bank, shared services), `frontend_pce.c`
 - Animation is palette driven: the tunnel cycles four palettes; hero panels
   switch dim/selected/glow palettes; menu highlights swap sprite palettes.
 - Text is BG font characters on a flat panel colour, so there are no black boxes.
-- Options live in `pce_options` (difficulty, lives, continues, music). Hearts are
-  3/2/1 and enemy fire intervals 120/90/62 frames. Lives and continues are capped
-  at 7/5, 5/4, 3/3 by difficulty. The CD fader can only ramp to silence, so
+- Options live in `pce_options` (difficulty, lives, music). Hearts are
+  3/2/1 and enemy fire intervals 120/90/62 frames. Lives are capped
+  at 7, 5, 3 by difficulty. The CD fader can only ramp to silence, so
   music volume selects one of three attenuated copies of every track (blocks at
   tracks 2, 21 and 40) or turns music off; the disc carries all three.
 - `emulator-profile.patch` and `tools/pce/profile.py` add a per-function

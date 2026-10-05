@@ -3,7 +3,6 @@
 #include "arcade_pce.h"
 #include "road_pce.h"
 #include "play_pce.h"
-#include "save_pce.h"
 #include "overlay_pce.h"
 #include "campaign_pce.h"
 #include "audio_pcm.h"
@@ -85,7 +84,6 @@ PCE_FLOW static void render_test(uint8_t keys,uint8_t pressed) {
         }
         if(pressed&KEY_SELECT) {
             phase^=1;if(phase){race_x=4096;heading=8;}
-            save_store(stage,hero,phase);
         }
         pce_control.x=race_x;pce_control.y=race_y;pce_control.heading=heading<<2;pce_control.phase=phase;
         overlay_call(0x6d,road_draw);
@@ -126,22 +124,12 @@ PCE_FLOW void flow_main(void) {
         for(;;)video_wait();
     }
     pce_metrics.arcade_ports=arcade_selftest();if(pce_metrics.arcade_ports!=15)for(;;){}
-    PceSave checkpoint;
-    bool resumed=save_load(&checkpoint);
-    if(resumed)hero=checkpoint.hero;
-    pce_control.stage=resumed?checkpoint.stage:0;pce_control.hero=hero;
+    pce_control.stage=0;pce_control.hero=hero;
     overlay_call(0x72,frontend_start);if(!pce_control.ok)for(;;){};
     if(!loader_font())for(;;){}
     hero=pce_control.hero;
     uint8_t initial=pce_control.stage?pce_control.stage:PCE_START_STAGE;
     if(!change_stage(initial))for(;;){}
-    if(resumed&&initial==checkpoint.stage&&stage==2&&checkpoint.phase){
-        pce_metrics.phase=1;
-#ifndef RETAIL
-        phase=1;race_x=4096;heading=8;
-#endif
-        if(!pce_campaign.diagnostic){pce_control.phase=1;overlay_call(0x79,race_start);pce_campaign.state=CAM_PLAY;pce_campaign.timer=0;video_restore();}
-    }
     simulation_tick=pce_ticks;
     for(;;) {
         /* The race runs as fast as it can (a pass is rarely a whole number of frames, and waiting out the rest wastes the
@@ -166,7 +154,6 @@ PCE_FLOW void flow_main(void) {
                 if(selected!=stage||hero!=menu_hero||pce_campaign.diagnostic!=menu_mode) {
                     audio_stop();
                     if(!loader_font()||!change_stage(selected))for(;;){};
-                    save_store(stage,hero,0);
                 } else {
                     video_restore();
                     if(stage==2){overlay_call(0x6d,road_start);if(!pce_control.ok)for(;;){};video_display(true);}
@@ -197,16 +184,7 @@ PCE_FLOW void flow_main(void) {
             if(pce_campaign.state==CAM_POWER){overlay_call(0x7b,power_frame);simulation_tick=pce_ticks;continue;}
             if(pce_campaign.state==CAM_OVER||pce_campaign.state==CAM_END) {
                 if(pce_campaign.state==CAM_OVER) {
-                    ui_fade_out();   /* a life lost for good: to black, then the continue screen */
-                    pce_control.ok=0;
-                    if(pce_continues)overlay_call(0x71,frontend_continue);
-                    if(pce_control.ok) {
-                        /* A continue restarts the current stage (or race phase) with fresh lives. */
-                        if(!loader_font())for(;;){}
-                        pce_campaign.state=CAM_PLAY;pce_campaign.result=2;pce_metrics.hp=campaign_hearts();
-                        simulation_tick=pce_ticks;continue;
-                    }
-                    if(pce_continues)ui_fade_out();   /* the countdown ran out on the continue panel */
+                    ui_fade_out();   /* all lives lost: to black, then GAME OVER */
                     overlay_call(0x71,frontend_game_over);
                 } else overlay_call(0x71,frontend_credits);
                 pce_control.stage=0;pce_control.hero=hero;
@@ -214,7 +192,7 @@ PCE_FLOW void flow_main(void) {
                 if(!loader_font())for(;;){}
                 hero=pce_control.hero;
                 if(!change_stage(1))for(;;){};
-                save_store(1,hero,0);simulation_tick=pce_ticks;
+                simulation_tick=pce_ticks;
                 continue;
             }
             if(pce_campaign.state==CAM_CLEAR) {
@@ -222,7 +200,7 @@ PCE_FLOW void flow_main(void) {
                 if(stage==7){pce_campaign.state=CAM_END;continue;}
                 pce_campaign.powers=2;
                 if(!loader_font()||!change_stage(stage+1))for(;;){};
-                save_store(stage,hero,0);simulation_tick=pce_ticks;
+                simulation_tick=pce_ticks;
                 continue;
             }
             if(pce_campaign.result==2){

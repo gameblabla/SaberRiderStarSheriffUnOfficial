@@ -54,7 +54,7 @@ void audio_pcm_play(uint8_t sample) {
     if(sample>2)return;
     request=sample;overlay_call(0x75,start);
 }
-void audio_pcm_tick(void) {request=PCM_SAMPLE_TICK;overlay_call(0x75,start);}   /* the CONTINUE? countdown's tick (sfx 0 of the PC game) */
+void audio_pcm_tick(void) {request=PCM_SAMPLE_TICK;overlay_call(0x75,start);}   /* the menu tick (sfx 0 of the PC game) */
 __attribute__((noinline)) void audio_pcm_gallop(bool on) {request=on?PCM_SAMPLE_GALLOP:PCM_SAMPLE_STOP_LOOP;overlay_call(0x75,start);}
 void audio_pcm_power_intro(void) {request=PCM_SAMPLE_POWER_INTRO;overlay_call(0x75,start);}
 void audio_pcm_turbo_start(void) {request=PCM_SAMPLE_TURBO_START;overlay_call(0x75,start);}

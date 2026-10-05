@@ -11,7 +11,7 @@
  * palettes; hero panels change state by palette; menu items, names and the
  * chosen hero's portrait are hardware sprites, so they are not bound by the
  * per-character background palettes. Text is BG characters on a flat panel
- * colour. Shared services are in ui_pce.c; continue/credits are in credits_pce.c. */
+ * colour. Shared services are in ui_pce.c; game over/credits are in credits_pce.c. */
 #define UI_CODE __attribute__((noinline,section(".ram_bank114.text"),minsize))
 extern uint8_t buffer[2048];
 extern uint8_t previous;
@@ -22,10 +22,10 @@ static const uint8_t arrow_left[5]=PCE_UI_ARROW_LEFT,arrow_right[5]=PCE_UI_ARROW
 static const uint8_t panel_x[4]={0x10,0x60,0xa0,0xe0};
 
 /* ---------------------------------------------------------------- title */
-UI_CODE static void title_draw(const uint8_t *patch,uint16_t patch_count,bool resume,uint8_t sel) {
-    static const uint16_t base[3]={PCE_UI_TITLE_START,PCE_UI_CONTINUE_PATTERN,PCE_UI_TITLE_OPTION};
-    static const uint8_t width[3]={PCE_UI_TITLE_START_W,PCE_UI_CONTINUE_W,PCE_UI_TITLE_OPTION_W};
-    uint8_t items=resume?3:2;
+UI_CODE static void title_draw(const uint8_t *patch,uint16_t patch_count,uint8_t sel) {
+    static const uint16_t base[2]={PCE_UI_TITLE_START,PCE_UI_TITLE_OPTION};
+    static const uint8_t width[2]={PCE_UI_TITLE_START_W,PCE_UI_TITLE_OPTION_W};
+    uint8_t items=2;
     video_sat_begin();
     for(uint16_t k=0;k<patch_count;++k) {
         const uint16_t *p=(const uint16_t*)(patch+2)+k*4;
@@ -33,36 +33,34 @@ UI_CODE static void title_draw(const uint8_t *patch,uint16_t patch_count,bool re
     }
     /* Menu items: white, gold while selected (flashing white as in the Saturn). */
     for(uint8_t i=0;i<items;++i) {
-        uint8_t kind=resume?i:(i?2:0);
+        uint8_t kind=i;
         uint8_t on=(sel==i)&&((ticks&31)>=8);
         uint8_t w=width[kind];
-        int16_t x=(320-w*16)/2,y=(resume?182:190)+i*12;
+        int16_t x=(320-w*16)/2,y=190+i*12;
         for(uint8_t k=0;k<w;++k)ui_sprite(x+k*16,y,base[kind]+k,on?1:0,false);
     }
     video_sat_end();
 }
-UI_CODE static uint8_t title(bool resume) {
+UI_CODE static uint8_t title(void) {
     ui_dark=1;ui_show(SCREEN_TITLE);ui_dark=0;pce_ui_state=1;
     audio_music(0);
-    uint8_t items=resume?3:2,sel=0;
+    uint8_t items=2,sel=0;
     uint8_t patch[2+44*8];
     uint16_t patch_count;
     arcade_read(2,ui_screen->extra,patch,2);patch_count=patch[0]|patch[1]<<8;
     if(patch_count>44)patch_count=44;
     arcade_read(2,ui_screen->extra+2,patch+2,patch_count*8);
     ticks=0;
-    title_draw(patch,patch_count,resume,sel);ui_black();ui_fade_in();   /* up from black, as every screen */
+    title_draw(patch,patch_count,sel);ui_black();ui_fade_in();   /* up from black, as every screen */
     for(;;) {
         video_wait();ui_read_keys();++ticks;
         if(ui_pressed&KEY_DOWN){sel=sel+1==items?0:sel+1;ui_blip();}
         if(ui_pressed&KEY_UP){sel=sel?sel-1:items-1;ui_blip();}
-        if((ui_pressed&KEY_SELECT)&&resume){ui_fade_out();ui_end();return 3;}
         if(ui_pressed&(KEY_RUN|KEY_1|KEY_2)) {
             ui_blip();ui_fade_out();ui_end();   /* fade to black, then the next screen comes up from black */
-            if(!resume)return sel;
-            return sel==1?3:sel==2?1:0;
+            return sel;
         }
-        title_draw(patch,patch_count,resume,sel);
+        title_draw(patch,patch_count,sel);
     }
 }
 
@@ -145,15 +143,14 @@ UI_CODE static uint8_t select_hero(uint8_t chosen) {
 }
 
 /* ---------------------------------------------------------------- options */
-enum { OPT_DIFFICULTY, OPT_LIVES, OPT_CONTINUES, OPT_MUSIC, OPT_EXIT, OPT_COUNT };
-UI_CODE static void caps(uint8_t *lives,uint8_t *continues) {
+enum { OPT_DIFFICULTY, OPT_LIVES, OPT_MUSIC, OPT_EXIT, OPT_COUNT };
+UI_CODE static void caps(uint8_t *lives) {
     *lives=pce_options.difficulty==0?7:pce_options.difficulty==1?5:3;
-    *continues=pce_options.difficulty==0?5:pce_options.difficulty==1?4:3;
 }
 UI_CODE static void option_row(uint8_t row,bool selected) {
     static const char *const difficulty[3]={"EASY  ","NORMAL","HARD  "};
     static const char *const music[4]={"OFF ","LOW ","MID ","HIGH"};
-    static const char *const label[OPT_COUNT]={"DIFFICULTY","LIVES","CONTINUES","MUSIC VOLUME","EXIT"};
+    static const char *const label[OPT_COUNT]={"DIFFICULTY","LIVES","MUSIC VOLUME","EXIT"};
     uint8_t y=9+row*2;if(row==OPT_EXIT)y=20;
     ui_put(7,y,label[row],selected?13:12);
     if(row==OPT_EXIT)return;
@@ -161,14 +158,13 @@ UI_CODE static void option_row(uint8_t row,bool selected) {
     switch(row) {
     case OPT_DIFFICULTY:ui_put(26,y,difficulty[pce_options.difficulty],15);break;
     case OPT_LIVES:ui_put_number(26,y,pce_options.lives,15);ui_put(28,y,"    ",15);break;
-    case OPT_CONTINUES:ui_put_number(26,y,pce_options.continues,15);ui_put(28,y,"    ",15);break;
     default:ui_put(26,y,music[pce_options.music&3],15);ui_put(30,y,"  ",15);break;
     }
     ui_put(33,y,selected?">":" ",13);
 }
 UI_CODE static void option_help(uint8_t row) {
     static const char *const help[OPT_COUNT]={
-        "EASY 3  NORMAL 2  HARD 1 HEARTS","EXTRA LIVES AT THE START","CONTINUES AFTER GAME OVER",
+        "EASY 3  NORMAL 2  HARD 1 HEARTS","EXTRA LIVES AT THE START",
         "CD MUSIC LEVEL","BACK TO THE TITLE"};
     ui_clear_rows(23,23);
     ui_put(4+(32-(uint8_t)__builtin_strlen(help[row]))/2,23,help[row],14);
@@ -183,27 +179,22 @@ UI_CODE static void options(void) {
     for(;;) {
         video_wait();ui_read_keys();++ticks;
         ui_cycle();
-        uint8_t old=sel,maxl=0,maxc=0;
+        uint8_t old=sel,maxl=0;
         if(ui_pressed&KEY_UP){sel=sel?sel-1:OPT_COUNT-1;ui_blip();}
         if(ui_pressed&KEY_DOWN){sel=sel+1==OPT_COUNT?0:sel+1;ui_blip();}
         int8_t dir=(ui_pressed&KEY_RIGHT)?1:(ui_pressed&KEY_LEFT)?-1:0;
         if(dir) {
             bool changed=false;
-            caps(&maxl,&maxc);
+            caps(&maxl);
             switch(sel) {
             case OPT_DIFFICULTY:
                 pce_options.difficulty=(pce_options.difficulty+3+dir)%3;
-                caps(&maxl,&maxc);
+                caps(&maxl);
                 if(pce_options.lives>maxl)pce_options.lives=maxl;
-                if(pce_options.continues>maxc)pce_options.continues=maxc;
-                option_row(OPT_LIVES,false);option_row(OPT_CONTINUES,false);changed=true;break;
+                option_row(OPT_LIVES,false);changed=true;break;
             case OPT_LIVES:
                 if(dir>0&&pce_options.lives<maxl)++pce_options.lives;
                 else if(dir<0&&pce_options.lives)--pce_options.lives;
-                changed=true;break;
-            case OPT_CONTINUES:
-                if(dir>0&&pce_options.continues<maxc)++pce_options.continues;
-                else if(dir<0&&pce_options.continues)--pce_options.continues;
                 changed=true;break;
             case OPT_MUSIC:
                 pce_options.music=(pce_options.music+4+dir)&3;
@@ -216,28 +207,25 @@ UI_CODE static void options(void) {
         if(sel!=old){option_row(old,false);option_help(sel);}
         if(dir||sel!=old||ticks==1)option_row(sel,true);
         if(((ui_pressed&(KEY_RUN|KEY_1|KEY_2))&&sel==OPT_EXIT)||(ui_pressed&KEY_SELECT)) {
-            ui_blip();pce_continues=pce_options.continues;ui_fade_out();ui_end();return;
+            ui_blip();ui_fade_out();ui_end();return;
         }
     }
 }
 
 /* ---------------------------------------------------------------- flow */
-/* Title -> (options) -> hero select. pce_control.stage holds the saved
- * checkpoint on entry; on exit it holds the stage to start (0 = new game)
- * and pce_control.hero the choice. */
+/* Title -> (options) -> hero select. Every selection starts a new game. */
 UI_CODE void frontend_start(void) {
-    uint8_t checkpoint=pce_control.stage,chosen=pce_control.hero;
+    uint8_t chosen=pce_control.hero;
     /* A button held through GAME OVER's fade must not start the title or
      * confirm a hero again. Wait for a fresh press on the new screen. */
     previous=~pce_joypad_read();pce_metrics.ready=0;
     if(!loader_ui()){pce_control.ok=0;return;}
     for(;;) {
-        uint8_t choice=title(checkpoint!=0);
+        uint8_t choice=title();
         if(choice==1){options();continue;}
-        if(choice==3){pce_control.stage=checkpoint;break;}
         chosen=select_hero(chosen);pce_control.stage=0;break;
     }
-    audio_stop();pce_ui_state=0;pce_control.hero=chosen;pce_continues=pce_options.continues;
+    audio_stop();pce_ui_state=0;pce_control.hero=chosen;
     pce_campaign.lives=pce_options.lives;pce_campaign.powers=2;pce_campaign.score=0;
     pce_control.ok=1;previous=ui_held;
 }
