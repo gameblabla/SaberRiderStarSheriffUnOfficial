@@ -253,8 +253,11 @@ def add_art(root,work,stage,sprites,frame):
     # The hero power's cut-in portrait (the select screen's lit portrait, 64 dots wide, 160 high, in three sprites of 64x64, 64x64 and 64x32 a hero:
     # power_base + 3 * hero + part). The three parts share the hero's palette (add_sprites), so the cache's shared-palette slots show them right.
     power=len(sprites)
-    for hero,rid in enumerate((0x67C9A3D9,0x74100546,0x72A6B0FB,0xEEE2331F) if stage in (1,3,4,5,7) else ()):
-        port=get(rid);x0=(port.width-64)//2
+    # (assets/pce/power_portraits.png: the four portraits cut by hand, 80x160 cells in hero order, each figure at most 64 dots wide)
+    sheet=Image.open(root/'assets/pce/power_portraits.png').convert('RGBA')
+    for hero in range(4 if stage in (1,3,4,5,7) else 0):
+        port=sheet.crop((80*hero,0,80*hero+80,160));box=port.getchannel('A').point(lambda v:255 if v>=128 else 0).getbbox()
+        x0=max(0,min(16,(box[0]+box[2])//2-32))
         for k,(y0,y1) in enumerate(((0,64),(64,128),(128,160))):add(f'pwr{hero}_{k}',port.crop((x0,y0,x0+64,y1)))
     # the hero's name beside it (power_base + 12 + hero): the dialogue font at twice the size, 14 dots a letter, white with a black outline (14 * letters + 4 wide, 18 high)
     if stage in (1,3,4,5,7):
