@@ -80,8 +80,9 @@ FOES_CODE void foes_shots(void) {
                     else if(boss.state==0&&boss.hp>1)--boss.hp;
                 }
             }
+            /* A generous target: one player shot destroys a bomb. */
             for(uint8_t i=0;i<6&&b->t;++i)
-                if(mines[i].t&&absolute(wrapdiff(b->x,mines[i].x))<18&&absolute(wrapdiff(b->y,mines[i].y))<18){b->t=0;mines[i].t=0;blast(mines[i].x,mines[i].y);}
+                if(mines[i].t&&absolute(wrapdiff(b->x,mines[i].x))<34&&absolute(wrapdiff(b->y,mines[i].y))<34){b->t=0;mines[i].t=0;blast(mines[i].x,mines[i].y);}
         } else if(absolute(wrapdiff(b->x,px))<22&&absolute(wrapdiff(b->y,py))<22){b->t=0;hurt_car(1);}
     }
     for(uint8_t k=0;k<6;++k) {

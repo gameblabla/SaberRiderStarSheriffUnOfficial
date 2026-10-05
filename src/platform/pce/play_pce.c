@@ -286,7 +286,10 @@ PCE_BOSS void play_draw(void) {
         if(keys&KEY_RIGHT)facing=0;
     }
     hero_sprite=id;   /* what the dialogue overlay draws while the world is frozen */
-    if(!safe_timer||(frame&4)||pce_death)video_sprite(id,player.x-camera,player.y-16,facing,16);
+    /* The last death tick clears pce_death before this final frame is drawn.
+     * Keep the hero hidden throughout the GAME OVER fade instead of showing
+     * a living pose for a frame. */
+    if(pce_campaign.state!=CAM_OVER&&(!safe_timer||(frame&4)||pce_death))video_sprite(id,player.x-camera,player.y-16,facing,16);
     /* The galloping herd comes right after the hero, ahead of shots and enemies: where the SAT or a scanline is full it
      * is what the optional sprites give way to, so the horses never flicker. */
     if(herd_on)overlay_call(0x6f,herd_draw);
@@ -303,7 +306,7 @@ PCE_BOSS void play_draw(void) {
     if(pce_campaign.boss_kind){pce_control.phase=0;overlay_call(0x7c,shots_draw_pass);}   /* the bosses' lasers */
     actors_mode=2;overlay_call(0x74,actors_draw);actors_mode=0;
     pce_control.phase=1;overlay_call(0x7c,shots_draw_pass);
-    if(flash_time)video_sprite_optional(pce_flash_base[stage]+(flash_diag?0:4)+4-flash_time,player.x+flash_dx-camera,player.y+flash_dy-16,false,16);
+    if(pce_campaign.state!=CAM_OVER&&flash_time)video_sprite_optional(pce_flash_base[stage]+(flash_diag?0:4)+4-flash_time,player.x+flash_dx-camera,player.y+flash_dy-16,false,16);
     /* The Hyperjumper (stages 3 and 4) goes behind every bullet: its sprites move to the end of the SAT (lower slots are in front). */
     if(pce_campaign.boss_kind==2)sat_to_end(hull_first,hull_end);
     sat_to_end(props_first,props_end);
