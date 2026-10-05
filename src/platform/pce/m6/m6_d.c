@@ -35,6 +35,7 @@ static void put_at(uint16_t d,uint16_t late,int16_t rel,int16_t height,uint16_t 
 static void put(uint16_t d,int16_t rel,int16_t height,uint16_t id) {put_at(d,0,rel,height,id);}
 /* a height in 1/8 unit as pixels at distance d (with the arena's zoom, 1.6) */
 static inline int16_t lift(uint16_t d,int16_t z) {
+    if(d<160)d=160;   /* the rows under the horizon stop growing here (m6_row): the height stops too, or a close shot or burst climbs the screen */
     uint16_t i=d>>3;uint16_t px=((uint16_t)(z>>3)*(m6_rcp[i<200?i:200]>>2))>>6;return (int16_t)(px+(px>>1)+(px>>3));
 }
 /* the big mech and the arm are drawn in the world's image (m6_c.c m6_blit) */
@@ -66,7 +67,7 @@ void m6_draw(void) {
     int16_t lock_sx=0,lock_sy=0,lock_d=0,lock_hp=0;
     uint8_t *threat=a6.threat;threat[0]=threat[1]=threat[2]=0;
     bool big_taken=false;
-    uint8_t nearest=255;{uint16_t best=0xffff;for(uint8_t k=0;k<3;++k){Mech6 *m=&a6.mech[k];if(m->st!=S_OFF&&m->st!=S_DYING&&m->dist<best){best=m->dist;nearest=k;}}}
+    uint8_t nearest=255;{uint16_t best=0xffff;for(uint8_t k=0;k<3;++k){Mech6 *m=&a6.mech[k];if(m->st!=S_OFF&&m->dist<best){best=m->dist;nearest=k;}}}
     for(uint8_t k=0;k<3;++k) {
         Mech6 *m=&a6.mech[k];if(m->st==S_OFF)continue;
         uint16_t d=m->dist>>2;int16_t rel=relq(m->ang);

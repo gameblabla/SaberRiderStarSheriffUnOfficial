@@ -139,6 +139,14 @@ static void shots_step(void) {
                     s->life=0;mech_damage(m,1,false);audio_effect(22);burst(m->ang,m->dist,s->z,0,9);   /* (a bolt strikes: the PSG zap, voice 1, no DDA) */
                 }
             }
+            for(uint8_t j=0;j<14&&s->life;++j) {   /* a bolt that meets a boulder or cactus blows it up (it comes round again far ahead) */
+                Prop6 *p=&A.prop[j];
+                int16_t da=s->ang-p->ang;if(da>ARC/2)da-=ARC;else if(da<-ARC/2)da+=ARC;
+                if(s->dist+200>=p->dist&&s->dist<=p->dist+300&&abs16(da)<(int16_t)(rcp_of(p->dist)<<2)) {
+                    s->life=0;burst(p->ang,p->dist,200,2,30);
+                    p->dist=6400;
+                }
+            }
             for(uint8_t j=0;j<16&&s->life;++j) {   /* bolts shoot plasma down */
                 Shot6 *o=&A.shot[j];if(!o->life||!o->enemy)continue;
                 int16_t da=s->ang-o->ang;uint16_t dd=s->dist>o->dist?s->dist-o->dist:o->dist-s->dist;
