@@ -1,9 +1,10 @@
 /* Resident HUD retention copies, in the flow overlay with its caller.
- * At most 64 bytes per instruction so the PCM timer can service every sample. */
+ * At most 16 bytes per instruction (113 cycles) so the PCM timer can service every sample and the road's raster interrupt
+ * is never held back by more than a fraction of a scanline. */
 .section .ram_bank110.text,"ax",@progbits
 .global hud_copy, hud_copy_src, hud_copy_dst, hud_copy_len, hud_copy_opcode
 hud_copy:
-    lda #64
+    lda #16
     ldx hud_copy_len+1
     bne 1f
     cmp hud_copy_len

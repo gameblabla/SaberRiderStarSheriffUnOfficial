@@ -164,8 +164,9 @@ class Campaign(Test):
             e.write(sym('px'),struct.pack('<2H',bx,(by+120)&8191))   # (not paused: the pause menu restarts the stage)
             e.input(16);e.run(30);e.input(0);self.dialogs(e)
             assert self.state(e)['boss_kind']==4 and e.memory(sym('rphase'),1)[0]==4,self.state(e)
-            # One more hit: a shot of the car's own on him with a single hit point left.
-            e.run(30)
+            # One more hit: a shot of the car's own on him with a single hit point left (after any dialogue that has begun by now:
+            # the pool is cleared while one is up, and when it begins depends on the loop's speed).
+            e.run(30);self.dialogs(e)
             bx,by=struct.unpack('<2h',e.memory(sym('boss')+8,4))
             e.write(sym('boss')+19,bytes([1]))
             e.write(sym('race_bolts'),struct.pack('<4h2B',bx,by,0,0,20,1)+bytes(10*5))
@@ -231,7 +232,7 @@ class Campaign(Test):
             self.until(e,lambda:e.memory(ui,1)!=b'\0',limit=6000)
             for _ in range(40):
                 if e.memory(ui,1)==b'\1':break
-                self.press(e,1);e.run(120)
+                self.press(e,1);e.run(97)   # not 120: a credits page lasts 210 frames, and a press every 210 can fall in its first 20 frames for ever
             self.until(e,lambda:e.memory(ui,1)==b'\1',limit=6000)
             self.press(e,1);self.until(e,lambda:e.memory(ui,1)==b'\2')
             self.press(e,1)

@@ -50,7 +50,7 @@ bool arcade_vram(uint32_t address, uint16_t word, uint16_t size) {
     *(volatile uint8_t*)0x20f7=VDC_REG_VRAM_DATA;
     *IO_VDC_INDEX = VDC_REG_VRAM_DATA;
     __attribute__((leaf)) asm volatile("plp" ::: "p","memory");
-    /* Native loop uses 64-byte TIA bursts through Arcade bank $40. */
+    /* Native loop uses 16-byte TIA bursts through Arcade bank $40. */
     if(size) {arcade_vdc_len=size;arcade_vdc_copy();}
     return true;
 }

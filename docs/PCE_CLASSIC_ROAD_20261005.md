@@ -58,6 +58,28 @@ Three faults of the first version, and what was done (the usual way retro racers
 
 Bank notes: `road_stripes` and `pce_road_z` moved to $6d, `story_graphics_restore` to $6e (`overlay_call(0x6e,..)`), `hurt_call` to $7c, `ground_call` to $78.
 
+## Raster glitches while standing still (2026-10-05, third session)
+
+Standing on the grid (no steering, the tables identical from frame to frame) the road still flickered: now and then one or two
+scanlines of the road were shifted or showed the wrong stripe colour for one frame (about 4% of the frames; a screenshot diff of
+consecutive frames showed single full-width rows changing). The tables were stable, so the fault was the interrupt timing.
+
+* **Diagnosis.** An instrumented copy of the emulator (log of every RCR interrupt: assertion time, latency, the instruction it
+  interrupted, and the scanline/phase of each BXR/BYR write) showed the handler normally writes BXR about 60 dots into the line after the
+  interrupt, which leaves about 300 CPU cycles of slack before the next scanline latches BXR/BYR. Whenever the interrupt was held back
+  by more than that, scanline p got the previous pair's values (a one-line glitch). Every long delay came from block transfers,
+  which the HuC6280 does not interrupt: `arcade_tai` (the piece list of a sprite, up to 255 bytes at 6 cycles a byte, 600-1500
+  cycles), the 64-byte TIA bursts of `arcade_vdc_copy` (VRAM uploads) and `hud_copy` (SAT copy, 401 cycles each).
+  (Padding the handler by 150 NOPs changed nothing and 180 NOPs shifted every line by one: that is how the 300-cycle slack was measured.)
+* **Fix.** `arcade_tai` now moves its length in bursts of at most 16 bytes (113 cycles) with interrupts open between them, and the TIA
+  bursts of `arcade_vdc_copy` and `hud_copy` are 16 bytes instead of 64. Late interrupts fell from 94 in 115,000 (4% of the frames
+  glitched) to 3 in 132,000 standing still, and from 48 to 8 in 200,000 while driving the circuit; 900 consecutive standing frames show no
+  changed road row at all (`glitch.py`-style screenshot diff; before: 6-16 glitch frames per 150-300).
+* **Cost.** The race loop runs 17.9 times a second in `tools/pce/test_road.py` (19.1 before): the extra burst set-up is about 45 cycles a
+  16 bytes. Remaining long delays are rare BIOS/CD handlers and the PCM timer handler stacking onto a burst.
+* Rule for new code in the race: no uninterruptible block move longer than about 16 bytes (the RCR handler's slack is ~300 cycles,
+  and a PCM timer interrupt can queue in front of it).
+
 ## Cost and results
 
 * Measured in the accurate-core emulator with seven rivals and an autopilot: the loop completes about 22 times a second and the
