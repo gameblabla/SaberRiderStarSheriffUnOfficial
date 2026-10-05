@@ -34,11 +34,16 @@ DRAW_CODE static void bar(int16_t x,int16_t y,uint8_t pieces,uint16_t fill,uint8
     }
 }
 typedef struct {int16_t x,y;uint16_t f;uint8_t kind;} Visible;
-static Visible vis[18];static uint8_t nvis;static int8_t shown_c,shown_s;
+static Visible vis[18];static uint8_t nvis;static int8_t shown_c,shown_s,shown_cl,shown_sl;
 /* (a * b) >> 7 for |a| < 4096 and |b| <= 127 without 32-bit arithmetic: the high and the low byte of a apart */
 DRAW_CODE static int16_t mulq(int16_t a,int8_t b) {
     int8_t high=a>>8;uint8_t low=a;
     return (int16_t)(high*b*2+(int16_t)((int16_t)low*b>>7));
+}
+/* a * b for int16 a and int8 b, in 32 bits */
+DRAW_CODE static int32_t mulw(int16_t a,int8_t b) {
+    int8_t high=a>>8;uint8_t low=a;
+    return ((int32_t)(int16_t)(high*b)<<8)+(int16_t)((int16_t)low*b);
 }
 /* The ground point in the camera's frame: f ahead, l to the right. The screen row follows from the distance (horizon
  * 113 + 10080 / f); a car's width in dots is 1.17 x the rows below the horizon; the offset from the middle is
@@ -47,12 +52,14 @@ DRAW_CODE static bool project_point(int16_t wx,int16_t wy,int16_t *sx,int16_t *r
     int16_t rx=wrapdiff(wx,pce_control.x),ry=wrapdiff(wy,pce_control.y);
     if(rx>1900||rx<-1900||ry>1900||ry<-1900)return false;
     int16_t f=mulq(rx,shown_c)+mulq(ry,shown_s);
-    if(f<40||f>900)return false;   /* beyond 900 units a ground point would be above the floor's first scanline (120): nothing flies in the sky */
-    int16_t l=mulq(ry,shown_c)-mulq(rx,shown_s);
-    if(l>f||l<-f)return false;
+    if(f<40||f>560)return false;   /* beyond 560 units (road_pce.c FAR_F) the road is lost in the haze: nothing is drawn there */
+    /* the side offset in quarter units, from the camera's Q14 sine and cosine: whole units moved a car four dots at a time near the camera,
+     * out of step with the road under it */
+    int16_t l=(int16_t)((((mulw(ry,shown_c)-mulw(rx,shown_s))<<7)+mulw(ry,shown_cl)-mulw(rx,shown_sl))>>12);
+    if(l>4*f||l<-4*f)return false;
     uint16_t below=10080u/(uint16_t)f;
     *row=113+below;*depth=f;
-    *sx=256+(int16_t)(l*(int16_t)((below*171)>>8)>>4);
+    *sx=256+(int16_t)(l*(int16_t)((below*171)>>8)>>6);
     return true;
 }
 DRAW_CODE static void add(uint8_t kind,int16_t wx,int16_t wy) {
@@ -65,7 +72,7 @@ DRAW_CODE static void add(uint8_t kind,int16_t wx,int16_t wy) {
 }
 DRAW_CODE void race_draw(void) {
     base=pce_hud_base[1];
-    shown_c=cam_c;shown_s=cam_s;
+    shown_c=cam_c;shown_s=cam_s;shown_cl=cam_cl;shown_sl=cam_sl;
     nvis=0;
     for(uint8_t k=0;k<7;++k)if(rv[k].hp)add(rv[k].kind,rv[k].x,rv[k].y);
     for(uint8_t k=0;k<6;++k)if(mines[k].t)add(6,mines[k].x,mines[k].y);

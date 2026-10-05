@@ -18,7 +18,7 @@ extern Leader boss,escort[2];
 extern uint16_t px,py,hd,cam_hd,phase_t,race_time,gap_dist,race_rng,ps;
 extern int16_t speed,tilt;
 extern uint8_t rphase,car_hp,car_max,boost,boost_on,hurt,shake,finish_rank,spin,ram_cd;
-extern int8_t lapp,cam_c,cam_s;
+extern int8_t lapp,cam_c,cam_s,cam_cl,cam_sl;   /* the camera's cosine and sine: Q7 bytes and the remainder to Q14 (value = 128 c + cl) */
 extern uint8_t road_idx;   /* the circuit sample nearest the car: the road is built from three before it */
 /* arguments of the calls across banks */
 extern int16_t arg_x,arg_y,arg_dist,arg_radius;extern uint8_t arg_damage,arg_life;extern int16_t arg_speed;

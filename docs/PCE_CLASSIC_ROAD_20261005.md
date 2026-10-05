@@ -33,6 +33,31 @@ interrupt scrolls and re-selects it for every scanline). The sky is unchanged.
 Removed: `floor_pce.c`, `floor_sample.S`, `floor_tables.py`, the 256 pair characters, the floor geometry archive, the 19-strip
 interrupt.
 
+## Stability pass (2026-10-05, second session)
+
+Three faults of the first version, and what was done (the usual way retro racers handle them: Lou's Pseudo 3D page, Chase H.Q. itself):
+
+* **Horizon too far.** The road went on to f = 1023 (scanline 113 + 9); the far knots swung by hundreds of dots. The road now ends at
+  `FAR_F` = 560 (scanline 113 + 18) and fades into the haze: BAT rows 0-1 of the picture are full haze, row 2 mixes 60%, rows 3-4 40% and 20%
+  (`build_assets.py road_assets`), and the stripes start at image line 24. Cars, mines and shots are culled at the same distance
+  (`race_draw_pce.c project_point`), 560 units. The knot walk is 13 knots (every sample for 8, then every second one).
+* **Wrap-round.** A scanline's BXR window is 512 dots of a 1024-dot picture: when the road's centre was pushed more than 256 dots off, the
+  window ran over the picture's edge and showed the far kerb on the wrong side of the screen (the "hook" at the far right). Every knot's
+  offset is clamped to +-250 dots (`X_LIMIT`, `dots_q4`), so BXR stays in 6..506 and, since a line is a straight interpolation of its
+  knots, so does everything between them. (Chase H.Q. has the same wrap; this is the plain fix: keep the window inside the picture.)
+* **Unstable road.** (1) The camera heading was the car's own, up to 34 degrees off the road, so steering swung the whole far road round the
+  car. It is now the road's direction at the car, as in Chase H.Q.: `race_pce.c road_heading` (the circuit's tangent blended between its
+  samples), and steering slides the road sideways instead. The car's own heading only moves the car. (2) `cam_c`/`cam_s` came from a table of
+  256 steps a turn and were 7-bit: one step of the camera moved the far road 3-10 dots. They are now interpolated to 14 bits (`sine14`),
+  held as a Q7 byte plus a remainder (`cam_c`/`cam_cl`), and the knot walk (`road_fill.S road_advance`) and the first knot's rotation keep Q14
+  (`road_k`, 32 bits); the side offset is taken in quarter units. Cars use the same Q14 (`project_point`), so they sit on the road without
+  shimmer. (3) `project` now finds the car's place along its circuit segment from the segment's real length (36-66 units, it was a fixed
+  52), which made progress (and the stripes) jump at each new nearest sample.
+* Measured (autopilot, `tools/pce/test_road.py`): the table value at scanline 30 moves by 1-2 dots a step where it jumped by 4-9 before.
+  The loop runs at 19-20 commits a second in the same test (it was 22-23 with the less precise walk): the walk now uses eight byte products a knot.
+
+Bank notes: `road_stripes` and `pce_road_z` moved to $6d, `story_graphics_restore` to $6e (`overlay_call(0x6e,..)`), `hurt_call` to $7c, `ground_call` to $78.
+
 ## Cost and results
 
 * Measured in the accurate-core emulator with seven rivals and an autopilot: the loop completes about 22 times a second and the

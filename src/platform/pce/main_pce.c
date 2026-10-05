@@ -155,7 +155,7 @@ PCE_FLOW void flow_main(void) {
             }
             else {
                 if(pce_campaign.state==CAM_STORY)
-                    overlay_call(0x6f,story_graphics_restore);
+                    overlay_call(0x6e,story_graphics_restore);
                 menu=1;selected=stage;menu_hero=hero;menu_mode=pce_campaign.diagnostic;
                 if(stage==2){pce_raster_enabled=0;video_scene(&pce_scenes[1]);video_background(0);video_display(true);}
             }

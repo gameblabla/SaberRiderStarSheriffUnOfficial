@@ -30,7 +30,7 @@ Leader boss,escort[2];
 uint16_t px,py,hd,cam_hd,phase_t,race_time,gap_dist,race_rng=0xB5AD,ps;
 int16_t speed,tilt,arg_x,arg_y,arg_dist,arg_radius,arg_speed;
 uint8_t rphase,car_hp,car_max,boost,boost_on,hurt,shake,finish_rank,spin,ram_cd,arg_damage,arg_life;
-int8_t lapp,cam_c,cam_s;
+int8_t lapp,cam_c,cam_s,cam_cl,cam_sl;
 uint8_t road_idx;
 static uint8_t pfx,pfy,fire_cd;
 static uint16_t spawn_t;
@@ -39,13 +39,15 @@ RACE_CODE static uint8_t rnd(void) {
     uint8_t carry=race_rng&1;race_rng>>=1;if(carry)race_rng^=0xB400;
     return (uint8_t)(race_rng^(race_rng>>8));
 }
-/* The ground byte under a world position: colour (low nibble) and class (high: 0 sand, 1 kerb, 2 road). */
-RACE_CODE static uint8_t ground(uint16_t x,uint16_t y) {
+/* The ground byte under a world position (arg_x, arg_y): colour (low nibble) and class (high: 0 sand, 1 kerb, 2 road); bank $78: $79 is full. */
+PCE_SCENERY void ground_call(void) {
     uint8_t v;
+    uint16_t x=arg_x,y=arg_y;
     if(rphase>=P_PURSUIT)arcade_read(1,PCE_RACE_PURSUIT_ROW+((x&8191)>>3),&v,1);
     else arcade_read(1,PCE_RACE_RACE_MAP+((uint32_t)((y&8191)>>3)<<10)+((x&8191)>>3),&v,1);
-    return v>>4;
+    arg_life=v>>4;
 }
+RACE_CODE static uint8_t ground(uint16_t x,uint16_t y) {arg_x=x;arg_y=y;overlay_call(0x78,ground_call);return arg_life;}
 RACE_CODE static void track_point(uint16_t s,int16_t lat,int16_t *x,int16_t *y) {
     arg_speed=(int16_t)s;arg_dist=lat;overlay_call(0x6d,field_point_call);*x=arg_x;*y=arg_y;
 }
@@ -63,21 +65,38 @@ RACE_CODE static int16_t project(void) {
     uint8_t n=bi+1;
     int16_t sx=wrapdiff(track[n].x,track[bi].x),sy=wrapdiff(track[n].y,track[bi].y);
     int16_t rx=wrapdiff(px,track[bi].x),ry=wrapdiff(py,track[bi].y);
-    /* a segment is about 52 units long: dot / 52^2 * 256 and cross / 52 */
-    int16_t along=(rx*sx+ry*sy)*3>>5;
+    if(rx>240)rx=240;else if(rx<-240)rx=-240;if(ry>240)ry=240;else if(ry<-240)ry=-240;   /* keeps the products in 16 bits */
+    /* where the car is along its segment, exactly (Q8): the segments are 36 to 66 units long, and a fixed length made the progress
+     * (the stripes) and the road's direction jump each time the nearest sample changed */
+    int16_t along=(int32_t)(rx*sx+ry*sy)*256/(sx*sx+sy*sy);
     if(along<-256)along=-256;if(along>511)along=511;
     uint16_t s=((uint16_t)bi<<8)+along;
     if(ps>0xc000&&s<0x4000)++lapp;else if(ps<0x4000&&s>0xc000)--lapp;
     ps=s;
     return ((rx*-sy+ry*sx)>>1)*5>>7;
 }
-RACE_CODE static void hurt_car(uint8_t damage) {
+PCE_HUD static void hurt_car(uint8_t damage) {   /* bank $7c: $79 is full */
     if(hurt||(rphase!=P_RACE&&rphase!=P_PURSUIT&&rphase!=P_BOSS))return;
     audio_effect(5);hurt=42;shake=24;
     if(car_hp>damage){car_hp-=damage;pce_metrics.hp=(uint8_t)(((uint16_t)car_hp*8+car_max-1)/car_max);}
     else{car_hp=0;pce_metrics.hp=1;campaign_hurt();}
 }
-RACE_CODE void hurt_call(void) {hurt_car(arg_damage);}
+PCE_HUD void hurt_call(void) {hurt_car(arg_damage);}
+/* The camera looks along the road, as Chase H.Q.'s does: the road's direction at the car (the circuit's tangent, blended between its
+ * samples), not the car's own heading. Steering then slides the road sideways instead of swinging all of it round the car, which is
+ * what kept the far road from settling. */
+RACE_CODE static uint16_t road_heading(void) {
+    if(rphase>=P_PURSUIT)return 0xc000;
+    uint16_t q=ps-128;   /* a segment's direction holds at its middle */
+    uint8_t i=q>>8;
+    int8_t step=(int8_t)(track[(uint8_t)(i+1)].heading-track[i].heading);
+    return ((uint16_t)track[i].heading<<8)+(int16_t)step*(uint8_t)q;
+}
+/* The camera's sine in Q14, between the table's 256 steps a turn (a step of 1.4 degrees swung the far road by ten dots at once). */
+RACE_CODE static int16_t sine14(uint16_t angle) {
+    int8_t low=SIN[(uint8_t)(angle>>8)],high=SIN[(uint8_t)((angle>>8)+1)];
+    return (int16_t)low*128+(((int16_t)(int8_t)(high-low)*(uint8_t)angle)>>1);
+}
 /* ---- the car --------------------------------------------------------------------------------------------- */
 RACE_CODE static void drive(uint8_t keys) {
     uint8_t cls=ground(px,py);
@@ -107,12 +126,12 @@ RACE_CODE static void drive(uint8_t keys) {
     if(cls==0)turn-=turn>>3;
     hd+=steer*turn;
     {   /* The road is seen head-on (its picture is a straight road in perspective): the car keeps within 34 degrees of the road's direction. */
-        uint16_t along=rphase>=P_PURSUIT?0xc000:(uint16_t)track[road_idx].heading<<8;
+        uint16_t along=road_heading();
         int16_t off=(int16_t)(hd-along);
         if(off>MAX_OFF)hd=along+MAX_OFF;else if(off<-MAX_OFF)hd=along-MAX_OFF;
     }
     tilt+=(steer*112-tilt)>>3;                 /* Q4: whole numbers made (7 - 0) / 8 = 0, so the car never leaned */
-    cam_hd+=((int16_t)(hd-cam_hd)>>3)+((int16_t)(hd-cam_hd)>>5);
+    cam_hd+=(int16_t)(road_heading()-cam_hd)>>1;
     /* the step in Q8 units: speed / 60 * 256 = speed * 4.27 */
     int16_t mx=muls(speed,cosine(hd)),my=muls(speed,sine(hd));
     int16_t tx=pfx+mx*4+(mx>>2),ty=pfy+my*4+(my>>2);
@@ -129,6 +148,7 @@ RACE_CODE static void drive(uint8_t keys) {
     }
 }
 /* ---- the phases ---------------------------------------------------------------------------------------------- */
+RACE_CODE static void begin_pursuit(void);
 RACE_CODE void race_start(void) {
     arcade_read(1,pce_scenes[1].track,track,sizeof track);
     car_max=pce_options.difficulty==0?16:pce_options.difficulty==1?12:8;car_hp=car_max;
@@ -141,10 +161,7 @@ RACE_CODE void race_start(void) {
     hd=(uint16_t)track[road_idx].heading<<8;cam_hd=hd;
     pfx=pfy=0;
     rphase=P_COUNT;
-    if(pce_control.phase) {   /* resuming at the pursuit */
-        px=py=4096;hd=cam_hd=0xc000;speed=200;rphase=P_PURSUIT;
-        overlay_call(0x7a,foes_leader_start);spawn_t=150;
-    }
+    if(pce_control.phase)begin_pursuit();   /* resuming at the pursuit */
 }
 RACE_CODE static void begin_pursuit(void) {
     rphase=P_PURSUIT;px=py=4096;pfx=pfy=0;hd=cam_hd=0xc000;speed=200;hurt=0;spin=0;car_hp=car_max;pce_metrics.hp=8;
@@ -214,7 +231,8 @@ RACE_CODE void race_frame(void) {
     uint8_t keys=pce_control.keys;
     for(uint8_t i=0;i<pce_control.elapsed&&!pce_campaign.event&&!pce_campaign.result&&pce_campaign.state==CAM_PLAY;++i)race_tick(keys);
     /* the road is drawn from the camera: 92 units behind the car along the camera's heading */
-    cam_c=cosine(cam_hd);cam_s=sine(cam_hd);
+    int16_t q=sine14(cam_hd+0x4000);cam_c=(q+64)>>7;cam_cl=q-cam_c*128;   /* each as a Q7 byte and the remainder */
+    q=sine14(cam_hd);cam_s=(q+64)>>7;cam_sl=q-cam_s*128;
     pce_control.x=px-(cam_c*92>>7);
     pce_control.y=py-(cam_s*92>>7);
     pce_control.heading=(uint8_t)(cam_hd>>9)&127;pce_control.phase=rphase>=P_PURSUIT;

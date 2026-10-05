@@ -305,6 +305,6 @@ PCE_BOSS void play_draw(void) {
         video_wait();
         pce_vce_copy_palette(31,buffer+512,1);
         video_panel_restore_apply();
-        overlay_call(0x6f,story_graphics_restore);pce_panel_restore=0;
+        overlay_call(0x6e,story_graphics_restore);pce_panel_restore=0;
     }
 }

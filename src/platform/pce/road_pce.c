@@ -22,7 +22,10 @@
 #define ROAD_MATH PCE_MISSION   /* bank $6f: the camera-frame arithmetic and its tables ($6d holds the field and the sky loader) */
 #define DMAX 110          /* the nearest scanline, 223 */
 #define NEAR_F 88         /* the camera-frame distance of scanline DMAX + 1 */
-#define POINTS 11
+#define POINTS 13
+#define FAR_F 560         /* the farthest distance drawn: scanline 113 + 18, where the road is lost in the haze */
+#define SIDE_LIMIT 1600   /* 400 units in Q2: farther than that a scanline's offset is past the limit anyway */
+#define X_LIMIT 4000      /* the largest offset of a scanline (Q4 dots): BXR stays in 6..506 and the 1024-dot picture never wraps */
 extern uint16_t columns[33][30];
 extern volatile uint8_t pce_floor_pending;
 extern volatile uint16_t pce_sky_far,pce_sky_near;
@@ -30,7 +33,6 @@ extern volatile uint16_t pce_sky_far,pce_sky_near;
 uint8_t *road_fill_base,*road_sel_base;
 uint8_t road_fill_b0,road_fill_b1,road_fill_b2,road_fill_s0,road_fill_s1,road_fill_s2,road_fill_m,road_fill_n,road_div_n,road_along;
 uint16_t road_div_q;
-int16_t knot_f,knot_side;
 void road_fill(void),road_divide(void),road_stripes(void);
 void road_advance(int8_t dx,int8_t dy);
 /* the knots of the frame (scanline and offset, Q4 dots), after the tables in the platform background cache array */
@@ -38,22 +40,29 @@ void road_advance(int8_t dx,int8_t dy);
 #define kn_x ((int16_t*)((uint8_t*)columns+1056))
 static uint8_t kn_n,pursuit;
 static uint16_t camera_x,camera_y;
+int32_t road_k[2];   /* road_fill.S: the knot being walked in the camera's frame, forward and to the right, in 1/16384 units */
 
-/* (a * b) >> 7 for |a| < 4096 and |b| <= 127 without 32-bit arithmetic: the high and the low byte of a apart */
-ROAD_MATH static int16_t mulq(int16_t a,int8_t b) {
+/* a * b for int16 a and int8 b, in 32 bits: the high and the low byte of a apart */
+ROAD_MATH static int32_t mulw(int16_t a,int8_t b) {
     int8_t high=a>>8;uint8_t low=a;
-    return (int16_t)(high*b*2+(int16_t)((int16_t)low*b>>7));
+    return ((int32_t)(int16_t)(high*b)<<8)+(int16_t)((int16_t)low*b);
 }
-/* Scanline of a distance (lines below the horizon, d = 10080 / f) and the dots to the right of the middle (Q4) of a side offset. */
-ROAD_MATH static int16_t line_of(int16_t f) {return f>=1023?9:pce_road_d[f>>1];}
+/* a * (128 m + ml): the camera's sine or cosine is the byte m (Q7) and a small remainder ml, which together keep the road still
+ * while the camera turns (a Q7 value alone moves the far road three dots at each step of it) */
+ROAD_MATH static int32_t rotate(int16_t a,int8_t m,int8_t ml) {return (mulw(a,m)<<7)+mulw(a,ml);}
+/* Scanline of a distance (lines below the horizon, d = 10080 / f). */
+ROAD_MATH static int16_t line_of(int16_t f) {return f>=766?pce_road_d[383]:pce_road_d[f>>1];}
+/* The dots (Q4) to the right of the middle of a side offset (Q2: quarter units) at d lines below the horizon: side * d * 0.0418 * 16 / 4.
+ * A scanline's offset is held inside the picture: BXR 256 - x must stay in 0..512 or the window wraps round to the other side of
+ * the picture and shows the far kerb of the road on the wrong side of the screen. */
 ROAD_MATH static int16_t dots_q4(int16_t side,int16_t d) {
-    int16_t t=side*d;                     /* |side| <= 2 f keeps this in 16 bits: |t| <= 20160 */
-    return (t>>1)+(t>>3)+(t>>5)+(t>>7);   /* t * 0.0418 * 16 (the dots of 421 / f, in sixteenths) */
+    int32_t x=((int32_t)side*d*43)>>8;   /* 0.1672 = 43 / 256 */
+    return x>X_LIMIT?X_LIMIT:x<-X_LIMIT?-X_LIMIT:(int16_t)x;
 }
-/* The knots: the circuit's points ahead of the camera, a few before it, every sample near and every second one far, as scanline
- * kn_d[i] and offset kn_x[i] (Q4 dots), nearest first. The first point is rotated into the camera's frame; each next one is the
- * last plus the rotated step between them (a step is under 128 units: a byte times a byte). The segment that crosses the near
- * distance is cut there; the list ends where the road turns away from the camera or at the far distance. */
+/* The knots: the circuit's points ahead of the camera, a few before it, as scanline kn_d[i] and offset kn_x[i] (Q4 dots), nearest
+ * first. The first point is rotated into the camera's frame; each next one is the last plus the rotated step between them (a step is
+ * under 128 units: a byte times a byte, kept to 14 bits). The segment that crosses the near distance is cut there; the list ends where
+ * the road turns away from the camera or at the far distance. */
 ROAD_MATH static void knots_call(void) {
     int16_t previous_f=-32000,previous_side=0;
     uint8_t index=road_idx-3;
@@ -65,17 +74,18 @@ ROAD_MATH static void knots_call(void) {
             if(pursuit){wx=4096;wy=(camera_y&~63)+192;}
             else {const TrackPoint *t=&track[index];wx=t->x;wy=t->y;}
             int16_t rx=wrapdiff(wx,camera_x),ry=wrapdiff(wy,camera_y);
-            knot_f=mulq(rx,cam_c)+mulq(ry,cam_s);knot_side=mulq(ry,cam_c)-mulq(rx,cam_s);
+            road_k[0]=rotate(rx,cam_c,cam_cl)+rotate(ry,cam_s,cam_sl);road_k[1]=rotate(ry,cam_c,cam_cl)-rotate(rx,cam_s,cam_sl);
         } else {
-            uint8_t step=k<=4?1:2,next=index+step;
+            uint8_t step=k<=7?1:2,next=index+step;   /* every sample near, every second one far: a chord of the far curve is a dot off at most */
             int8_t dx,dy;
             if(pursuit){dx=0;dy=-64*step;}
             else {dx=(int8_t)(track[next].x-track[index].x);dy=(int8_t)(track[next].y-track[index].y);}
             index=next;
             road_advance(dx,dy);
         }
-        int16_t f=knot_f,side=knot_side;
-        if(f>0){if(side>2*f)side=2*f;else if(side<-2*f)side=-2*f;}
+        int16_t f=(int16_t)(road_k[0]>>14);
+        int32_t wide=road_k[1]>>12;
+        int16_t side=wide>SIDE_LIMIT?SIDE_LIMIT:wide<-SIDE_LIMIT?-SIDE_LIMIT:(int16_t)wide;
         if(f<=previous_f)break;                  /* the road turns away from the camera: it ends here */
         if(f<NEAR_F){previous_f=f;previous_side=side;continue;}
         int16_t d=line_of(f),x=dots_q4(side,d);
@@ -83,16 +93,15 @@ ROAD_MATH static void knots_call(void) {
             have=true;
             if(previous_f>-32000) {              /* the segment from the point behind, cut at the near distance */
                 uint16_t t=((uint16_t)(NEAR_F-previous_f)<<7)/(uint16_t)(f-previous_f);
-                int16_t s0=previous_side+mulq(side-previous_side,t>127?127:t);
+                int16_t s0=previous_side+(int16_t)((int32_t)(side-previous_side)*(t>127?127:t)>>7);
                 kn_d[0]=line_of(NEAR_F);kn_x[0]=dots_q4(s0,kn_d[0]);kn_n=1;
             }
         }
         kn_d[kn_n]=d;kn_x[kn_n]=x;++kn_n;
         previous_f=f;previous_side=side;
-        if(f>=1023)break;
+        if(f>=FAR_F)break;
     }
 }
-ROAD_MATH static void stripes_call(void) {road_stripes();}
 /* Lines dcur down to d_end + 1 get the offset xq (Q4 dots) and then slope more on every line nearer the horizon. */
 ROAD_CODE static void fill(int16_t dcur,int16_t d_end,int16_t xq,int16_t slope) {
     int16_t n=dcur-d_end;
@@ -125,7 +134,7 @@ ROAD_CODE static void road_update(void) {
         fill(dcur,-2,x_p,0);                     /* the far end: the road's last centre, up to the horizon */
     }
     road_along=pursuit?(uint8_t)(-camera_y):(uint8_t)((ps>>8)*52+(((ps&255)*52)>>8));
-    overlay_call(0x6f,stripes_call);
+    road_stripes();
     pce_sky_far=(cam_hd>>7)&511;
     pce_sky_near=((cam_hd>>6)+(camera_y>>4))&511;
     pce_floor_pending=back;

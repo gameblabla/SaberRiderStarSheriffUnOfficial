@@ -54,7 +54,7 @@ PCE_MISSION static void platform_box(void) {
         video_vdc(2,((uint16_t*)buffer)[(uint16_t)row*28+x]);
     }
 }
-PCE_MISSION void story_graphics_restore(void) {
+PCE_FLOW void story_graphics_restore(void) {   /* bank $6e: $6f is full */
     if(pce_metrics.stage==2||pce_metrics.stage>=6)return;
     extern const PceScene *video_scene_ptr;
     uint8_t colors[32];

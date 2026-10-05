@@ -11,7 +11,7 @@ static uint8_t rnd(void) {
     uint8_t carry=race_rng&1;race_rng>>=1;if(carry)race_rng^=0xB400;
     return (uint8_t)(race_rng^(race_rng>>8));
 }
-FOES_CODE static void hurt_car(uint8_t damage) {arg_damage=damage;overlay_call(0x79,hurt_call);}
+FOES_CODE static void hurt_car(uint8_t damage) {arg_damage=damage;overlay_call(0x7c,hurt_call);}
 FOES_CODE static void bump(int16_t x,int16_t y,int16_t dist,int16_t r) {arg_x=x;arg_y=y;arg_dist=dist;arg_radius=r;overlay_call(0x6d,bump_call);}
 FOES_CODE static void wreck(void) {audio_effect(4);}
 FOES_CODE static void set_pos(Leader *e) {e->x=(e->xq>>8)&8191;e->y=(e->yq>>8)&8191;}

@@ -283,7 +283,7 @@ def boss_background(archive, previews):
     return archive.add('boss_bg', bytes(blob), 32), len(tiles)
 
 ROAD_LINES = 112          # image lines: scanlines 112..223 of the road region (the horizon is scanline 113)
-ROAD_STRIPE_FIRST = 16    # image line where the two stripe phases start (the lines above are the haze rows)
+ROAD_STRIPE_FIRST = 24    # image line where the two stripe phases start (the lines above are the haze rows)
 def road_assets(sand, previews):
     """The classic racing road (see docs/PCE_CLASSIC_ROAD_20261005.md): one static picture of a straight road in perspective,
     1024 dots wide with its centre at dot 512, one image line for each scanline below the horizon. Edges are drawn at integer
@@ -326,10 +326,10 @@ def road_assets(sand, previews):
     palettes = [palette(phase_a, 1.0), palette(phase_a, 0.6), palette(phase_a, 0.4), palette(phase_a, 0.2), palette(phase_a, 0.0),
                 palette(phase_b, 0.4), palette(phase_b, 0.2), palette(phase_b, 0.0)]
     def row_palette(r, b):   # image row r (0..13), phase b
-        if r == 0: return 1
-        if r == 1: return 2
-        if r < 4: return 6 if b else 3
-        if r < 6: return 7 if b else 4
+        if r < 2: return 1
+        if r == 2: return 2
+        if r == 3: return 6 if b else 3
+        if r == 4: return 7 if b else 4
         return 8 if b else 5
     bat = bytearray()
     for b in (0, 1):
@@ -346,7 +346,7 @@ def road_assets(sand, previews):
 def road_tables():
     """C tables for the road builder (bank $6f): the scanline of a distance (half units of distance, d = 10080 / f) and the
     distance of a scanline (z = 10080 / d; only its low byte, which is all a 32-unit band needs)."""
-    d = [min(255, round(10080 / max(2 * k, 1))) for k in range(512)]
+    d = [min(255, round(10080 / max(2 * k, 1))) for k in range(384)]
     z = [65535] + [min(65535, round(10080 / k)) for k in range(1, ROAD_LINES + 1)]
     return d, z
 
@@ -1031,9 +1031,9 @@ def main():
     c.append('const uint8_t pce_car_widths[PCE_CAR_STEPS]={'+','.join(map(str,CAR_WIDTHS))+'};')
     c.append('const uint8_t pce_mech_sizes[PCE_MECH_STEPS]={'+','.join(map(str,MECH_SIZES))+'};')
     d_table,z_table=road_tables()
-    h.append('extern const uint8_t pce_road_d[512];extern const uint8_t pce_road_z[113];')
-    c.append('const uint8_t pce_road_d[512] __attribute__((section(".ram_bank111.rodata")))={'+','.join(map(str,d_table))+'};')
-    c.append('const uint8_t pce_road_z[113] __attribute__((section(".ram_bank111.rodata")))={'+','.join(str(v&255) for v in z_table)+'};')
+    h.append('extern const uint8_t pce_road_d[384];extern const uint8_t pce_road_z[113];')
+    c.append('const uint8_t pce_road_d[384] __attribute__((section(".ram_bank111.rodata")))={'+','.join(map(str,d_table))+'};')
+    c.append('const uint8_t pce_road_z[113] __attribute__((section(".ram_bank109.rodata")))={'+','.join(str(v&255) for v in z_table)+'};')
     c.append('const uint8_t pce_actor_ids[33] = {'+','.join(map(str,scenes[0]['actor_ids']))+'};')
     (out/'assets.c').write_text('\n'.join(c)+'\n')
     h += ['#define PCE_HERO_FRAMES 9', '#define PCE_SHOT_ID 36', '#define PCE_ENEMY_SHOT_ID 37', '#define PCE_BLAST_ID 38']
