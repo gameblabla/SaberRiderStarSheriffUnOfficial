@@ -48,9 +48,10 @@ arcade_tai_len:
     bra .Lnext
 .Lend:
     rts
-/* The always-mapped work bank has room for the stream loop. Interrupts may
- * use MPR6 between bursts; the audio handler restores the caller's mapping. */
-.section .ram_bank107.text,"ax",@progbits
+/* Keep the stream loop in always-mapped resident RAM ($68), leaving work
+ * bank $6b room for PCM's sample-bank crossing code. Interrupts may use MPR6
+ * between bursts; the audio handler restores the caller's mapping. */
+.section .text.irq,"ax",@progbits
 .global arcade_vdc_copy, arcade_vdc_len
 arcade_vdc_copy:
     tma #0x40

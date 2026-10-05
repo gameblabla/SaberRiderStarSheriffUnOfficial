@@ -18,27 +18,27 @@ def build(out):
     subprocess.run(['cc','-O2','-std=c11','-Isrc','tools/dc/dcprep.c','src/pack.c','src/lzo1z.c',
                     'src/platform/common/sfx_decode.c','src/platform/common/mups.c','-o',str(exe)],cwd=ROOT,check=True)
     subprocess.run([str(exe.resolve()),'music',str(ROOT/'SaberRider/data'),str(music.resolve())],check=True)
-    source=(ROOT/'src/audio.c').read_text().split('MUSIC_TABLE[18]',1)[1].split('};',1)[0]
-    ids=re.findall(r'0x([0-9A-F]{8})',source)
-    assert len(ids)==18
+    source=(ROOT/'src/audio.c').read_text()
+    table=re.search(r'MUSIC_TABLE\[(\d+)\]\s*=\s*\{(.*?)\};',source,re.S)
+    if not table: raise ValueError('Missing source music table')
+    ids=re.findall(r'0x([0-9A-F]{8})',table[2])
+    if len(ids)!=int(table[1]): raise ValueError('Incomplete source music table')
     tracks=[]
-    # Three attenuated CD-DA copies: the PC Engine CD fader can only ramp to
-    # silence, so the music-volume option selects a track block. Each block is
-    # 18 tracks plus a silent end marker: HIGH 2-19, MID 21-38, LOW 40-57.
-    levels=[('',0.9,2),('_m',0.40,21),('_l',0.16,40)]
-    for suffix,gain,base in levels:
-        for i,mid in enumerate(ids):
-            pcm=out/f'music{i:02d}{suffix}.bin';src=music/f'{mid}.ogg'
-            if not pcm.exists() or pcm.stat().st_mtime<src.stat().st_mtime:
-                subprocess.run(['ffmpeg','-y','-v','error','-i',str(src),'-af',f'volume={gain},adelay=2000|2000',
-                                '-ac','2','-ar','44100','-f','s16le',str(pcm)],check=True)
-                with pcm.open('ab') as f:f.write(bytes(-pcm.stat().st_size%2352))
-            row=dict(id=mid,logical=i,track=base+i,file=pcm.name,sectors=pcm.stat().st_size//2352)
-            if suffix=='': row['sha256']=hashlib.sha256(pcm.read_bytes()).hexdigest()
-            tracks.append(row)
-        end=out/f'music_end{suffix}.bin';end.write_bytes(bytes(2352*300))
-        tracks.append(dict(id='END',logical=-1,track=base+18,file=end.name,sectors=300))
-    (out/'music_end.bin').write_bytes(bytes(2352*300))
+    # One physical CD-DA track per source song; no volume banks or dummy end
+    # track. The driver reads the TOC lead-out for the last song's endpoint.
+    for i,mid in enumerate(ids):
+        pcm=out/f'music{i:02d}.bin';src=music/f'{mid}.ogg'
+        if not pcm.exists() or pcm.stat().st_mtime<src.stat().st_mtime:
+            subprocess.run(['ffmpeg','-y','-v','error','-i',str(src),'-af','volume=0.9,adelay=2000|2000',
+                            '-ac','2','-ar','44100','-f','s16le',str(pcm)],check=True)
+            with pcm.open('ab') as f:f.write(bytes(-pcm.stat().st_size%2352))
+        tracks.append(dict(id=mid,logical=i,track=2+i,file=pcm.name,
+                           sectors=pcm.stat().st_size//2352,
+                           sha256=hashlib.sha256(pcm.read_bytes()).hexdigest()))
+    for pattern in ('music*_m.bin','music*_l.bin','music_end.bin'):
+        for stale in out.glob(pattern):stale.unlink()
+    (out/'music.h').write_text('/* Generated CD-DA layout: source music table order. */\n'
+        f'#define CDDA_TRACK_COUNT {len(ids)}\n#define CDDA_FIRST_TRACK 2\n')
     sfx=work/'sfx';sfx.mkdir(exist_ok=True)
     subprocess.run([str(exe.resolve()),'sfx',str(ROOT/'SaberRider/data'),str(sfx.resolve())],check=True)
     # Native PSG effects (psg_pce.c): the hero's shot (C66E1894), the flying bosses' cannon (8AEB8147) and rider's gun (0AFC505A) are rebuilt from the
@@ -221,6 +221,6 @@ def build(out):
     header+='static const uint16_t voice_samples[4][VOICE_SAMPLES][2] __attribute__((section(".ram_bank117.rodata")))={'+','.join('{'+','.join(r[1])+'}' for r in rows)+'};\n'
     header+='static const uint16_t voice_total[4] __attribute__((section(".ram_bank117.rodata")))={%s};\n'%','.join(str(r[2]) for r in rows)
     (out/'samples.h').write_text(header)
-    (out/'audio.json').write_text(json.dumps(dict(tracks=tracks,end_track=20,volume_blocks=[2,21,40],voices=voices,dda=pcm_report),indent=2)+'\n')
+    (out/'audio.json').write_text(json.dumps(dict(tracks=tracks,voices=voices,dda=pcm_report),indent=2)+'\n')
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--out',type=Path,required=True);a=p.parse_args();build(a.out.resolve())

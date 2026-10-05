@@ -47,6 +47,8 @@ bool arcade_vram(uint32_t address, uint16_t word, uint16_t size) {
         word > 0x8000U - (size >> 1) || !arcade_seek(0, address)) return false;
     __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
     pce_vdc_poke(VDC_REG_VRAM_WRITE_ADDR, word);
+    extern volatile uint8_t pce_vdc_index;
+    pce_vdc_index=VDC_REG_VRAM_DATA;
     *(volatile uint8_t*)0x20f7=VDC_REG_VRAM_DATA;
     *IO_VDC_INDEX = VDC_REG_VRAM_DATA;
     __attribute__((leaf)) asm volatile("plp" ::: "p","memory");

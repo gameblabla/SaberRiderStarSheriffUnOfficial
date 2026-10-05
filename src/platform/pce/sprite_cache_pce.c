@@ -44,7 +44,9 @@ CACHE_CODE static void allocate(void) {
     uint8_t pages=(count+3)>>2,chosen=48;
     uint8_t best_age=0;
     uint8_t limit=(herd_on?28:arena?32:48)-pages;
-    for(uint8_t base=0;base<=limit;++base) {
+    /* Race dialogue glyphs extend through $4dff; leave those six pages
+     * reserved throughout the race, including before a panel opens. */
+    for(uint8_t base=pce_metrics.stage==2?6:0;base<=limit;++base) {
         bool available=true;uint8_t age=255;
         for(uint8_t p=base;p<base+pages;++p) {
             uint8_t owner=pattern_owner[p];

@@ -108,6 +108,10 @@ PCE_FLOW static uint8_t read_pad(uint8_t *pressed_power) {
         else if(select_before&&!select_dirty&&select_clock<=20)*pressed_power=1;
     }
     third_before=third;select_before=keys&KEY_SELECT;
+    if(pce_options.swap_buttons) {
+        uint8_t buttons=keys&(KEY_1|KEY_2);
+        if(buttons==KEY_1||buttons==KEY_2)keys^=KEY_1|KEY_2;
+    }
     return keys;
 }
 PCE_FLOW void flow_main(void) {

@@ -143,15 +143,15 @@ UI_CODE static uint8_t select_hero(uint8_t chosen) {
 }
 
 /* ---------------------------------------------------------------- options */
-enum { OPT_DIFFICULTY, OPT_LIVES, OPT_CONTINUES, OPT_MUSIC, OPT_EXIT, OPT_COUNT };
+enum { OPT_DIFFICULTY, OPT_LIVES, OPT_CONTINUES, OPT_MUSIC, OPT_SWAP, OPT_EXIT, OPT_COUNT };
 UI_CODE static void caps(uint8_t *lives,uint8_t *continues) {
     *lives=pce_options.difficulty==0?7:pce_options.difficulty==1?5:3;
     *continues=pce_options.difficulty==0?5:pce_options.difficulty==1?4:3;
 }
 UI_CODE static void option_row(uint8_t row,bool selected) {
     static const char *const difficulty[3]={"EASY  ","NORMAL","HARD  "};
-    static const char *const music[4]={"OFF ","LOW ","MID ","HIGH"};
-    static const char *const label[OPT_COUNT]={"DIFFICULTY","LIVES","CONTINUES","MUSIC VOLUME","EXIT"};
+    static const char *const music[2]={"OFF ","ON  "};
+    static const char *const label[OPT_COUNT]={"DIFFICULTY","LIVES","CONTINUES","MUSIC","SWAP I/II","EXIT"};
     uint8_t y=9+row*2;if(row==OPT_EXIT)y=20;
     ui_put(7,y,label[row],selected?13:12);
     if(row==OPT_EXIT)return;
@@ -160,14 +160,16 @@ UI_CODE static void option_row(uint8_t row,bool selected) {
     case OPT_DIFFICULTY:ui_put(26,y,difficulty[pce_options.difficulty],15);break;
     case OPT_LIVES:ui_put_number(26,y,pce_options.lives,15);ui_put(28,y,"    ",15);break;
     case OPT_CONTINUES:ui_put_number(26,y,pce_options.continues,15);ui_put(28,y,"    ",15);break;
-    default:ui_put(26,y,music[pce_options.music&3],15);ui_put(30,y,"  ",15);break;
+    case OPT_MUSIC:ui_put(26,y,music[pce_options.music!=0],15);ui_put(30,y,"  ",15);break;
+    case OPT_SWAP:ui_put(26,y,music[pce_options.swap_buttons!=0],15);ui_put(30,y,"  ",15);break;
+    default:break;
     }
     ui_put(33,y,selected?">":" ",13);
 }
 UI_CODE static void option_help(uint8_t row) {
     static const char *const help[OPT_COUNT]={
         "EASY 3  NORMAL 2  HARD 1 HEARTS","EXTRA LIVES AT THE START","CONTINUES AFTER GAME OVER",
-        "CD MUSIC LEVEL","BACK TO THE TITLE"};
+        "CD MUSIC ON OR OFF","SWAP BUTTONS I AND II","BACK TO THE TITLE"};
     ui_clear_rows(23,23);
     ui_put(4+(32-(uint8_t)__builtin_strlen(help[row]))/2,23,help[row],14);
 }
@@ -204,8 +206,11 @@ UI_CODE static void options(void) {
                 else if(dir<0&&pce_options.continues)--pce_options.continues;
                 changed=true;break;
             case OPT_MUSIC:
-                pce_options.music=(pce_options.music+4+dir)&3;
+                pce_options.music=pce_options.music?0:3;
                 if(pce_options.music)audio_music(3);else audio_stop();
+                changed=true;break;
+            case OPT_SWAP:
+                pce_options.swap_buttons^=1;
                 changed=true;break;
             default:break;
             }

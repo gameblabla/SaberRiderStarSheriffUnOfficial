@@ -90,18 +90,23 @@ PCE_X2 void project_entities(void) {
         if(project_point(race_bolts[k].x,race_bolts[k].y,&sx,&row,&f,false)){bolt_sx[k]=sx;bolt_sy[k]=row;bolt_ok|=1<<k;bolt_step[k]=f<130?0:f<210?1:f<320?2:f<440?3:4;}
     }
 }
-/* While a dialogue is up the race stands still behind it: the car and everything on view are drawn from the last frame's camera (story_pce.c; the
- * box is a BG panel at the top, so nothing here is hidden by it). */
+/* Dialogue pages retain the previous frame's car SAT entries. No projection,
+ * cache allocation, pattern upload or palette replacement occurs here. */
+uint8_t race_world_count;
 PCE_X2 void race_dialog_cars(void) {
-    project_entities();
-    video_sprite_optional(PCE_CAR_STEER+4,256,215,false,16);
-    for(uint8_t k=0;k<nvis;++k) {
-        uint16_t rows=vis[k].y-113,dots=rows+(rows>>3)+(rows>>5);
-        uint8_t kind=vis[k].kind;
-        if(kind>=8&&kind<13){video_sprite_optional(PCE_CAR_EXPL+(dots>70?0:5)+kind-8,vis[k].x,vis[k].y,false,16);continue;}
-        if(kind==7||kind==13){uint16_t f=vis[k].f;video_sprite_optional(PCE_CAR_POLE+(f<125?5:f<165?4:f<225?3:f<310?2:f<430?1:0),vis[k].x,vis[k].y,kind==13,16);continue;}
-        uint8_t i=0;
-        while(i<PCE_CAR_STEPS-1&&(uint16_t)pce_car_widths[i]*2<dots)++i;
-        video_sprite_optional(3+kind*PCE_CAR_STEPS+i,vis[k].x,vis[k].y,false,16);
+    extern vdc_sprite_t sat[2][64];
+    extern uint8_t sat_count;
+    extern uint8_t pattern_owner[48],sprite_used[48],sprite_pinned[48];
+    extern uint8_t sprite_occupancy[240];
+    for(uint8_t k=0;k<race_world_count;++k) {
+        vdc_sprite_t e=sat[1][k];
+        uint8_t owner=pattern_owner[((e.pattern<<5)-PCE_SPR_WORD)>>8];
+        if(owner){sprite_used[owner-1]=1;sprite_pinned[owner-1]=2;}
+        sat[0][sat_count++]=e;
+        int16_t y=(e.y&1023)-64;
+        for(int16_t row=y<0?0:y;row<y+16&&row<224;++row)++sprite_occupancy[row];
     }
+    /* The dialogue replaces the HUD. Release its history and obsolete car
+     * poses while keeping every retained world owner protected. */
+    for(uint8_t slot=0;slot<48;++slot)if(!sprite_used[slot])sprite_pinned[slot]=0;
 }

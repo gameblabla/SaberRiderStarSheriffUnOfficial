@@ -8,6 +8,7 @@
 .extern pce_scroll_x, pce_scroll_y, pce_vdc_index
 .extern pce_floor_pending, pce_scroll_hold
 .extern pce_sky_far,pce_sky_near
+.extern pce_race_dialog
 .extern pce_draws
 .comm pce_visible_draw,1
 .comm pce_presented,2
@@ -67,6 +68,14 @@ pce_vblank:
     lda #255
     sta pce_raster_row
     st0 #6
+    lda pce_race_dialog
+    beq 2f
+    lda #254
+    sta pce_raster_row
+    st1 #104            /* dialogue starts at scanline 40 */
+    st2 #0
+    bra .Ldone
+2:
     st1 #120            /* the near sky band (the mountains) at scanline 56, then the road from 128 */
     st2 #0
     bra .Ldone
@@ -181,11 +190,25 @@ pce_hblank:
     lda pce_scroll_y+1
     adc #0
     sta 3
-    bra .Lhlast
+    jmp .Lhlast
 .Lfloor:
     lda pce_raster_row
+    cmp #254
+    bne 2f
+    st0 #7
+    st1 #0
+    st2 #0
+    dec pce_raster_row
+    st0 #6
+    st1 #152            /* restore the frozen sky below the box, scanline 88 */
+    st2 #0
+    jmp .Lhdone
+2:
+    cmp #253
+    beq .Lnear
     cmp #255
     bne .Lroad
+.Lnear:
     st0 #7
     lda pce_sky_near
     sta 2

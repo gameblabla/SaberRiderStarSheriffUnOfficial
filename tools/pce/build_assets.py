@@ -118,27 +118,39 @@ def camera_wall_mask(im):
         stack += [(y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)]
     return seen
 
-def camera_background(out, work):
-    """Bake the stationary camera and its wall into scenery, never the SAT."""
-    d = (work / '211F5D78.levl').read_bytes()
-    aid = struct.unpack_from('<I', d, 4)[0]
-    first = struct.unpack_from('<I', d, 0x34 + 24 + 4)[0]
-    whole = bool(struct.unpack_from('<I', d, 0x34 + 24 + 20)[0] & 8)
-    art = work / 'srgb' / f'{aid:08X}.srgb'
-    cell = cblock_whole_frame(art, first) if whole else cblock_frame(art, first)
-    mask = camera_wall_mask(cell)
+def scenery_background(out, work, stage):
+    """Complete the tilemap's prop openings before quantization.
+
+    Decorative props (12..23) occupy holes in the building art. Their base
+    frame must remain behind the animated sprite even when SAT admission drops
+    it, otherwise unrelated mountains show through those holes.
+    """
+    props = dict(enumerate(['4042CD71', '71887ECA', 'BFDAB70F', '1D724DD9',
+                           '211F5D78', '9393E59B', '20C6FAEF', 'ECC992CB',
+                           '72B53EF8', '925534E2', '916137ED', '906D3698'], 12))
     px = np.array(out)
-    meta = json.loads((work / 'stage1.json').read_text())
+    meta = json.loads((work / f'stage{stage}.json').read_text())
     for t in meta['triggers']:
-        if t['type'] != 16: continue
+        if t['type'] not in props: continue
+        d = (work / f"{props[t['type']]}.levl").read_bytes()
+        aid = struct.unpack_from('<I', d, 4)[0]
+        first = struct.unpack_from('<I', d, 0x34 + 24 + 4)[0]
+        whole = bool(struct.unpack_from('<I', d, 0x34 + 24 + 20)[0] & 8)
+        art = work / 'srgb' / f'{aid:08X}.srgb'
+        if not art.exists(): continue
+        cell = cblock_whole_frame(art, first) if whole else cblock_frame(art, first)
+        ax, ay = (round(v) for v in struct.unpack_from('<ff', d, 8))
         x0, y0 = t['waypoints'][0]
+        x0 -= ax; y0 -= ay
         patch = np.array(cell)
-        h, w = mask.shape
+        h, w = patch.shape[:2]
+        mask = camera_wall_mask(cell) if t['type'] == 16 else np.zeros((h, w), bool)
         # Match the bracket's wall to the building below it, while preserving
         # the camera pixels. Both then pass through the same BG palette bake.
         for y in range(h):
             for x in range(w):
                 if not mask[y, x]: continue
+                if not (0 <= y0 + y + h < out.height and 0 <= x0 + x < out.width): continue
                 src = px[y0 + y + h, x0 + x]
                 if src[3] >= 128 and int(src[2]) <= int(src[0]) + 30:
                     patch[y, x] = src
@@ -580,7 +592,7 @@ def platform_background(stage, work):
             else: pixels=np.where(layer[...,3:4]>=128,layer,pixels)
         out.paste(Image.fromarray(pixels),(x,0))
         foreground.paste(Image.fromarray(front),(x,0))
-    if stage == 1: out = camera_background(out, work)
+    if stage == 1: out = scenery_background(out, work, stage)
     return out,foreground
 
 def add_sprites(archive, sprites, previews):
@@ -590,6 +602,10 @@ def add_sprites(archive, sprites, previews):
     # The HUD pieces of a stage share one palette (the cache gives them the shared-palette slots, see sprite_cache_pce.c).
     hud=[im for name,im,_ in sprites if name.startswith('hudp_')]
     hud_palette=palette_for(hud,unique=True) if hud else None
+    # One mapping for April's entire animation set. Per-pose median cuts
+    # changed identical clothing/boot pixels as the pose's histogram changed.
+    april=[im for name,im,_ in sprites if name.startswith('hero2_')]
+    april_palette=palette_for(april,unique=True) if april else None
     power_palette={}
     for h in range(4):   # the portrait's 14 colours, then white for the name beside it (all of a hero's parts share the palette)
         parts=[im for name,im,_ in sprites if name.startswith(f'pwr{h}_') and not name.endswith('name')]
@@ -600,7 +616,7 @@ def add_sprites(archive, sprites, previews):
     boss=[im for name,im,_ in sprites if name in ('gunship_left','gunship_right','hyperjumper_left','hyperjumper_right')]
     boss_palette=palette_for(boss) if boss else None
     for name, im, anchor in sprites:
-        pat, parts, palette, line = pack_sprite(im, anchor,boss_palette if name in ('gunship_left','gunship_right','hyperjumper_left','hyperjumper_right') else fg_palette if name.startswith("foreground_") else hud_palette if name.startswith('hudp_') else power_palette[int(name[3])] if name.startswith('pwr') else None)
+        pat, parts, palette, line = pack_sprite(im, anchor,april_palette if name.startswith('hero2_') else boss_palette if name in ('gunship_left','gunship_right','hyperjumper_left','hyperjumper_right') else fg_palette if name.startswith("foreground_") else hud_palette if name.startswith('hudp_') else power_palette[int(name[3])] if name.startswith('pwr') else None)
         if (not parts and name != 'battle_cruiser') or len(parts)>32:
             raise ValueError(f'{name}: expected 1..32 visible sprite pieces, got {len(parts)}')
         offset = archive.add(name + '_patterns', pat)
@@ -701,10 +717,11 @@ def platform_dialog(archive, work):
     archive.add('dialog_original_font',b''.join(original))
 
 def race_dialog(archive, work):
-    """Wide BAT dialogue; glyphs occupy unused race BAT rows 24..47.
+    """Wide BAT dialogue; glyphs occupy $4200..$4dff (word addresses).
 
     The box uses at most 32 characters at $4000, below the normal font.
-    Sky characters stay below $4000 and sprite patterns start at $4800.
+    Sky characters stay below $4000. The race sprite allocator reserves its
+    first six pages so the double-width font never overwrites road BAT cells.
     """
     records=[]
     for rid in presentation.BOX_TILESETS:

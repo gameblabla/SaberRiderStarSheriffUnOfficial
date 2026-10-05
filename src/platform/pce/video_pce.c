@@ -13,6 +13,7 @@ volatile uint8_t pce_vdc_index;
 volatile uint16_t pce_scroll_x, pce_scroll_y;
 volatile uint8_t pce_scroll_hold;
 volatile uint8_t pce_floor_pending;
+volatile uint8_t pce_race_dialog;
 static const PceScene *scene;
 const PceScene *video_scene_ptr;
 static uint16_t cache_ids[PCE_BG_MAX_TILES] PCE_WORK;
@@ -130,6 +131,7 @@ PCE_RENDER void video_display(bool enable) {
 PCE_RENDER void video_scroll(uint16_t x, uint16_t y) { pce_scroll_x = x; pce_scroll_y = y; }
 extern void foreground_reset(void);
 PCE_RENDER void video_scene(const PceScene *s) {
+    pce_race_dialog=0;
     foreground_reset();vce_hold=0;
     scene = s;video_scene_ptr=s;sat_previous=64;video_nsprites=s->nsprites;
     memset(sprite_slot_of,0xff,sizeof sprite_slot_of);
@@ -220,10 +222,14 @@ PCE_RENDER static bool column_load(uint16_t world) {
         *IO_VDC_DATA_LO = cb[y*3];
         *IO_VDC_DATA_HI = cb[y*3+1];
     }
+    /* Drain the final queued VRAM write before changing CR's increment.
+     * A data-port read stalls for VRAM access without acknowledging IRQs. */
+    (void)*IO_VDC_DATA_LO;
     *(volatile uint8_t *)0x20f7 = 5;
     *IO_VDC_INDEX = 5;
     *IO_VDC_DATA_LO = control;
     *IO_VDC_DATA_HI = control>>8;
+    pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;*IO_VDC_INDEX=2;
     pce_cpu_irq_enable();
     return true;
 }
@@ -263,7 +269,7 @@ PCE_RENDER void video_text(uint8_t x, uint8_t y, const char *text) {
         video_vdc(0, dest);
         dest=pce_raster_enabled?dest+1:(dest&~63U)|((dest+1)&63);
         if(pce_raster_enabled) {
-            uint16_t glyph=0xe0c0+(uint16_t)(c-32)*2;
+            uint16_t glyph=0xe420+(uint16_t)(c-32)*2;
             video_vdc(2,glyph);video_vdc(2,glyph+1);++dest;
         } else video_vdc(2, 0xf000 | ((PCE_FONT_WORD >> 4) + c - 32));
     }

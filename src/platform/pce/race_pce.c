@@ -249,7 +249,6 @@ RACE_CODE static void race_tick(uint8_t keys) {
             if(finish_rank<=3) {
                 pce_campaign.story=1;pce_campaign.event=1;
                 save_store(2,pce_control.hero,1);audio_music(14);   /* the pursuit's own track (mode7.c PH_PURSUIT) */
-                begin_pursuit();
             } else {pce_metrics.hp=1;campaign_hurt();}   /* must finish 3rd or better: a life, and the race again */
         }
         break;
@@ -279,8 +278,12 @@ RACE_CODE static void race_tick(uint8_t keys) {
     }
 }
 RACE_CODE void race_frame(void) {
+    /* Keep the finish camera until its dialogue has closed. */
+    if(rphase==P_FINISH&&phase_t>=192&&finish_rank<=3&&!pce_campaign.event&&pce_campaign.state==CAM_PLAY)begin_pursuit();
     uint8_t keys=pce_control.keys;
     for(uint8_t i=0;i<pce_control.elapsed&&!pce_campaign.event&&!pce_campaign.result&&pce_campaign.state==CAM_PLAY;++i)race_tick(keys);
+    /* The opening panel retains the last complete displayed scene. */
+    if(pce_campaign.event)return;
     /* the road is drawn from the camera: 92 units behind the car along the camera's heading */
     int16_t q=sine14(cam_hd+0x4000);cam_c=(q+64)>>7;cam_cl=q-cam_c*128;   /* each as a Q7 byte and the remainder */
     q=sine14(cam_hd);cam_s=(q+64)>>7;cam_sl=q-cam_s*128;

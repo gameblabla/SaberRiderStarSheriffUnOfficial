@@ -32,6 +32,8 @@ DDA banks `$7d–$7f` and then `$84` onward. The timer skips virtual banks
 `$80–$83`, reserved for arena overlays, when a sample crosses that range. The
 linker checks bank capacity. The loader retains its 56 KiB scratch buffer in
 `$76–$7c`, preserving audio across loads.
+The Arcade Card VDC transfer loop (`arcade_vdc_copy`) lives in resident bank
+`$68`, freeing work-bank space for the expanded PCM bank-crossing code.
 The existing CD-DA music and CD hardware ADPCM character voices remain separate. Each hero's ADPCM bank
 (`voiceN.bin`, `voice_groups` / `voice_samples` in the generated `samples.h`) holds 15 samples in 8 events: jump, hurt x3,
 death x2, fall, enemy hit x3, enemy death x3, the Outrider's alarm and the level-1 dialogue line. The PC game's

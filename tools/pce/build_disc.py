@@ -33,12 +33,13 @@ def main():
     audio=json.loads((out/'audio.json').read_text())
     (out/'disc.json').write_text(json.dumps(dict(extents=extents,data_sectors=len(image)//2048,audio=audio),indent=2)+'\n')
     cue=['FILE "saber_rider.iso" BINARY','  TRACK 01 MODE1/2048','    INDEX 01 00:00:00']
-    for track in sorted(audio['tracks'],key=lambda t:t['track']):
-        if track['id']=='END':
-            cue.extend([f'FILE "{track["file"]}" BINARY',f'  TRACK {track["track"]:02d} AUDIO','    INDEX 01 00:00:00'])
-        else:
-            cue.extend([f'FILE "{track["file"]}" BINARY',f'  TRACK {track["track"]:02d} AUDIO',
-                        '    INDEX 00 00:00:00','    INDEX 01 00:02:00'])
+    for number,track in enumerate(audio['tracks'],2):
+        if track['track']!=number or track['logical']!=number-2:
+            raise RuntimeError('CD-DA source order differs from the driver layout')
+        if track['file']!=f'music{number-2:02d}.bin':
+            raise RuntimeError('Unexpected CD-DA variant or end-marker track')
+        cue.extend([f'FILE "{track["file"]}" BINARY',f'  TRACK {number:02d} AUDIO',
+                    '    INDEX 00 00:00:00','    INDEX 01 00:02:00'])
     (out/'saber_rider.cue').write_text('\n'.join(cue)+'\n')
 
 if __name__=='__main__': main()

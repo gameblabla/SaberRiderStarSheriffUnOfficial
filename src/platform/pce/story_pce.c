@@ -17,13 +17,13 @@ static char story_text[256];
 static uint8_t race_colour;
 /* Put wide box and glyphs in the race's unused VRAM. No sprite-cache pages
  * are needed for the box, and its 56-character width matches the dot clock. */
-/* The box covers sky cells (BAT rows 53-58, columns 6-61) and its glyph characters sit on the BAT rows 24-47 that hold the road's wrap copies. The cells
- * the box takes are kept in Arcade RAM (the tile directory's area, unused in the race) and written back when the dialogue closes; the wrap copies come
- * from the road asset again. (Reloading the whole sky instead wiped the sky back in over 20 frames.) While the box is up no scanline may use a
- * wrap copy: the frozen road's classes are cut down to the plain two. */
+/* Preserve only the sky cells covered by the box. Road patterns, every road
+ * BAT copy, the camera scrolls and both raster table buffers stay intact. */
 #define RACE_KEPT 0x1e0000UL
 static uint8_t race_kept;
-extern uint16_t columns[33][30];
+extern vdc_sprite_t sat[2][64];
+extern uint8_t sat_count,race_world_count;
+extern volatile uint8_t pce_race_dialog;
 PCE_X2 static void race_keep(void) {
     uint16_t w[8];
     for(uint8_t row=0;row<6;++row)for(uint8_t part=0;part<7;++part) {
@@ -35,16 +35,21 @@ PCE_X2 static void race_keep(void) {
         pce_cpu_irq_enable();
         arcade_write(2,RACE_KEPT+(uint32_t)row*112+part*16,w,16);
     }
-    uint8_t *classes=(uint8_t*)columns+512;
-    for(uint16_t i=0;i<256;++i)classes[i]&=1;
+    /* Keep the displayed cars exactly as submitted, with their existing
+     * cache owners. The HUD is replaced by the dialogue. */
+    race_world_count=0;
+    for(uint8_t k=0;k<sat_count;++k) {
+        uint16_t word=sat[0][k].pattern<<5;
+        if(word<PCE_SPR_WORD||word>=PCE_SPR_WORD+48*256)continue;
+        uint8_t owner=pattern_owner[(word-PCE_SPR_WORD)>>8];
+        if(owner&&sprite_ids[owner-1]<pce_hud_base[1])sat[1][race_world_count++]=sat[0][k];
+    }
     race_kept=1;
 }
 PCE_X2 static void race_unbox(void) {
     if(!race_kept)return;
     for(uint8_t row=0;row<6;++row){pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;arcade_vram(RACE_KEPT+(uint32_t)row*112,(uint16_t)(53+row)*128+6,112);}
-    pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-    arcade_vram(PCE_RACE_ROAD_BAT+6656,24*128,6144);   /* the wrap copies */
-    race_kept=0;
+    pce_race_dialog=0;race_kept=0;
 }
 PCE_X2 static void race_box(void) {   /* bank $77 (the CD buffer's second: $6f and $7c are full) */
     uint32_t record[4];uint16_t bytes;
@@ -55,12 +60,13 @@ PCE_X2 static void race_box(void) {   /* bank $77 (the CD buffer's second: $6f a
     arcade_read(2,record[0],buffer,32);pce_vce_copy_palette(14,buffer,1);
     pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
     arcade_vram(record[1],0x4000,bytes);
-    arcade_vram(record[3],0x0c00,6144);
+    arcade_vram(record[3],PCE_FONT_WORD,6144);
     arcade_read(2,record[2],buffer,672);
     for(uint8_t row=0;row<6;++row) {
         video_vdc(0,(uint16_t)(53+row)*128+6);
         for(uint8_t x=0;x<56;++x)video_vdc(2,((uint16_t*)buffer)[(uint16_t)row*56+x]);
     }
+    pce_race_dialog=1;
 }
 /* Platform panels use BG characters, leaving only four alpha corners in
  * the SAT. Their font and palette are restored from the preloaded archive. */
@@ -120,9 +126,10 @@ STORY_CODE static void draw(void) {
     /* Blank every BG cell under the box except the four 2x2 corner blocks; the corner pieces stay in front of the
      * scenery so their rounded edges show the scenery, not a hole. */
     bool platform=pce_metrics.stage!=2&&pce_metrics.stage!=7;   /* the platform stages and Ramrod's arena: a scrolling background with the panel in BG characters and four sprite corners */
-    if(pce_metrics.stage==2){pce_sky_far=pce_sky_near=0;race_colour=colour&3;overlay_call(0x77,race_box);}
+    if(pce_metrics.stage==2){race_colour=colour&3;overlay_call(0x77,race_box);}
     else if(!platform){video_panel(5,y,24,2);video_panel(3,y+2,28,2);video_panel(5,y+4,24,2);}
     video_sat_begin();
+    if(pce_metrics.stage==2)overlay_call(0x77,race_dialog_cars);
     if(platform)foreground_prepare();   /* the outpost's walls stay in front of the hero and the actors the scene shows */
     if(avatar!=65535) {
         video_sprite(avatar,pce_metrics.stage==2?(box_x-26)*2:box_x-26,box_y-8,false,16);
@@ -151,7 +158,6 @@ STORY_CODE static void draw(void) {
     }
     /* The world stands still behind the text: the hero (behind the box, which comes first in the SAT), the actors
      * (the cutscene outrider stays put) and the boss stay on screen. */
-    if(pce_metrics.stage==2)overlay_call(0x77,race_dialog_cars);   /* the car and the rivals stay on view behind the text */
     if(pce_metrics.stage==7)overlay_call(0x78,space_dialog_ship);
     if(platform&&pce_metrics.stage<6) {
         video_sprite(hero_sprite,player.x-camera,player.y-16,facing,16);
@@ -197,7 +203,7 @@ STORY_CODE void story_start(void) {
     pce_campaign.page=0;pce_campaign.state=CAM_STORY;pce_campaign.timer=0;
     /* The race and the cockpits keep their HUD in sprites: let the last two displayed generations go (their cache slots
      * stay pinned through the SAT DMA) so the box and the avatar find slots in the same frame. */
-    if(pce_metrics.stage==2||pce_metrics.stage==7)for(uint8_t k=0;k<3;++k){video_sat_begin();video_sat_end();video_wait();}
+    if(pce_metrics.stage==7)for(uint8_t k=0;k<3;++k){video_sat_begin();video_sat_end();video_wait();}
     /* Resuming from Run invalidates the BAT. Remove the menu's cells before
      * reopening a panel, including the cells outside its restoration area. */
     if(pce_metrics.stage!=2&&pce_metrics.stage<6)video_background(camera);
@@ -216,7 +222,7 @@ STORY_CODE void story_step(void) {
         /* Retained scenery must re-admit its chunks. Platform panels now need
          * only four corner patterns: keep the displayed generation pinned until
          * the closing SAT DMA, so uploads cannot overwrite its live graphics. */
-        if(pce_metrics.stage==2||pce_metrics.stage==7) {
+        if(pce_metrics.stage==7) {
             memset(sprite_used,0,sizeof sprite_used);memset(sprite_pinned,0,sizeof sprite_pinned);
         }
         foreground_reset();
