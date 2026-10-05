@@ -185,7 +185,10 @@ RACE_CODE static void drive(uint8_t keys) {
 }
 /* ---- the phases ---------------------------------------------------------------------------------------------- */
 RACE_CODE static void begin_pursuit(void);
-RACE_CODE void race_start(void) {
+/* One-time setup runs in $7b, leaving $79 for the race's per-frame code.
+ * Its callees are resident services or explicit overlays; no direct call
+ * returns into another routine in the shared $6000 window. */
+PCE_BOSS static void race_reset(void) {
     audio_pcm_turbo_loop(false);
     arcade_read(1,pce_scenes[1].track,track,sizeof track);
     car_max=pce_options.difficulty==0?16:pce_options.difficulty==1?12:8;car_hp=car_max;
@@ -193,6 +196,9 @@ RACE_CODE void race_start(void) {
     boost=255;boost_on=boost_locked=0;hurt=spin=shake=fire_cd=ram_cd=0;speed=0;tilt=0;race_time=0;phase_t=0;
     overlay_call(0x6d,field_start_call);
     memset(blasts,0,sizeof blasts);
+}
+RACE_CODE void race_start(void) {
+    overlay_call(0x7b,race_reset);
     uint16_t s=63005u;
     int16_t x,y;track_point(s,48,&x,&y);
     px=x;py=y;ps=s;road_idx=s>>8;lapp=-1;
