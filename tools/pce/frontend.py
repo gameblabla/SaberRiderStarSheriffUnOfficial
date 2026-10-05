@@ -541,7 +541,12 @@ def credits_pages(work):
     def clean(t):
         t = re.sub(r'<[^>]*>', '', t)
         t = unicodedata.normalize('NFKD', t).encode('ascii', 'ignore').decode()
-        return [l.strip() for l in t.splitlines() if l.strip()]
+        return [fit(l.strip()) for l in t.splitlines() if l.strip()]
+    def fit(l):   # the panel's text area is 32 columns: a longer line is shortened (no bracketed note, no 'awesome') instead of running out of the box
+        if len(l) > 32: l = re.sub(r'\s*\([^)]*\)', '', l)
+        if len(l) > 32: l = re.sub(r'(?i)\bawesome ', '', l)
+        if len(l) > 32: l = l[:33].rsplit(' ', 1)[0]
+        return l
     # [fade] splits pages; a [roll] section is a long list of names.
     for chunk in re.split(r'\[fade\]', raw):
         if 'See YOUR NAME' in chunk: continue
@@ -550,7 +555,11 @@ def credits_pages(work):
         if head: pages.append('\n'.join(head))
         for roll in parts[1:]:
             names = clean(roll)
-            for i in range(0, len(names), 10): pages.append('\n'.join(names[i:i + 10]))
+            page = []   # at most ten lines and 150 characters a page (the player reads 160 bytes of it)
+            for n in names:
+                if page and (len(page) == 10 or len('\n'.join(page + [n])) > 150): pages.append('\n'.join(page)); page = []
+                page.append(n)
+            if page: pages.append('\n'.join(page))
     texts = [p.upper().encode('ascii', 'replace') + b'\0' for p in pages]
     head = 2 + 2 * len(texts)
     offsets, pos = [], head
