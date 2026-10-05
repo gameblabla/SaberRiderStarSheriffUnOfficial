@@ -84,6 +84,10 @@ def build(out):
     # an armour-piercing hit: a bright zap sweeping down from 2.6 kHz on a burst of noise, with a shimmer of a fifth over the first steps and a ring at the end
     hit=synth([(max(0,28-3*k),max(8,28-2*k),31-k if k<20 else 12-(k-19)*3,int(2600*math.exp(-k*0.075)*(1.5 if (k&1 and k<12) else 1))) for k in range(26)])
     psg_rows+=[pip,go,hit]
+    # Stage-card / menu tick (the PC game's sfx 0, E418A101): pure PSG, no DDA
+    # or ADPCM. Rebuilt from the recording like the shot/guns above (tone follows
+    # the ~560 Hz body, noise follows the 1.3-6 kHz click), one step every 1/60 s.
+    psg_rows+=[psg_script('E418A101',-3,15,-3)]
     ph='/* Generated: native PSG effects, 5 bytes a 1/60 s step: noise level, noise clock, tone level, tone period (16 bits); 255 ends. */\n'
     ph+='static const uint8_t psg_scripts[%d][%d] __attribute__((section(".ram_bank117.rodata")))={'%(len(psg_rows),max(len(r) for r in psg_rows)*5)
     ph+=','.join('{'+','.join(str(v) for row in r for v in row)+'}' for r in psg_rows)+'};\n'

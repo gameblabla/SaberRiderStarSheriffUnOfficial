@@ -18,8 +18,9 @@ def verify(out):
         e.write(0x0c01,b'\0');e.write(0x1402,b'\x07')
         for key,val in [('P',4),('MPR3',117),('MPR6',125)]:e.call('register_set',key,val)
         # Real generated arrays must survive normal boot and CD scratch loading.
+        # Shot is pure PSG (no DDA file); resident holds the power sample only.
         resident=symbol(elf,'pce_pcm_resident')
-        resident_data=(out/'work/shot.dda').read_bytes()+(out/'work/power.dda').read_bytes()
+        resident_data=(out/'work/power.dda').read_bytes()
         assert e.memory(resident,len(resident_data))==resident_data
         stream=(out/'work/impact.dda').read_bytes()+(out/'work/gallop.dda').read_bytes()+(out/'work/tick.dda').read_bytes()
         for i in range(3):
