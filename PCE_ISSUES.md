@@ -416,3 +416,14 @@ Actual audio captures: `build/pce/audio-review/*.wav`.
       edge glitch, cabin walls in front of the hero again.
 - [x] Continue screen: the PC game's tick (sfx 0) and confirmation (sfx 8) instead of the menu blip.
 - [x] Respawn waits include the source's `rand_n` jitter (exported in the trigger's former layer byte).
+
+## Nineteenth pass (2026-10-05: level 2 as a classic racing road; details in `docs/PCE_CLASSIC_ROAD_20261005.md`)
+
+- [x] The Wolf3D pair-character floor (128 coarse samples, ~15 updates a second) is replaced by a Chase H.Q.-style road: one static
+      road picture in the BAT (148 characters, 1024 dots wide), scrolled sideways one scanline pair at a time (BXR) to follow the
+      circuit and re-read through a second copy of its rows (BYR) for the road/kerb/sand stripes, which run with the distance
+      driven. Full 512-dot resolution, the road moves every frame the loop completes (about 22 a second with seven rivals, was 15).
+- [x] The sky is unchanged (its two scrolling bands); the haze rows now carry the road's far end.
+- [x] The car keeps within 34 degrees of the circuit's direction; the track record's tangent is 256 steps a turn.
+- [x] Cars, mines and shots project with the live camera (no more lag behind the last finished floor).
+- [ ] Not done: roadside scenery; real hardware.

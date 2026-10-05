@@ -20,7 +20,6 @@ import presentation
 import tile_budget
 import palfit
 import hudart
-import floor_tables
 import frontend
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -282,6 +281,74 @@ def boss_background(archive, previews):
     Image.fromarray(preview).save(previews / 'boss_bg.png')
     print(f'  stage 7 cruiser: {len(tiles)} characters', flush=True)
     return archive.add('boss_bg', bytes(blob), 32), len(tiles)
+
+ROAD_LINES = 112          # image lines: scanlines 112..223 of the road region (the horizon is scanline 113)
+ROAD_STRIPE_FIRST = 16    # image line where the two stripe phases start (the lines above are the haze rows)
+def road_assets(sand, previews):
+    """The classic racing road (see docs/PCE_CLASSIC_ROAD_20261005.md): one static picture of a straight road in perspective,
+    1024 dots wide with its centre at dot 512, one image line for each scanline below the horizon. Edges are drawn at integer
+    or quarter slopes (dots per line), so the sloped tiles repeat from row to row and the whole picture is about a hundred
+    characters. The race scrolls the picture sideways one scanline at a time (the road's curve and the camera's offset), and
+    shows each band of the road in one of two colour phases by choosing which copy of the BAT rows a scanline reads (BYR):
+    the copies use the same characters with different palettes. The far rows fade into the haze of the sky."""
+    W, C = 1024, 512
+    SLOPE_KERB, SLOPE_ROAD, SLOPE_EDGE, SLOPE_DASH = 5.0, 4.25, 4.0, 0.11   # dots a line: kerb outside, road, white edge line, centre dash
+    # 1 sand, 2 kerb, 3 edge line, 4 asphalt, 5 centre dash
+    img = np.ones((ROAD_LINES, W), np.uint8)
+    ax = np.abs(np.arange(W) - C + 0.5)
+    for i in range(ROAD_LINES):
+        d = i - 1
+        if d <= 0: continue
+        img[i, ax < SLOPE_KERB * d] = 2
+        img[i, ax < SLOPE_ROAD * d] = 3
+        img[i, ax < SLOPE_EDGE * d] = 4
+        img[i, ax < SLOPE_DASH * d] = 5
+    tiles, lookup = [], {}
+    ids = np.zeros((ROAD_LINES // 8, W // 8), np.uint16)
+    for r in range(ROAD_LINES // 8):
+        for c in range(W // 8):
+            enc = planar_tile(img[r * 8:r * 8 + 8, c * 8:c * 8 + 8])
+            if enc not in lookup: lookup[enc] = len(tiles); tiles.append(enc)
+            ids[r, c] = lookup[enc]
+    assert len(tiles) <= 256, f'Road picture needs {len(tiles)} characters'
+    sand = np.asarray(sand, float)
+    haze = sand * 0.72 + np.array((200, 220, 255.)) * 0.28
+    asphalt_a, asphalt_b = np.array((66, 66, 78.)), np.array((80, 80, 94.))
+    red, white = np.array((226, 44, 40.)), np.array((236, 236, 244.))
+    phase_a = [sand, red, white, asphalt_a, white]
+    phase_b = [sand * 0.86, white, white, asphalt_b, asphalt_b]
+    def palette(colours, mix):
+        out = np.zeros(16, '<u2')
+        for k, c in enumerate(colours):
+            out[k + 1] = vce_colors(np.clip(np.asarray(c) * (1 - mix) + haze * mix, 0, 255).astype(np.uint8))
+        return out
+    # hardware palettes 1..8: haze, far haze, then the phase colours fading in over the first rows
+    palettes = [palette(phase_a, 1.0), palette(phase_a, 0.6), palette(phase_a, 0.4), palette(phase_a, 0.2), palette(phase_a, 0.0),
+                palette(phase_b, 0.4), palette(phase_b, 0.2), palette(phase_b, 0.0)]
+    def row_palette(r, b):   # image row r (0..13), phase b
+        if r == 0: return 1
+        if r == 1: return 2
+        if r < 4: return 6 if b else 3
+        if r < 6: return 7 if b else 4
+        return 8 if b else 5
+    bat = bytearray()
+    for b in (0, 1):
+        for r in range(2, ROAD_LINES // 8):
+            bat += b''.join(struct.pack('<H', 0x200 + int(t) | row_palette(r, b) << 12) for t in ids[r])
+    for r in (0, 1):
+        bat += b''.join(struct.pack('<H', 0x200 + int(t) | row_palette(r, 0) << 12) for t in ids[r])
+    preview = np.zeros((ROAD_LINES, W, 3), np.uint8)
+    pa = vce_rgb(palettes[4]); preview[:] = pa[img]
+    Image.fromarray(preview).save(previews / 'road.png')
+    print(f'  road picture: {len(tiles)} characters', flush=True)
+    return dict(tiles=b''.join(tiles).ljust(8192, b'\0'), bat=bytes(bat), palette=b''.join(p.tobytes() for p in palettes))
+
+def road_tables():
+    """C tables for the road builder (bank $6f): the scanline of a distance (half units of distance, d = 10080 / f) and the
+    distance of a scanline (z = 10080 / d; only its low byte, which is all a 32-unit band needs)."""
+    d = [min(255, round(10080 / max(2 * k, 1))) for k in range(512)]
+    z = [65535] + [min(65535, round(10080 / k)) for k in range(1, ROAD_LINES + 1)]
+    return d, z
 
 def race_sky(archive, previews, sand):
     """The Grand Prix's sky as plain background tiles: a blue gradient from the zenith to a pale horizon (scanline 113), then
@@ -862,13 +929,12 @@ def make_scene(stage, work, previews, shared):
         cx = np.arange(1024)[None, :] & 3; cy = np.arange(1024)[:, None] & 3
         ground = blocks[np.minimum(race, 10), cx, cy] | (cls[np.minimum(race, 10)] << 4)
         a.add('race_map', ground.astype(np.uint8).tobytes())    # first: the sampler addresses it from Arcade offset 0
-        a.add('floor_palette', pal.tobytes())
         # the commonest sand colour of the ground: the haze between the sky and the floor's first scanline matches it
         sand_index = int(np.bincount((ground & 15)[(ground >> 4) == 0].ravel(), minlength=16).argmax())
         race_sand = vce_rgb(pal[sand_index:sand_index + 1])[0]
         meta['track_offset']=a.add('track', (work/'track.bin').read_bytes())
-        a.add('pair_characters', pair_characters())
-        a.add('floor_geometry', floor_tables.generate())
+        road = road_assets(race_sand, previews)
+        a.add('road_tiles', road['tiles']); a.add('road_bat', road['bat']); a.add('road_palette', road['palette'])
         # Pursuit is the source's straight desert road; both working sets fit by representing its repeated row
         # (indexed by the x cell, 1 KiB aligned) rather than another 1 MiB map.
         road = np.zeros(1024, np.uint8); road[496:528] = 7; road[498:526] = 2; road[511:513] = 3
@@ -964,10 +1030,14 @@ def main():
     h += [f'#define PCE_MECH_STEPS {len(MECH_SIZES)}', f'#define PCE_MECH_ARM (3+3*PCE_MECH_STEPS*8)', 'extern const uint8_t pce_mech_sizes[PCE_MECH_STEPS];']
     c.append('const uint8_t pce_car_widths[PCE_CAR_STEPS]={'+','.join(map(str,CAR_WIDTHS))+'};')
     c.append('const uint8_t pce_mech_sizes[PCE_MECH_STEPS]={'+','.join(map(str,MECH_SIZES))+'};')
+    d_table,z_table=road_tables()
+    h.append('extern const uint8_t pce_road_d[512];extern const uint8_t pce_road_z[113];')
+    c.append('const uint8_t pce_road_d[512] __attribute__((section(".ram_bank111.rodata")))={'+','.join(map(str,d_table))+'};')
+    c.append('const uint8_t pce_road_z[113] __attribute__((section(".ram_bank111.rodata")))={'+','.join(str(v&255) for v in z_table)+'};')
     c.append('const uint8_t pce_actor_ids[33] = {'+','.join(map(str,scenes[0]['actor_ids']))+'};')
     (out/'assets.c').write_text('\n'.join(c)+'\n')
     h += ['#define PCE_HERO_FRAMES 9', '#define PCE_SHOT_ID 36', '#define PCE_ENEMY_SHOT_ID 37', '#define PCE_BLAST_ID 38']
-    for name in ('pair_characters','floor_palette','floor_geometry','race_map','pursuit_row','dialog_wide'):
+    for name in ('road_tiles','road_bat','road_palette','race_map','pursuit_row','dialog_wide'):
         h.append(f"#define PCE_RACE_{name.upper()} {scenes[1]['records'][name]['offset']}UL")
     (out/'assets.h').write_text('\n'.join(h)+'\n')
     # Runtime work buffers are separate from BIOS/compiler console RAM.

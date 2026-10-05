@@ -32,7 +32,6 @@ void video_front_begin(void);
 void video_sat_end(void);
 void video_vdc(uint8_t index, uint16_t value);
 void video_race_init(void);
-void video_floor_row(uint8_t page, uint8_t row, const uint8_t *pairs);
 bool video_race_sky(void);
 void pce_vblank(void);
 void pce_hblank(void);

@@ -1,6 +1,5 @@
 #include "overlay_pce.h"
 #include "play_pce.h"
-#include "floor_pce.h"
 #include "campaign_pce.h"
 PceControl pce_control;
 __attribute__((noinline,callback(2))) void overlay_call(uint8_t bank,void (*method)(void)) {
@@ -29,11 +28,6 @@ PCE_CODE void play_frame(void) {
     overlay_call(0x7b,play_draw);
 }
 PCE_CODE void play_present(void) { overlay_call(0x7b,play_draw); }
-PCE_FLOOR void floor_start(void) { pce_control.ok=floor_init(); }
-PCE_FLOOR void floor_draw(void) {
-    floor_update(pce_control.x,pce_control.y,pce_control.heading,pce_control.phase);
-    if(pce_campaign.diagnostic)floor_present();
-}
 int main(void) {
     pce_bank3_set(0x6e);
     flow_main();

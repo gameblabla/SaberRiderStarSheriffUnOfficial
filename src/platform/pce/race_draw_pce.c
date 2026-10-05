@@ -6,11 +6,9 @@
 #include "race_math.h"
 #include "race_pce.h"
 PCE_BOSS void race_briefing_frame(void) {
-    uint16_t commits=pce_metrics.floor_commits;
-    do {overlay_call(0x79,race_frame);} while(pce_metrics.floor_commits==commits);
+    overlay_call(0x79,race_frame);
     video_wait();
 }
-#include "floor_pce.h"
 /* The race's sprites and HUD. The screen runs at the 512-dot clock, so every x here is in dots (256 is the middle) and
  * every picture was stretched to twice its width at build time (tools/pce/hudart.py, build_assets.py). Cars are drawn
  * far to near from the camera's frame: its focal length is 421 dots, its horizon row 113, and a car at a distance f is
@@ -46,7 +44,7 @@ DRAW_CODE static int16_t mulq(int16_t a,int8_t b) {
  * 113 + 10080 / f); a car's width in dots is 1.17 x the rows below the horizon; the offset from the middle is
  * l * 421 / f = l * rows / 23.9, taken as l * (rows * 0.668 in Q4) >> 4 so that it stays in 16 bits. */
 DRAW_CODE static bool project_point(int16_t wx,int16_t wy,int16_t *sx,int16_t *row,int16_t *depth) {
-    int16_t rx=wrapdiff(wx,floor_shown_x),ry=wrapdiff(wy,floor_shown_y);
+    int16_t rx=wrapdiff(wx,pce_control.x),ry=wrapdiff(wy,pce_control.y);
     if(rx>1900||rx<-1900||ry>1900||ry<-1900)return false;
     int16_t f=mulq(rx,shown_c)+mulq(ry,shown_s);
     if(f<40||f>900)return false;   /* beyond 900 units a ground point would be above the floor's first scanline (120): nothing flies in the sky */
@@ -67,7 +65,7 @@ DRAW_CODE static void add(uint8_t kind,int16_t wx,int16_t wy) {
 }
 DRAW_CODE void race_draw(void) {
     base=pce_hud_base[1];
-    shown_c=cosine((uint16_t)floor_shown_heading<<9);shown_s=sine((uint16_t)floor_shown_heading<<9);
+    shown_c=cam_c;shown_s=cam_s;
     nvis=0;
     for(uint8_t k=0;k<7;++k)if(rv[k].hp)add(rv[k].kind,rv[k].x,rv[k].y);
     for(uint8_t k=0;k<6;++k)if(mines[k].t)add(6,mines[k].x,mines[k].y);

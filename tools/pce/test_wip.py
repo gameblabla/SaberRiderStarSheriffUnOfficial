@@ -34,9 +34,9 @@ def verify(out):
         c.stage(e,2);c.dialogs(e);e.input(16|64);e.run(300);e.input(0)
         far=int.from_bytes(e.memory(a['pce_sky_far'],2),'little');near=int.from_bytes(e.memory(a['pce_sky_near'],2),'little')
         assert far!=near and far<512 and near<512,(far,near)
-        # Both halves of the sky BAT repeat, so BXR can wrap without exposing an empty region.
+        # Both halves of the sky BAT repeat (rows 62-63 are the road's far rows), so BXR can wrap without exposing an empty region.
         sky=bytes.fromhex(e.call('asread','vram0',48*128*2,16*128*2)['hex'])
-        for row in range(16):assert sky[row*256:row*256+128]==sky[row*256+128:(row+1)*256]
+        for row in range(14):assert sky[row*256:row*256+128]==sky[row*256+128:(row+1)*256]
         e.screenshot(review/'race-parallax.png');report['race_parallax']={'far_scroll':far,'near_scroll':near,'wrapping_bat':True}
         c.stage(e,7);e.run(60);reads=c.metrics(e)['disc_reads'];c.seed(e,'flight_clock',6359)
         c.until(e,lambda:e.memory(a['space_hull_ready'],1)==b'\1',limit=600,step=1);e.run(30)

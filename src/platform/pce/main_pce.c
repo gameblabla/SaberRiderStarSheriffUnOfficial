@@ -1,7 +1,7 @@
 #include "video_pce.h"
 #include "loader_pce.h"
 #include "arcade_pce.h"
-#include "floor_pce.h"
+#include "road_pce.h"
 #include "play_pce.h"
 #include "save_pce.h"
 #include "effect_pce.h"
@@ -31,7 +31,7 @@ PCE_FLOW static bool change_stage(uint8_t n) {
     pce_control.stage=stage;pce_control.hero=hero;pce_control.phase=0;
     pce_campaign.state=CAM_PLAY;pce_campaign.result=pce_campaign.event=0;pce_campaign.boss_kind=0;
     if(stage==2) {
-        overlay_call(0x6d,floor_start);if(!pce_control.ok)return false;
+        overlay_call(0x6d,road_start);if(!pce_control.ok)return false;
         video_sat_begin();video_sprite(5,256,215,false,16);
         video_sprite(9,180,177,false,16);video_sprite(12,360,163,true,16);
         video_sat_end();
@@ -43,8 +43,8 @@ PCE_FLOW static bool change_stage(uint8_t n) {
     if(!pce_campaign.diagnostic) {
         if(stage==2){
             overlay_call(0x79,race_start);pce_control.elapsed=0;
-            /* The briefing freezes the world. Finish the first floor before
-             * opening it, otherwise the initialization checkerboard stays up. */
+            /* The briefing freezes the world. Draw the first road before
+             * opening it. */
             overlay_call(0x7b,race_briefing_frame);
         }
         else if(stage==6)overlay_call(0x72,mech_start);
@@ -76,7 +76,7 @@ PCE_FLOW static void render_test(uint8_t keys,uint8_t pressed) {
             save_store(stage,hero,phase);
         }
         pce_control.x=race_x;pce_control.y=race_y;pce_control.heading=heading<<2;pce_control.phase=phase;
-        overlay_call(0x6d,floor_draw);
+        overlay_call(0x6d,road_draw);
     } else if(stage==6) {
         if(keys&KEY_LEFT)test_x-=2;if(keys&KEY_RIGHT)test_x+=2;
         if(test_x<0)test_x=0;if(test_x>255)test_x=255;
@@ -148,7 +148,7 @@ PCE_FLOW void flow_main(void) {
                     save_store(stage,hero,0);
                 } else {
                     video_restore();
-                    if(stage==2){overlay_call(0x6d,floor_start);if(!pce_control.ok)for(;;){};}
+                    if(stage==2){overlay_call(0x6d,road_start);if(!pce_control.ok)for(;;){};}
                     if(pce_campaign.state==CAM_STORY)overlay_call(0x71,story_start);
                 }
                 previous=keys;simulation_tick=pce_ticks;

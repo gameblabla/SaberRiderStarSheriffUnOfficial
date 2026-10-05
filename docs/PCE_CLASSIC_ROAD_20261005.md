@@ -1,0 +1,48 @@
+# PCE level 2: the classic racing road (2026-10-05)
+
+The Wolf3D bitmap-tilemap floor (128 samples across, 19 strips, a new picture about every 4th frame) is gone. Level 2 now draws
+its road the way Chase H.Q. does (`PCE/References/Chase H.Q. (USA).pce`; its VRAM holds one static road picture, and a raster
+interrupt scrolls and re-selects it for every scanline). The sky is unchanged.
+
+## How it works
+
+* **One static picture** (`tools/pce/build_assets.py road_assets`): a straight road in perspective, 1024 dots wide (centre at
+  dot 512), one image line for each scanline below the horizon (scanline 113). Edges are drawn at integer and quarter slopes
+  (dots a line), so the sloped characters repeat from row to row: the whole picture is 148 characters at VRAM `$2000`.
+  Kerb outside at 5.0 dots a line (120 units from the centre), asphalt to 4.25 (102, the source map's own widths), a white
+  edge line, a centre dash.
+* **Two copies of its BAT rows** (rows 0-11 and 12-23), the same characters with different palettes (sand/kerb/dash/asphalt
+  colours of the two stripe phases). The 14 sky BAT rows are untouched; sky rows 62-63 (scanlines 112-127, formerly flat haze)
+  hold the road's far rows in hazed palettes. The first copy follows scanline 127 by itself (BYR counts on from the sky's 384
+  and wraps to row 0 at scanline 128).
+* **Per-scanline raster** (`irq.S pce_hblank`): one RCR interrupt for each pair of scanlines from the end of scanline 111 to 221. It writes
+  BXR from a table (the road's curve and the camera's offset) and BYR only where the stripe phase changes.
+* **Tables** (`road_pce.c road_update`, banks `$6d` and `$6f`, every frame): the circuit's points ahead of the camera are rotated into
+  the camera's frame (forward `f`, right `sd`); a point is on scanline `113 + 10080/f` and `sd*d/23.9` dots right of the middle;
+  between two points the road's centre is a straight line in the scanline (exact for a straight piece), so each segment is one
+  division and a run of additions. The stripe of a scanline is `((progress + 10080/d) >> 5) & 1` (32-unit bands from the
+  distance along the circuit); the first 16 scanlines of the region never stripe, and rows 2-5 of the picture fade into the
+  haze to hide aliasing. The tables live in the platform background cache array (`columns`, unused in the race), two buffers
+  of three 128-byte pages (BXR low, BXR high, stripe copy); the VBlank handler latches the finished buffer (`pce_floor_pending`).
+* **Pursuit**: a straight road along -y at x 4096 (the source's pursuit road) gives the points.
+* **Steering**: the car keeps within 34 degrees of the road's direction (`race_pce.c MAX_OFF`), since a straight road in
+  perspective is only right for a road seen head-on. The circuit's tangent is now 256 steps a turn (`export_track.c`).
+* Cars, mines and shots are projected with the same camera (`race_draw_pce.c project_point`), which now is the live camera,
+  not the camera of the last finished floor.
+
+Removed: `floor_pce.c`, `floor_sample.S`, `floor_tables.py`, the 256 pair characters, the floor geometry archive, the 19-strip
+interrupt.
+
+## Cost and results
+
+* Measured in the accurate-core emulator with seven rivals and an autopilot: the loop completes about 22 times a second and the
+  road changes every time (the old floor: 15 passes a second at 128 samples across). The road builder is about 50-60k CPU cycles a
+  frame (11 knots, each 4 byte-by-byte products in `smul8`, one 16-by-8 division a segment, `road_fill` at about 90 cycles a
+  line), the raster interrupts 8% of the machine, cars and HUD sprites the largest remaining share, and the simulation (every
+  tick, catch-up after a slow frame) about a third of a 60 Hz frame a tick, mostly `__mulhi3` (`tools/pce/prof_report.py`
+  summarises a `prof_dump` by function). The numbers to beat for 30 Hz are the sprites and `__mulhi3`, not the road.
+* `tools/pce/test_road.py` drives the car round the circuit with an autopilot, takes screenshots, prints the tables and the refresh
+  rate (`--profile` adds a cycle dump).
+* Bank use: the knot arithmetic, its tables and `smul8` are in `$6f`, the table filler in `$6d` with the field and the sky loader.
+* Not done: roadside scenery (posts, rocks) for a stronger sense of speed; a 30 Hz road needs a cheaper simulation tick and sprite
+  pass first.

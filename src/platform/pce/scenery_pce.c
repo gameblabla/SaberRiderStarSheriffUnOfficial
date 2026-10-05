@@ -2,7 +2,6 @@
 #include "video_pce.h"
 #include "arcade_pce.h"
 #include "race_pce.h"
-#include "floor_pce.h"
 #include "campaign_pce.h"
 
 extern uint8_t buffer[2048];
@@ -12,13 +11,6 @@ static uint16_t hull_palette[64] PCE_STAGE;
 uint8_t space_flashing;
 static uint8_t hull_gone;
 volatile uint16_t pce_sky_far,pce_sky_near;
-
-PCE_SCENERY void race_scenery(void) {
-    /* Horizon follows the completed road camera; high clouds move half as far.
-     * The 512-dot texture repeats twice in the 1024-dot BAT. */
-    pce_sky_far=((uint16_t)floor_shown_heading*4)&511;
-    pce_sky_near=((uint16_t)floor_shown_heading*8+(floor_shown_y>>4))&511;
-}
 
 PCE_SCENERY void space_hull_load(void) {
     uint32_t a=pce_boss_bg[6];

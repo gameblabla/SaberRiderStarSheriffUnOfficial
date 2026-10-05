@@ -6,6 +6,7 @@
 
 volatile PceTelemetry pce_metrics;
 volatile uint8_t pce_ticks, pce_raster_enabled, pce_floor_page, pce_raster_row;
+uint8_t pce_road_off,pce_road_prev;   /* irq.S: the road's table half on display (0 or 128), the picture copy the last scanline read */
 volatile uint16_t pce_draws;
 volatile uint8_t pce_vdc_index;
 volatile uint16_t pce_scroll_x, pce_scroll_y;
@@ -346,16 +347,12 @@ PCE_RENDER void video_race_init(void) {
     video_vdc(VDC_REG_MEMORY, VDC_BG_SIZE_128_64);
     video_display(true);
 }
-PCE_RENDER void video_floor_row(uint8_t page, uint8_t row, const uint8_t *pairs) {
-    /* the row's 64 words (pairs: low and high bytes interleaved) by the PCM-friendly block copy, setup atomic */
-    sat_transfer((uint16_t)row * 128 + (page ? 64 : 0), pairs, 128);
-}
-__attribute__((noinline,section(".ram_bank109.text"))) static void race_sky_load(void) {   /* beside the floor code that calls it */
+__attribute__((noinline,section(".ram_bank109.text"))) static void race_sky_load(void) {   /* beside the road code that calls it */
     uint16_t used=0;
     memset(cache_ids,0xff,sizeof cache_ids);
     for(uint8_t x=0;x<128;++x) {
         arcade_read(1,scene->map+(uint32_t)(x&63)*90,buffer,90);
-        for(uint8_t y=0;y<16;++y) {
+        for(uint8_t y=0;y<14;++y) {   /* the last two rows (scanlines 112-127) are the road's haze rows */
             uint16_t id=buffer[y*3]|(uint16_t)buffer[y*3+1]<<8;
             uint16_t slot;
             for(slot=0;slot<used&&cache_ids[slot]!=id;++slot) {}
@@ -372,9 +369,15 @@ __attribute__((noinline,section(".ram_bank109.text"))) static void race_sky_load
         }
     }
     pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-    arcade_vram(PCE_RACE_PAIR_CHARACTERS,0x2000,8192);
-    arcade_read(2,PCE_RACE_FLOOR_PALETTE,buffer,32);
-    pce_vce_copy_palette(15,buffer,1);
+    /* The road: 256 characters at $2000, its BAT rows (two copies of 12 rows from row 0, the haze rows at 62) and eight palettes. */
+    arcade_vram(PCE_RACE_ROAD_TILES,0x2000,8192);
+    pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
+    arcade_vram(PCE_RACE_ROAD_BAT,0,6144);
+    pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
+    arcade_vram(PCE_RACE_ROAD_BAT+6144,62*128,512);
+    arcade_read(2,PCE_RACE_ROAD_PALETTE,buffer,256);
+    pce_vce_copy_palette(1,buffer,8);
+    pce_vce_set_color(255,0x1ff);   /* palette 15's white: the text glyphs' ink */
     pce_control.ok=1;
 }
 

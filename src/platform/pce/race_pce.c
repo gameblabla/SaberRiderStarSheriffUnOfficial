@@ -4,7 +4,7 @@
 #include "arcade_pce.h"
 #include "loader_pce.h"
 #include "save_pce.h"
-#include "floor_pce.h"
+#include "road_pce.h"
 #include "scenery_pce.h"
 #include "assets.h"
 #define RACE_SIN_SECTION ".ram_bank121.rodata"
@@ -16,9 +16,10 @@
  * speeds, rubber band and Black Hornet mines and shots, and the circuit is raced for three laps with a top-three finish
  * needed; the pursuit follows (race_foes_pce.c). Positions are world units (8192 wrap); angles 16 bits (65536 = a turn);
  * speeds units a second; progress along the circuit in 1/256ths of its 256 sample points. The camera sits 92 units behind
- * the car (its ground point is the floor's nearest row); horizon row 113, focal 421 dots (the floor tables' own). */
+ * the car (its ground point is the road's nearest scanline); horizon row 113, focal 421 dots (road_pce.c). */
 #define RACE_CODE PCE_RACE
 #define N_RIVALS 7
+#define MAX_OFF 0x1800
 TrackPoint track[256] PCE_STAGE;
 Rival rv[N_RIVALS];
 Mine mines[6];
@@ -30,7 +31,8 @@ uint16_t px,py,hd,cam_hd,phase_t,race_time,gap_dist,race_rng=0xB5AD,ps;
 int16_t speed,tilt,arg_x,arg_y,arg_dist,arg_radius,arg_speed;
 uint8_t rphase,car_hp,car_max,boost,boost_on,hurt,shake,finish_rank,spin,ram_cd,arg_damage,arg_life;
 int8_t lapp,cam_c,cam_s;
-static uint8_t pfx,pfy,near_idx,fire_cd;
+uint8_t road_idx;
+static uint8_t pfx,pfy,fire_cd;
 static uint16_t spawn_t;
 
 RACE_CODE static uint8_t rnd(void) {
@@ -51,13 +53,13 @@ RACE_CODE static void update_field(bool grid,int16_t plat) {arg_life=grid;arg_x=
 RACE_CODE static void standings(void) {overlay_call(0x6d,field_standings_call);}
 /* The nearest sample of the circuit to the car (searched round the last one): its progress, and the lateral offset. */
 RACE_CODE static int16_t project(void) {
-    int16_t best=32000;uint8_t bi=near_idx;
+    int16_t best=32000;uint8_t bi=road_idx;
     for(int8_t d=-2;d<=3;++d) {
-        uint8_t i=near_idx+d;
+        uint8_t i=road_idx+d;
         int16_t q=absolute(wrapdiff(px,track[i].x))+absolute(wrapdiff(py,track[i].y));
         if(q<best){best=q;bi=i;}
     }
-    near_idx=bi;
+    road_idx=bi;
     uint8_t n=bi+1;
     int16_t sx=wrapdiff(track[n].x,track[bi].x),sy=wrapdiff(track[n].y,track[bi].y);
     int16_t rx=wrapdiff(px,track[bi].x),ry=wrapdiff(py,track[bi].y);
@@ -104,6 +106,11 @@ RACE_CODE static void drive(uint8_t keys) {
     int16_t turn=sp+(sp>>3);                  /* 1.9 rad/s at 300 u/s: 330 units a step */
     if(cls==0)turn-=turn>>3;
     hd+=steer*turn;
+    {   /* The road is seen head-on (its picture is a straight road in perspective): the car keeps within 34 degrees of the road's direction. */
+        uint16_t along=rphase>=P_PURSUIT?0xc000:(uint16_t)track[road_idx].heading<<8;
+        int16_t off=(int16_t)(hd-along);
+        if(off>MAX_OFF)hd=along+MAX_OFF;else if(off<-MAX_OFF)hd=along-MAX_OFF;
+    }
     tilt+=(steer*112-tilt)>>3;                 /* Q4: whole numbers made (7 - 0) / 8 = 0, so the car never leaned */
     cam_hd+=((int16_t)(hd-cam_hd)>>3)+((int16_t)(hd-cam_hd)>>5);
     /* the step in Q8 units: speed / 60 * 256 = speed * 4.27 */
@@ -130,8 +137,8 @@ RACE_CODE void race_start(void) {
     overlay_call(0x6d,field_start_call);
     uint16_t s=63005u;
     int16_t x,y;track_point(s,48,&x,&y);
-    px=x;py=y;ps=s;near_idx=s>>8;lapp=-1;
-    hd=(uint16_t)track[near_idx].heading<<11;cam_hd=hd;
+    px=x;py=y;ps=s;road_idx=s>>8;lapp=-1;
+    hd=(uint16_t)track[road_idx].heading<<8;cam_hd=hd;
     pfx=pfy=0;
     rphase=P_COUNT;
     if(pce_control.phase) {   /* resuming at the pursuit */
@@ -206,19 +213,12 @@ RACE_CODE static void race_tick(uint8_t keys) {
 RACE_CODE void race_frame(void) {
     uint8_t keys=pce_control.keys;
     for(uint8_t i=0;i<pce_control.elapsed&&!pce_campaign.event&&!pce_campaign.result&&pce_campaign.state==CAM_PLAY;++i)race_tick(keys);
-    /* the floor is drawn from the camera: 92 units behind the car along the camera's heading */
+    /* the road is drawn from the camera: 92 units behind the car along the camera's heading */
     cam_c=cosine(cam_hd);cam_s=sine(cam_hd);
     pce_control.x=px-(cam_c*92>>7);
     pce_control.y=py-(cam_s*92>>7);
     pce_control.heading=(uint8_t)(cam_hd>>9)&127;pce_control.phase=rphase>=P_PURSUIT;
-    uint16_t commits=pce_metrics.floor_commits;
-    overlay_call(0x6d,floor_draw);
-    /* Actors project against the completed road snapshot. Re-emitting them
-     * on every partial sampling pass wasted time on the same displayed road. */
-    if(pce_metrics.floor_commits!=commits) {
-        overlay_call(0x78,race_scenery);
-        overlay_call(0x7c,race_draw);
-        overlay_call(0x6d,floor_present);
-    }
+    overlay_call(0x6d,road_draw);
+    overlay_call(0x7c,race_draw);
     pce_metrics.phase=rphase>=P_PURSUIT;pce_metrics.player_x=px;pce_metrics.player_y=py;
 }
