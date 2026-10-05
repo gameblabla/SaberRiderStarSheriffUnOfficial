@@ -25,6 +25,8 @@ extern int8_t lapp,cam_c,cam_s,cam_cl,cam_sl;   /* the camera's cosine and sine:
 extern uint8_t road_idx;   /* the circuit sample nearest the car: the road is built from three before it */
 /* arguments of the calls across banks */
 extern int16_t arg_x,arg_y,arg_dist,arg_radius;extern uint8_t arg_damage,arg_life;extern int16_t arg_speed;
+/* Resident: pursuit helpers in different overlays share this RNG safely. */
+uint8_t race_random(void);
 void race_start(void);
 void race_frame(void);
 void race_draw(void);

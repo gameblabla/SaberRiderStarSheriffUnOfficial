@@ -118,38 +118,32 @@ def camera_wall_mask(im):
         stack += [(y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)]
     return seen
 
-def key_wall(im):
-    """The security camera's cell carries a patch of the building wall behind its bracket. That wall is a different grey from
-    the background tiles it sits on (and from each building), so the patch showed as a coloured block. The wall greys
-    connected to the cell's left and bottom edges are made transparent: the scenery shows through instead (the background
-    then carries that wall itself: see camera_wall_background)."""
-    a = np.array(im.convert('RGBA'))
-    a[camera_wall_mask(im), 3] = 0
-    return Image.fromarray(a)
-
-def camera_wall_background(out, work):
-    """The level's background has sky where the camera's cell stands (the source draws the wall as part of the camera's art),
-    so with the cell's wall made transparent there was a hole beside the camera. The wall is continued into the background
-    here, from the wall directly below the cell, which is the same surface and the same greys."""
-    d = (work / '211F5D78.levl').read_bytes(); aid = struct.unpack_from('<I', d, 4)[0]
+def camera_background(out, work):
+    """Bake the stationary camera and its wall into scenery, never the SAT."""
+    d = (work / '211F5D78.levl').read_bytes()
+    aid = struct.unpack_from('<I', d, 4)[0]
     first = struct.unpack_from('<I', d, 0x34 + 24 + 4)[0]
-    art = work / 'srgb' / f'{aid:08X}.srgb'
     whole = bool(struct.unpack_from('<I', d, 0x34 + 24 + 20)[0] & 8)
-    mask = camera_wall_mask(cblock_whole_frame(art, first) if whole else cblock_frame(art, first))
-    h, w = mask.shape
+    art = work / 'srgb' / f'{aid:08X}.srgb'
+    cell = cblock_whole_frame(art, first) if whole else cblock_frame(art, first)
+    mask = camera_wall_mask(cell)
     px = np.array(out)
     meta = json.loads((work / 'stage1.json').read_text())
     for t in meta['triggers']:
         if t['type'] != 16: continue
         x0, y0 = t['waypoints'][0]
+        patch = np.array(cell)
+        h, w = mask.shape
+        # Match the bracket's wall to the building below it, while preserving
+        # the camera pixels. Both then pass through the same BG palette bake.
         for y in range(h):
             for x in range(w):
                 if not mask[y, x]: continue
-                # (whatever the background has there: sky at the first camera, the next building behind the second)
-                src = px[y0 + y + h, x0 + x]                             # the wall below the cell
-                if src[3] < 128 or int(src[2]) > int(src[0]) + 30: continue
-                px[y0 + y, x0 + x] = src
-    return Image.fromarray(px)
+                src = px[y0 + y + h, x0 + x]
+                if src[3] >= 128 and int(src[2]) <= int(src[0]) + 30:
+                    patch[y, x] = src
+        out.alpha_composite(Image.fromarray(patch), (x0, y0))
+    return out
 
 HORSE_FRAMES = 5
 
@@ -586,7 +580,7 @@ def platform_background(stage, work):
             else: pixels=np.where(layer[...,3:4]>=128,layer,pixels)
         out.paste(Image.fromarray(pixels),(x,0))
         foreground.paste(Image.fromarray(front),(x,0))
-    if stage == 1: out = camera_wall_background(out, work)
+    if stage == 1: out = camera_background(out, work)
     return out,foreground
 
 def add_sprites(archive, sprites, previews):
@@ -919,6 +913,8 @@ def make_scene(stage, work, previews, shared):
                 meta['actor_ids'][t]=255;continue
             if t==11:      # the galloping robot horses are drawn by the herd code from their own big-cell frames
                 meta['actor_ids'][t]=255;continue
+            if t==16:      # stationary security cameras are baked into stage 1 BG tiles
+                meta['actor_ids'][t]=255;continue
             if 24<=t<=27:      # the airships of the far background layers: not drawn (the PCE has no such layer)
                 meta['actor_ids'][t]=255;continue
             flags=struct.unpack_from('<I',d,0x34+24+20)[0]
@@ -932,13 +928,8 @@ def make_scene(stage, work, previews, shared):
                 scale=min(128/im.width,64/im.height)
                 im=im.resize((max(1,round(im.width*scale)),max(1,round(im.height*scale))),Image.Resampling.NEAREST)
                 anchor=tuple(round(v*scale) for v in anchor)
-            if t==16:
-                im=key_wall(im)
             meta['actor_ids'][t]=len(sprites)
             sprites.append((f'actor_type{t}',im,anchor))
-            if t==16:
-                # Security camera: both original animation cells, no static substitute.
-                sprites.append(('actor_type16_frame1',key_wall(cblock_whole_frame(art,first+1) if whole else cblock_frame(art,first+1)),anchor))
         # The cutscene Outrider (type 28) is the blue one: standing, the "!" alarm pose, then the six run cells.
         art=work/'srgb'/'6338F34D.srgb';meta['actor_ids'][28]=len(sprites)
         for name,n in [('idle',24),('alarm',36)]+[(f'run{k}',42+k) for k in range(6)]:

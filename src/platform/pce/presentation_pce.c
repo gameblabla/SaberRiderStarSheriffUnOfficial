@@ -63,7 +63,7 @@ PCE_FLOW void presentation_frame(void) {
 uint8_t actors_mode;   /* 0 every actor (the dialogue's redraw), 1 only the scenery props, 2 only the fighters (play_pce.c draws the props first, see there) */
 PRESENT void actors_draw(void) {
     uint8_t stage=pce_metrics.stage-1;
-    /* Scenery props (types 12-27: the saloon doors, the security camera...) come after the fighters in the SAT, so they
+    /* Scenery props (types 12-27: the saloon doors...) come after the fighters in the SAT, so they
      * stay behind every fighter; where the SAT or a scanline is full they are what gives way. */
     for(uint8_t pass=actors_mode==1;pass<(actors_mode==2?1:2);++pass)
     for(Actor *a=actors;a<actors+8;++a) {   /* by pointer: indexing a 21-byte record costs a multiplication each time */
@@ -98,7 +98,6 @@ PRESENT void actors_draw(void) {
                 }
             }
         }
-        if(a->type==16){id+=(frame/15)&1;a->flip=0;}
         if(a->type==28)id+=a->hp==2?0:a->hp==1?1:2+(a->anim>>2)%6;   /* the blue Outrider: stand, alarm, run */
         int16_t sx=a->b.x-camera;
         /* a refused draw is skipped for the frame, never a removal; a fighter refused on screen holds the filler spawns back */

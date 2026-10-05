@@ -7,10 +7,6 @@
 #include <string.h>
 /* Shots, mines, the Hornet leader and his escort (mode7.c update_ents), called from the race's step. */
 #define FOES_CODE PCE_RACE2
-FOES_CODE static uint8_t rnd(void) {
-    uint8_t carry=race_rng&1;race_rng>>=1;if(carry)race_rng^=0xB400;
-    return (uint8_t)(race_rng^(race_rng>>8));
-}
 FOES_CODE static void hurt_car(uint8_t damage) {arg_damage=damage;overlay_call(0x7c,hurt_call);}
 FOES_CODE static void bump(int16_t x,int16_t y,int16_t dist,int16_t r) {arg_x=x;arg_y=y;arg_dist=dist;arg_radius=r;overlay_call(0x6d,bump_call);}
 FOES_CODE static void wreck(void) {audio_effect(4);}   /* the burst's sound alone (a booster firing) */
@@ -28,7 +24,7 @@ FOES_CODE void foes_aimed_bolt(void) {
     for(uint8_t b=6;b<10;++b)if(!race_bolts[b].t) {
         int16_t dx=wrapdiff(px,arg_x),dy=wrapdiff(py,arg_y);
         int16_t dist=hypot16(dx,dy);if(dist<1)dist=1;
-        int16_t jit=(int16_t)(rnd()%102)-51;
+        int16_t jit=(int16_t)(race_random()%102)-51;
         int16_t jx=dx-(dy>>3)*jit/32,jy=dy+(dx>>3)*jit/32;
         /* the direction as dx / dist in Q5, times the speed: (|jx| << 5) / dist * (speed / 8) / 4 */
         uint16_t ux=(uint16_t)absolute(jx)<<5,uy=(uint16_t)absolute(jy)<<5;
@@ -50,8 +46,8 @@ __attribute__((noinline,minsize,section(".ram_bank114.text"))) void foes_spawn_e
     for(uint8_t k=0;k<2;++k)if(!escort[k].hp) {
         Leader *e=&escort[k];
         memset(e,0,sizeof *e);
-        e->xq=(int32_t)(4096+(int16_t)(rnd()%160)-80)<<8;e->yq=((int32_t)py-900-(int16_t)(rnd()%300))<<8;
-        e->speed=300;e->hp=e->hp_max=4+pce_options.difficulty;e->t=(uint8_t)(60+rnd()%120);
+        e->xq=(int32_t)(4096+(int16_t)(race_random()%160)-80)<<8;e->yq=((int32_t)py-900-(int16_t)(race_random()%300))<<8;
+        e->speed=300;e->hp=e->hp_max=4+pce_options.difficulty;e->t=(uint8_t)(60+race_random()%120);
         e->x=(e->xq>>8)&8191;e->y=(e->yq>>8)&8191;return;
     }
 }
@@ -104,13 +100,13 @@ FOES_CODE void foes_escorts(void) {
         if(e->state==0) {   /* running, weaving across the road */
             e->anim+=226;
             e->speed+=(300-e->speed)>>5;
-            if(e->t)--e->t;else{e->state=1;e->t=(uint8_t)(150+rnd()%90);e->t2=40;}
+            if(e->t)--e->t;else{e->state=1;e->t=(uint8_t)(150+race_random()%90);e->t2=40;}
         } else {            /* slowed right down, guns on the car (a shot every two seconds: gentler than the source's one a second) */
             e->anim+=300;
             e->speed+=(90-e->speed)>>4;
             if(e->t2)--e->t2;
             else if(dist<1100){e->t2=120;arg_x=e->x;arg_y=e->y;arg_speed=2200;arg_life=140;foes_aimed_bolt();}
-            if(e->t)--e->t;else{e->state=0;e->t=(uint8_t)(180+rnd()%180);}
+            if(e->t)--e->t;else{e->state=0;e->t=(uint8_t)(180+race_random()%180);}
         }
         if(e->knock){--e->knock;e->speed=e->speed*97/100;}
         /* the lane steers towards a point weaving about the middle of the road, as the leader does: the old sideways integral
@@ -132,7 +128,7 @@ FOES_CODE void foes_leader(void) {
     e->anim+=e->state==1?243:156;
     if(e->state==2) {   /* burning out: rolls to a stop, sparks, then the big one */
         e->speed-=e->speed>>4;
-        if(!(e->t&7))blast(e->x+(int16_t)(rnd()&31)-16,e->y+(int16_t)(rnd()&15)-8);
+        if(!(e->t&7))blast(e->x+(int16_t)(race_random()&31)-16,e->y+(int16_t)(race_random()&15)-8);
         if(!--e->t){blast(e->x,e->y);e->state=3;rphase=P_VICTORY;phase_t=0;pce_campaign.boss_hp=0;return;}
     } else if(e->state==0) {   /* the pursuit: up the road, pace rubber-banded to the gap so he stays in reach but never free */
         target=gap>3400?210:gap>2200?320:(gap<600?450:390);   /* a fifth slower than the source */
@@ -141,18 +137,18 @@ FOES_CODE void foes_leader(void) {
         if(e->boost){--e->boost;target=600;e->since=0;}else if(e->since<1000)++e->since;
         e->speed+=(target-e->speed)>>(e->boost?4:6);
         if(e->t2)--e->t2;
-        else if(gap<900&&gap>0){e->t2=(uint8_t)(84+rnd()%60);arg_x=e->x;arg_y=e->y;arg_life=200;foes_drop_mine();}
+        else if(gap<900&&gap>0){e->t2=(uint8_t)(84+race_random()%60);arg_x=e->x;arg_y=e->y;arg_life=200;foes_drop_mine();}
     } else {   /* the fight: he keeps racing just ahead of the car, weaving to block, mines out the back, a rear gunner, a booster now and then */
         target=gap<0?450:gap<140?480:gap<520?360:gap<1200?290:225;   /* four fifths of the source's pace */
         if(e->knock)target=target*4/5;
         if(e->t3)--e->t3;
-        else if(gap>0&&gap<450&&!e->boost){e->boost=138;e->t3=(uint8_t)(120+rnd()%120);e->speed=580;wreck();}
+        else if(gap>0&&gap<450&&!e->boost){e->boost=138;e->t3=(uint8_t)(120+race_random()%120);e->speed=580;wreck();}
         if(e->boost){--e->boost;target=580;}
         e->speed+=(target-e->speed)>>(e->boost?4:6);
         if(e->t2)--e->t2;
-        else if(gap>60&&gap<700){e->t2=(uint8_t)(60+rnd()%48);arg_x=e->x+(int16_t)(rnd()%40)-20;arg_y=e->y;arg_life=220;foes_drop_mine();}
+        else if(gap>60&&gap<700){e->t2=(uint8_t)(60+race_random()%48);arg_x=e->x+(int16_t)(race_random()%40)-20;arg_y=e->y;arg_life=220;foes_drop_mine();}
         if(e->since)--e->since;
-        else if(gap>90&&gap<1300){e->since=(uint8_t)(100+rnd()%50);arg_x=e->x;arg_y=e->y;arg_speed=2300;arg_life=140;foes_aimed_bolt();}
+        else if(gap>90&&gap<1300){e->since=(uint8_t)(100+race_random()%50);arg_x=e->x;arg_y=e->y;arg_speed=2300;arg_life=140;foes_aimed_bolt();}
     }
     /* weaving about the road (jinking out of the car's line when it closes in); the heading follows it */
     int16_t road_x=4096+muls(e->state==1?60:60,sine(e->anim));

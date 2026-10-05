@@ -24,3 +24,7 @@ __ram_bank131 = 0x6000;
 INCLUDE binary-scd.ld
 __pce_app_entry = ABSOLUTE(_start);
 ASSERT(__zp_bss_start + __zp_bss_size <= 0xf82080, "Audio state overlaps compiler zero page")
+
+/* Shared pursuit RNG must be callable while any stage overlay is mapped. */
+ASSERT((race_random & 0xffff) < 0x6000 || (race_random & 0xffff) >= 0x8000,
+       "Race RNG must remain outside the overlay execution window")

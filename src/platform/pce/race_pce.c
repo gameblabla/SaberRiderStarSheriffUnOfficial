@@ -43,7 +43,8 @@ __attribute__((noinline)) int16_t muls(int16_t a,int8_t b) {
 static uint8_t pfx,pfy,fire_cd;
 static uint16_t spawn_t;
 
-RACE_CODE static uint8_t rnd(void) {
+/* Fixed resident code: called by $79, $7a and the escort spawner in $72. */
+__attribute__((noinline)) uint8_t race_random(void) {
     uint8_t carry=race_rng&1;race_rng>>=1;if(carry)race_rng^=0xB400;
     return (uint8_t)(race_rng^(race_rng>>8));
 }
@@ -260,7 +261,7 @@ RACE_CODE static void race_tick(uint8_t keys) {
         gap_dist=boss.state<2?(uint16_t)hypot16(wrapdiff(px,boss.x),wrapdiff(py,boss.y)):0;
         if(rphase==P_PURSUIT) {
             if(spawn_t)--spawn_t;
-            else if(gap_dist>700){spawn_t=(uint16_t)(180+rnd()%120);overlay_call(0x72,foes_spawn_escort);}
+            else if(gap_dist>700){spawn_t=(uint16_t)(180+race_random()%120);overlay_call(0x72,foes_spawn_escort);}
             if(gap_dist<260&&wrapdiff(boss.y,py)<0&&boss.state==0) {   /* on his tail: he stops running, the fight is on */
                 speed=speed/2;
                 pce_campaign.story=2;pce_campaign.event=1;
