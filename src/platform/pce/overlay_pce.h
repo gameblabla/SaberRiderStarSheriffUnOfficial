@@ -20,7 +20,7 @@ void herd_spawn(void);
 extern int16_t herd_y;
 extern uint16_t herd_lead;
 void herd_draw(void);
-extern uint8_t herd_on,herd_locked,herd_pending;
+extern uint8_t herd_on,herd_locked,herd_pending,herd_flee;   /* herd_flee: the first stampede of level 1 (the enemies run off to the left) */
 extern int16_t herd_next;
 void herd_feed(void);
 void play_frame(void);

@@ -130,7 +130,15 @@ ENEMY_CODE void world_update(void) {
         if(((a->b.x<(int16_t)camera-80||(a->b.x>(int16_t)camera+384&&a->type<6))&&a->type!=28)||a->b.y>272){a->active=0;continue;}
         /* The stampede tramples every humanoid in its way: the placed snipers and the rest are simply gone while it runs, which is
          * also what keeps its scenes inside the sprite budget (they are never drawn, uploaded or fired from). */
-        if(herd_on&&(a->type<11||a->type>28)){a->active=0;continue;}
+        if(herd_on&&(a->type<11||a->type>28)) {
+            /* (the first stampede of level 1 alone: its enemies turn and run off to the left, snipers and kneelers in the run of the brown grunt, which has their body) */
+            if(!herd_flee||a->type>10){a->active=0;continue;}
+            if(a->dead){if(++a->dead>24)a->active=0;continue;}
+            if(a->type>5)a->type=5;
+            a->mode&=~8;a->timer=0;a->flip=1;a->b.vx=-768;phys(&a->b);++a->anim;
+            if(a->b.coll&3)a->active=0;   /* (a wall in the way: nowhere left to run) */
+            continue;
+        }
         if(a->type>=12&&a->type<=27)continue;
         if(a->type==11){advance(&a->b.x,&a->b.fx,a->flip?-512:512);continue;}   /* the herd gallops at the source's 120 px/s */
         if(a->type==28) {

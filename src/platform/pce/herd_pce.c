@@ -100,7 +100,7 @@ HERD_CODE void herd_draw(void) {
         for(uint8_t p=28;p<48;++p)pattern_owner[p]=0;
         for(uint8_t i=0;i<warm_count;++i)if(sprite_ids[warm_slots[i]]==warm_ids[i])
             sprite_pinned[warm_slots[i]]=sprite_used[warm_slots[i]]?2:0;
-        sprite_pinned[47]=0;herd_on=herd_locked=0;audio_pcm_gallop(false);return;
+        sprite_pinned[47]=0;herd_on=herd_locked=herd_flee=0;audio_pcm_gallop(false);return;
     }
     audio_pcm_gallop(true);
     sprite_pinned[47]=250;

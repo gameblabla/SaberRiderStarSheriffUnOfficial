@@ -22,7 +22,7 @@ static int16_t trigger_lo[60] PCE_STAGE,trigger_hi[60] PCE_STAGE;
 PCE_COMBAT void encounter_init(void) {
     const PceScene *scene=play_scene;
     uint8_t counts[3];arcade_read(2,scene->rules,counts,3);
-    stop_count=counts[2]>4?4:counts[2];stop_done=0;herd_on=herd_locked=herd_pending=0;
+    stop_count=counts[2]>4?4:counts[2];stop_done=0;herd_on=herd_locked=herd_pending=herd_flee=0;
     arcade_read(2,scene->rules+3+(uint16_t)counts[0]*16+(uint16_t)counts[1]*12,stop_zones,stop_count*8);
     for(uint8_t k=0;k<scene->ntr;++k) {
         arcade_read(2,scene->triggers+(uint32_t)k*sizeof trigger,&trigger,sizeof trigger);
@@ -34,7 +34,7 @@ PCE_COMBAT void encounter_init(void) {
 /* The convoy is instantiated lazily: the source drops all of its horses at once (12-13, 99 px apart).
  * The PCE spaces them 224 px apart to fit the real scanline limit. The actor pool holds eight, so each horse is created when its place in the column comes within a few horses of the screen. The
  * column marches at the horses' own speed (2 px a step, 8 per call), so `herd_next` is where the next one would be. */
-uint8_t herd_pending;int16_t herd_next;
+uint8_t herd_pending,herd_flee;int16_t herd_next;
 PCE_SCENERY void herd_feed(void) {
     herd_next-=8;
     while(herd_pending&&herd_next<(int16_t)camera+328+(int16_t)herd_lead+200) {
@@ -73,6 +73,7 @@ PCE_SCENERY void encounters(void)   /* $78: the mission bank is full */ {
              * the same horse count, 224 px apart, so at most two are on screen and two fit a scanline beside the hero. */
             if(!play_scene->horse||t->wp[0][0]<=30000){trigger_remaining[k]=0;continue;}
             herd_y=t->wp[0][1];herd_lead=t->interval*5/2;herd_pending=(uint8_t)t->remaining+1;if(pce_metrics.stage==1)herd_pending=t->cx<4000?8:t->cx>8000?herd_pending-3:herd_pending;   /* the first convoy runs a third shorter, the last three horses fewer */
+            herd_flee=pce_metrics.stage==1&&t->cx<4000;
             herd_next=camera+328+herd_lead+16;overlay_call(0x6f,herd_spawn);herd_feed();
             trigger_remaining[k]=0;continue;
         }
