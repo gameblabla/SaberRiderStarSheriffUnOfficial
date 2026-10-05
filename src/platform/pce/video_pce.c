@@ -375,7 +375,7 @@ __attribute__((noinline,section(".ram_bank109.text"))) static void race_sky_load
     memset(cache_ids,0xff,sizeof cache_ids);
     for(uint8_t x=0;x<128;++x) {
         arcade_read(1,scene->map+(uint32_t)(x&63)*90,buffer,90);
-        for(uint8_t y=0;y<14;++y) {   /* the last two rows (scanlines 112-127) are the road's haze rows */
+        for(uint8_t y=0;y<16;++y) {   /* 16 rows: the sky reaches scanline 127, where the road's first scanline is (irq.S) */
             uint16_t id=buffer[y*3]|(uint16_t)buffer[y*3+1]<<8;
             uint16_t slot;
             for(slot=0;slot<used&&cache_ids[slot]!=id;++slot) {}
@@ -392,12 +392,10 @@ __attribute__((noinline,section(".ram_bank109.text"))) static void race_sky_load
         }
     }
     pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-    /* The road: 256 characters at $2000, its BAT rows (two copies of 12 rows from row 0, the haze rows at 62, the wrap variants of the lower rows at 24) and eight palettes. */
+    /* The road: 256 characters at $2000, its BAT rows (two copies of 12 rows from row 0, the wrap variants of the lower rows at 24) and eight palettes. */
     arcade_vram(PCE_RACE_ROAD_TILES,0x2000,8192);
     pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
     arcade_vram(PCE_RACE_ROAD_BAT,0,6144);
-    pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-    arcade_vram(PCE_RACE_ROAD_BAT+6144,62*128,512);
     pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
     arcade_vram(PCE_RACE_ROAD_BAT+6656,24*128,6144);   /* the lower rows' wrap variants (BAT rows 24-47) */
     arcade_read(2,PCE_RACE_ROAD_PALETTE,buffer,256);

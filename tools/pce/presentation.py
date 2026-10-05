@@ -250,7 +250,27 @@ def add_art(root,work,stage,sprites,frame):
         up=stand.copy();up.alpha_composite(cell(38),(0,-30));down=stand.copy();down.alpha_composite(cell(46),(0,-9))
         frames+=[cell(120),cell(40),cell(44),cell(42),up,down,cell(149)]+[cell(n) for n in (160,162,164,167)]
         for k,im in enumerate(frames):add(f'dark_april{k}',violet(im),(32,32))
-    return dict(portraits=portraits,dialog=dialog,hud=hud,digits=digits,aim=aim,motion=motion,pose=pose,up_tip=up_tip,art_muzzle=art_muzzle,flash=flash,enemy=enemy,dark=dark,end=len(sprites))
+    # The hero power's cut-in portrait (the select screen's lit portrait, 64 dots wide, 160 high, in three sprites of 64x64, 64x64 and 64x32 a hero:
+    # power_base + 3 * hero + part). The three parts share the hero's palette (add_sprites), so the cache's shared-palette slots show them right.
+    power=len(sprites)
+    for hero,rid in enumerate((0x67C9A3D9,0x74100546,0x72A6B0FB,0xEEE2331F) if stage in (1,3,4,5,7) else ()):
+        port=get(rid);x0=(port.width-64)//2
+        for k,(y0,y1) in enumerate(((0,64),(64,128),(128,160))):add(f'pwr{hero}_{k}',port.crop((x0,y0,x0+64,y1)))
+    # the hero's name beside it (power_base + 12 + hero): the dialogue font at twice the size, 14 dots a letter, white with a black outline (14 * letters + 4 wide, 18 high)
+    if stage in (1,3,4,5,7):
+        for hero,name in enumerate(('SABER RIDER','FIREBALL','APRIL','COLT')):
+            w=14*len(name)+4;mask=np.zeros((18,w),bool)
+            for i,ch in enumerate(name):
+                if ch==' ':continue
+                g=np.asarray(get(0x12072E60,ord(ch)-0x21))[...,3]>=64
+                g=np.repeat(np.repeat(g,2,axis=0),2,axis=1)
+                mask[1:17,2+14*i:18+14*i]|=g
+            ring=np.zeros_like(mask)
+            for dy in (-1,0,1):
+                for dx in (-1,0,1):ring|=np.roll(np.roll(mask,dy,0),dx,1)
+            a=np.zeros((18,w,4),np.uint8);a[ring]=(0,0,0,255);a[mask]=(255,255,255,255)
+            add(f'pwr{hero}_name',Image.fromarray(a))
+    return dict(portraits=portraits,dialog=dialog,hud=hud,digits=digits,aim=aim,motion=motion,pose=pose,up_tip=up_tip,art_muzzle=art_muzzle,flash=flash,enemy=enemy,dark=dark,power=power,end=len(sprites))
 
 def emit_tables(out,scenes,h,c):
     m=scenes[0]['presentation']
@@ -270,6 +290,8 @@ def emit_tables(out,scenes,h,c):
     h.append('extern const uint8_t pce_hero_pose[4][6];')
     pose=next((m['presentation']['pose'] for m in scenes if m['presentation']['pose']),[[0]*6]*4)
     c.append('const uint8_t pce_hero_pose[4][6]={'+','.join('{'+','.join(map(str,e))+'}' for e in pose)+'};')
+    h.append('extern const uint16_t pce_power_base[7];')   # (bank $7b with the cut-in's code: the resident bank has no room)
+    c.append('const uint16_t pce_power_base[7] __attribute__((section(".ram_bank123.rodata")))={'+','.join(str(m['presentation']['power']) for m in scenes)+'};')
     h.append('extern const uint16_t pce_flash_base[7];')
     c.append('const uint16_t pce_flash_base[7]={'+','.join(str(m['presentation']['flash']) for m in scenes)+'};')
     h.append('extern const uint16_t pce_present_base[7][3];')

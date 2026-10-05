@@ -67,7 +67,7 @@ pce_vblank:
     lda #255
     sta pce_raster_row
     st0 #6
-    st1 #120            /* the near sky band (the mountains) at scanline 56, then the road from 112 */
+    st1 #120            /* the near sky band (the mountains) at scanline 56, then the road from 128 */
     st2 #0
     bra .Ldone
 .Lnormal:
@@ -148,7 +148,8 @@ pce_vblank:
     rts
 
 /* The race's raster, from the end of scanline 79: the near sky band, then one interrupt for each pair of scanlines from the end of
- * scanline 111 to 221. Interrupt p (pce_raster_row) is at the end of scanline 111 + 2p and sets what scanlines 112 + 2p and 113 + 2p
+ * scanline 127 to 221 (the sky and its mountains fill scanlines 0-127: the road's far rows are fully hazed down to there; the table
+ * entries m < 16 are not used). Interrupt p (pce_raster_row, 8 to 55) is at the end of scanline 111 + 2p and sets what scanlines 112 + 2p and 113 + 2p
  * show: BXR from the tables road_pce.c built (low byte at columns + 0, high at +256, both indexed by m = 2p plus the half on display)
  * and, where the picture copy changes (the stripes, or a window that wraps round the picture), BYR. The picture is two copies of 12 BAT
  * rows (rows 0-11, 12-23; scanline 128 reads row 0 by itself since BYR counts on from the sky's 384) after the haze rows 62-63 at
@@ -190,9 +191,10 @@ pce_hblank:
     sta 2
     lda pce_sky_near+1
     sta 3
-    stz pce_raster_row
+    lda #8
+    sta pce_raster_row
     st0 #6
-    st1 #176
+    st1 #192
     st2 #0
     jmp .Lhdone
 .Lroad:

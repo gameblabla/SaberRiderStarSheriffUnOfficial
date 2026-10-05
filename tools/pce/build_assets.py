@@ -415,7 +415,7 @@ def race_sky(archive, previews, sand):
     the haze of the ground out to the floor's first scanline (120). One 15-colour palette: 13 shades of the gradient and the
     haze; ordered dithering (8x8 Bayer, 64 steps between neighbouring shades) keeps the bands invisible, and because the
     dither repeats every 8 dots a tile row is the same all across, so the whole sky is 16 distinct characters."""
-    HORIZON = 113
+    HORIZON = 128   # the sky's feet: the road's far rows are fully hazed down to here (road_assets), so the sky and its mountains fill that stretch (irq.S starts the road's scanlines at 128)
     def word(c): return int(vce_colors(np.clip(np.asarray(c, float), 0, 255).astype(np.uint8)))
     zenith, pale = np.array((12, 60, 188.)), np.array((200, 220, 255.))
     haze = np.asarray(sand, float) * 0.72 + pale * 0.28
@@ -457,8 +457,8 @@ def race_sky(archive, previews, sand):
     # wrapping at the panorama's 512 dots. They get a hardware palette of their own (palette 9: the gradient's shades that reach down here, and the range's
     # own colours fitted to it), flat shaded, so the tiles repeat enough for the 256 characters of the sky.
     rgb = vce_rgb(palette)
-    strip = race_mountains(np.asarray(sand, float) * 0.72 + pale * 0.28, MTN_TOP, HORIZON - 1)
-    region = pixels[MTN_TOP:HORIZON - 1].copy()
+    strip = race_mountains(np.asarray(sand, float) * 0.72 + pale * 0.28, MTN_TOP, HORIZON)
+    region = pixels[MTN_TOP:HORIZON].copy()
     shades = sorted(set(int(v) for v in np.unique(region)))
     solid = strip[..., 3] > 0
     # (the range's colours, by hand on the hardware's lattice: a shaded side stays brown and a lit one gold, which a fit to the haze-blended pixels turned olive;
@@ -474,10 +474,10 @@ def race_sky(archive, previews, sand):
     out = remap[region]
     near = ((strip[..., None, :3] - mtn_rgb[None, None]) ** 2).sum(-1).argmin(-1).astype(np.uint8) + len(shades) + 1
     out[solid] = near[solid]
-    pixels[MTN_TOP:HORIZON - 1] = out
+    pixels[MTN_TOP:HORIZON] = out
     sky_rgb = np.zeros((pixels.shape[0], 512, 3), np.uint8)
     sky_rgb[:MTN_TOP] = rgb[pixels[:MTN_TOP]]
-    sky_rgb[MTN_TOP:HORIZON - 1] = vce_rgb(pal2)[pixels[MTN_TOP:HORIZON - 1]]
+    sky_rgb[MTN_TOP:HORIZON] = vce_rgb(pal2)[pixels[MTN_TOP:HORIZON]]
     palette[14] = word(np.asarray(sand)*0.68 + np.array((110,135,180))*0.32)
     tiles, lookup, columns = [], {}, []
     for x in range(64):
@@ -485,7 +485,7 @@ def race_sky(archive, previews, sand):
         for y in range(30):
             enc = planar_tile(pixels[min(y,15)*8:min(y,15)*8+8,x*8:x*8+8])
             if enc not in lookup: lookup[enc]=len(tiles);tiles.append(enc)
-            column += struct.pack('<HB',lookup[enc],9 if MTN_TOP // 8 <= y < 14 else 0)
+            column += struct.pack('<HB',lookup[enc],9 if MTN_TOP // 8 <= y < 16 else 0)
         columns.append(column)
     assert len(tiles)<=256, f'Race panorama exceeds sky VRAM: {len(tiles)} characters'
     pals = [palette] * 16; pals[9] = pal2
@@ -596,10 +596,16 @@ def add_sprites(archive, sprites, previews):
     # The HUD pieces of a stage share one palette (the cache gives them the shared-palette slots, see sprite_cache_pce.c).
     hud=[im for name,im,_ in sprites if name.startswith('hudp_')]
     hud_palette=palette_for(hud,unique=True) if hud else None
+    power_palette={}
+    for h in range(4):   # the portrait's 13 colours, then white and black for the name beside it (all of a hero's parts share the palette)
+        parts=[im for name,im,_ in sprites if name.startswith(f'pwr{h}_') and not name.endswith('name')]
+        if not parts: continue
+        pal=palette_for(parts,13);pal[14]=vce_colors(np.array((255,255,255),np.uint8));pal[15]=0
+        power_palette[h]=pal
     boss=[im for name,im,_ in sprites if name in ('gunship_left','gunship_right','hyperjumper_left','hyperjumper_right')]
     boss_palette=palette_for(boss) if boss else None
     for name, im, anchor in sprites:
-        pat, parts, palette, line = pack_sprite(im, anchor,boss_palette if name in ('gunship_left','gunship_right','hyperjumper_left','hyperjumper_right') else fg_palette if name.startswith("foreground_") else hud_palette if name.startswith('hudp_') else None)
+        pat, parts, palette, line = pack_sprite(im, anchor,boss_palette if name in ('gunship_left','gunship_right','hyperjumper_left','hyperjumper_right') else fg_palette if name.startswith("foreground_") else hud_palette if name.startswith('hudp_') else power_palette[int(name[3])] if name.startswith('pwr') else None)
         if (not parts and name != 'battle_cruiser') or len(parts)>32:
             raise ValueError(f'{name}: expected 1..32 visible sprite pieces, got {len(parts)}')
         offset = archive.add(name + '_patterns', pat)
@@ -732,6 +738,41 @@ def race_dialog(archive, work):
         glyphs=archive.add(f'dialog{rid}_font',b''.join(font))
         records.append(struct.pack('<4IH',pal,pat,bat,glyphs,len(tiles)*32))
     archive.add('dialog_wide',b''.join(records))
+
+def power_wave():
+    """The hero power's blue wave (power_pce.c): 14 ramp colours (VCE words) then 64 background characters. The picture is a field of
+    slanted curling crests, 64 dots across and 48 down, so eight characters across and six down tile it; a contour of the field is one
+    palette entry, and the cut-in rotates the 14 ramp colours through palette 15 (entries 1-14) so the crests flow. Entry 15 is the
+    black outline. Characters: kind (0-5: the picture's character rows), 6 the band's top row (two black lines), 7 its bottom row
+    (kind 1 with the last two lines black); character = kind * 8 + the column & 7."""
+    ramp = []
+    for i in range(14):
+        if i >= 13: c = (255, 255, 255)
+        elif i == 12: c = (200, 244, 255)
+        else:
+            a = np.array((8, 28, 110.)); b = np.array((60, 170, 255.)); c = tuple(int(v) for v in a + (b - a) * (i / 11) ** 1.4)
+        ramp.append(int(vce_colors(np.array(c, np.uint8))))
+    y, x = np.mgrid[0:48, 0:64]
+    s = 14 * y / 48 + 3.0 * np.sin(2 * np.pi * x / 64 + 2 * np.pi * y / 48) + 1.5 * np.sin(2 * np.pi * 2 * x / 64 - 2 * np.pi * 2 * y / 48)
+    field = (np.floor(s).astype(int) % 14 + 1).astype(np.uint8)
+    tiles = []
+    for kind in range(8):
+        row = kind if kind < 6 else 0 if kind == 6 else 1
+        for col in range(8):
+            t = field[row * 8:row * 8 + 8, col * 8:col * 8 + 8].copy()
+            if kind == 6: t[:2] = 15
+            if kind == 7: t[6:] = 15
+            tiles.append(planar_tile(t))
+    return struct.pack('<14H', *ramp) + b''.join(tiles)
+
+def font_glyphs(work):
+    """The 96 ASCII glyphs of the dialogue font (font.bin; palette 15)."""
+    glyphs = []
+    font_path = work/'srgb'/'12072E60.srgb'
+    for ch in range(32, 128):
+        px = np.asarray(cblock_frame(font_path, ch - 0x21)) if ch > 32 and ch - 0x21 < 106 else np.zeros((8,8,4), np.uint8)
+        glyphs.append(planar_tile(((px[..., 3] >= 64) * 15).astype(np.uint8)))
+    return b''.join(glyphs)
 
 def make_scene(stage, work, previews, shared):
     a = Archive()
@@ -1256,6 +1297,8 @@ def make_scene(stage, work, previews, shared):
     # Append presentation art after fixed gameplay IDs to retain mission IDs.
     if stage in (1,3,4,5,6):platform_dialog(a,work)
     if stage not in (6,7): meta['presentation']=presentation.add_art(ROOT,work,stage,sprites,cblock_frame)
+    if stage in (1,3,4,5,7): a.add('power_wave', power_wave())
+    if stage == 7: a.add('dialog_original_font', font_glyphs(work))   # (the cut-in puts the font back; the other stages' copy comes with their dialogue panels)
     meta['foreground_offset']=0;meta['foreground_count']=0
     if stage in (1,3,4,5):
         # Platform playfields now include the source's top 16 lines. Gameplay
@@ -1263,7 +1306,7 @@ def make_scene(stage, work, previews, shared):
         # the renderer needs no per-draw Y adjustment.
         hud0=meta['presentation']['hud'][0][0];aim0=meta['presentation']['aim'][0][0];motion0=meta['presentation']['motion'][0][0]
         for i,(name,im,(ax,ay)) in enumerate(sprites):
-            if i<hud0 or aim0<=i<meta['presentation']['end']:   # gameplay, aim and motion poses (not the HUD)
+            if i<hud0 or aim0<=i<meta['presentation']['power']:   # gameplay, aim and motion poses (not the HUD, not the power portraits)
                 sprites[i]=(name,im,(ax,ay-16))
         if stage in (1,3):   # no foreground layer at all: whatever is left of it flickers (stage 4 keeps its cabin walls)
             foreground=Image.new('RGBA',foreground.size);print(f'  stage {stage}: foreground removed', flush=True)
@@ -1300,12 +1343,7 @@ def main():
     ui_h,ui_c,ui_bytes=frontend.bake(ROOT,work,out,previews,cblock_frame)
     # 96 ASCII glyphs use background characters, palette 15: the Saturn small
     # font's 8x8 frames (frame = char - 0x21; 0x7f is its dialogue arrow).
-    glyphs = []
-    font_path = work/'srgb'/'12072E60.srgb'
-    for ch in range(32, 128):
-        px = np.asarray(cblock_frame(font_path, ch - 0x21)) if ch > 32 and ch - 0x21 < 106 else np.zeros((8,8,4), np.uint8)
-        glyphs.append(planar_tile(((px[..., 3] >= 64) * 15).astype(np.uint8)))
-    (out/'font.bin').write_bytes(b''.join(glyphs))
+    (out/'font.bin').write_bytes(font_glyphs(work))
     h = ['/* Generated: all offsets are Arcade RAM byte addresses. */', '#pragma once', '#include <stdint.h>',
          'typedef struct { uint32_t bytes, pal, tiles, map, collision, sprites, triggers, story, track, rules, occlusion, foreground, horse; uint16_t cols, ccols, crows, nsprites, nforeground; int16_t sx, sy, width; uint8_t ntr, cw, ch; } PceScene;',
          'extern const PceScene pce_scenes[7];','extern const uint8_t pce_actor_ids[33];']
@@ -1333,6 +1371,8 @@ def main():
     c.append('const uint32_t pce_boss_bg[7]={'+','.join(str(m.get('boss_bg_offset',0))+'UL' for m in scenes)+'};')
     h.append('extern const uint32_t pce_boss_big[7];')
     c.append('const uint32_t pce_boss_big[7]={'+','.join(str(m.get('boss_big_offset',0))+'UL' for m in scenes)+'};')
+    h.append('extern const uint32_t pce_power_wave[7];')
+    c.append('const uint32_t pce_power_wave[7] __attribute__((section(".ram_bank123.rodata")))={'+','.join(str(m['records'].get('power_wave',{}).get('offset',0))+'UL' for m in scenes)+'};')
     for name in ('dialog_bg','dialog_corners','dialog_original_font'):
         h.append(f'extern const uint32_t pce_{name}[7];')
         c.append(f'const uint32_t pce_{name}[7]={{'+','.join(str(m['records'].get(name,{}).get('offset',0))+'UL' for m in scenes)+'};')

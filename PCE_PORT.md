@@ -42,10 +42,10 @@ enabled and hardware sprite limits enabled, and
 | --- | --- |
 | Title / options / selection | Up/down choose; left/right change an option or hero; Run or I/II accept; Select on title resumes the checkpoint |
 | Platform | Left/right move; II jump; down crouch; down + II drop through a one-way platform or slide on solid ground; I shoot |
-| Aim / power | Hold Select with directions to aim; press Select while holding I for a power |
+| Aim / power | Hold Select with directions to aim. Hero power: button III on a 6-button pad (in 6-button mode), or a tap of Select (pressed and released within 20 frames, no direction held) on a 2-button pad |
 | Race / pursuit | Up gas, down brake, left/right steer, II turbo/ram, I fire in pursuit |
 | Ramrod | Left/right aim, up/down change range, I guns, II close punch |
-| Space | Directions fly, Select slower movement, I shoot, II torpedo, Select + I hero power |
+| Space | Directions fly, Select slower movement, I shoot, II torpedo, hero power as above (button III, or a Select tap) |
 | Dialog / clear | I or II advance |
 | Run menu | Left/right stage, up/down hero, II campaign/diagnostics, Run resume/start, Select planar effect demo |
 

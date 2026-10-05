@@ -5,6 +5,7 @@
 typedef struct {
     uint16_t x,y;
     uint8_t stage,hero,keys,pressed,elapsed,heading,phase,ok;
+    uint8_t power;   /* a hero power was asked for this frame (main_pce.c read_pad: button III of a 6-button pad, or a tap of Select on a 2-button one); the tick that uses it clears it */
 } PceControl;
 extern PceControl pce_control;
 void overlay_call(uint8_t bank,void (*method)(void));
@@ -25,6 +26,7 @@ extern int16_t herd_next;
 void herd_feed(void);
 void play_frame(void);
 void play_present(void);
+void power_frame(void);   /* power_pce.c, bank $7b: one frame of a hero power's cut-in */
 void race_start(void);
 void race_frame(void);
 /* Ramrod's arena: code images loaded with the stage (m6/m6_state.h); the world's image is in bank $79 */

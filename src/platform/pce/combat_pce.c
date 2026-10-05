@@ -7,6 +7,7 @@ static uint8_t dialogs_done,ndialog,ndeath;
 static uint16_t arena_time;
 static uint8_t boss_wait PCE_WORK;   /* a boss's arena is locked and the camera is still gliding there: its fight (and music) start when it stops */
 void arena_spawn(void),arena_reset(void);
+extern uint8_t pce_power_land;
 extern int16_t boss_x,boss_y;extern uint8_t boss_phase,boss_flash,boss_max;extern uint16_t boss_time;
 void boss_start(void),boss_tick(void),boss_draw(void),boss_release(void);
 void dark_begin(void),dark_tick(void),dark_draw(void);
@@ -84,10 +85,10 @@ PCE_COMBAT static void cut_step(void) {
 PCE_COMBAT void combat_tick(void) {
     if(pce_campaign.boost)--pce_campaign.boost;
     if(pce_campaign.power_cd)--pce_campaign.power_cd;
+    if(pce_power_land){pce_power_land=0;power_strike();}   /* the cut-in (power_pce.c) is over */
     if(cut_phase){cut_step();return;}
-    if((pce_control.pressed&KEY_SELECT)&&(pce_control.keys&KEY_1)&&
-       pce_campaign.powers&&!pce_campaign.power_cd&&!pce_campaign.boost) {
-        --pce_campaign.powers;pce_campaign.state=CAM_POWER;pce_campaign.timer=0;return;
+    if(pce_control.power&&pce_campaign.powers&&!pce_campaign.power_cd&&!pce_campaign.boost) {
+        --pce_campaign.powers;pce_campaign.state=CAM_POWER;pce_campaign.timer=0;pce_control.power=0;return;
     }
     for(uint8_t k=0;k<ndialog;++k)if(!(dialogs_done&(1<<k))&&zone(dialog_zones[k].zone)) {
         dialogs_done|=1<<k;pce_campaign.story=k;
@@ -152,12 +153,6 @@ PCE_COMBAT void combat_tick(void) {
     }
 }
 PCE_COMBAT void combat_draw(void) {
-    if(pce_campaign.state==CAM_POWER) {
-        const char *name=hero==0?"SABER SLASH":hero==1?"FIREBALL BLAST":hero==2?"APRIL OVERDRIVE":"COLT RAPID FIRE";
-        video_text(6,12,name);
-        pce_campaign.timer+=pce_control.elapsed;
-        if(pce_campaign.timer>=114){power_strike();pce_campaign.state=CAM_PLAY;video_restore();}
-    }
     if(pce_campaign.boss_kind==3&&pce_campaign.boss_hp)overlay_call(0x70,dark_draw);
     else if(pce_campaign.boss_kind&&pce_campaign.boss_kind!=3&&pce_campaign.boss_hp)overlay_call(0x6d,boss_draw);
 

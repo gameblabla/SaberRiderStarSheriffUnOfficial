@@ -18,7 +18,9 @@ static Foe foes[8];
 static Bolt bolts[12];
 static Expl expl[10] PCE_WORK;   /* the console RAM is full: this lives in the work bank */
 static Event next_event;
-static uint16_t flight_clock,spawn_clock,beam_clock,power_timer;
+uint16_t flight_clock;   /* (power_pce.c reloads the nebula from it) */
+static uint16_t spawn_clock,beam_clock;
+extern uint8_t pce_power_land;
 static uint8_t space_flash,hull_flash,foe_flash[2],foe_white;   /* foe_flash: the armoured mines' and gunships' white hit blink (kinds 4 and 5), foe_white: which are lit */
 static uint8_t event_index,event_count,pending,gun_clock,hurt,power,bombs,boss_die,boss_gone,noise;
 static int16_t ship_x,ship_y,pickup_x,pickup_y,space_boss_y;
@@ -36,7 +38,7 @@ SPACE_CODE static void event_load(void) {
 }
 SPACE_CODE void space_start(void) {
     memset(foes,0,sizeof foes);memset(bolts,0,sizeof bolts);memset(expl,0,sizeof expl);memset(&sb,0,sizeof sb);space_hull_x=0;boss_die=boss_gone=0;
-    flight_clock=spawn_clock=beam_clock=power_timer=0;space_flash=hull_flash=foe_flash[0]=foe_flash[1]=foe_white=0;space_hull_ready=0;space_flashing=0;event_index=pending=gun_clock=hurt=pickup=0;
+    flight_clock=spawn_clock=beam_clock=0;space_flash=hull_flash=foe_flash[0]=foe_flash[1]=foe_white=0;space_hull_ready=0;space_flashing=0;event_index=pending=gun_clock=hurt=pickup=0;
     pce_campaign.power_cd=pce_campaign.timer=0;
     power=1;bombs=3;ship_x=48;ship_y=112;space_boss_y=80;
     arcade_read(2,pce_scenes[6].track,&event_count,1);event_load();
@@ -116,23 +118,20 @@ __attribute__((noinline,minsize,section(".ram_bank118.text"))) static void space
 }
 SPACE_CODE static void space_tick(void) {
     uint8_t keys=pce_control.keys;
-    if(pce_death){keys=0;pce_control.pressed=0;overlay_call(0x76,space_dead);}
-    if(power_timer) {
-        pce_campaign.timer=--power_timer;
-        if(!power_timer) {
-            for(uint8_t k=0;k<8;++k)if(foes[k].kind)foe_kill(&foes[k]);
-            for(uint8_t k=0;k<12;++k)if(bolts[k].enemy)bolts[k].on=0;
-            if(sb.ph==4) {
-                pce_campaign.boss_hp=pce_campaign.boss_hp>84?pce_campaign.boss_hp-84:0;
-                for(uint8_t k=0;k<7;++k)if(k<5||pce_campaign.boss_round)port_hp[k]=0;
-            }
-            hurt=150;pce_campaign.power_cd=720;space_flash=8;hull_flash=12;audio_effect(8);audio_effect(4);
+    if(pce_death){keys=0;pce_control.pressed=pce_control.power=0;overlay_call(0x76,space_dead);}
+    if(pce_power_land) {   /* the cut-in (power_pce.c) is over: the power lands */
+        pce_power_land=0;
+        for(uint8_t k=0;k<8;++k)if(foes[k].kind)foe_kill(&foes[k]);
+        for(uint8_t k=0;k<12;++k)if(bolts[k].enemy)bolts[k].on=0;
+        if(sb.ph==4) {
+            pce_campaign.boss_hp=pce_campaign.boss_hp>84?pce_campaign.boss_hp-84:0;
+            for(uint8_t k=0;k<7;++k)if(k<5||pce_campaign.boss_round)port_hp[k]=0;
         }
-        return;
+        hurt=150;pce_campaign.power_cd=720;space_flash=8;hull_flash=12;audio_effect(8);audio_effect(4);
     }
     if(pce_campaign.power_cd)--pce_campaign.power_cd;
-    if((pce_control.pressed&KEY_SELECT)&&(keys&KEY_1)&&pce_campaign.powers&&!pce_campaign.power_cd) {
-        --pce_campaign.powers;power_timer=114;pce_campaign.timer=114;return;
+    if(pce_control.power&&pce_campaign.powers&&!pce_campaign.power_cd) {
+        --pce_campaign.powers;pce_campaign.state=CAM_POWER;pce_campaign.timer=0;pce_control.power=0;return;
     }
     if(space_flash)--space_flash;if(hull_flash)--hull_flash;
     for(uint8_t k=0;k<2;++k)if(foe_flash[k])--foe_flash[k];

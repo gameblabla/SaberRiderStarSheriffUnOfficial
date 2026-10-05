@@ -227,7 +227,7 @@ RACE_CODE static void race_tick(uint8_t keys) {
         {uint8_t lap=lapp<0?1:lapp>=2?3:lapp+1;if(lap>pce_campaign.lap)lap_banner=150;pce_campaign.lap=lap;}   /* a new lap: its banner for 2.5 s */
         if(lap_banner)--lap_banner;
         if(lapp>=3) {
-            rphase=P_FINISH;phase_t=0;finish_rank=pce_campaign.rank;lap_banner=0;
+            overlay_call(0x6d,field_rank_call);rphase=P_FINISH;phase_t=0;finish_rank=pce_campaign.rank;lap_banner=0;
             memset(mines,0,sizeof mines);memset(race_bolts,0,sizeof race_bolts);audio_stop();
         }
         break; }

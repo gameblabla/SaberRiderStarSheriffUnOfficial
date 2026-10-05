@@ -30,7 +30,7 @@ void race_frame(void);
 void race_draw(void);
 void hurt_call(void);          /* arg_damage */
 void bump_call(void);          /* arg_x, arg_y, arg_dist, arg_radius (bank $6d with the field) */
-void field_start_call(void),field_update_call(void),field_standings_call(void),field_point_call(void);
+void field_start_call(void),field_update_call(void),field_standings_call(void),field_rank_call(void),field_point_call(void);
 void foes_shots(void),foes_leader(void),foes_escorts(void),foes_leader_start(void),foes_spawn_escort(void);
 void foes_drop_mine(void);     /* arg_x, arg_y, arg_life */
 void foes_aimed_bolt(void);    /* arg_x, arg_y, arg_speed, arg_life */

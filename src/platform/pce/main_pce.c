@@ -80,6 +80,25 @@ PCE_FLOW static void render_test(uint8_t keys,uint8_t pressed) {
     }
     pce_metrics.phase=phase;pce_metrics.player_x=race_x;pce_metrics.player_y=race_y;
 }
+/* The pad. A 6-button pad (in its 6-button mode) answers alternate reads with its extra buttons: the direction nibble reads 0000 (all four
+ * pressed, which no D-pad can do) and the buttons nibble holds III, IV, V, VI. Two reads a frame return both sets, in either order. Button III is
+ * the hero power. On a 2-button pad the power is a tap of Select (pressed and let go within 20 frames with no direction held meanwhile: Select
+ * held with a direction is the aim). */
+static uint8_t pad_six,select_clock,select_dirty;
+PCE_FLOW static uint8_t read_pad(uint8_t *pressed_power) {
+    uint8_t a=~pce_joypad_read(),b=~pce_joypad_read(),keys=a,third=0;
+    if((a&0xf0)==0xf0){third=a&1;keys=b;pad_six=1;}
+    else if((b&0xf0)==0xf0){third=b&1;pad_six=1;}
+    static uint8_t third_before,select_before;
+    *pressed_power=0;
+    if(pad_six){if(third&&!third_before)*pressed_power=1;}
+    else {
+        if(keys&KEY_SELECT){if(!select_before){select_clock=0;select_dirty=0;}if(select_clock<255)++select_clock;if(keys&(KEY_UP|KEY_DOWN|KEY_LEFT|KEY_RIGHT))select_dirty=1;}
+        else if(select_before&&!select_dirty&&select_clock<=20)*pressed_power=1;
+    }
+    third_before=third;select_before=keys&KEY_SELECT;
+    return keys;
+}
 PCE_FLOW void flow_main(void) {
     pce_metrics.magic[0]='S';pce_metrics.magic[1]='R';pce_metrics.magic[2]='P';pce_metrics.magic[3]='C';
     pce_metrics.version=1;video_init();audio_pcm_init();
@@ -115,7 +134,7 @@ PCE_FLOW void flow_main(void) {
         uint8_t elapsed=pce_ticks-simulation_tick;simulation_tick=pce_ticks;
         if(elapsed>12)elapsed=12;
         if(pce_stall){pce_stall=0;elapsed=1;}   /* a CD seek or a big upload held the loop up: its ticks are not caught up */
-        uint8_t keys=~pce_joypad_read(),pressed=keys&~previous;previous=keys;audio_tick();
+        uint8_t power,keys=read_pad(&power),pressed=keys&~previous;previous=keys;audio_tick();
         if(pressed&KEY_RUN) {
             if(menu) {
                 menu=0;
@@ -146,9 +165,10 @@ PCE_FLOW void flow_main(void) {
             pce_metrics.hero=hero;menu_draw();continue;
         }
         pce_control.keys=keys;pce_control.pressed=pressed;pce_control.elapsed=elapsed;
+        pce_control.power=power;
         if(!pce_campaign.diagnostic) {
             if(pce_campaign.state==CAM_STORY){overlay_call(0x71,story_step);simulation_tick=pce_ticks;continue;}
-            if(pce_campaign.state==CAM_POWER){overlay_call(0x69,play_present);continue;}
+            if(pce_campaign.state==CAM_POWER){overlay_call(0x7b,power_frame);simulation_tick=pce_ticks;continue;}
             if(pce_campaign.state==CAM_OVER||pce_campaign.state==CAM_END) {
                 if(pce_campaign.state==CAM_OVER) {
                     ui_fade_out();   /* a life lost for good: to black, then the continue screen */

@@ -92,13 +92,19 @@ FIELD_CODE static void standings(void) {
 
 FIELD_CODE void field_start_call(void) {start_field();}
 /* arg_x: the car's lateral offset on the circuit, arg_life: 1 on the grid */
-/* arg_dist comes back 1 when every rival still running has finished the race (three laps) before the car: the race is lost */
+/* arg_dist comes back 1 when every rival still running has finished the race (three laps) before the car, and there are at least three of them
+ * (with fewer left the car is in the first three whatever happens, and finishes): the race is lost */
 FIELD_CODE void field_update_call(void) {
     uint8_t alive=0,done=0;
     if(!(phase_t&3))update_field(arg_life,arg_x);   /* every fourth step, each worth four */
     for(uint8_t k=0;k<N_RIVALS;++k)if(rv[k].hp){++alive;if(rv[k].lap>=3)++done;}
-    arg_dist=alive&&done==alive;
+    arg_dist=alive>=3&&done==alive;
 }
 FIELD_CODE void field_standings_call(void) {standings();}
+/* The placing at the flag: from fresh gaps (the ones update_field keeps are up to three steps old). */
+FIELD_CODE void field_rank_call(void) {
+    for(uint8_t k=0;k<N_RIVALS;++k)if(rv[k].hp)rv[k].gap=gap_units(&rv[k]);
+    standings();
+}
 /* arg_speed: progress (as unsigned), arg_dist: lateral offset; the point comes back in arg_x, arg_y */
 FIELD_CODE void field_point_call(void) {track_point((uint16_t)arg_speed,arg_dist,&arg_x,&arg_y);}
