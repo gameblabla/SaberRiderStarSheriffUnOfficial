@@ -116,15 +116,17 @@ __attribute__((noinline,section(".ram_bank117.text"))) static void effect_body(v
     uint8_t tone=effect_tone;
     /* 1 the hero's shot, 2 jump, 5 hurt, 6 death, 7/8 enemy hit / death yells, 9 alarm "!", 10 dialogue line, 11 fall, 12-17 the flying bosses'
      * engine pass, gun, rider's gun, both, blast and big bang: CD ADPCM voices (the bank picks a variant) except the guns, which are PSG; a hero
-     * voice is never cut by a lower-priority one. */
+     * voice is never cut by a lower-priority one. audio_adpcm_reset before each play: the controller is shared with the BIOS transfer that loaded
+     * the bank, and a length counter left in the broken $1xxxx range makes every voice mute itself (audio_pcm.c). */
     if(tone>=20){psg_voice=tone>21;psg_script=tone-17;overlay_call(0x75,psg_start);return;}   /* 20 the countdown's pip, 21 GO (voice 0), 22 a bolt striking a Renegade (voice 1): synthesised PSG scripts 3-5 */
     if(tone==1||(tone>=13&&tone<=15)){psg_voice=tone!=1;psg_script=tone==1?0:tone==14?2:1;overlay_call(0x75,psg_start);return;}
     if(tone==2||(tone>=5&&tone<=19)) {
         audio_pcm_voice(tone);
         if((pce_cdb_adpcm_status()&ADPCM_STOPPED)||pce_voice.priority>=voice_priority) {
-            pce_cdb_adpcm_stop();
-            pce_cdb_adpcm_play(pce_voice.address,pce_voice.bytes,pce_voice.rate,PCE_CDB_ADPCM_ONE_SHOT);
-            voice_priority=pce_voice.priority;
+            pce_cdb_adpcm_stop();          /* clears IFU_INT_END/HALF from the mask, so the stale state reset below cannot raise IRQ2 */
+            audio_adpcm_reset();           /* clean flags, length counter and pointers: the shared controller's state, not ours to inherit */
+            if(!pce_cdb_adpcm_play(pce_voice.address,pce_voice.bytes,pce_voice.rate,PCE_CDB_ADPCM_ONE_SHOT))
+                voice_priority=pce_voice.priority;
         }
         return;
     }

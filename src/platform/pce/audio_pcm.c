@@ -61,6 +61,35 @@ __attribute__((noinline)) void audio_pcm_gallop(bool on) {request=on?PCM_SAMPLE_
 void audio_pcm_power_intro(void) {request=PCM_SAMPLE_POWER_INTRO;overlay_call(0x75,start);}
 void audio_pcm_turbo_start(void) {request=PCM_SAMPLE_TURBO_START;overlay_call(0x75,start);}
 void audio_pcm_turbo_loop(bool on) {request=on?PCM_SAMPLE_TURBO_LOOP:PCM_SAMPLE_STOP_LOOP;overlay_call(0x75,start);}
+/* ---- The hardware ADPCM controller, reset before every voice play ----
+ *
+ * $180a (the ADPCM RAM data port) is also the length counter: every write *increments* it, and it does not saturate at $ffff - it wraps with a
+ * 17-bit mask, and the Super CD verificator (tst_adpcm.c, "writes to 180A increment len counter ... counter wraps, mask is 1FFFF / seems if counter
+ * will be leave at 0x1xxxx range it may broke proper flags work") found that a counter left in $10000-$1ffff breaks the END and "32k" flags. That
+ * is exactly the state every stage leaves behind: loader_voice() fills the 37-43 KB hero bank through the BIOS AD_TRANS, so one transfer counts tens
+ * of thousands of bytes into that counter.
+ *
+ * Once the flags are broken, ADPCM_AD_END ($180c bit 0 - the BIOS ad_stat's "not playing") can read set with nothing playing, and the IFU raises IRQ2
+ * the instant ad_play re-enables IFU_INT_END (tst_adpcm.c, tst_ad_irq: "should fire immediately if enable it while ad_play_end state"). The System
+ * Card handler then clears ADPCM_PLAY, so each voice is cut a fraction of a millisecond after it starts and the channel stays silent until something
+ * resets the controller - the mute that outlives a single effect.
+ *
+ * So take clean ownership before each play: the controller's reset pulse (which clears both length flags, the length counter and the read/write
+ * pointers), no CD DMA left over from a transfer, the RAM port back in byte mode, and the BIOS fader cancelled ($180f bit 3 cancels a fade; bit 2
+ * would otherwise leave ADPCM itself faded to silence). $1802 is deliberately NOT touched: HuC's ad_reset clears it, but that would also drop the
+ * CD-DA driver's own IFU enables (cdda_pce.c keeps its own snapshot). */
+#define IFU_ADPCM_DMA (*(volatile uint8_t*)0x180b)
+#define IFU_ADPCM_CTL (*(volatile uint8_t*)0x180d)
+#define IFU_ADPCM_SPD (*(volatile uint8_t*)0x180e)
+#define IFU_AUDIO_FADE (*(volatile uint8_t*)0x180f)
+PCM_CODE void audio_adpcm_reset(void) {
+    IFU_ADPCM_CTL=0x80;                 /* ADPCM_RESET, held one opcode as the verificator does */
+    __asm__ __volatile__("nop");
+    IFU_ADPCM_CTL=0x00;
+    IFU_ADPCM_DMA=0x00;                 /* stop ADPCM DMA from CD */
+    IFU_AUDIO_FADE=0x00;                /* byte mode for the RAM port, and cancel any BIOS fade */
+    IFU_ADPCM_SPD=0x00;                 /* ad_play sets the sample's own rate next */
+}
 /* tone (audio_effect) -> voice event: jump hurt death fall enemy_hit enemy_death alarm dialogue line, then the flying
  * bosses' engine pass, gun, rider's gun, both guns, blast and big bang (tones 12-17), the cruiser's cannon gathering and firing (18, 19) */
 PCM_CODE static void voice_pick(void) {
