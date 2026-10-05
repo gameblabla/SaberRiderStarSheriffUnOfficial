@@ -145,8 +145,7 @@ def camera_wall_background(out, work):
         for y in range(h):
             for x in range(w):
                 if not mask[y, x]: continue
-                cur = px[y0 + y, x0 + x]
-                if cur[3] >= 128 and not (int(cur[2]) > int(cur[0]) + 30): continue        # only where the background shows sky
+                # (whatever the background has there: sky at the first camera, the next building behind the second)
                 src = px[y0 + y + h, x0 + x]                             # the wall below the cell
                 if src[3] < 128 or int(src[2]) > int(src[0]) + 30: continue
                 px[y0 + y, x0 + x] = src
