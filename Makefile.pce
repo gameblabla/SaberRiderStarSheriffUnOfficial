@@ -25,7 +25,7 @@ $(OUT)/ipl.bin: tools/pce/ipl.py ../PCE/huc/src/isolink/main.c | $(OUT)
 $(OUT)/ipl_font.h: tools/pce/ipl_font.py | $(OUT)
 	python3 $< $@
 
-$(PCE_AUDIO) &: tools/pce/build_audio.py tools/pce/adpcm.py tools/pce/adpcm2.py ../PCE/Sound/adpcm_build_14_2bit.pce src/audio.c $(wildcard SaberRider/data/*.pck assets/voice/*.wav) | $(OUT)
+$(PCE_AUDIO) &: tools/pce/build_audio.py tools/pce/adpcm.py tools/pce/adpcm2.py ../PCE/Sound/adpcm_build_14_2bit.pce src/audio.c $(wildcard SaberRider/data/*.pck assets/voice/*.wav assets/sfx/*.wav) assets/power/saber_intermission.wav | $(OUT)
 	python3 $< --out $(OUT)
 
 $(OUT)/ipl.elf: src/platform/pce/ipl.c src/platform/pce/link/ipl.ld $(OUT)/ipl_font.h | $(OUT)

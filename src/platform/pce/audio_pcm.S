@@ -40,6 +40,11 @@ pce_pcm_irq_end:
     lda #0xc0
     sta \base+3
     inc \base+9
+    lda \base+9
+    cmp #128
+    bne .Lcount\@
+    lda #132
+    sta \base+9
 .Lcount\@:
     lda \base
     bne .Ldec\@

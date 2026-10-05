@@ -4,6 +4,7 @@
 #include "arcade_pce.h"
 #include "loader_pce.h"
 #include "save_pce.h"
+#include "audio_pcm.h"
 #include "road_pce.h"
 #include "scenery_pce.h"
 #include "assets.h"
@@ -131,6 +132,7 @@ RACE_CODE static int16_t sine14(uint16_t angle) {
 }
 /* ---- the car --------------------------------------------------------------------------------------------- */
 RACE_CODE static void drive(uint8_t keys) {
+    uint8_t turbo_was_on=boost_on;
     uint8_t cls=ground(px,py);
     int16_t vmax=cls==2?470:cls==1?380:250;
     bool playing=rphase==P_RACE||rphase>=P_PURSUIT;
@@ -146,6 +148,8 @@ RACE_CODE static void drive(uint8_t keys) {
         if(boost<255&&phase_t%3==0)++boost;
         if(boost_locked&&boost>=128)boost_locked=0;
     }
+    if(boost_on&&!turbo_was_on){audio_pcm_turbo_start();audio_pcm_turbo_loop(true);}
+    else if(!boost_on&&turbo_was_on)audio_pcm_turbo_loop(false);
     bool accel=(keys&(KEY_1|KEY_UP))!=0;
     if(spin){accel=false;--spin;}
     if(accel)speed+=turbo?9:5;else speed-=2;
@@ -182,6 +186,7 @@ RACE_CODE static void drive(uint8_t keys) {
 /* ---- the phases ---------------------------------------------------------------------------------------------- */
 RACE_CODE static void begin_pursuit(void);
 RACE_CODE void race_start(void) {
+    audio_pcm_turbo_loop(false);
     arcade_read(1,pce_scenes[1].track,track,sizeof track);
     car_max=pce_options.difficulty==0?16:pce_options.difficulty==1?12:8;car_hp=car_max;
     pce_metrics.hp=8;pce_campaign.lap=1;lap_banner=0;pce_campaign.rank=8;pce_campaign.boss_kind=0;pce_campaign.boss_hp=0;

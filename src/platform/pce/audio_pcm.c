@@ -20,21 +20,21 @@ PCM_CODE static void stop_all(void) {
  * and only the PSG channel's set-up, which the handler's channel select would otherwise split, is done with them off. */
 PCM_CODE static void start(void) {
     uint8_t sample=request;
-    uint8_t channel=sample==3?1:0;
+    uint8_t channel=(sample==PCM_SAMPLE_GALLOP||sample==PCM_SAMPLE_STOP_LOOP||sample==PCM_SAMPLE_TURBO_LOOP)?1:0;
     volatile PcePcmVoice *v=&pce_pcm_voices[channel];
-    if(sample==4) {
+    if(sample==PCM_SAMPLE_STOP_LOOP) {
         pce_cpu_irq_disable();
         v=&pce_pcm_voices[1];v->left=0;v->loop=0;pce_pcm_active&=1;*IO_PSG_CH_SELECT=1;*IO_PSG_CH_CONTROL=0;
         pce_cpu_irq_enable();
         return;
     }
-    if(sample==3&&v->left)return;
+    if((sample==PCM_SAMPLE_GALLOP||sample==PCM_SAMPLE_TURBO_LOOP)&&v->left)return;
     const uint16_t *table=pcm_samples[sample];
     uint8_t bank=table[0];uint16_t begin=table[1],count=table[2];
     pce_cpu_irq_disable();pce_pcm_active&=~(1<<channel);pce_cpu_irq_enable();
     v->left=v->count=count;v->read=v->start=begin;
     v->bank=bank;v->last_sample=16;v->start_bank=bank;
-    v->loop=sample==3;v->channel=channel;
+    v->loop=sample==PCM_SAMPLE_GALLOP||sample==PCM_SAMPLE_TURBO_LOOP;v->channel=channel;
     pce_cpu_irq_disable();
     pce_pcm_active|=1<<channel;
     *IO_PSG_VOLUME=0xff;*IO_PSG_CH_SELECT=channel;
@@ -54,8 +54,11 @@ void audio_pcm_play(uint8_t sample) {
     if(sample>2)return;
     request=sample;overlay_call(0x75,start);
 }
-void audio_pcm_tick(void) {request=5;overlay_call(0x75,start);}   /* the CONTINUE? countdown's tick (sfx 0 of the PC game) */
-__attribute__((noinline)) void audio_pcm_gallop(bool on) {request=on?3:4;overlay_call(0x75,start);}
+void audio_pcm_tick(void) {request=PCM_SAMPLE_TICK;overlay_call(0x75,start);}   /* the CONTINUE? countdown's tick (sfx 0 of the PC game) */
+__attribute__((noinline)) void audio_pcm_gallop(bool on) {request=on?PCM_SAMPLE_GALLOP:PCM_SAMPLE_STOP_LOOP;overlay_call(0x75,start);}
+void audio_pcm_power_intro(void) {request=PCM_SAMPLE_POWER_INTRO;overlay_call(0x75,start);}
+void audio_pcm_turbo_start(void) {request=PCM_SAMPLE_TURBO_START;overlay_call(0x75,start);}
+void audio_pcm_turbo_loop(bool on) {request=on?PCM_SAMPLE_TURBO_LOOP:PCM_SAMPLE_STOP_LOOP;overlay_call(0x75,start);}
 /* tone (audio_effect) -> voice event: jump hurt death fall enemy_hit enemy_death alarm dialogue line, then the flying
  * bosses' engine pass, gun, rider's gun, both guns, blast and big bang (tones 12-17), the cruiser's cannon gathering and firing (18, 19) */
 PCM_CODE static void voice_pick(void) {

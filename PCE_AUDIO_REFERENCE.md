@@ -26,9 +26,12 @@ voice before blocking loads.
 
 Audio controls and 7,006 shot/power DAC bytes share bank `$75`.
 The two fixed voice paths are unrolled in `$6b`, avoiding per-voice calls,
-indexed state access and interrupt-time overlay switching. Impact and gallop
-occupy 23,041 bytes across `$7d–$7f`. The linker checks bank capacity. The loader
-retains its 56 KiB scratch buffer in `$76–$7c`, preserving audio across loads.
+indexed state access and interrupt-time overlay switching. Impact, gallop,
+countdown tick, the power cut-in, and the Level 2 turbo sounds stream through
+DDA banks `$7d–$7f` and then `$84` onward. The timer skips virtual banks
+`$80–$83`, reserved for arena overlays, when a sample crosses that range. The
+linker checks bank capacity. The loader retains its 56 KiB scratch buffer in
+`$76–$7c`, preserving audio across loads.
 The existing CD-DA music and CD hardware ADPCM character voices remain separate. Each hero's ADPCM bank
 (`voiceN.bin`, `voice_groups` / `voice_samples` in the generated `samples.h`) holds 15 samples in 8 events: jump, hurt x3,
 death x2, fall, enemy hit x3, enemy death x3, the Outrider's alarm and the level-1 dialogue line. The PC game's

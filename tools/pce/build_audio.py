@@ -89,16 +89,23 @@ def build(out):
     ph+=','.join('{'+','.join(str(v) for row in r for v in row)+'}' for r in psg_rows)+'};\n'
     (out/'psg.h').write_text(ph)
     # Expand the exact Build 14 output to 5-bit DAC bytes at build time.
-    # Shot/power share the code bank; impact/gallop span the three sample banks.
+    # Shot/power share the code bank; impact/gallop/tick and the power/turbo cues
+    # stream from banks $7d-$7f and $84-$87. Banks $80-$83 are the arena overlays.
     t=tables();resident=bytearray();stream=bytearray();pcm_rows=[];pcm_report=[]
+    stream_banks=(125,126,127,132,133,134,135)
     for event,rid in [('shot','C66E1894'),('impact','87265BA0'),
-                      ('power','A8382083'),('gallop','82EFBA26'),('tick','E418A101')]:
+                      ('power','A8382083'),('gallop','82EFBA26'),('tick','E418A101'),
+                      ('power_portrait',ROOT/'assets/power/saber_intermission.wav'),
+                      ('turbo_start',ROOT/'assets/sfx/turbo_start.wav'),
+                      ('turbo_loop',ROOT/'assets/sfx/turbo_loop.wav')]:
         if event=='shot':pcm_rows.append('{0,0,0}');continue   # the hero's shot is native PSG now (psg_pce.c, psg.h below): no DDA sample, no bank space
         if event=='tick':pcm_rows.append('{0,0,0}')   # request 4 stops the gallop: no sample 4
         # Keep the hoof rumble audible beside CD-DA; the general effects filter
         # removed its bass and attenuated an already shared PSG mix.
-        filtering='highpass=f=20,lowpass=f=3000,volume=1.0' if event=='gallop' else 'highpass=f=80,lowpass=f=3000,volume=0.7'
-        result=subprocess.run(['ffmpeg','-v','error','-i',str(sfx/f'{rid}.wav'),
+        local_source=isinstance(rid,Path)
+        source=rid if local_source else sfx/f'{rid}.wav'
+        filtering='highpass=f=20,lowpass=f=3000,volume=1.0' if event in ('gallop','turbo_loop','turbo_start') else 'highpass=f=80,lowpass=f=3000,volume=0.7'
+        result=subprocess.run(['ffmpeg','-v','error','-i',str(source),
             '-ac','1','-ar','6991','-af',filtering,
             '-f','s16le','-'],check=True,capture_output=True)
         samples=array.array('h');samples.frombytes(result.stdout)
@@ -107,11 +114,13 @@ def build(out):
         samples=array.array('h',(max(-32767,min(32767,round(v*0.95*32767/peak))) for v in samples))
         if event=='tick':
             # The CONTINUE? countdown's tick (the PC game's sfx 0): trimmed, with a short fade, to what the sample banks have left.
-            room=3*8192-len(stream)-32
+            room=len(stream_banks)*8192-len(stream)-32
             if len(samples)>room:
                 samples=samples[:room];fade=min(256,room)
                 for k in range(fade):samples[room-1-k]=int(samples[room-1-k]*k/fade)
-        values=list(samples)+[0]*32
+        # The supplied turbo loop is already periodic; do not insert the usual
+        # one-shot tail silence at its loop boundary.
+        values=list(samples)+([] if event=='turbo_loop' else [0]*32)
         packed=encode2(values,t)
         data=bytes((v+128)>>3 for v in decode2(packed,len(values),t))
         (work/f'{event}.adpcm2').write_bytes(packed)
@@ -120,19 +129,23 @@ def build(out):
             address=f'(uint16_t)pce_pcm_resident+0x6000+{len(resident)}'
             bank=117;resident.extend(data)
         else:
-            bank=125+len(stream)//8192;address=str(0xc000+len(stream)%8192)
+            bank_index=len(stream)//8192
+            if bank_index>=len(stream_banks):raise ValueError('DDA sample banks overflow')
+            bank=stream_banks[bank_index];address=str(0xc000+len(stream)%8192)
             stream.extend(data)
         pcm_rows.append(f'{{{bank},{address},{len(values)}}}')
-        pcm_report.append(dict(event=event,source=rid,samples=len(values),bytes=len(data),
+        source_name=str(source.relative_to(ROOT)) if local_source else rid
+        pcm_report.append(dict(event=event,source=source_name,samples=len(values),bytes=len(data),
                                packed_bytes=len(packed),rate=6991,
-                               codec='build14-predecoded-5bit',channel=1 if event=='gallop' else 0))
-    if len(stream)>3*8192:raise ValueError('DDA sample banks overflow')
+                               codec='build14-predecoded-5bit',channel=1 if event in ('gallop','turbo_loop') else 0))
+    if len(stream)>len(stream_banks)*8192:raise ValueError('DDA sample banks overflow')
     header='/* Exact Build 14 DAC bytes: bank, mapped CPU address, sample count. */\n'
+    header+='enum { PCM_SAMPLE_GALLOP=3, PCM_SAMPLE_STOP_LOOP=4, PCM_SAMPLE_TICK=5, PCM_SAMPLE_POWER_INTRO=6, PCM_SAMPLE_TURBO_START=7, PCM_SAMPLE_TURBO_LOOP=8 };\n'
     header+='const uint8_t pce_pcm_resident[] __attribute__((used,retain,section(".ram_bank117.rodata")))={'+','.join(map(str,resident))+'};\n'
-    for i in range(3):
+    for i,bank in enumerate(stream_banks[:(len(stream)+8191)//8192]):
         blob=stream[i*8192:(i+1)*8192]
-        header+='const uint8_t pce_pcm_bank%d[] __attribute__((used,retain,section(".ram_bank%d.rodata")))={'%(i,125+i)+','.join(map(str,blob))+'};\n'
-    header+='static const uint16_t pcm_samples[6][3] __attribute__((section(".ram_bank117.rodata")))={'+','.join(pcm_rows)+'};\n'
+        header+='const uint8_t pce_pcm_bank%d[] __attribute__((used,retain,section(".ram_bank%d.rodata")))={'%(i,bank)+','.join(map(str,blob))+'};\n'
+    header+='static const uint16_t pcm_samples[%d][3] __attribute__((section(".ram_bank117.rodata")))={%s};\n'%(len(pcm_rows),','.join(pcm_rows))
     (out/'pcm.h').write_text(header)
     # Hardware ADPCM voice banks, one per hero (CD ADPCM RAM is 64 KiB). Events with several variants are picked at
     # random like the PC game's; every bank holds the same shared events (enemy yells, alarm, dialogue line).

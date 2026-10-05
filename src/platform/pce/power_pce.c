@@ -115,7 +115,7 @@ POWER_CODE void power_frame(void) {
         }
         for(uint8_t k=0;k<3;++k)video_sprite(base+k,x,32+64*k,false,16);
         video_sat_end();
-        if(t==PORTRAIT_AT)audio_effect(8);
+        if(t==PORTRAIT_AT)audio_pcm_power_intro();
     }
     if(t==FLASH_AT){video_sat_begin();video_sat_end();}
     if(t>=FLASH_AT&&t<END_AT&&!(t&1)) {   /* burning out to white */
