@@ -238,7 +238,7 @@ class Campaign(Test):
             self.press(e,1)
             self.until(e,lambda:e.memory(ui,1)==b'\0' and self.metrics(e)['stage']==1 and self.metrics(e)['ready'],limit=6000)
             # A zero-lives collision must reach game over, with no underflow.
-            self.field(e,'lives',0);e.write(self.address+34,b'\x01\x00')
+            self.field(e,'lives',0);e.write(self.address+34,b'\x01\x00');self.seed(e,'pce_continues',0,1)
             self.seed(e,'safe_timer',0,1)
             px=self.metrics(e)['player_x'];py=self.metrics(e)['player_y']
             e.write(symbol(self.out/'app.elf','shots'),struct.pack('<4h2B',px,py,0,0,1,1));e.run(120)

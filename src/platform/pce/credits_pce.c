@@ -7,13 +7,36 @@ extern uint8_t buffer[2048];
 #include "campaign_pce.h"
 #include "audio_pcm.h"
 
-/* Game over and credits share the options panel. */
+/* Continue, game over and credits share the options panel. */
 #define CREDITS_CODE __attribute__((noinline,section(".ram_bank113.text")))
 extern uint8_t previous;
 extern volatile uint16_t pce_scroll_x;
 
 CREDITS_CODE static void panel(void) {
     ui_show(SCREEN_PANEL);pce_ui_state=4;ui_clear_rows(7,24);
+}
+CREDITS_CODE void frontend_continue(void) {
+    previous=0;audio_stop();
+    if(!loader_ui()){pce_control.ok=0;return;}
+    ui_dark=1;panel();ui_dark=0;
+    /* The panel's text area is columns 4-35 and rows 7-24: its centre is column 20 (x=160), row 16. */
+    char digit[2]={'0'+pce_continues%10,0};
+    ui_put(15,10,"CONTINUE ?",13);
+    ui_put(9,18,"PRESS START TO CONTINUE",12);
+    ui_put(12,21,"CONTINUES LEFT",14);ui_put(27,21,digit,15);
+    ui_black();ui_fade_in();
+    uint8_t seconds=15,clock=0;
+    pce_control.ok=0;
+    for(;;) {
+        video_wait();ui_read_keys();ui_cycle();
+        if(!clock)ui_put_number(19,14,seconds,13);
+        if(++clock==60){clock=0;if(!seconds--)break;audio_pcm_tick();}   /* the PC game's tick (sfx 0), not the menu blip (the hit yell) */
+        if(ui_pressed&(KEY_RUN|KEY_1|KEY_2)){pce_control.ok=1;audio_pcm_play(2);break;}   /* sfx 8: the confirm */
+    }
+    if(pce_control.ok)for(uint8_t i=0;i<30;++i)video_wait();   /* let the confirm sound play out */
+    ui_end();audio_stop();pce_ui_state=0;
+    if(pce_control.ok){--pce_continues;pce_campaign.lives=pce_options.lives;pce_campaign.powers=2;}
+    previous=ui_held;
 }
 /* GAME OVER: the supplied Nemesis painting filling the screen, the lettering added as light by OR-ing bit planes
  * (frontend.py); its pulse rewrites the few palettes under the letters. Faded in and out. */

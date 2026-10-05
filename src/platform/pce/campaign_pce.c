@@ -3,8 +3,8 @@
 #include "loader_pce.h"
 #include "play_internal.h"
 PceCampaign pce_campaign={.lives=3,.powers=2};
-PceOptions pce_options={.difficulty=1,.lives=3,.music=3};
-uint8_t pce_death;
+PceOptions pce_options={.difficulty=1,.lives=3,.continues=3,.music=3};
+uint8_t pce_continues=3,pce_death;
 uint8_t campaign_hearts(void) { return pce_options.difficulty==0?3:pce_options.difficulty==1?2:1; }
 void campaign_hurt(void) {
     if(pce_death)return;

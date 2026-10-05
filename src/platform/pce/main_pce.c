@@ -184,7 +184,16 @@ PCE_FLOW void flow_main(void) {
             if(pce_campaign.state==CAM_POWER){overlay_call(0x7b,power_frame);simulation_tick=pce_ticks;continue;}
             if(pce_campaign.state==CAM_OVER||pce_campaign.state==CAM_END) {
                 if(pce_campaign.state==CAM_OVER) {
-                    ui_fade_out();   /* all lives lost: to black, then GAME OVER */
+                    ui_fade_out();   /* a life lost for good: to black, then the continue screen */
+                    pce_control.ok=0;
+                    if(pce_continues)overlay_call(0x71,frontend_continue);
+                    if(pce_control.ok) {
+                        /* A continue restarts the current stage (or race phase) with fresh lives. */
+                        if(!loader_font())for(;;){}
+                        pce_campaign.state=CAM_PLAY;pce_campaign.result=2;pce_metrics.hp=campaign_hearts();
+                        simulation_tick=pce_ticks;continue;
+                    }
+                    if(pce_continues)ui_fade_out();   /* the countdown ran out on the continue panel */
                     overlay_call(0x71,frontend_game_over);
                 } else overlay_call(0x71,frontend_credits);
                 pce_control.stage=0;pce_control.hero=hero;
