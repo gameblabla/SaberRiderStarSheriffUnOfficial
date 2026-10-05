@@ -4,6 +4,7 @@
 #include "loader_pce.h"
 #include "arcade_pce.h"
 #include "sprite_cache_pce.h"
+extern uint8_t buffer[2048];
 /* The two flying bosses of the platform stages, on the source game's timelines (enemies.c update_boss for the level-1
  * gunship, night.c for the Hyperjumper), in whole 1/60 s steps; positions are the sprite's centre in world px.
  *
@@ -215,7 +216,7 @@ __attribute__((minsize)) BOSS_CODE void boss_tick(void) {
         Shot *s=&shots[k];if(!s->active||s->enemy)continue;
         int16_t dx=s->x-boss_x,dy=s->y-boss_y,rx=kind==1?42:48;
         if(dx>-rx&&dx<rx&&dy>(kind==1?-15:-26)&&dy<(kind==1?27:34)) {
-            s->active=0;audio_effect(4);
+            s->active=0;audio_effect(22);   /* (the PSG zap, no DDA) */
             if(kind==1&&boss_flash)continue;   /* the gunship ignores a shot landing during its 4-step flash */
             boss_flash=kind==1?4:5;
             if(pce_campaign.boss_hp)--pce_campaign.boss_hp;
@@ -228,7 +229,7 @@ __attribute__((minsize)) BOSS_CODE void boss_tick(void) {
         }
     }
 }
-static bool hull_flip;
+static bool hull_flip,hull_white;
 /* The hull's 32x32 pieces: the sprite-allocation bank ($74) has the room, the race core's bank is full. */
 __attribute__((noinline,section(".ram_bank116.text"))) static void hull_body(void) {
     bool flip=hull_flip;
@@ -252,6 +253,9 @@ __attribute__((noinline,section(".ram_bank116.text"))) static void hull_body(voi
 BOSS_DRAW static void hull(bool flip) {hull_flip=flip;overlay_call(0x74,hull_body);}
 BOSS_DRAW void boss_draw(void) {
     bool flip=pce_campaign.boss_kind==2&&(hull_level==3||hull_level==7)?false:boss_phase==1?true:boss_dir;   /* the Hyperjumper's front pose is not mirrored */
+    bool white=boss_flash!=0&&boss_phase!=12;   /* a hit blanks the whole hull white (palette 30 is the hull's alone); the colours come back with the hull's load */
+    if(hull_white&&!white)hull_ready=0;
+    hull_white=white;
     if(boss_phase==12) {
         if(boss_y<250&&(boss_time&1))hull(flip);
         for(uint8_t k=0;k<2;++k) {
@@ -260,5 +264,6 @@ BOSS_DRAW void boss_draw(void) {
         }
         return;
     }
-    if(!boss_flash||(frame&2))hull(flip);
+    hull(flip);
+    if(white){for(uint8_t i=0;i<16;++i)((uint16_t*)buffer)[i]=0x1ff;vce_copy(30,buffer,1);}
 }

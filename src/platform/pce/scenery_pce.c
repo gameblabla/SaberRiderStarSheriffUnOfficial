@@ -78,8 +78,8 @@ PCE_SCENERY void space_hull_draw(int16_t y,uint8_t flash,bool gone) {
     hull_lit=flash!=0;
     for(uint8_t i=0;i<64;++i) {
         uint16_t c=hull_palette[i];
-        /* A hit warms the intact hull, keeping transparent/black pixels black. */
-        if(flash&&(i&15))c=(c&0x1c7)|0x38;
+        /* A hit blanks the intact hull white, keeping transparent/black pixels black. */
+        if(flash&&(i&15))c=0x1ff;
         ((uint16_t*)buffer)[i]=c;
     }
     pce_vce_copy_palette(0,buffer,4);

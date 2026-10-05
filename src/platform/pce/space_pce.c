@@ -6,6 +6,8 @@
 #include <string.h>
 #include "hud_pce.h"
 #include "scenery_pce.h"
+#include "sprite_cache_pce.h"
+extern uint8_t buffer[2048];
 #define SPACE_CODE __attribute__((noinline,minsize,section(".ram_bank115.text")))
 typedef struct __attribute__((packed)) {uint16_t time;uint8_t kind,n;int16_t y;uint16_t gap;uint8_t pattern,drop;} Event;
 typedef struct {int16_t x,y;uint8_t kind,hp,pattern,drop;uint16_t clock;uint8_t charge;} Foe;
@@ -17,7 +19,7 @@ static Bolt bolts[12];
 static Expl expl[10] PCE_WORK;   /* the console RAM is full: this lives in the work bank */
 static Event next_event;
 static uint16_t flight_clock,spawn_clock,beam_clock,power_timer;
-static uint8_t space_flash,hull_flash;
+static uint8_t space_flash,hull_flash,foe_flash[2],foe_white;   /* foe_flash: the armoured mines' and gunships' white hit blink (kinds 4 and 5), foe_white: which are lit */
 static uint8_t event_index,event_count,pending,gun_clock,hurt,power,bombs,boss_die,boss_gone,noise;
 static int16_t ship_x,ship_y,pickup_x,pickup_y,space_boss_y;
 static uint8_t pickup,port_hp[7],dead_t;
@@ -34,7 +36,7 @@ SPACE_CODE static void event_load(void) {
 }
 SPACE_CODE void space_start(void) {
     memset(foes,0,sizeof foes);memset(bolts,0,sizeof bolts);memset(expl,0,sizeof expl);memset(&sb,0,sizeof sb);space_hull_x=0;boss_die=boss_gone=0;
-    flight_clock=spawn_clock=beam_clock=power_timer=0;space_flash=hull_flash=0;space_hull_ready=0;space_flashing=0;event_index=pending=gun_clock=hurt=pickup=0;
+    flight_clock=spawn_clock=beam_clock=power_timer=0;space_flash=hull_flash=foe_flash[0]=foe_flash[1]=foe_white=0;space_hull_ready=0;space_flashing=0;event_index=pending=gun_clock=hurt=pickup=0;
     pce_campaign.power_cd=pce_campaign.timer=0;
     power=1;bombs=3;ship_x=48;ship_y=112;space_boss_y=80;
     arcade_read(2,pce_scenes[6].track,&event_count,1);event_load();
@@ -133,6 +135,7 @@ SPACE_CODE static void space_tick(void) {
         --pce_campaign.powers;power_timer=114;pce_campaign.timer=114;return;
     }
     if(space_flash)--space_flash;if(hull_flash)--hull_flash;
+    for(uint8_t k=0;k<2;++k)if(foe_flash[k])--foe_flash[k];
     ++flight_clock;if(gun_clock)--gun_clock;if(hurt)--hurt;
     uint8_t velocity=keys&KEY_SELECT?1:2;
     if(keys&KEY_LEFT)ship_x-=velocity;if(keys&KEY_RIGHT)ship_x+=velocity;
@@ -186,10 +189,10 @@ SPACE_CODE static void space_tick(void) {
                 Foe *f=&foes[j];if(!f->kind||dist(b->x,f->x)>24||dist(b->y,f->y)>16)continue;
                 b->on=0;
                 /* Armoured mines deflect ordinary shots, as in space.c. */
-                if(f->kind>=4){f->hp=f->hp>power?f->hp-power:0;if(!f->hp)foe_kill(f);}
+                if(f->kind>=4){f->hp=f->hp>power?f->hp-power:0;if(!f->hp)foe_kill(f);else{foe_flash[f->kind-4]=5;audio_effect(22);}}   /* (a hit that does not kill: it blinks white, with the PSG zap) */
             }
             if(b->on&&sb.ph==4&&space_hull_hit(b->x-space_hull_x,b->y-space_boss_y)) {
-                b->on=0;hull_flash=4;
+                b->on=0;hull_flash=4;audio_effect(22);
                 uint16_t damage=power;
                 for(uint8_t j=0;j<7;++j)if(port_hp[j]&&(j<5||pce_campaign.boss_round)&&dist(b->y,space_boss_y+port_y[j])<4) {
                     port_hp[j]=port_hp[j]>power?port_hp[j]-power:0;if(!port_hp[j])damage+=30;break;
@@ -287,6 +290,16 @@ PCE_SCENERY void space_frame(void) {
         Foe *f=&foes[k];
         if(!video_sprite_optional(f->kind<=3?8:f->kind==5?5:4,f->x,f->y,false,16)){f->kind=0;continue;}   /* the art faces left, the way they fly */
         if(f->charge>20&&(flight_clock&4))video_sprite_optional(1,f->x-20,f->y,false,16);
+    }
+    for(uint8_t k=0;k<2;++k) {   /* a struck mine or gunship is a white blank: its own palette (the cache's slot of its picture) is overwritten with white while it blinks, and loaded again after */
+        bool on=foe_flash[k]!=0;
+        if(!on&&!(foe_white&(1<<k)))continue;
+        uint8_t slot=sprite_slot_of[4+k];
+        if(slot<15&&sprite_ids[slot]==4+k) {
+            if(on){for(uint8_t i=0;i<16;++i)((uint16_t*)buffer)[i]=0x1ff;vce_copy(16+slot,buffer,1);}
+            else sprite_ids[slot]=0xffff;
+        }
+        if(on)foe_white|=1<<k;else foe_white&=~(1<<k);
     }
     if(pickup)video_sprite_optional(8+pickup,pickup_x,pickup_y,false,16);
     for(uint8_t k=0;k<10;++k)if(expl[k].t)video_sprite_optional(12+(expl[k].small?5:0)+(expl[k].t-1)/6,expl[k].x,expl[k].y,false,16);

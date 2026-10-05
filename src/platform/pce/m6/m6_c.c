@@ -131,6 +131,14 @@ static void shots_step(void) {
         Shot6 *s=&A.shot[k];if(!s->life)continue;
         s->ang=wrapq(s->ang+s->vang);s->dist=(uint16_t)((int16_t)s->dist+s->vd);s->z+=s->vz;--s->life;
         if(!s->life||s->z<0){s->life=0;continue;}
+        for(uint8_t j=0;j<14&&s->life&&s->enemy;++j) {   /* an enemy plasma ball that meets a boulder or cactus blows it up (it comes round again far ahead) */
+            Prop6 *p=&A.prop[j];
+            int16_t da=s->ang-p->ang;if(da>ARC/2)da-=ARC;else if(da<-ARC/2)da+=ARC;
+            if(s->dist+200>=p->dist&&s->dist<=p->dist+300&&abs16(da)<(int16_t)(rcp_of(p->dist)<<2)) {
+                s->life=0;burst(p->ang,p->dist,200,2,30);
+                p->dist=6400;
+            }
+        }
         if(!s->enemy) {
             for(uint8_t j=0;j<3&&s->life;++j) {
                 Mech6 *m=&A.mech[j];if(m->st==S_OFF||m->st==S_DYING)continue;
@@ -139,20 +147,12 @@ static void shots_step(void) {
                     s->life=0;mech_damage(m,1,false);audio_effect(22);burst(m->ang,m->dist,s->z,0,9);   /* (a bolt strikes: the PSG zap, voice 1, no DDA) */
                 }
             }
-            for(uint8_t j=0;j<14&&s->life;++j) {   /* a bolt that meets a boulder or cactus blows it up (it comes round again far ahead) */
-                Prop6 *p=&A.prop[j];
-                int16_t da=s->ang-p->ang;if(da>ARC/2)da-=ARC;else if(da<-ARC/2)da+=ARC;
-                if(s->dist+200>=p->dist&&s->dist<=p->dist+300&&abs16(da)<(int16_t)(rcp_of(p->dist)<<2)) {
-                    s->life=0;burst(p->ang,p->dist,200,2,30);
-                    p->dist=6400;
-                }
-            }
             for(uint8_t j=0;j<16&&s->life;++j) {   /* bolts shoot plasma down */
                 Shot6 *o=&A.shot[j];if(!o->life||!o->enemy)continue;
                 int16_t da=s->ang-o->ang;uint16_t dd=s->dist>o->dist?s->dist-o->dist:o->dist-s->dist;
                 if(abs16(da)<160&&dd<240){s->life=0;o->life=0;burst(o->ang,o->dist,o->z,0,30);}
             }
-        } else if(s->dist<=240) {   /* within 48 units of Ramrod: it hits unless Ramrod has stepped aside since it was fired */
+        } else if(s->life&&s->dist<=240) {   /* within 48 units of Ramrod: it hits unless Ramrod has stepped aside since it was fired */
             s->life=0;
             if(abs16(A.lat-s->lat0)<384){burst(s->ang,s->dist,s->z,2,9);hurt_player(s->dmg,16);}
         }
