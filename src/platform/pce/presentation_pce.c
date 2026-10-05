@@ -79,9 +79,12 @@ PRESENT void actors_draw(void) {
         } else if(fighter) {
             /* walker 0 / grunt 1 / sniper 2: run frames, then six death frames */
             uint16_t base=pce_enemy_base[stage],kind=id-39;
-            if(a->dead)id=base+(kind==0?6:kind==1?18:24)+(a->dead-1)/4;
-            else if(!(a->b.coll&4)&&kind<2)id=base+30+kind*2+((frame>>3)&1);   /* dropping: the fall cells, not a frozen run frame */
-            else if(a->b.vx&&kind<2)id=base+kind*12+(a->anim>>2)%6;
+            bool brown=a->type==5;   /* the brown grunt: the sniper's body, its own run and fall cells (appended: enemy_base + 68..) */
+            if(a->dead)id=base+(kind==0?6:kind==1&&!brown?18:24)+(a->dead-1)/4;
+            else if(a->mode&8&&kind==1)id=base+76+(brown?2:0)+((frame>>3)&1);   /* dropping in from its spawn point: anim 0x34 */
+            else if(!(a->b.coll&4)&&kind<2)id=brown?base+74+((frame>>3)&1):base+30+kind*2+((frame>>3)&1);   /* dropping: the fall cells, not a frozen run frame */
+            else if(a->b.vx&&kind<2)id=brown?base+68+(a->anim>>2)%6:base+kind*12+(a->anim>>2)%6;
+            else if(brown)id=base+34+(a->timer>=16?5:0);   /* standing to fire: the blue body's level aim (then recoil), not the tan grunt's stand cell it shares an id with */
             else if(kind==2) {
                 if(a->type==8||a->type==9) {
                     /* the kneeler crouches and, from the 24th step of a throw, plays its three throwing cells */

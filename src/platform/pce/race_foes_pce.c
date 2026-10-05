@@ -7,13 +7,18 @@
 #include <string.h>
 /* Shots, mines, the Hornet leader and his escort (mode7.c update_ents), called from the race's step. */
 #define FOES_CODE PCE_RACE2
-static uint8_t rnd(void) {
+FOES_CODE static uint8_t rnd(void) {
     uint8_t carry=race_rng&1;race_rng>>=1;if(carry)race_rng^=0xB400;
     return (uint8_t)(race_rng^(race_rng>>8));
 }
 FOES_CODE static void hurt_car(uint8_t damage) {arg_damage=damage;overlay_call(0x7c,hurt_call);}
 FOES_CODE static void bump(int16_t x,int16_t y,int16_t dist,int16_t r) {arg_x=x;arg_y=y;arg_dist=dist;arg_radius=r;overlay_call(0x6d,bump_call);}
-FOES_CODE static void wreck(void) {audio_effect(4);}
+FOES_CODE static void wreck(void) {audio_effect(4);}   /* the burst's sound alone (a booster firing) */
+/* A car going up: the explosion sprite at its place (race_draw_pce.c) and the burst's sound sample (the source's sfx 14) */
+FOES_CODE static void blast(int16_t x,int16_t y) {
+    for(uint8_t k=0;k<4;++k)if(!blasts[k].t){blasts[k]=(Blast){x,y,1};break;}
+    audio_effect(4);
+}
 FOES_CODE static void set_pos(Leader *e) {e->x=(e->xq>>8)&8191;e->y=(e->yq>>8)&8191;}
 FOES_CODE void foes_drop_mine(void) {
     for(uint8_t m=0;m<6;++m)if(!mines[m].t){mines[m]=(Mine){arg_x,arg_y,arg_life};return;}
@@ -40,13 +45,14 @@ FOES_CODE void foes_leader_start(void) {
     boss.xq=(int32_t)4096<<8;boss.yq=((int32_t)py-1500)<<8;boss.speed=300;boss.since=600;boss.t2=180;
     set_pos(&boss);
 }
-FOES_CODE void foes_spawn_escort(void) {
+/* In the cockpit/front-end bank ($72, overlay_call(0x72,..)): this one is full. */
+__attribute__((noinline,minsize,section(".ram_bank114.text"))) void foes_spawn_escort(void) {
     for(uint8_t k=0;k<2;++k)if(!escort[k].hp) {
         Leader *e=&escort[k];
         memset(e,0,sizeof *e);
         e->xq=(int32_t)(4096+(int16_t)(rnd()%160)-80)<<8;e->yq=((int32_t)py-900-(int16_t)(rnd()%300))<<8;
         e->speed=300;e->hp=e->hp_max=4+pce_options.difficulty;e->t=(uint8_t)(60+rnd()%120);
-        set_pos(e);return;
+        e->x=(e->xq>>8)&8191;e->y=(e->yq>>8)&8191;return;
     }
 }
 FOES_CODE void foes_shots(void) {
@@ -59,33 +65,34 @@ FOES_CODE void foes_shots(void) {
                 Rival *r=&rv[i];
                 if(r->hp&&absolute(wrapdiff(b->x,r->x))<34&&absolute(wrapdiff(b->y,r->y))<34) {
                     b->t=0;r->knock=14;audio_effect(7);
-                    if(!--r->hp)wreck();
+                    if(!--r->hp)blast(r->x,r->y);
                 }
             }
             if(rphase>=P_PURSUIT) {
                 for(uint8_t i=0;i<2&&b->t;++i)if(escort[i].hp&&absolute(wrapdiff(b->x,escort[i].x))<34&&absolute(wrapdiff(b->y,escort[i].y))<34) {
-                    b->t=0;audio_effect(7);if(!--escort[i].hp)wreck();
+                    b->t=0;audio_effect(7);if(!--escort[i].hp)blast(escort[i].x,escort[i].y);
                 }
                 if(b->t&&boss.state<2&&absolute(wrapdiff(b->x,boss.x))<42&&absolute(wrapdiff(b->y,boss.y))<42) {
                     b->t=0;boss.knock=18;audio_effect(7);
                     /* a shot hurts him from the first moment (while he flees it also slows him, but never finishes him: the catch
                      * and its dialogue come first) */
-                    if(boss.state==1&&!--boss.hp){boss.state=2;boss.t=144;boss.t2=0;wreck();}
+                    if(boss.state==1&&!--boss.hp){boss.state=2;boss.t=144;boss.t2=0;blast(boss.x,boss.y);}
                     else if(boss.state==0&&boss.hp>1)--boss.hp;
                 }
             }
             for(uint8_t i=0;i<6&&b->t;++i)
-                if(mines[i].t&&absolute(wrapdiff(b->x,mines[i].x))<18&&absolute(wrapdiff(b->y,mines[i].y))<18){b->t=0;mines[i].t=0;wreck();}
+                if(mines[i].t&&absolute(wrapdiff(b->x,mines[i].x))<18&&absolute(wrapdiff(b->y,mines[i].y))<18){b->t=0;mines[i].t=0;blast(mines[i].x,mines[i].y);}
         } else if(absolute(wrapdiff(b->x,px))<22&&absolute(wrapdiff(b->y,py))<22){b->t=0;hurt_car(1);}
     }
     for(uint8_t k=0;k<6;++k) {
         Mine *m=&mines[k];if(!m->t)continue;
         --m->t;
         if(absolute(wrapdiff(m->x,px))<26&&absolute(wrapdiff(m->y,py))<26) {
-            m->t=0;wreck();hurt_car(2);
+            m->t=0;blast(m->x,m->y);hurt_car(2);
             if(hurt){speed=speed*2/5;spin=36;}
         }
     }
+    for(uint8_t k=0;k<4;++k)if(blasts[k].t&&++blasts[k].t>20)blasts[k].t=0;
 }
 FOES_CODE void foes_escorts(void) {
     for(uint8_t k=0;k<2;++k) {
@@ -124,8 +131,8 @@ FOES_CODE void foes_leader(void) {
     e->anim+=e->state==1?243:156;
     if(e->state==2) {   /* burning out: rolls to a stop, sparks, then the big one */
         e->speed-=e->speed>>4;
-        if(!(e->t&7))wreck();
-        if(!--e->t){wreck();e->state=3;rphase=P_VICTORY;phase_t=0;pce_campaign.boss_hp=0;return;}
+        if(!(e->t&7))blast(e->x+(int16_t)(rnd()&31)-16,e->y+(int16_t)(rnd()&15)-8);
+        if(!--e->t){blast(e->x,e->y);e->state=3;rphase=P_VICTORY;phase_t=0;pce_campaign.boss_hp=0;return;}
     } else if(e->state==0) {   /* the pursuit: up the road, pace rubber-banded to the gap so he stays in reach but never free */
         target=gap>3400?210:gap>2200?320:(gap<600?450:390);   /* a fifth slower than the source */
         if(e->knock&&!e->boost)target=target*3/4;
@@ -159,7 +166,7 @@ FOES_CODE void foes_leader(void) {
         if(!ram_cd) {
             ram_cd=30;
             if(speed>330&&gap>0&&e->state==1) {
-                speed=speed*55/100;shake=21;wreck();
+                speed=speed*55/100;shake=21;blast(e->x,e->y);
                 if(e->hp>4)e->hp-=4;else{e->hp=0;e->state=2;e->t=144;e->t2=0;}
             } else speed=speed*3/5;
         }

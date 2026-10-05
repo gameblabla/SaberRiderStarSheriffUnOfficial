@@ -17,7 +17,7 @@ static uint8_t trigger_spawned[100];
 static Trigger trigger;
 static int16_t stop_zones[4][4];
 static uint8_t stop_count,stop_done;
-static Trigger trigger_cache[60] PCE_STAGE;
+Trigger trigger_cache[60] PCE_STAGE;   /* (Ramrod's arena uses this staging memory for its own state: mech_pce.h) */
 static int16_t trigger_lo[60] PCE_STAGE,trigger_hi[60] PCE_STAGE;
 PCE_COMBAT void encounter_init(void) {
     const PceScene *scene=play_scene;
@@ -72,11 +72,13 @@ PCE_SCENERY void encounters(void)   /* $78: the mission bank is full */ {
              * of 12 horses at once, 99 px apart, behind the right screen edge, running at the hero at 120 px/s; here
              * the same horse count, 224 px apart, so at most two are on screen and two fit a scanline beside the hero. */
             if(!play_scene->horse||t->wp[0][0]<=30000){trigger_remaining[k]=0;continue;}
-            herd_y=t->wp[0][1];herd_lead=t->interval*5/2;herd_pending=(uint8_t)t->remaining+1;if(pce_metrics.stage==1&&t->cx<4000)herd_pending=8;   /* the first convoy runs a third shorter */
+            herd_y=t->wp[0][1];herd_lead=t->interval*5/2;herd_pending=(uint8_t)t->remaining+1;if(pce_metrics.stage==1)herd_pending=t->cx<4000?8:t->cx>8000?herd_pending-3:herd_pending;   /* the first convoy runs a third shorter, the last three horses fewer */
             herd_next=camera+328+herd_lead+16;overlay_call(0x6f,herd_spawn);herd_feed();
             trigger_remaining[k]=0;continue;
         }
-        if(herd_on)continue;   /* nothing else is called in while the herd runs */
+        /* Nothing else is called in while the herd runs, and what a zone would have brought in meanwhile is gone: in the source it would have
+         * stood in the horses' way and been trampled, so a placed enemy must not walk in once the stampede is over. */
+        if(herd_on){if(trigger_remaining[k]>0)trigger_remaining[k]=0;continue;}
         /* Placed enemies always come when their zone is crossed; the endless streams use the room that is left (priority_pce.c). */
         if(t->type!=28&&(t->type<11||t->type>28)) {
             if(convoy_near)continue;   /* (a convoy is about to start) */
@@ -88,12 +90,13 @@ PCE_SCENERY void encounters(void)   /* $78: the mission bank is full */ {
         for(uint8_t i=0;i<8;++i) if(!actors[i].active) {
             uint8_t wp=trigger_spawned[k]%t->nwp;
             int16_t x=t->wp[wp][0],y=t->wp[wp][1];
-            bool edge=x>30000||x< -30000;
+            bool edge=x>30000||x< -30000,drop_in=y< -999;   /* a spawn point below -999 is a drop-in: the enemy is thrown up out of it */
             if(x>30000)x=camera+288;else if(x< -30000)x=camera-32;
             if(y>30000)y=256;else if(y< -30000)y=-32;
             if(y< -999)y=-1000-y;
             if(edge&&t->type<6){probe_x=x+8;probe_y=y+19;probe_left=player.x<x;overlay_call(0x69,spawn_clear);y=probe_y-19;}
             actors[i]=(Actor){.b={.x=t->type>=11&&t->type<=27?x:x+8,.y=t->type>=11&&t->type<=27?y:y+19},.active=1,.type=t->type,.hp=t->type==28?2:t->type>=30?(pce_options.difficulty==0?4:pce_options.difficulty==1?6:8):1,.timer=t->type>=30&&t->type<=31?60:0,.flip=player.x<x,.aim=4,.mode=1};
+            if(drop_in){actors[i].mode|=8;actors[i].b.vy=-711;}   /* 166.7 px/s, in Q8 a step */
             if(trigger_remaining[k]>0)--trigger_remaining[k];
             ++trigger_spawned[k];
             /* the source adds up to rand_n * 0.02 s to every wait (exported in the trigger's layer byte) */

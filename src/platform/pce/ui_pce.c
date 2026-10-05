@@ -20,7 +20,7 @@ uint8_t ui_cycle_step,ui_cycle_clock,ui_dark;
 UI_BASE void ui_read_keys(void) {
     ui_held=~pce_joypad_read();ui_pressed=ui_held&~previous;previous=ui_held;
 }
-UI_BASE void ui_blip(void) { audio_pcm_play(1); }
+UI_BASE void ui_blip(void) { audio_pcm_tick(); }   /* the PC menus' tick (sfx 0) */
 UI_BASE void ui_sprite(int16_t x,int16_t y,uint16_t pattern,uint8_t palette,bool wide) {
     if(sat_count>=64||x<=-32||x>=320||y<=-16||y>=224)return;
     sat[0][sat_count++]=(vdc_sprite_t){y+64,x+32,UI_SPRITE_CODE+pattern*2,
@@ -76,3 +76,12 @@ UI_BASE void ui_fade(uint8_t level) {
     }
     pce_vce_copy_palette(0,dst,32);
 }
+/* The common screen transitions (title -> hero select, hero select -> the stage card, every stage's start): fade out takes what is on
+ * screen to black through the palette snapshot; a screen is shown from black by ui_black (the snapshot of the palettes it was built
+ * with, then black) once it is set up, and ui_fade_in brings it up. The snapshot lives in `buffer`: nothing else may use it between.
+ * They are in the spare bank $7b (ui_pce.h has the calls) because the renderer bank and the front end's are full. */
+#define UI_FADE_CODE __attribute__((noinline,section(".ram_bank123.text")))
+UI_FADE_CODE static void fade_step(uint8_t level) {video_wait();video_wait();video_wait();ui_fade(level);}
+UI_FADE_CODE void ui_fade_out_body(void) {ui_fade(8);for(uint8_t level=1;level<8;++level)fade_step(level);}
+UI_FADE_CODE void ui_black_body(void) {ui_fade(8);ui_fade(7);}
+UI_FADE_CODE void ui_fade_in_body(void) {video_display(true);for(uint8_t level=6;level<7;--level)fade_step(level);}

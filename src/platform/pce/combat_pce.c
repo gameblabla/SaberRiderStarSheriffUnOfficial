@@ -5,8 +5,11 @@
 #include "loader_pce.h"
 static uint8_t dialogs_done,ndialog,ndeath;
 static uint16_t arena_time;
+static uint8_t boss_wait PCE_WORK;   /* a boss's arena is locked and the camera is still gliding there: its fight (and music) start when it stops */
+void arena_spawn(void),arena_reset(void);
 extern int16_t boss_x,boss_y;extern uint8_t boss_phase,boss_flash,boss_max;extern uint16_t boss_time;
 void boss_start(void),boss_tick(void),boss_draw(void),boss_release(void);
+void dark_begin(void),dark_tick(void),dark_draw(void);
 typedef struct { int16_t zone[4],focus; uint16_t before,after,voice; } DialogZone;
 static DialogZone dialog_zones[4];
 static int16_t death_zones[8][6];
@@ -21,11 +24,8 @@ static inline __attribute__((always_inline)) int16_t distance(int16_t a,int16_t 
 PCE_COMBAT static bool zone(const int16_t *z) {
     return distance(player.x+4,z[0])<=z[2]+8&&distance(player.y+9,z[1])<=z[3]+23;
 }
-PCE_COMBAT static void bullet(int16_t x,int16_t y,int16_t vx,int16_t vy) {
-    for(uint8_t k=0;k<NSHOTS;++k)if(!shots[k].active){shots[k]=(Shot){x,y,vx,vy,1,1,0,0,0};break;}
-}
 PCE_COMBAT void combat_start(void) {
-    boss_phase=boss_flash=dialogs_done=ndialog=ndeath=cut_phase=0;boss_time=arena_time=0;
+    boss_phase=boss_flash=dialogs_done=ndialog=ndeath=cut_phase=boss_wait=0;boss_time=arena_time=0;
     pce_campaign.boss_kind=pce_campaign.boss_round=0;pce_campaign.boss_hp=0;
     pce_campaign.result=pce_campaign.event=0;pce_campaign.boost=pce_campaign.power_cd=0;
     uint8_t count[3];arcade_read(2,play_scene->rules,count,3);
@@ -36,9 +36,14 @@ PCE_COMBAT void combat_start(void) {
 PCE_COMBAT static void boss_begin(uint8_t kind) {
     pce_campaign.boss_kind=kind;
     boss_time=0;boss_x=play_scene->width-16;boss_y=80;   /* the arena's right edge; the camera glides there */
-    if(kind==3){pce_campaign.boss_hp=boss_max=30;boss_phase=3;}
-    else overlay_call(0x6f,boss_start);   /* the flying bosses: boss_pce.c */
-    audio_music(8);
+    if(kind==3){boss_phase=3;overlay_call(0x73,dark_begin);return;}   /* Dark April (dark_pce.c): her scenes come first, the music with the fight */
+    boss_wait=1;   /* the camera glides to the arena first (play_pce.c); the ship, its patterns and the boss music (a CD seek that holds the loop up) come when it has stopped */
+}
+/* The camera has reached the arena: the flying bosses' set-up and music, behind a still picture. */
+PCE_COMBAT static void boss_arrive(void) {
+    boss_wait=0;
+    overlay_call(0x6f,boss_start);   /* the flying bosses: boss_pce.c */
+    if(pce_metrics.stage!=4)audio_music(8);   /* (stage 4's finale has had it since its radio scene, as the source's) */
 }
 PCE_COMBAT static void power_strike(void) {
     if(hero<2) {
@@ -103,44 +108,31 @@ PCE_COMBAT void combat_tick(void) {
         if(stage==3&&player.x>=6480&&!(dialogs_done&16)){dialogs_done|=16;pce_campaign.story=1;pce_campaign.event=1;return;}
         if(player.x>=(int16_t)start) {
             if(stage==4&&++arena_time<1440) {
-                if(arena_time==1){pce_campaign.story=1;pce_campaign.event=1;}
-                if(!(arena_time%120))for(uint8_t k=0;k<8;++k)if(!actors[k].active) {
-                    actors[k]=(Actor){.b={.x=camera+240,.y=170},.active=1,.type=2,.hp=1,.flip=1,.aim=4,.mode=1};break;
+                if(arena_time==1){pce_campaign.story=1;pce_campaign.event=1;overlay_call(0x76,arena_reset);}
+                else {
+                    if(arena_time==2){audio_music(8);}   /* the boss music from the end of the radio scene, as the source's finale (forest.c FF_WAIT) */
+                    if(!(arena_time&3))overlay_call(0x76,arena_spawn);
                 }
-            } else {
-                boss_begin(stage==1||stage==5?1:2);
-                
-            }
+            } else boss_begin(stage==1||stage==5?1:2);
         }
     } else {
         uint8_t kind=pce_campaign.boss_kind;
-        if(kind==3) {
-            /* Dark April: runs at the hero's heels and fires level */
-            ++boss_time;if(boss_flash)--boss_flash;
-            boss_x+=player.x<boss_x?-1:1;
-            if(boss_x<(int16_t)camera+32)boss_x=camera+32;
-            if(boss_x>(int16_t)camera+224)boss_x=camera+224;
-            boss_y=player.y;
-            if(!(boss_time%45))bullet(boss_x,boss_y-8,(player.x<boss_x?-4:4)<<8,0);
-            if(!safe_timer&&distance(player.x,boss_x)<14&&distance(player.y,boss_y)<28){safe_timer=120;campaign_hurt();}
-            for(uint8_t k=0;k<NSHOTS;++k) {
-                Shot *s=&shots[k];if(!s->active||s->enemy)continue;
-                if(distance(s->x,boss_x)<12&&distance(s->y,boss_y)<24) {
-                    s->active=0;if(pce_campaign.boss_hp)--pce_campaign.boss_hp;boss_flash=6;audio_effect(4);
-                }
-            }
-        } else overlay_call(0x7b,boss_tick);
+        if(boss_wait){if((int16_t)camera>=play_scene->width-256)boss_arrive();}
+        else {
+        if(kind==3)overlay_call(0x71,dark_tick);
+        else overlay_call(0x76,boss_tick);
+        if(pce_metrics.stage==4&&pce_campaign.boss_hp&&!(frame&3))overlay_call(0x76,arena_spawn);   /* the finale's thinner streams go on through the fight */
         if(!pce_campaign.boss_hp) {
             if(kind!=3)overlay_call(0x6f,boss_release);
             if(pce_metrics.stage==4) {
                 ++pce_campaign.score;pce_campaign.boss_round=2;
             } else if(pce_metrics.stage==5&&kind==1) {
                 pce_campaign.boss_round=1;boss_begin(3);
-                pce_campaign.story=hero==2?5:2;pce_campaign.event=1;
             } else {
                 ++pce_campaign.score;pce_campaign.result=1;
                 if(pce_metrics.stage!=1){pce_campaign.story=pce_metrics.stage==5?(hero==2?6:3):2;pce_campaign.event=1;}
             }
+        }
         }
     }
     /* The robot-horse herd tramples every humanoid in its way, as in the main game. */
@@ -164,7 +156,7 @@ PCE_COMBAT void combat_draw(void) {
         pce_campaign.timer+=pce_control.elapsed;
         if(pce_campaign.timer>=114){power_strike();pce_campaign.state=CAM_PLAY;video_restore();}
     }
-    if(pce_campaign.boss_kind==3&&pce_campaign.boss_hp&&(!boss_flash||(frame&2)))video_sprite(43,boss_x-camera,boss_y-16,player.x<boss_x,16);
+    if(pce_campaign.boss_kind==3&&pce_campaign.boss_hp)overlay_call(0x70,dark_draw);
     else if(pce_campaign.boss_kind&&pce_campaign.boss_kind!=3&&pce_campaign.boss_hp)overlay_call(0x6d,boss_draw);
 
 }

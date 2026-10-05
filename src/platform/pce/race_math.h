@@ -24,8 +24,5 @@ static inline int16_t hypot16(int16_t dx,int16_t dy) {
     int16_t a=absolute(dx),b=absolute(dy);
     return a>b?a+(b>>1):b+(a>>1);
 }
-/* (a * b) / 128 for |b| <= 127, in 16 bits (the magnitude of a is cut to 14 bits' worth of precision) */
-__attribute__((noinline,unused)) static int16_t muls(int16_t a,int8_t b) {
-    uint16_t m=(uint16_t)(absolute(a)>>2)*(uint8_t)(b<0?-b:b)>>5;
-    return (a<0)!=(b<0)?-(int16_t)m:(int16_t)m;
-}
+/* (a * b) / 128 for |b| <= 127, in 16 bits (the magnitude of a is cut to 14 bits' worth of precision): one copy, in the resident bank (race_pce.c) */
+int16_t muls(int16_t a,int8_t b);

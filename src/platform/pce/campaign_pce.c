@@ -12,8 +12,9 @@ void campaign_hurt(void) {
     if(pce_metrics.hp)--pce_metrics.hp;
     if(!pce_metrics.hp) {
         audio_effect(6);
-        /* Platform stages respawn in place after a short death (play_tick). */
-        if(!pce_campaign.diagnostic&&pce_metrics.stage!=2&&pce_metrics.stage<6){pce_death=1;return;}
+        /* Platform stages respawn in place after a short death (play_tick), and so do Ramrod's arena (m6_c.c: the wave begins again) and the last level's ship
+         * (space_pce.c), as the source's (space.c: Ramrod flies back in where the fight is). */
+        if(!pce_campaign.diagnostic&&pce_metrics.stage!=2){pce_death=1;return;}
         if(pce_campaign.lives) { --pce_campaign.lives;pce_campaign.result=2; }
         else {pce_campaign.state=CAM_OVER;pce_campaign.timer=0;}
     }

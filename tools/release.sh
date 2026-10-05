@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Package a release: separate zips in release/
-#   saber_rider-linux-x86_64-<version>.zip  the SDL3 build, its bundled libraries, assets/ and the demo's data/*.pck
+# Package a release in release/
+#   saber_rider-linux-x86_64-<version>.AppImage  the SDL3 build, bundled libraries, assets/ and data/*.pck
 #   saber_rider-windows-x86_64-<version>.zip  the MinGW-w64 static build (no DLLs to ship), assets/ and the demo's data/*.pck
 #   saber_rider-dreamcast-<version>.zip     the self-booting CDI (the packs are on the disc)
 #   saber_rider-saturn-<version>.zip        the CD image (a single cue/bin, like a retail disc; the packs are baked onto it)
@@ -41,14 +41,22 @@ mkdir -p "$OUT"
 
 # ---------------------------------------------------------------- Linux
 package_linux() {
-    echo "== Linux build"
+    echo "== Linux AppImage build"
+    local appimagetool="${APPIMAGETOOL:-appimagetool}"
+    command -v "$appimagetool" >/dev/null 2>&1 || {
+        echo "appimagetool not found; install AppImageKit or set APPIMAGETOOL to its executable" >&2
+        exit 1
+    }
     make -j"$(nproc)"
-    local stage="$OUT/linux" dir="$OUT/linux/SaberRider"
-    rm -rf "$stage"; mkdir -p "$dir/lib" "$dir/data"
+    local stage="$OUT/linux/AppDir"
+    local bin="$stage/usr/bin/saber_rider" lib="$stage/usr/lib"
+    local share="$stage/usr/share/saber-rider"
+    rm -rf "$stage"
+    mkdir -p "$stage/usr/bin" "$lib" "$share/data" "$stage/usr/share/doc/saber-rider"
 
-    strip --strip-debug -o "$dir/saber_rider" saber_rider
-    cp -r assets "$dir/assets"
-    for p in "${PACKS[@]}"; do cp "$DATA/$p" "$dir/data/"; done
+    strip --strip-debug -o "$bin" saber_rider
+    cp -r assets "$share/"
+    for p in "${PACKS[@]}"; do cp "$DATA/$p" "$share/data/"; done
 
     # Bundle everything the binary links except glibc and the libraries that must match the user's desktop
     # (X11 / xcb / Wayland / GL / DRM, ALSA / PulseAudio / D-Bus and the libraries PulseAudio pulls in).
@@ -57,32 +65,42 @@ package_linux() {
     ldd saber_rider | awk '$2 == "=>" && $3 ~ /^\// { print $1, $3 }' | while read -r name path; do
         name="${name##*/}"                 # the loader is listed by path (/lib64/ld-linux-x86-64.so.2 => ...)
         [[ "$name" =~ $keep_exact || "$name" =~ $keep_family ]] && continue
-        cp -L "$path" "$dir/lib/$name"
+        cp -L "$path" "$lib/$name"
     done
-    if LD_LIBRARY_PATH="$dir/lib" ldd "$dir/saber_rider" | grep -q "not found"; then
-        LD_LIBRARY_PATH="$dir/lib" ldd "$dir/saber_rider" | grep "not found" >&2; exit 1
+    if LD_LIBRARY_PATH="$lib" ldd "$bin" | grep -q "not found"; then
+        LD_LIBRARY_PATH="$lib" ldd "$bin" | grep "not found" >&2; exit 1
     fi
     local glibc
-    glibc="$(objdump -T "$dir/saber_rider" "$dir"/lib/*.so* 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1 | cut -d_ -f2)"
+    glibc="$(objdump -T "$bin" "$lib"/*.so* 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1 | cut -d_ -f2)"
 
-    cat > "$dir/saber_rider.sh" <<'EOF'
+    cat > "$stage/AppRun" <<'EOF'
 #!/bin/sh
-# Saber Rider launcher: the bundled libraries in lib/, the demo packs in data/. Extra arguments go to the game
-# (--level N skips the front end, e.g. ./saber_rider.sh --level 2).
-here="$(cd "$(dirname "$0")" && pwd)"
-cd "$here" || exit 1
-LD_LIBRARY_PATH="$here/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec "$here/saber_rider" "$here/data" "$@"
+# AppImage runtime sets APPDIR; readlink also supports direct AppRun use while developing the AppDir.
+APPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
+export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export SABER_ASSETS="$APPDIR/usr/share/saber-rider/assets"
+exec "$APPDIR/usr/bin/saber_rider" "$APPDIR/usr/share/saber-rider/data" "$@"
 EOF
-    chmod +x "$dir/saber_rider.sh" "$dir/saber_rider"
+    chmod +x "$stage/AppRun" "$bin"
 
-    cat > "$dir/README.txt" <<EOF
-Saber Rider and the Star Sheriffs - demo reconstruction, Linux x86_64 ($VERSION)
+    cat > "$stage/saber-rider.desktop" <<'EOF'
+[Desktop Entry]
+Name=Saber Rider and the Star Sheriffs
+Exec=AppRun
+Icon=saber_rider
+Type=Application
+Categories=Game;ArcadeGame;
+Terminal=false
+EOF
+    cp SaberRider/icon.png "$stage/saber_rider.png"
 
-Run ./saber_rider.sh (or: ./saber_rider.sh --level N to start on stage N, 1-6).
+    cat > "$stage/usr/share/doc/saber-rider/README.txt" <<EOF
+Saber Rider and the Star Sheriffs - demo reconstruction, Linux x86_64 AppImage ($VERSION)
+
+Run the AppImage (or pass --level N to start on stage N, 1-7).
 
 Needs glibc $glibc or newer, and an X11 or Wayland desktop with ALSA or PulseAudio/PipeWire sound.
-The other libraries (SDL3, FFmpeg, Vorbis, ...) are bundled in lib/.
-data/ holds the original demo's .pck packs, which the game reads directly.
+The AppImage bundles the game, SDL3, FFmpeg, Vorbis, assets and the demo's .pck packs.
 
 Controls: arrows move, W/A jump, S/D shoot, hold Q/E to aim (8 directions), X/F power attack,
 Enter starts / pauses, Alt+Enter toggles fullscreen. Down+jump slides; down+jump on a platform drops through.
@@ -90,10 +108,13 @@ Gamepad: d-pad/stick, South jump, East/West shoot, North power attack, shoulders
 OPTIONS sets the screen (fullscreen / window size), ratio and filter; OPTIONS > CONTROLS remaps the keyboard
 and the gamepad (saved in ~/.local/share/SaberRider/SaberRider/controls.cfg).
 EOF
-    local zipf="$OUT/saber_rider-linux-x86_64-$VERSION.zip"
-    rm -f "$zipf"
-    (cd "$stage" && zip -qr9 "$zipf" SaberRider)
-    echo "-> $zipf ($(du -h "$zipf" | cut -f1))"
+    local appimage="$OUT/saber_rider-linux-x86_64-$VERSION.AppImage"
+    rm -f "$appimage"
+    local runtime_args=()
+    if [ -n "${APPIMAGE_RUNTIME:-}" ]; then runtime_args=(--runtime-file "$APPIMAGE_RUNTIME"); fi
+    APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 "$appimagetool" "${runtime_args[@]}" "$stage" "$appimage"
+    chmod +x "$appimage"
+    echo "-> $appimage ($(du -h "$appimage" | cut -f1))"
 }
 
 # ---------------------------------------------------------------- Windows

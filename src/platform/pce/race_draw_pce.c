@@ -13,7 +13,7 @@ PCE_BOSS void race_briefing_frame(void) {
  * every picture was stretched to twice its width at build time (tools/pce/hudart.py, build_assets.py). Cars are drawn
  * far to near from the camera's frame: its focal length is 421 dots, its horizon row 113, and a car at a distance f is
  * 128*92/f dots wide (the player's own, at 92, is 128). */
-#define DRAW_CODE PCE_HUD
+#define DRAW_CODE __attribute__((noinline,minsize,section(".ram_bank124.text")))
 static uint16_t base;
 DRAW_CODE static void put(uint16_t offset,int16_t x,int16_t y) {
     video_sprite_optional(base+offset,x,y,false,16);
@@ -33,54 +33,9 @@ DRAW_CODE static void bar(int16_t x,int16_t y,uint8_t pieces,uint16_t fill,uint8
         put(PCE_H2_BAR_GREEN_1+(uint16_t)color*16+f-1,x+k*16,y);
     }
 }
-typedef struct {int16_t x,y;uint16_t f;uint8_t kind;} Visible;
-static Visible vis[18];static uint8_t nvis;static int8_t shown_c,shown_s,shown_cl,shown_sl;
-/* (a * b) >> 7 for |a| < 4096 and |b| <= 127 without 32-bit arithmetic: the high and the low byte of a apart */
-DRAW_CODE static int16_t mulq(int16_t a,int8_t b) {
-    int8_t high=a>>8;uint8_t low=a;
-    return (int16_t)(high*b*2+(int16_t)((int16_t)low*b>>7));
-}
-/* a * b for int16 a and int8 b, in 32 bits */
-DRAW_CODE static int32_t mulw(int16_t a,int8_t b) {
-    int8_t high=a>>8;uint8_t low=a;
-    return ((int32_t)(int16_t)(high*b)<<8)+(int16_t)((int16_t)low*b);
-}
-/* The ground point in the camera's frame: f ahead, l to the right. The screen row follows from the distance (horizon
- * 113 + 10080 / f); a car's width in dots is 1.17 x the rows below the horizon; the offset from the middle is
- * l * 210 / f = l * rows / 48, taken as l * (rows * 0.334 in Q4) >> 4 so that it stays in 16 bits (the road is drawn half as wide as the
- * focal length of 421 dots gives, so that its picture has sand on both sides). */
-DRAW_CODE static bool project_point(int16_t wx,int16_t wy,int16_t *sx,int16_t *row,int16_t *depth) {
-    int16_t rx=wrapdiff(wx,pce_control.x),ry=wrapdiff(wy,pce_control.y);
-    if(rx>1900||rx<-1900||ry>1900||ry<-1900)return false;
-    int16_t f=mulq(rx,shown_c)+mulq(ry,shown_s);
-    if(f<40||f>560)return false;   /* beyond 560 units (road_pce.c FAR_F) the road is lost in the haze: nothing is drawn there */
-    /* the side offset in quarter units, from the camera's Q14 sine and cosine: whole units moved a car four dots at a time near the camera,
-     * out of step with the road under it */
-    int16_t l=(int16_t)((((mulw(ry,shown_c)-mulw(rx,shown_s))<<7)+mulw(ry,shown_cl)-mulw(rx,shown_sl))>>12);
-    if(l>4*f||l<-4*f)return false;
-    uint16_t below=10080u/(uint16_t)f;
-    *row=113+below;*depth=f;
-    *sx=256+(int16_t)(l*(int16_t)((below*85)>>8)>>6);
-    return true;
-}
-DRAW_CODE static void add(uint8_t kind,int16_t wx,int16_t wy) {
-    int16_t sx,row,f;
-    if(nvis>=18||!project_point(wx,wy,&sx,&row,&f))return;
-    if(sx<-60||sx>572)return;
-    uint8_t at=nvis;
-    while(at&&vis[at-1].f>(uint16_t)f){vis[at]=vis[at-1];--at;}
-    vis[at]=(Visible){sx,row,(uint16_t)f,kind};++nvis;
-}
 DRAW_CODE void race_draw(void) {
     base=pce_hud_base[1];
-    shown_c=cam_c;shown_s=cam_s;shown_cl=cam_cl;shown_sl=cam_sl;
-    nvis=0;
-    for(uint8_t k=0;k<7;++k)if(rv[k].hp)add(rv[k].kind,rv[k].x,rv[k].y);
-    for(uint8_t k=0;k<6;++k)if(mines[k].t)add(6,mines[k].x,mines[k].y);
-    if(rphase>=P_PURSUIT) {
-        for(uint8_t k=0;k<2;++k)if(escort[k].hp)add(1,escort[k].x,escort[k].y);
-        if(boss.state<3)add(2,boss.x,boss.y);
-    }
+    overlay_call(0x77,project_entities);   /* the entities in the camera's frame (race_proj.c) */
     video_sat_begin();
     /* the car: hard left .. hard right from the steering lean, blinking while it is hurt */
     if(!hurt||(race_time&4)||rphase!=P_RACE) {
@@ -111,7 +66,13 @@ DRAW_CODE void race_draw(void) {
         }
     }
     for(uint8_t k=0;k<nvis;++k) {
-        uint16_t rows=vis[k].y-113,dots=(rows>>1)+(rows>>4)+(rows>>5);   /* 5888 / f: the road is drawn half as wide as the focal length of 421 dots gives (road_pce.c) */
+        uint16_t rows=vis[k].y-113,dots=rows+(rows>>3)+(rows>>5);   /* 11776 / f */
+        if(vis[k].kind>=8&&vis[k].kind<13){video_sprite_optional(PCE_CAR_EXPL+(dots>70?0:5)+vis[k].kind-8,vis[k].x,vis[k].y,false,16);continue;}
+        if(vis[k].kind==7||vis[k].kind==13) {   /* the start / finish line's flag poles, one each side of the road (the right-hand one is the left one flipped) */
+            uint16_t f=vis[k].f;
+            video_sprite_optional(PCE_CAR_POLE+(f<125?5:f<165?4:f<225?3:f<310?2:f<430?1:0),vis[k].x,vis[k].y,vis[k].kind==13,16);
+            continue;
+        }
         uint8_t i=0;
         while(i<PCE_CAR_STEPS-1&&(uint16_t)pce_car_widths[i]*2<dots)++i;
         /* Baked perspective sizes use the cached assembly emitter. Scaling
@@ -119,9 +80,9 @@ DRAW_CODE void race_draw(void) {
         video_sprite_optional(3+vis[k].kind*PCE_CAR_STEPS+i,vis[k].x,vis[k].y,false,16);
     }
     /* shots: the source's 8x8 orbs (blue the car's, red theirs) at their ground positions */
-    for(uint8_t k=0;k<10;++k)if(race_bolts[k].t) {
-        int16_t sx,row,f;
-        if(project_point(race_bolts[k].x,race_bolts[k].y,&sx,&row,&f))video_sprite_optional(race_bolts[k].own?0:1,sx,row-(1400/f),false,16);
+    for(uint8_t k=0;k<10;++k)if(bolt_ok&(1<<k)) {
+        int16_t below=bolt_sy[k]-113;
+        video_sprite_optional(PCE_CAR_ORB+(race_bolts[k].own?0:PCE_ORB_STEPS)+bolt_step[k],bolt_sx[k],bolt_sy[k]-(below>>3)-(below>>6),false,16);   /* 1400 / f without the division; big at the gun, smaller as it flies away */
     }
     /* HUD: the car's damage bar and spare cars, the turbo bar (no speedometer), then what the phase has to say */
     uint16_t hp_frac=(uint16_t)car_hp*64/car_max;   /* 16-bit throughout: the 32-bit multiply and divide cost the road its updates */
@@ -134,6 +95,10 @@ DRAW_CODE void race_draw(void) {
         number(440,10,lap,1,0);put(PCE_H2_SLASH3,454,10);
         uint8_t rank=pce_campaign.rank<1?1:pce_campaign.rank>8?8:pce_campaign.rank;
         put(PCE_H2_ORD1+rank-1,440,26);
+    }
+    if(lap_banner&&(lap_banner>40||(lap_banner&8))) {   /* LAP 2/3 as the lap begins, FINAL LAP on the last (blinking as it goes) */
+        uint8_t last=pce_campaign.lap>=3;
+        put(last?PCE_H2_LAPMSG3:PCE_H2_LAPMSG2,256-(last?PCE_H2_LAPMSG3_W:PCE_H2_LAPMSG2_W)/2,52);
     }
     if(rphase==P_COUNT) {
         uint8_t n=3-phase_t/60;if(n>3)n=3;if(n<1)n=1;

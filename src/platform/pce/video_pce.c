@@ -2,6 +2,7 @@
 #include "arcade_pce.h"
 #include "sprite_cache_pce.h"
 #include "overlay_pce.h"
+#include "loader_pce.h"
 #include <string.h>
 
 volatile PceTelemetry pce_metrics;
@@ -15,7 +16,7 @@ volatile uint8_t pce_floor_pending;
 static const PceScene *scene;
 const PceScene *video_scene_ptr;
 static uint16_t cache_ids[PCE_BG_MAX_TILES] PCE_WORK;
-static uint16_t cache_refs[PCE_BG_MAX_TILES] PCE_WORK;
+uint16_t cache_refs[PCE_BG_MAX_TILES] PCE_WORK;   /* (the race borrows it for its quarter-square table: race_proj.c) */
 uint16_t columns[33][30] PCE_WORK;
 static uint16_t first_column, last_column;
 /* A tile slot whose last column has scrolled out stays unavailable until the next call: the scroll that drops the column only
@@ -24,7 +25,7 @@ static uint16_t first_column, last_column;
 #define HOLD 0x4000
 static uint16_t held[48] PCE_WORK;
 static uint8_t held_count;
-static uint16_t free_cursor;
+static uint16_t free_cursor,bg_tiles=PCE_BG_MAX_TILES;   /* bg_tiles: Ramrod's arena (stage 6) keeps the cache's top 384 characters ($2800-$3fff) for the arm's and a mech's pattern buffers (m6_d.c) */
 uint8_t buffer[2048] PCE_STAGE;
 uint8_t sprite_occupancy[240], sprite_line_lo, sprite_line_hi, sprite_line_ok, sprite_exact;
 extern void sprite_lines_reserve(void), sprite_lines_release(void);
@@ -55,6 +56,14 @@ PCE_RENDER void video_vdc(uint8_t index, uint16_t value) {
     *IO_VDC_DATA_HI = value >> 8;
     pce_cpu_irq_enable();
 }
+/* Ramrod's arena (m6/m6_state.h): its four 8 KiB code images, read from the stage's archive into the code banks $76, $77, $79 and $7a. Here, in the renderer bank
+ * that is always mapped, so the window ($6000) can change under the caller. */
+PCE_RENDER void m6_load(void) {
+    static const uint8_t bank[4]={0x76,0x77,0x79,0x7a};
+    uint8_t previous=pce_bank3_get();
+    for(uint8_t k=0;k<4;++k){pce_bank3_set(bank[k]);arcade_read(2,PCE_M6_IMAGE+(uint32_t)k*8192,(void*)0x6000,8192);}
+    pce_bank3_set(previous);
+}
 PCE_RENDER void video_init(void) {
     __attribute__((leaf)) asm volatile("csh" ::: "memory");
     pce_cpu_irq_disable();
@@ -84,6 +93,7 @@ PCE_RENDER static void timing(bool wide) {
 }
 /* 320x224 timing for the front end: the 7.16 MHz dot clock, 40 characters. */
 PCE_RENDER void video_mode_ui(void) {
+    pce_arena_raster=0;
     sprite_screen_height=224;sprite_exact=1;
     pce_cpu_irq_disable();
     *IO_VCE_CONTROL = 1;
@@ -100,8 +110,20 @@ PCE_RENDER void video_wait(void) {
     uint8_t previous = pce_ticks;
     while (previous == pce_ticks) {}
     ++pce_metrics.frames;
+    audio_tick();   /* the PSG effects' envelopes keep running through the fades and waits that never reach the main loop */
 }
+extern uint8_t vce_arg_index,vce_arg_count;extern const void *vce_arg_ptr;extern uint16_t vce_arg_value;
+void vce_copy_body(void),vce_set_body(void),vce_read_body(void);
+PCE_RENDER void vce_copy(uint8_t index,const void *source,uint8_t count) {vce_arg_index=index;vce_arg_ptr=source;vce_arg_count=count;overlay_call(0x75,vce_copy_body);}
+PCE_RENDER void vce_set(uint16_t index,uint16_t value) {vce_arg_index=index>>4;vce_arg_count=index&15;vce_arg_value=value;overlay_call(0x75,vce_set_body);}
+PCE_RENDER void vce_read(void *dest,uint8_t index,uint8_t count) {vce_arg_index=index;vce_arg_ptr=dest;vce_arg_count=count;overlay_call(0x75,vce_read_body);}
+#pragma push_macro("pce_vce_copy_palette")
+#undef pce_vce_copy_palette
+PCE_RENDER void vce_copy_now(uint8_t index,const void *source,uint8_t count) {pce_vce_copy_palette(index,source,count);}
+#pragma pop_macro("pce_vce_copy_palette")
+volatile uint8_t pce_display_on;   /* palette RAM is only written in the vertical blank while this is set (pce_config.h) */
 PCE_RENDER void video_display(bool enable) {
+    pce_display_on=enable;
     video_vdc(VDC_REG_CONTROL, VDC_CONTROL_IRQ_VBLANK | VDC_CONTROL_IRQ_SCANLINE |
               (enable ? VDC_CONTROL_ENABLE_BG | VDC_CONTROL_ENABLE_SPRITE : 0));
 }
@@ -121,7 +143,7 @@ PCE_RENDER void video_scene(const PceScene *s) {
     memset(sprite_pinned,0,sizeof sprite_pinned);
     memset(pattern_owner,0,sizeof pattern_owner);
     first_column = last_column = 0xffff;
-    free_cursor=0;
+    pce_arena_raster=0;free_cursor=0;bg_tiles=s==&pce_scenes[5]?512:PCE_BG_MAX_TILES;
     for(uint8_t page=0;page<32;++page)arcade_fill(0x1e0000UL+(uint32_t)page*4096,0xff,4096);
     arcade_read(2, s->pal, buffer, 512);
     pce_vce_copy_palette(0, buffer, 16);
@@ -156,20 +178,21 @@ PCE_RENDER static void held_free(void) {
 /* A column's 30 BAT entries are written with the VDC address increment set to
  * 64 words, so only one address is programmed. IRQs stay masked meanwhile. */
 PCE_RENDER static bool column_load(uint16_t world) {
-    if (!arcade_read(1, scene->map + (uint32_t)(world % scene->cols) * 90, buffer, 90)) return false;
+    uint8_t *cb=buffer+1920;   /* the last 128 bytes: the palette snapshot of a fade (fade_pce.c) lives in the first 1024 */
+    if (!arcade_read(1, scene->map + (uint32_t)(world % scene->cols) * 90, cb, 90)) return false;
     uint16_t *refs = columns[world % 33];
     arcade_seek(3,0x1e0000UL);
     for (uint8_t y = 0; y < 30; ++y) {
-        uint16_t id = buffer[y * 3] | (uint16_t)buffer[y * 3 + 1] << 8;
+        uint16_t id = cb[y * 3] | (uint16_t)cb[y * 3 + 1] << 8;
         uint16_t slot=directory_get(id);
         if (slot == 0xffff) {
             slot=free_cursor;
             uint16_t checked=0;
             while(cache_refs[slot]) {
-                if(++checked==PCE_BG_MAX_TILES){if(!held_count)return false;held_free();checked=0;}   /* a full cache gives its held slots up */
-                if(++slot==PCE_BG_MAX_TILES)slot=0;
+                if(++checked==bg_tiles){if(!held_count)return false;held_free();checked=0;}   /* a full cache gives its held slots up */
+                if(++slot==bg_tiles)slot=0;
             }
-            free_cursor=slot+1;if(free_cursor==PCE_BG_MAX_TILES)free_cursor=0;
+            free_cursor=slot+1;if(free_cursor==bg_tiles)free_cursor=0;
             if(cache_ids[slot]!=0xffff)directory_set(cache_ids[slot],0xffff);
             pce_vdc_index = 2; *(volatile uint8_t *)0x20f7 = 2;
             if (!arcade_vram(scene->tiles + (uint32_t)id * 32,
@@ -179,8 +202,8 @@ PCE_RENDER static bool column_load(uint16_t world) {
             pce_metrics.uploads += 32;
         }
         ++cache_refs[slot]; refs[y] = slot;
-        uint16_t word=(PCE_BG_WORD>>4)+slot+((uint16_t)buffer[y*3+2]<<12);
-        buffer[y*3]=word;buffer[y*3+1]=word>>8;
+        uint16_t word=(PCE_BG_WORD>>4)+slot+((uint16_t)cb[y*3+2]<<12);
+        cb[y*3]=word;cb[y*3+1]=word>>8;
     }
     uint16_t control=*(volatile uint16_t *)0x20f3;
     pce_cpu_irq_disable();
@@ -194,8 +217,8 @@ PCE_RENDER static bool column_load(uint16_t world) {
     *(volatile uint8_t *)0x20f7 = 2;
     *IO_VDC_INDEX = 2;
     for (uint8_t y = 0; y < 30; ++y) {
-        *IO_VDC_DATA_LO = buffer[y*3];
-        *IO_VDC_DATA_HI = buffer[y*3+1];
+        *IO_VDC_DATA_LO = cb[y*3];
+        *IO_VDC_DATA_HI = cb[y*3+1];
     }
     *(volatile uint8_t *)0x20f7 = 5;
     *IO_VDC_INDEX = 5;
@@ -245,7 +268,7 @@ PCE_RENDER void video_text(uint8_t x, uint8_t y, const char *text) {
         } else video_vdc(2, 0xf000 | ((PCE_FONT_WORD >> 4) + c - 32));
     }
 }
-__attribute__((noinline)) void video_number(uint8_t x, uint8_t y, uint16_t n) {
+__attribute__((noinline,minsize,section(".ram_bank110.text"))) void video_number(uint8_t x, uint8_t y, uint16_t n) {
     char text[6];
     for (uint8_t k = 0; k < 5; ++k) { text[4-k] = '0' + n % 10; n /= 10; }
     text[5] = 0; video_text(x, y, text);
@@ -258,7 +281,7 @@ PCE_FLOW static void sat_begin_body(void) {
 }
 PCE_RENDER void video_sat_begin(void) {overlay_call(0x6e,sat_begin_body);}
 PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8_t scale) {
-    bool fast=scale==16&&pce_metrics.stage!=6;
+    bool fast=scale==16;
     if(fast) {
         sprite_emit_id=id;sprite_emit_x=x;sprite_emit_y=y;sprite_emit_flip=flip?8:0;
         overlay_call(0x74,sprite_fast);
@@ -369,12 +392,14 @@ __attribute__((noinline,section(".ram_bank109.text"))) static void race_sky_load
         }
     }
     pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-    /* The road: 256 characters at $2000, its BAT rows (two copies of 12 rows from row 0, the haze rows at 62) and eight palettes. */
+    /* The road: 256 characters at $2000, its BAT rows (two copies of 12 rows from row 0, the haze rows at 62, the wrap variants of the lower rows at 24) and eight palettes. */
     arcade_vram(PCE_RACE_ROAD_TILES,0x2000,8192);
     pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
     arcade_vram(PCE_RACE_ROAD_BAT,0,6144);
     pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
     arcade_vram(PCE_RACE_ROAD_BAT+6144,62*128,512);
+    pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
+    arcade_vram(PCE_RACE_ROAD_BAT+6656,24*128,6144);   /* the lower rows' wrap variants (BAT rows 24-47) */
     arcade_read(2,PCE_RACE_ROAD_PALETTE,buffer,256);
     pce_vce_copy_palette(1,buffer,8);
     pce_vce_set_color(255,0x1ff);   /* palette 15's white: the text glyphs' ink */

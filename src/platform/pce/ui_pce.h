@@ -21,15 +21,18 @@ void ui_end(void);
  * (0 = as shown, 7 = black). With ui_dark set, ui_show leaves the display off so a fade-in starts from black. */
 extern uint8_t ui_dark;
 void ui_fade(uint8_t level);
+void ui_fade_out_body(void),ui_black_body(void),ui_fade_in_body(void);
+static inline __attribute__((always_inline)) void ui_fade_out(void) {overlay_call(0x7b,ui_fade_out_body);}   /* the screen fades to black (a common call: front end and every stage) */
+static inline __attribute__((always_inline)) void ui_black(void) {overlay_call(0x7b,ui_black_body);}         /* snapshot the palettes of a screen that has been set up, and go black under it */
+static inline __attribute__((always_inline)) void ui_fade_in(void) {overlay_call(0x7b,ui_fade_in_body);}     /* then turn the display on and bring the screen up from black */
 extern uint16_t ui_ramp[4][12],ui_ring[4][16];
 extern uint8_t ui_cycle_step,ui_cycle_clock;
 /* Small helpers compiled into each overlay to spare the renderer bank. */
-static inline void ui_put_number(uint8_t col,uint8_t row,uint8_t n,uint8_t slot) {
+static inline __attribute__((always_inline)) void ui_put_number(uint8_t col,uint8_t row,uint8_t n,uint8_t slot) {
     char text[3]={'0'+n/10%10,'0'+n%10,0};ui_put(col,row,text,slot);
 }
 static inline void ui_clear_rows(uint8_t first,uint8_t last) {
-    static const char blank[33]="                                ";
-    for(uint8_t r=first;r<=last;++r)ui_put(4,r,blank,12);
+    for(uint8_t r=first;r<=last;++r)ui_put(4,r,"                                ",12);
 }
 /* Rotate the tunnel colours: one step every few frames. */
 static inline void ui_cycle(void) {

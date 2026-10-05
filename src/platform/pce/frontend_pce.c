@@ -12,7 +12,7 @@
  * chosen hero's portrait are hardware sprites, so they are not bound by the
  * per-character background palettes. Text is BG characters on a flat panel
  * colour. Shared services are in ui_pce.c; continue/credits are in credits_pce.c. */
-#define UI_CODE __attribute__((noinline,section(".ram_bank114.text")))
+#define UI_CODE __attribute__((noinline,section(".ram_bank114.text"),minsize))
 extern uint8_t buffer[2048];
 extern uint8_t previous;
 
@@ -22,42 +22,47 @@ static const uint8_t arrow_left[5]=PCE_UI_ARROW_LEFT,arrow_right[5]=PCE_UI_ARROW
 static const uint8_t panel_x[4]={0x10,0x60,0xa0,0xe0};
 
 /* ---------------------------------------------------------------- title */
+UI_CODE static void title_draw(const uint8_t *patch,uint16_t patch_count,bool resume,uint8_t sel) {
+    static const uint16_t base[3]={PCE_UI_TITLE_START,PCE_UI_CONTINUE_PATTERN,PCE_UI_TITLE_OPTION};
+    static const uint8_t width[3]={PCE_UI_TITLE_START_W,PCE_UI_CONTINUE_W,PCE_UI_TITLE_OPTION_W};
+    uint8_t items=resume?3:2;
+    video_sat_begin();
+    for(uint16_t k=0;k<patch_count;++k) {
+        const uint16_t *p=(const uint16_t*)(patch+2)+k*4;
+        ui_sprite(p[0],p[1],p[2],p[3],false);
+    }
+    /* Menu items: white, gold while selected (flashing white as in the Saturn). */
+    for(uint8_t i=0;i<items;++i) {
+        uint8_t kind=resume?i:(i?2:0);
+        uint8_t on=(sel==i)&&((ticks&31)>=8);
+        uint8_t w=width[kind];
+        int16_t x=(320-w*16)/2,y=(resume?182:190)+i*12;
+        for(uint8_t k=0;k<w;++k)ui_sprite(x+k*16,y,base[kind]+k,on?1:0,false);
+    }
+    video_sat_end();
+}
 UI_CODE static uint8_t title(bool resume) {
-    ui_show(SCREEN_TITLE);pce_ui_state=1;
+    ui_dark=1;ui_show(SCREEN_TITLE);ui_dark=0;pce_ui_state=1;
     audio_music(0);
     uint8_t items=resume?3:2,sel=0;
     uint8_t patch[2+44*8];
-    uint16_t npatch;
-    arcade_read(2,ui_screen->extra,patch,2);npatch=patch[0]|patch[1]<<8;
-    if(npatch>44)npatch=44;
-    arcade_read(2,ui_screen->extra+2,patch+2,npatch*8);
-    static const uint16_t base[3]={PCE_UI_TITLE_START,PCE_UI_CONTINUE_PATTERN,PCE_UI_TITLE_OPTION};
-    static const uint8_t width[3]={PCE_UI_TITLE_START_W,PCE_UI_CONTINUE_W,PCE_UI_TITLE_OPTION_W};
+    uint16_t patch_count;
+    arcade_read(2,ui_screen->extra,patch,2);patch_count=patch[0]|patch[1]<<8;
+    if(patch_count>44)patch_count=44;
+    arcade_read(2,ui_screen->extra+2,patch+2,patch_count*8);
     ticks=0;
+    title_draw(patch,patch_count,resume,sel);ui_black();ui_fade_in();   /* up from black, as every screen */
     for(;;) {
         video_wait();ui_read_keys();++ticks;
         if(ui_pressed&KEY_DOWN){sel=sel+1==items?0:sel+1;ui_blip();}
         if(ui_pressed&KEY_UP){sel=sel?sel-1:items-1;ui_blip();}
-        if((ui_pressed&KEY_SELECT)&&resume){ui_end();return 3;}
+        if((ui_pressed&KEY_SELECT)&&resume){ui_fade_out();ui_end();return 3;}
         if(ui_pressed&(KEY_RUN|KEY_1|KEY_2)) {
-            ui_blip();ui_end();
+            ui_blip();ui_fade_out();ui_end();   /* fade to black, then the next screen comes up from black */
             if(!resume)return sel;
             return sel==1?3:sel==2?1:0;
         }
-        video_sat_begin();
-        for(uint16_t k=0;k<npatch;++k) {
-            const uint16_t *p=(const uint16_t*)(patch+2)+k*4;
-            ui_sprite(p[0],p[1],p[2],p[3],false);
-        }
-        /* Menu items: white, gold while selected (flashing white as in the Saturn). */
-        for(uint8_t i=0;i<items;++i) {
-            uint8_t kind=resume?i:(i?2:0);
-            uint8_t on=(sel==i)&&((ticks&31)>=8);
-            uint8_t w=width[kind];
-            int16_t x=(320-w*16)/2,y=(resume?182:190)+i*12;
-            for(uint8_t k=0;k<w;++k)ui_sprite(x+k*16,y,base[kind]+k,on?1:0,false);
-        }
-        video_sat_end();
+        title_draw(patch,patch_count,resume,sel);
     }
 }
 
@@ -88,11 +93,31 @@ UI_CODE static void portrait_palette(uint8_t hero) {
     arcade_read(2,pce_ui_portrait[hero].palette,buffer,512);
     pce_vce_copy_palette(16+3,buffer+3*32,13);
 }
+UI_CODE static void select_draw(uint8_t shown,bool due,uint8_t chosen,uint16_t ticks_now) {
+    video_sat_begin();
+    for(uint8_t k=0;k<portrait_count;++k)
+        ui_sprite(panel_x[due?chosen:shown]+portrait_pieces[k][0],0x30+portrait_pieces[k][1],
+               portrait_slot?portrait_pieces[k][2]-PORTRAIT_MAX:ui_screen->nsprpat+portrait_pieces[k][2],portrait_pieces[k][3],false);
+    for(uint8_t h=0;h<4;++h) {
+        int16_t x=panel_x[h]+((h==0||h==3)?16:0);
+        uint8_t pal=h==(due?chosen:shown)?0:1,w=name_width[h],at=name_pattern[h];
+        while(w>=2){ui_sprite(x,0xd0,at,pal,true);x+=32;at+=2;w-=2;}
+        if(w)ui_sprite(x,0xd0,at,pal,false);
+    }
+    if(ticks_now&0x20) {
+        ui_sprite(arrow_left[3],0x60+arrow_left[4],arrow_left[0],2,false);
+        ui_sprite(arrow_left[3],0x60+arrow_left[4]+16,arrow_left[0]+1,2,false);
+        ui_sprite(0x120+arrow_right[3],0x60+arrow_right[4],arrow_right[0],2,false);
+        ui_sprite(0x120+arrow_right[3],0x60+arrow_right[4]+16,arrow_right[0]+1,2,false);
+    }
+    video_sat_end();
+}
 UI_CODE static uint8_t select_hero(uint8_t chosen) {
-    ui_show(SCREEN_SELECT);pce_ui_state=2;
+    ui_dark=1;ui_show(SCREEN_SELECT);ui_dark=0;pce_ui_state=2;
     audio_music(1);
     portrait_patterns(chosen,0);portrait_pieces_use(chosen,0);portrait_palette(chosen);select_palettes(chosen,false);
     uint8_t confirmed=0,shown=chosen;bool palettes_due=false;ticks=0;
+    select_draw(shown,false,chosen,0);ui_black();ui_fade_in();   /* up from black */
     for(;;) {
         video_wait();ui_read_keys();++ticks;
         /* The SAT with the new portrait went out at this VBlank: its palettes follow immediately. */
@@ -112,27 +137,10 @@ UI_CODE static uint8_t select_hero(uint8_t chosen) {
             if(ui_pressed&(KEY_RUN|KEY_1|KEY_2)){confirmed=1;ticks=0;audio_pcm_play(2);}
         } else if(ticks>36) {
             /* Black fade-out, then the front end hands over to the NOW LOADING screen. */
-            ui_fade(8);
-            for(uint8_t level=1;level<8;++level){video_wait();video_wait();video_wait();ui_fade(level);}
+            ui_fade_out();
             ui_end();return chosen;
         }
-        video_sat_begin();
-        for(uint8_t k=0;k<portrait_count;++k)
-            ui_sprite(panel_x[palettes_due?chosen:shown]+portrait_pieces[k][0],0x30+portrait_pieces[k][1],
-                   portrait_slot?portrait_pieces[k][2]-PORTRAIT_MAX:ui_screen->nsprpat+portrait_pieces[k][2],portrait_pieces[k][3],false);
-        for(uint8_t h=0;h<4;++h) {
-            int16_t x=panel_x[h]+((h==0||h==3)?16:0);
-            uint8_t pal=h==(palettes_due?chosen:shown)?0:1,w=name_width[h],at=name_pattern[h];
-            while(w>=2){ui_sprite(x,0xd0,at,pal,true);x+=32;at+=2;w-=2;}
-            if(w)ui_sprite(x,0xd0,at,pal,false);
-        }
-        if(ticks&0x20) {
-            ui_sprite(arrow_left[3],0x60+arrow_left[4],arrow_left[0],2,false);
-            ui_sprite(arrow_left[3],0x60+arrow_left[4]+16,arrow_left[0]+1,2,false);
-            ui_sprite(0x120+arrow_right[3],0x60+arrow_right[4],arrow_right[0],2,false);
-            ui_sprite(0x120+arrow_right[3],0x60+arrow_right[4]+16,arrow_right[0]+1,2,false);
-        }
-        video_sat_end();
+        select_draw(shown,palettes_due,chosen,ticks);
     }
 }
 
@@ -166,11 +174,12 @@ UI_CODE static void option_help(uint8_t row) {
     ui_put(4+(32-(uint8_t)__builtin_strlen(help[row]))/2,23,help[row],14);
 }
 UI_CODE static void options(void) {
-    ui_show(SCREEN_OPTIONS);pce_ui_state=3;
+    ui_dark=1;ui_show(SCREEN_OPTIONS);ui_dark=0;pce_ui_state=3;
     audio_music(3);           /* the options room has its own track, as in the main game */
     for(uint8_t r=0;r<OPT_COUNT;++r)option_row(r,r==0);
     option_help(0);
     uint8_t sel=0;ticks=0;
+    ui_black();ui_fade_in();
     for(;;) {
         video_wait();ui_read_keys();++ticks;
         ui_cycle();
@@ -207,7 +216,7 @@ UI_CODE static void options(void) {
         if(sel!=old){option_row(old,false);option_help(sel);}
         if(dir||sel!=old||ticks==1)option_row(sel,true);
         if(((ui_pressed&(KEY_RUN|KEY_1|KEY_2))&&sel==OPT_EXIT)||(ui_pressed&KEY_SELECT)) {
-            ui_blip();pce_continues=pce_options.continues;ui_end();return;
+            ui_blip();pce_continues=pce_options.continues;ui_fade_out();ui_end();return;
         }
     }
 }

@@ -3,8 +3,9 @@
 #include "video_pce.h"
 #include "loader_pce.h"
 #include "campaign_pce.h"
-#define CARD_CODE __attribute__((noinline,section(".ram_bank121.text")))
-#define CARD_DATA __attribute__((section(".ram_bank121.rodata")))
+#include "audio_pcm.h"
+#define CARD_CODE __attribute__((noinline,section(".ram_bank113.text")))
+#define CARD_DATA __attribute__((section(".ram_bank113.rodata")))
 extern volatile uint16_t pce_scroll_x;
 
 /* The stage's title card (game.c title_draw), shown from the moment a stage is asked for through its disc read: black, an
@@ -53,6 +54,7 @@ CARD_CODE void frontend_card(void) {
     put(12,text[0],14,255);
     for(;name<=length;++name) {
         put(14,text[1],15,name);
+        if(name&&name%5==1)audio_pcm_tick();   /* game.c title_draw: a tick as the name types (the PC plays one every 240 ms at most) */
         video_wait();video_wait();
     }
     put(16,text[2],13,255);

@@ -24,7 +24,9 @@ CACHE_CODE static void allocate(void) {
         else if(pce_hud_base[pce_metrics.stage-1])cache_first=pce_hud_base[pce_metrics.stage-1];   /* the HUD pieces share one palette */
         cache_stage=pce_metrics.stage;
     }
-    uint8_t low=id>=cache_first?15:0,high=id>=cache_first?48:15;
+    /* Ramrod's arena keeps palettes 29 (the arm) and 30 (the big mech) (m6_d.c) and the top 16 pages of the cache for one of the mech's two pattern buffers */
+    bool arena=pce_metrics.stage==6;
+    uint8_t low=id>=cache_first?15:0,high=id>=cache_first?48:arena?13:15;
     cache_result=48;
     uint8_t slot=high;
     for(uint8_t i=low;i<high;++i)
@@ -41,7 +43,7 @@ CACHE_CODE static void allocate(void) {
      * Live and pinned owners are protected in either case. */
     uint8_t pages=(count+3)>>2,chosen=48;
     uint8_t best_age=0;
-    uint8_t limit=(herd_on?28:48)-pages;
+    uint8_t limit=(herd_on?28:arena?32:48)-pages;
     for(uint8_t base=0;base<=limit;++base) {
         bool available=true;uint8_t age=255;
         for(uint8_t p=base;p<base+pages;++p) {

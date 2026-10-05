@@ -26,8 +26,17 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[2]
 CAR_WIDTHS = (16, 24, 32, 40, 52, 64)   # baked widths of the race cars
+ORB_SIZES = (14, 11, 8, 6, 4)              # baked heights of the race's shots, near to far (twice as wide)
+POLE_SIZES = ((10, 28), (14, 40), (18, 52), (24, 70), (32, 92), (44, 124))   # the finish line's flag poles: width, height in dots, far to near
 SPIN_FRAMES = 12                         # poses of a full turn of the spinning buggy (one is the upright car)
-MECH_SIZES = (24, 32, 40, 48, 56, 64, 72, 80)   # baked widths of the Ramrod mechs; the cockpit scales between them
+M6_HORIZON = 128                         # the arena's horizon row
+M6_SCALES = (0.15, 0.175, 0.205, 0.24, 0.28, 0.325, 0.38, 0.44, 0.51, 0.59, 0.68)   # the mechs' baked scales (canvas 138 x 146), a ladder of 1.16
+M6_BIG_SCALES = (0.74, 0.88, 1.01, 1.16)   # the nearest mech's bigger steps: pieces of 32x32 (at most 16 of them), drawn by m6_d.c's own emitter into two alternating VRAM buffers
+M6_PROP_SCALES = (0.18, 0.28, 0.42, 0.64, 0.95)
+M6_FX_SCALES = (0.3, 0.45, 0.7, 1.1, 1.7)
+M6_Z = 1.6                               # the arena's zoom over the source's law (214 / distance x 0.85): sizes and the rows under the horizon grow with it, so a mech
+                                         # that has walked up to Ramrod fills the screen (the bearings keep the source's 1344 dots to the turn)
+M6_ALL_SCALES = M6_SCALES + M6_BIG_SCALES
 sys.path[:0] = [str(ROOT / 'tools/saturn'), str(ROOT / 'tools/dc')]
 import levl
 import texbake
@@ -209,7 +218,8 @@ def native_background(image, archive, previews, name):
     canvas = Image.new('RGBA', (w, 240), (0, 0, 0, 255)); canvas.paste(image)
     rgba = np.asarray(canvas)
     cells = rgba.reshape(30, 8, w // 8, 8, 4).transpose(0, 2, 1, 3, 4).reshape(-1, 8, 8, 4)
-    dialog_palette=name in ('stage1','stage3','stage4','stage5')   # palette 15 belongs to the dialogue box and the font
+    dialog_palette=name in ('stage1','stage3','stage4','stage5','stage6')   # palette 15 belongs to the dialogue box and the font
+    cap = (512 - 4 - COLUMN_SLACK) if name == 'stage6' else BG_TILES - 4 - COLUMN_SLACK   # (Ramrod's arena keeps the cache's top 384 characters for sprite patterns)
     # The 16 palettes and the palette of every cell are optimised together (palfit.py), not by vertical bands of mean colour.
     palette, groups = palfit.fit_palettes(cells, 16, fixed=(15,) if dialog_palette else ())
     palette = [palette[k] for k in range(16)]
@@ -222,7 +232,7 @@ def native_background(image, archive, previews, name):
     tiles, tile_lookup, names = [], {}, []
     preview = np.zeros_like(rgba)
     cell_idx = palfit.index_cells(cells, np.asarray(palette), groups)
-    cell_idx, groups, merged = tile_budget.limit_tiles(cells, cell_idx, groups, palette, w // 8, BG_TILES - 4 - COLUMN_SLACK, reserved=(15,) if dialog_palette else ())
+    cell_idx, groups, merged = tile_budget.limit_tiles(cells, cell_idx, groups, palette, w // 8, cap, reserved=(15,) if dialog_palette else ())
     if merged: print(f'{name}: redrew {merged} cells with neighbouring characters to fit the {BG_TILES}-tile cache', flush=True)
     palette[0][0] = backdrop
     for i, cell in enumerate(cells):
@@ -269,11 +279,23 @@ def boss_background(archive, previews):
     for c in range(BOSS_COLS):
         rows = np.nonzero(solid[:, c * 8:c * 8 + 8].any(1))[0]
         if len(rows): top[c], bottom[c] = int(rows[0]), int(rows[-1])
+    # The nose cannon's beam as background characters (palette 4, kept after the tiles): five tiles whose lines are the beam's vertical
+    # profile (1 white core, 2 pale yellow, 3 orange, 4 red edge): rows 5-6 make the 11-dot beam, rows 4-7 the 22-dot one of the last stage.
+    def beam_tile(profile):
+        t = np.zeros((8, 8), np.uint8)
+        for line, v in profile.items(): t[line, :] = v
+        return planar_tile(t)
+    beam = [beam_tile({3: 4, 4: 3, 5: 2, 6: 1, 7: 1}), beam_tile({0: 1, 1: 1, 2: 2, 3: 3, 4: 4}),    # top / bottom half of the thin beam
+            beam_tile({k: 1 for k in range(8)}), beam_tile({5: 4, 6: 3, 7: 2}), beam_tile({0: 2, 1: 3, 2: 4})]   # body, top / bottom edge of the wide one
+    tiles += beam
+    beam_pal = np.zeros(16, '<u2')
+    for k, c in enumerate([(255, 255, 255), (255, 255, 150), (255, 150, 40), (210, 40, 20)]): beam_pal[k + 1] = vce_colors(np.asarray(c, np.uint8))
     blob = bytearray(struct.pack('<HBB', len(tiles), BOSS_COLS, BOSS_ROWS)) + top + bottom
     blob += bytes(64 - len(blob))
     blob += np.asarray(palettes, '<u2').tobytes()                       # offset 64: 4 palettes of 16 words
     blob += np.asarray(entries, '<u2').tobytes().ljust(640, b'\0')       # offset 192: the map, row by row
-    blob += b''.join(tiles)                                             # offset 832
+    blob += b''.join(tiles)                                             # offset 832 (the last five are the beam's), then the beam's palette
+    blob += beam_pal.tobytes()
     preview = np.zeros((BOSS_ROWS * 8, BOSS_COLS * 8, 3), np.uint8)
     for k in range(len(cells)):
         y, x = divmod(k, BOSS_COLS)
@@ -292,9 +314,10 @@ def road_assets(sand, previews):
     shows each band of the road in one of two colour phases by choosing which copy of the BAT rows a scanline reads (BYR):
     the copies use the same characters with different palettes. The far rows fade into the haze of the sky."""
     W, C = 1024, 512
-    SLOPE_KERB, SLOPE_ROAD, SLOPE_EDGE, SLOPE_DASH = 2.5, 2.25, 2.0, 0.055   # dots a line: kerb outside, road, white edge line, centre dash
-    # (half the dots a unit of the source map's widths needs, 120/102 units: the road is narrower than the picture's 1024 dots, so there is sand
-    # on both sides and the car can drive onto it - the sand beyond the picture's edge is the sand of its other edge)
+    SLOPE_KERB, SLOPE_ROAD, SLOPE_EDGE, SLOPE_DASH = 4.5, 3.75, 3.5, 0.1   # dots a line: kerb outside, road, white edge line, centre dash
+    # (the source map's widths, 120/102 units, at 0.0376 dots a unit and line: the kerb at the nearest line is 495 dots from the middle, just
+    # inside the picture. When a scanline's window runs past the picture's edge the wrapped part would show the road's other kerb, so the
+    # lower rows have two more copies where the half that would wrap in is sand: see the variants below)
     # 1 sand, 2 kerb, 3 edge line, 4 asphalt, 5 centre dash
     img = np.ones((ROAD_LINES, W), np.uint8)
     ax = np.abs(np.arange(W) - C + 0.5)
@@ -339,6 +362,17 @@ def road_assets(sand, previews):
             bat += b''.join(struct.pack('<H', 0x200 + int(t) | row_palette(r, b) << 12) for t in ids[r])
     for r in (0, 1):
         bat += b''.join(struct.pack('<H', 0x200 + int(t) | row_palette(r, 0) << 12) for t in ids[r])
+    # Variants of the lower image rows (8..13: scanlines 176..223), after the haze rows: in a window that runs past the picture's right
+    # edge (the road far to the left of the screen) the part that wraps in comes from the picture's left half, and the other way round, so
+    # the half that is not shown by itself is sand. BAT rows 24-47: right-wrap (phase A, B) then left-wrap (phase A, B); irq.S picks the
+    # copy from the sign and size of the scanline's BXR (road_fill.S road_stripes).
+    for side in (0, 1):
+        for b in (0, 1):
+            for r in range(8, ROAD_LINES // 8):
+                row = ids[r].copy()
+                if side == 0: row[:W // 16] = ids[r, 0]
+                else: row[W // 16:] = ids[r, W // 8 - 1]
+                bat += b''.join(struct.pack('<H', 0x200 + int(t) | row_palette(r, b) << 12) for t in row)
     preview = np.zeros((ROAD_LINES, W, 3), np.uint8)
     pa = vce_rgb(palettes[4]); preview[:] = pa[img]
     Image.fromarray(preview).save(previews / 'road.png')
@@ -696,39 +730,47 @@ def make_scene(stage, work, previews, shared):
         # and at 3/4 and 1/2 size for the mid and far passes (the ship flies in from the distance): three records,
         # reloaded into the same pattern pages when the ship changes layer.
         hull_records=b''
-        def hull_record(hull,hull_anchor,mirror_from=None):
-            """One record of 32x32 cells. With mirror_from (a symmetric hull on an odd number of cells: the centre cell is its own
+        def hull_set(hulls,hull_anchor,mirror_from=None):
+            """Records of 32x32 cells, one for each picture of `hulls` (the same size, one palette): identical cells share their patterns, so
+            the poses of a ship (its engines lit, its gun firing) cost only the cells that differ, and a pose change swaps a piece list
+            instead of reloading VRAM. With mirror_from (a symmetric hull on an odd number of cells: the centre cell is its own
             mirror), only the left half and the centre are stored; the right half is the same patterns drawn flipped
             (bit 15 of the pattern number), which halves the VRAM patterns the hull needs."""
-            pal=palette_for([hull]);idx=indexed(hull,pal);patterns=[];pieces=[]
-            def cell_at(source,x,y):
-                cell=source[y:y+32,x:x+32]
-                return np.pad(cell,((0,32-cell.shape[0]),(0,32-cell.shape[1])))
+            pal=palette_for(hulls);patterns=[];lookup={};lists=[]
             def add_cell(cell):
-                n=len(patterns)
+                key=cell.tobytes()
+                if key in lookup:return lookup[key]
+                n=len(patterns);lookup[key]=n
                 for row in (0,16):
                     for col in (0,16):patterns.append(planar_sprite(cell[row:row+16,col:col+16]))
                 return n
-            cols=(hull.width+31)//32
-            for y in range(0,hull.height,32):
-                if mirror_from is None:
-                    for x in range(0,hull.width,32):
-                        cell=cell_at(idx,x,y)
-                        if cell.any():pieces.append((x-hull_anchor[0],y-hull_anchor[1],add_cell(cell)))
-                    continue
-                assert cols%2==1 and hull.width==cols*32
-                made={}
-                for c in range(cols//2+1):
-                    cell=cell_at(idx,c*32,y)
-                    if cell.any():
-                        made[c]=add_cell(cell);pieces.append((c*32-hull_anchor[0],y-hull_anchor[1],made[c]))
-                for c in range(cols//2):                         # the mirrored right half
-                    if c in made:pieces.append(((cols-1-c)*32-hull_anchor[0],y-hull_anchor[1],made[c]|0x8000))
-            assert len(patterns)<=96 and len(pieces)<=28,(len(patterns),len(pieces))
+            def cell_at(source,x,y):
+                cell=source[y:y+32,x:x+32]
+                return np.pad(cell,((0,32-cell.shape[0]),(0,32-cell.shape[1])))
+            for hull in hulls:
+                idx=indexed(hull,pal);pieces=[]
+                cols=(hull.width+31)//32
+                for y in range(0,hull.height,32):
+                    if mirror_from is None:
+                        for x in range(0,hull.width,32):
+                            cell=cell_at(idx,x,y)
+                            if cell.any():pieces.append((x-hull_anchor[0],y-hull_anchor[1],add_cell(cell)))
+                        continue
+                    assert cols%2==1 and hull.width==cols*32
+                    made={}
+                    for c in range(cols//2+1):
+                        cell=cell_at(idx,c*32,y)
+                        if cell.any():
+                            made[c]=add_cell(cell);pieces.append((c*32-hull_anchor[0],y-hull_anchor[1],made[c]))
+                    for c in range(cols//2):                         # the mirrored right half
+                        if c in made:pieces.append(((cols-1-c)*32-hull_anchor[0],y-hull_anchor[1],made[c]|0x8000))
+                lists.append(pieces)
+            assert len(patterns)<=96 and all(len(p)<=28 for p in lists),(len(patterns),[len(p) for p in lists])
             bp=a.add('boss_big_palette',pal.tobytes())
-            bd=a.add('boss_big_pieces',b''.join(struct.pack('<hhH',*r) for r in pieces))
             bt=a.add('boss_big_patterns',b''.join(patterns))
-            return struct.pack('<IIIHB',bp,bd,bt,len(patterns)*128,len(pieces))
+            return [struct.pack('<IIIHB',bp,a.add('boss_big_pieces',b''.join(struct.pack('<hhH',*r) for r in pieces)),bt,len(patterns)*128,len(pieces)) for pieces in lists]
+        def hull_record(hull,hull_anchor,mirror_from=None):
+            return hull_set([hull],hull_anchor,mirror_from)[0]
         # The level-1 gunship carries a second rider (the source's clone, enemies.c update_boss_rider) whose gun covers the side the
         # hull's does not: record 0 is the full hull with its level gun, record 3 the same hull with the gun aimed down at 45
         # degrees (the rider lowers it when the hero is 60 px below). Both are baked into the hull cells, so the rider costs no
@@ -739,7 +781,13 @@ def make_scene(stage, work, previews, shared):
             rider=[]
             for frame_no in (6,12):
                 composite=im.copy();composite.alpha_composite(cblock_whole_frame(art,frame_no));rider.append(composite)
+        poses=None
+        if name=='hyperjumper':
+            # Records 0 and 4-6: the side hull normal, boosting (engines lit: moving about) and the two frames of its gun firing (night.c
+            # night_draw_layer: the muzzle-flash frame, then the other), one set of patterns (23 cells), four piece lists.
+            poses=hull_set([im]+[Image.open(ROOT/f'assets/hyperjumper/{n}.png').convert('RGBA') for n in ('side_boost','side_fire1','side_fire2')],anchor)
         for scale in (1.0,0.75,0.5):
+            if poses and scale==1.0:hull_records+=poses[0];continue
             source=rider[0] if rider and scale==1.0 else im
             hull=source if scale==1.0 else source.resize((round(source.width*scale),round(source.height*scale)),Image.Resampling.LANCZOS)
             hull_records+=hull_record(hull,tuple(round(v*scale) for v in anchor))
@@ -756,7 +804,13 @@ def make_scene(stage, work, previews, shared):
             sym=np.asarray(Image.fromarray(raw).resize(size,Image.Resampling.LANCZOS)).copy()
             orig=np.asarray(front.resize(size,Image.Resampling.LANCZOS))
             sym[:,64:96]=orig[:,64:96]
-            hull_records+=hull_record(Image.fromarray(sym),(80,size[1]//2),mirror_from=True)
+            fire=np.asarray(Image.open(ROOT/'assets/hyperjumper/front_fire.png').convert('RGBA').resize(size,Image.Resampling.LANCZOS)).copy()
+            fire_raw=np.asarray(Image.open(ROOT/'assets/hyperjumper/front_fire.png').convert('RGBA')).copy();fire_raw[:,100:]=fire_raw[:,100::-1]
+            fire_sym=np.asarray(Image.fromarray(fire_raw).resize(size,Image.Resampling.LANCZOS)).copy();fire_sym[:,64:96]=fire[:,64:96]
+            # record 3 the front pose, then (after the side poses) record 7 the front pose firing: one set of patterns
+            front_set=hull_set([Image.fromarray(sym),Image.fromarray(fire_sym)],(80,size[1]//2),mirror_from=True)
+            hull_records+=front_set[0]
+            hull_records+=b''.join(poses[1:])+front_set[1]
         meta['boss_big_offset']=a.add('boss_big',hull_records)
         # Two independently cached metasprites preserve the native art and anchor.
         sprites.append((name+'_left',im.crop((0,0,split,im.height)),anchor))
@@ -801,57 +855,209 @@ def make_scene(stage, work, previews, shared):
             sprites.append((f'outrider_{name}',cblock_frame(art,n),(32,32)))
     elif stage == 6:
         fonts = hudart.Fonts(work, cblock_frame)
-        # The world: the sky panorama round the planet above a horizon at row 112 and the desert floor below, full
-        # screen; the cockpit art (centre 256 of its 426 columns, like the source's 4:3 view) goes over it with its
-        # monitors and consoles, and the viewing window is whatever the art leaves transparent.
-        sky = Image.open(ROOT / 'assets/ramrod/sky.png').convert('RGBA').crop((330, 17, 700, 170)).resize((256, 105), Image.Resampling.LANCZOS)
-        floor = Image.open(ROOT / 'assets/ramrod/floor.png').convert('RGBA').resize((256, 112), Image.Resampling.LANCZOS)
-        bg = Image.new('RGBA', (256, 224), (34, 126, 200, 255))
-        bg.paste(sky, (0, 7)); bg.paste(floor, (0, 112))
-        shade = np.linspace(0.74, 1.0, 112)[:, None, None]
-        arr = np.asarray(bg).astype(float); arr[112:, :, :3] *= shade; bg = Image.fromarray(arr.astype(np.uint8))
-        cock = Image.open(ROOT / 'assets/ramrod/cockpit.png').convert('RGBA').crop((85, 0, 341, 224))
-        bg.alpha_composite(cock)
-        # The two monitors the source draws over the art (ramrod.c render_monitors, 52x33 each): the radar's rings and
-        # view cone and the status screen's labels and bar troughs are static; dots, bars and digits are sprites.
-        d = ImageDraw.Draw(bg)
-        rx, ry = 33, 23
-        d.rectangle((rx, ry, rx + 51, ry + 32), fill=(6, 34, 20, 255))
-        rcx, rcy = rx + 26, ry + 18
-        for radius in (8, 16):
-            d.ellipse((rcx - radius, rcy - radius, rcx + radius, rcy + radius), outline=(20, 90, 50, 255))
-        d.rectangle((rx, ry, rx + 51, ry + 1), fill=(6, 34, 20, 255)); d.rectangle((rx, ry + 31, rx + 51, ry + 32), fill=(6, 34, 20, 255))
-        d.line((rcx, rcy, rcx - 12, rcy - 14), fill=(20, 90, 50, 255)); d.line((rcx, rcy, rcx + 12, rcy - 14), fill=(20, 90, 50, 255))
-        sx, sy = 174, 23
-        d.rectangle((sx, sy, sx + 51, sy + 32), fill=(18, 22, 60, 255))
-        for label, ly, color in (('ARM', 1, (255, 210, 120)), ('GUN', 11, (255, 210, 120)), ('W', 22, (150, 200, 255)), ('x', 22, (255, 255, 255))):
-            lim = fonts.text(label, color)
-            bg.alpha_composite(lim, (sx + (38 if label == 'x' else 2), sy + ly + (1 if label != 'x' else 2)))
-        for ty in (3, 13): d.rectangle((sx + 27, sy + ty, sx + 27 + 21, sy + ty + 4), fill=(4, 6, 20, 255))
+        # Ramrod's arena as a sprite scaler (Space Harrier): the sky panorama round the planet, all 1344 dots of its turn, scrolls with the heading
+        # (an ordinary scrolling background, 168 characters wide, the horizon at row M6_HORIZON); the desert floor under it is a few soft tones, and
+        # the mechs, rocks, shots and bursts are sprites baked at a ladder of sizes (the source's scale law, 214 / distance x 0.85), nearest
+        # size at or above what the distance asks for, so nothing is stretched at run time.
+        pano = Image.open(ROOT / 'assets/ramrod/sky.png').convert('RGBA')
+        bg = Image.new('RGBA', (pano.width, 240), (34, 126, 200, 255))
+        bg.paste(pano.crop((0, 167 - M6_HORIZON, pano.width, 167)), (0, 0))
+        # The floor (BAT rows 16-27: 96 lines, then two rows of haze): a ground texture seen from above, laid out flat. Stripes of 16 lines in two sand tones, a thin line every
+        # 64 dots and a few speckles, from 13 characters in all; periodic every 64 columns, so that the BAT ring is seamless under any scroll. The picture warps it at
+        # run time: m6_d.c gives every group of four scanlines its own BYR (the texture line the depth of that row asks for, plus the way Ramrod has walked) and BXR (the
+        # strafing, by depth) through the horizontal-blank interrupt (irq.S), which is how the flat texture comes to run away to the horizon.
+        dust = np.array([217, 170, 122], np.uint8)
+        light, dark, grid_c, spk_l, spk_d = (np.array(c, np.uint8) for c in ((216, 168, 120), (198, 150, 106), (176, 128, 90), (228, 184, 138), (180, 134, 94)))
+        rng = np.random.RandomState(6)
+        def tile_pixels(stripe, kind):
+            base = np.tile((dark if stripe else light), (8, 8, 1)).astype(np.uint8)
+            if kind == 5: base[:, 0] = grid_c                       # the grid line
+            elif kind > 0:                                          # four speckle variants: a pair of dots
+                sx, sy = ((1, 2), (5, 6), (3, 4), (6, 1))[kind - 1]
+                base[sy, sx] = base[sy, sx + 1] = (spk_l if stripe else spk_d)
+            return base
+        floor_rows = np.zeros((240 - M6_HORIZON, 64 * 8, 3), np.uint8)
+        for tr in range(14):
+            for tc in range(64):
+                if tr < 12:
+                    stripe = (tr // 2) & 1
+                    kind = 5 if tc % 8 == 0 else (int(rng.randint(1, 5)) if rng.rand() < 0.22 else 0)
+                    floor_rows[tr * 8:tr * 8 + 8, tc * 8:tc * 8 + 8] = tile_pixels(stripe, kind)
+                else: floor_rows[tr * 8:tr * 8 + 8, tc * 8:tc * 8 + 8] = dust
+        floor_full = np.tile(floor_rows, (1, pano.width // 512 + 1, 1))[:, :pano.width]
+        floor_img = Image.fromarray(floor_full).convert('RGBA')
+        bg.paste(floor_img, (0, M6_HORIZON))
         sprites = shared[36:39]
-        # Mech frames at eight baked widths: the sprite pulls its 16 px slices together (sprite_generic's scale) between
-        # two baked widths, which hides the steps (the multiple-versions-plus-slices scheme of the Plutiedev scaling article).
-        for kind in ('mech','mech_red','mech_gold'):
-            for size in MECH_SIZES: sprites += atlas(ROOT / 'assets/ramrod/atlas.png', kind, size)
-        sprites += atlas(ROOT / 'assets/ramrod/atlas.png', 'arm', 64)
+        macros = []
+        def scaled(im, anchor, k):
+            w, h = max(1, round(im.width * k)), max(1, round(im.height * k))
+            small = im.convert('RGBa').resize((w, h), Image.Resampling.BOX).convert('RGBA')
+            a = np.asarray(small).copy(); a[..., 3] = np.where(a[..., 3] >= 128, 255, 0)
+            return Image.fromarray(a), (round(anchor[0] * k), round(anchor[1] * k))
+        def mark(name): macros.append(f'#define PCE_M6_{name} {len(sprites)}')
+        atl = ROOT / 'assets/ramrod/atlas.png'
+        # the mechs: 3 kinds x 8 poses (walk 0-3, aim, wind-up, punch, stagger) x the size ladder
+        mark('MECH')
+        for kind in ('mech', 'mech_red', 'mech_gold'):
+            frames = atlas(atl, kind)
+            for fr in range(8):
+                for k in M6_SCALES:
+                    im, anc = scaled(frames[fr][1], frames[fr][2], k)
+                    sprites.append((f'{kind}_{fr}_{round(k*1000)}', im, anc))
+        # scenery: boulders and cacti (the source's props), five sizes each
+        for name, mult in (('rock_big', 1.3), ('rock_small', 1.0), ('cactus', 0.7)):
+            mark(name.upper())
+            frame = atlas(atl, name)[0]
+            for k in M6_PROP_SCALES:
+                im, anc = scaled(frame[1], frame[2], k * mult)
+                sprites.append((f'{name}_{round(k*1000)}', im, anc))
+        # shots: Ramrod's bolt (an orange streak with a white core), the Renegades' plasma (two frames of a violet ball), five sizes
+        mark('BOLT')
+        for k in M6_FX_SCALES:
+            sz = max(4, round(18 * k)); im = Image.new('RGBA', (sz * 2, sz)); dr = ImageDraw.Draw(im)
+            for frac, col in ((1.0, (255, 120, 20)), (0.7, (255, 200, 70)), (0.35, (255, 255, 230))):
+                rx, ry = sz * frac - 0.5, sz * frac / 2 - 0.5
+                dr.ellipse((sz - rx, sz / 2 - ry, sz + rx, sz / 2 + ry), fill=(*col, 255))
+            sprites.append((f'bolt_{sz}', im, (sz, sz // 2)))
+        mark('PLASMA')
+        plasma = atlas(atl, 'plasma')
+        for fr in (0, 2):
+            for k in M6_FX_SCALES:
+                im, anc = scaled(plasma[fr][1], plasma[fr][2], k * 1.6)
+                sprites.append((f'plasma{fr}_{round(k*1000)}', im, anc))
+        # bursts: five frames (the sixth is a fade too faint to keep) at four sizes
+        mark('EXPL')
+        expl = atlas(atl, 'expl')
+        for k in (0.3, 0.55, 0.9, 1.35):
+            for fr in range(5):
+                im, anc = scaled(expl[fr][1], expl[fr][2], k)
+                sprites.append((f'expl{fr}_{round(k*1000)}', im, anc))
+        # Ramrod's arm reaching out past the glass (the ten frames of the source's punch; one the left fist's, the right is mirrored), drawn by m6_d.c's own emitter into
+        # one of two alternating pattern buffers of 32 patterns ($2800 and $4000): the pieces are 16x16 cells where two neighbours in a row are one 32x16 sprite (an entry
+        # fewer; the pair starts at an even pattern), as large as 32 patterns allow. An entry (frame): u32 piece list, u32 patterns, u8 entries, u8 patterns; a piece is
+        # (dx i16, dy i16, kind u8 (0 one cell, 1 a pair), pattern u8). One palette for all ten.
+        arm_heights = []
+        arm_frames = atlas(atl, 'arm')
+        def arm_pack(img, pal):
+            idx = indexed(img, pal); h_, w_ = idx.shape
+            pats, pieces = [], []
+            for y in range(0, h_, 16):
+                strip = idx[y:y + 16]
+                occ = np.flatnonzero(strip.any(0))
+                if not len(occ): continue
+                cells = [x for x in range(int(occ[0]), int(occ[-1]) + 1, 16) if strip[:, x:x + 16].any()]
+                def cell(x):
+                    c = np.pad(strip[:, x:x + 16], ((0, 16 - strip.shape[0]), (0, 16 - min(16, w_ - x)))); return planar_sprite(c[:16, :16])
+                i = 0
+                while i < len(cells):
+                    if i + 1 < len(cells) and cells[i + 1] == cells[i] + 16:
+                        if len(pats) & 1: pats.append(bytes(128))
+                        pieces.append((cells[i], y, 1, len(pats))); pats += [cell(cells[i]), cell(cells[i + 1])]; i += 2
+                    else:
+                        pieces.append((cells[i], y, 0, len(pats))); pats.append(cell(cells[i])); i += 1
+            return pats, pieces
+        arm_k = 0.62
+        while True:
+            imgs = [scaled(arm_frames[fr][1], (0, 0), arm_k)[0] for fr in range(10)]
+            arm_pal = palette_for(imgs)
+            packed = [arm_pack(im_, arm_pal) for im_ in imgs]
+            if max(len(pp[0]) for pp in packed) <= 32: break
+            arm_k -= 0.01
+        print(f'  arm: scale {arm_k:.2f}, entries {[len(pp[1]) for pp in packed]}', flush=True)
+        arm_rows = []
+        for fr, (pp, im_) in enumerate(zip(packed, imgs)):
+            arm_heights.append(im_.height)
+            arm_rows.append((a.add('arm_pieces', b''.join(struct.pack('<hhBB', *pc) for pc in pp[1])), a.add('arm_patterns', b''.join(pp[0])), len(pp[1]), len(pp[0])))
+        meta['m6_arm'] = a.add('m6_arm_table', b''.join(struct.pack('<IIBB', po, pa, n, np_) for po, pa, n, np_ in arm_rows))
+        meta['m6_armpal'] = a.add('m6_arm_palette', arm_pal.tobytes())
+        # the nearest mech at four more steps (M6_BIG_SCALES): 32x32 hardware pieces, the grid placed where it needs the fewest, each piece four 16x16 patterns (TL, TR,
+        # BL, BR); one palette a variant. Entries are (variant * 8 + pose) * 4 + step: u32 piece list, u32 patterns, u8 pieces (<= 16), pad; a piece is (dx, dy) from the
+        # feet (i16 each), its patterns being the i-th group of four.
+        big_pal = []
+        big_rows = []
+        big_frames = {}
+        for kind in ('mech', 'mech_red', 'mech_gold'):
+            frames = atlas(atl, kind)
+            big_frames[kind] = [[scaled(frames[fr][1], frames[fr][2], k) for k in M6_BIG_SCALES] for fr in range(8)]
+            big_pal.append(palette_for([big_frames[kind][fr][3][0] for fr in range(8)] + [big_frames[kind][fr][1][0] for fr in range(0, 8, 2)]))
+        for v, kind in enumerate(('mech', 'mech_red', 'mech_gold')):
+            for fr in range(8):
+                for st in range(4):
+                    img, (ax, ay) = big_frames[kind][fr][st]
+                    idx = indexed(img, big_pal[v]); h_, w_ = idx.shape
+                    ys, xs = np.nonzero(idx)
+                    best = None
+                    for ox in range(0, 32, 2):
+                        for oy in range(0, 32, 2):
+                            cells = sorted({(int((x - ax + ox) // 32), int((y - ay + oy) // 32)) for x, y in zip(xs.tolist(), ys.tolist())})
+                            if best is None or len(cells) < len(best[0]): best = (cells, ox, oy)
+                    cells, ox, oy = best
+                    if len(cells) > 16: raise ValueError(f'big mech {kind} {fr} {st}: {len(cells)} pieces')
+                    pieces = b''; pat = b''
+                    for (cx, cy) in cells:
+                        x0, y0 = cx * 32 - ox + ax, cy * 32 - oy + ay      # the cell's top left in the image
+                        blk = np.zeros((32, 32), np.uint8)
+                        for yy in range(32):
+                            for xx in range(32):
+                                X, Y = x0 + xx, y0 + yy
+                                if 0 <= X < w_ and 0 <= Y < h_: blk[yy, xx] = idx[Y, X]
+                        pieces += struct.pack('<hh', cx * 32 - ox, cy * 32 - oy)
+                        for (bx, by) in ((0, 0), (16, 0), (0, 16), (16, 16)): pat += planar_sprite(blk[by:by + 16, bx:bx + 16])
+                    big_rows.append((a.add('big_pieces', pieces), a.add('big_patterns', pat), len(cells)))
+        meta['m6_big'] = a.add('m6_big_table', b''.join(struct.pack('<IIBB', po, pa, n, 0) for po, pa, n in big_rows))
+        meta['m6_bigpal'] = a.add('m6_big_palettes', b''.join(p.tobytes() for p in big_pal))
+        # the portraits and dialogue pieces first (their ids come before the HUD's, so they get slots of their own palette, as on the platform stages)
+        meta['presentation'] = presentation.add_art(ROOT, work, stage, sprites, cblock_frame)
         hud = hudart.Hud(sprites)
+        # (the shadows, the reticle and its brackets share the HUD's palette: they are few colours and the cache has only fifteen palettes of its own)
+        def hmark(name): macros.append(f'#define PCE_M6_{name} {hud.base + len(sprites) - hud.base}')
+        hmark('SHADOW')
+        for i, k in enumerate(M6_ALL_SCALES[::2]):
+            w = min(48, max(6, round(88 * k))); h = max(3, round(w * min(0.5, max(0.08, 0.3 / (1 + i * 0.7)))))
+            im = Image.new('RGBA', (w, h)); dr = ImageDraw.Draw(im); dr.ellipse((0, 0, w - 1, h - 1), fill=(60, 36, 22, 255))
+            chk = np.asarray(im).copy(); chk[(np.indices(chk.shape[:2]).sum(0) & 1) == 1] = 0   # a checker of the shadow's colour: half see-through
+            hud.add(f'shadow{i}', Image.fromarray(chk), (w // 2, h // 2))
+        hmark('RETICLE')
+        for lit in (0, 1):
+            im = Image.new('RGBA', (16, 16)); dr = ImageDraw.Draw(im)
+            col = (255, 235, 220, 255) if lit else (255, 40, 30, 255)
+            for (x0, y0, dx, dy) in ((1, 1, 1, 1), (14, 1, -1, 1), (1, 14, 1, -1), (14, 14, -1, -1)):
+                dr.line((x0, y0, x0 + 3 * dx, y0), fill=col); dr.line((x0, y0, x0, y0 + 3 * dy), fill=col)
+            dr.line((8, 5, 8, 10), fill=col); dr.line((5, 8, 10, 8), fill=col); dr.point((8, 8), fill=(255, 255, 255, 255))
+            hud.add(f'reticle{lit}', im, (8, 8))
+        # the radar in the top right corner (ramrod.c render_monitors): a 32x32 panel, Ramrod at (16,24), the view cone and two range rings (one pixel is 80 units); the
+        # dots are 3x3 pieces
+        im = Image.new('RGBA', (32, 32)); dr = ImageDraw.Draw(im)
+        dr.rectangle((0, 0, 31, 31), fill=(6, 34, 20, 255), outline=(60, 200, 110, 255))
+        for rad in (8, 16):
+            for k in range(40 if rad == 8 else 64):
+                ang = k * 2 * math.pi / (40 if rad == 8 else 64); px, py = round(16 + math.cos(ang) * rad), round(24 + math.sin(ang) * rad)
+                if 1 <= px <= 30 and 1 <= py <= 30: dr.point((px, py), fill=(45, 150, 80, 255))
+        dr.line((16, 24, 7, 8), fill=(45, 150, 80, 255)); dr.line((16, 24, 25, 8), fill=(45, 150, 80, 255))
+        dr.rectangle((15, 23, 17, 25), fill=(255, 255, 255, 255))
+        for cell, (cx, cy) in enumerate(((0, 0), (16, 0), (0, 16), (16, 16))): hud.add(f'radar_{cell}', im.crop((cx, cy, cx + 16, cy + 16)))   # (four single pieces: the HUD's own pattern slots, m6_a.c)
+        for nm, col in (('green', (120, 255, 200)), ('red', (255, 70, 60)), ('gold', (255, 210, 40)), ('white', (255, 255, 255)), ('pink', (255, 110, 230))):
+            im = Image.new('RGBA', (16, 16)); ImageDraw.Draw(im).rectangle((0, 0, 2, 2), fill=(*col, 255)); hud.add('rdot_' + nm, im)
+        # the HUD: armour and gun-heat bars, digits, the arrows at the screen's edge and the wave banners
         hudart.add_bar_fills(hud, ('green', 'yellow', 'red', 'orange'))
         hudart.add_digits(hud, fonts, ('white', 'cyan', 'pink'))
-        for name, c, n in (('dot_green', (120, 255, 200), 2), ('dot_gold', (255, 210, 40), 3), ('dot_red', (255, 70, 60), 3), ('dot_white', (255, 255, 255), 3)):
-            im = Image.new('RGBA', (16, 16)); ImageDraw.Draw(im).rectangle((0, 0, n - 1, n - 1), fill=(*c, 255)); hud.add(name, im)
-        for name, c in (('cross_green', (120, 255, 140)), ('cross_red', (255, 70, 60))):
-            im = Image.new('RGBA', (16, 16)); dd = ImageDraw.Draw(im)
-            dd.line((0, 8, 5, 8), fill=(*c, 230)); dd.line((10, 8, 15, 8), fill=(*c, 230)); dd.line((8, 0, 8, 5), fill=(*c, 230)); dd.line((8, 10, 8, 15), fill=(*c, 230)); dd.point((8, 8), fill=(*c, 230))
-            hud.add(name, im, (8, 8))
         for danger, c in (('', (255, 200, 60)), ('_danger', (255, 60, 60))):
             im = Image.new('RGBA', (16, 16)); dd = ImageDraw.Draw(im)
             for k in range(5): dd.line((k, 5 - k, k, 5 + k), fill=(*c, 255))
             hud.add('chevron' + danger, im)
         for name, text, color, big in (('wave1', 'WAVE 1', (255, 182, 0), True), ('wave2', 'WAVE 2', (255, 182, 0), True), ('wave3', 'WAVE 3', (255, 182, 0), True),
                                        ('cleared', 'WAVE CLEARED', (255, 255, 255), True), ('destroyed', 'SQUADRON DESTROYED', (255, 255, 255), True),
-                                       ('down', 'RAMROD IS DOWN!', (255, 60, 60), True), ('warning', 'WARNING: COMMAND MECH', (255, 80, 80), False)):
+                                       ('down', 'RAMROD IS DOWN!', (255, 60, 60), True), ('warning', 'WARNING: COMMAND MECH', (255, 80, 80), False),
+                                       ('arm', 'ARM', (255, 210, 120), False), ('gun', 'GUN', (255, 210, 120), False), ('hot', 'HOT', (255, 70, 60), False),
+                                       ('counter', 'COUNTER!', (255, 255, 255), True), ('parry', 'PARRY!', (255, 255, 255), True),
+                                       ('wlab', 'W', (150, 200, 255), False), ('xlab', 'x', (255, 255, 255), False)):
             hudart.add_text(hud, fonts, name, text, color, big)
-        meta['hud'] = hud.base; meta['hud_macros'] = hud.macros('H6')
+        # the status line in single pieces: AR / GN (HT when the guns are hot), W1-3, and x0-9 for the spares
+        for nm, text, col in (('lab_ar', 'AR', (255, 210, 120)), ('lab_gn', 'GN', (255, 210, 120)), ('lab_ht', 'HT', (255, 70, 60)), ('lab_w1', 'W1', (150, 200, 255)),
+                              ('lab_w2', 'W2', (150, 200, 255)), ('lab_w3', 'W3', (150, 200, 255))) + tuple((f'lab_x{n}', f'x{n}', (255, 255, 255)) for n in range(10)):
+            hud.add(nm, hudart.piece(fonts.text(text, col, False, True), 0, 0))
+        meta['hud'] = hud.base; meta['hud_macros'] = hud.macros('H6') + macros
+        meta['arm_heights'] = arm_heights
         collision = 0
     elif stage == 7:
         bg = Image.open(ROOT / 'assets/space/nebula.png').convert('RGBA').resize((512, 224), Image.Resampling.NEAREST)
@@ -909,6 +1115,33 @@ def make_scene(stage, work, previews, shared):
         for k in range(tn):
             f = im.crop((tx + k * tw, ty, tx + (k + 1) * tw, ty + th)).resize((8, 8), Image.Resampling.NEAREST)
             sprites.append((f'turbo{k}', f.resize((16, 8), Image.Resampling.NEAREST), (8, 8)))
+        # The explosions of wrecked cars (mode7.c spawn_expl: frames of 64x64): a big one (96 dots wide, 48 high) and a small one for
+        # far cars (48 x 24), stretched to the 512-dot clock; anchored at the middle of the car's body (PCE_CAR_EXPL: five big frames, then five small).
+        ex, ey, ew, eh, en = rows7['explosion']
+        for size in (48, 24):
+            for k in range(en - 1):   # (the sixth frame is a fade too faint to keep)
+                f = im.crop((ex + k * ew, ey, ex + (k + 1) * ew, ey + eh)).resize((size, size), Image.Resampling.NEAREST)
+                sprites.append((f'expl{size}_{k}', f.resize((size * 2, size), Image.Resampling.NEAREST), (size, size * 3 // 4)))
+        # The shots (PCE_CAR_ORB: the car's and the enemies', five sizes each, near to far): a glowing orb, 2:1 for the 512-dot clock, big when it
+        # leaves a gun and smaller as it flies away. And the start / finish line's flag poles (PCE_CAR_POLE: six sizes, a checkered flag
+        # streaming to the right of the pole; the right-hand pole is the same sprite flipped), anchored at the foot of the pole.
+        for who, (core, mid, rim) in enumerate((((255, 255, 255), (140, 210, 255), (30, 110, 235)), ((255, 245, 200), (255, 130, 50), (200, 30, 30)))):
+            for step, size in enumerate(ORB_SIZES):
+                orb = Image.new('RGBA', (size * 2, size)); dr = ImageDraw.Draw(orb)
+                for frac, col in ((1.0, rim), (0.72, mid), (0.4, core)):
+                    rx, ry = size * frac - 0.5, size * frac / 2 - 0.5
+                    dr.ellipse((size - rx, size / 2 - ry, size + rx, size / 2 + ry), fill=(*col, 255))
+                sprites.append((f'orb{who}_{step}', orb, (size, size // 2)))
+        for step, (pw_, ph) in enumerate(POLE_SIZES):
+            pole = Image.new('RGBA', (pw_, ph)); dr = ImageDraw.Draw(pole)
+            shaft = max(2, pw_ // 7)
+            dr.rectangle((0, 0, shaft - 1, ph - 1), fill=(150, 150, 165, 255)); dr.rectangle((0, 0, shaft // 2 - 1, ph - 1), fill=(245, 245, 250, 255))
+            fh = max(6, ph // 4)
+            for r in range(3):
+                for c in range(4):
+                    x0, x1 = shaft + c * (pw_ - shaft) // 4, shaft + (c + 1) * (pw_ - shaft) // 4 - 1
+                    dr.rectangle((x0, r * fh // 3, x1, (r + 1) * fh // 3 - 1), fill=(0, 0, 0, 255) if (r + c) & 1 else (255, 255, 255, 255))
+            sprites.append((f'pole{step}', pole, (shaft // 2, ph)))
         env = dict(os.environ, SABER_ASSETS=str(ROOT / 'assets'), SABER_FRAMES='1', SABER_M7MAP=str(work/'race.pgm'))
         run([ROOT/'build/headless/saber_headless', ROOT/'SaberRider/data', 2], env=env)
         race = np.asarray(Image.open(work/'race.pgm'), np.uint8) // 20
@@ -950,8 +1183,8 @@ def make_scene(stage, work, previews, shared):
         meta['hud']=hud.base;meta['hud_macros']=hud.macros('H2')
         collision = 0
     # Append presentation art after fixed gameplay IDs to retain mission IDs.
-    if stage in (1,3,4,5):platform_dialog(a,work)
-    meta['presentation']=presentation.add_art(ROOT,work,stage,sprites,cblock_frame)
+    if stage in (1,3,4,5,6):platform_dialog(a,work)
+    if stage != 6: meta['presentation']=presentation.add_art(ROOT,work,stage,sprites,cblock_frame)
     meta['foreground_offset']=0;meta['foreground_count']=0
     if stage in (1,3,4,5):
         # Platform playfields now include the source's top 16 lines. Gameplay
@@ -968,6 +1201,7 @@ def make_scene(stage, work, previews, shared):
         meta['foreground_offset']=a.add('foreground_sprites',b''.join(struct.pack('<hhH',*v) for v in entries))
         meta['foreground_count']=len(entries)
         foreground.crop((0,0,1024,224)).save(previews/f'foreground{stage}.png')
+    if stage == 6: meta['m6_image'] = a.add('m6_image', bytes(4 * 8192), 2048)   # the arena's code images are put here after the application is linked (m6_image.py, build_disc.py)
     meta['story_offset']=story.bake(ROOT,work,stage,a,meta['presentation']['portraits'])
     meta.update(race_sky(a, previews, race_sand) if stage == 2 else native_background(bg, a, previews, f'stage{stage}'))
     sprite_table, rows, costs = add_sprites(a, list(sprites), previews)
@@ -1028,10 +1262,11 @@ def main():
     h.append('extern const uint16_t pce_hud_base[7];')
     c.append('const uint16_t pce_hud_base[7]={'+','.join(str(m.get('hud',0)) for m in scenes)+'};')
     for m in scenes: h += m.get('hud_macros',[])
-    h += [f'#define PCE_CAR_STEPS {len(CAR_WIDTHS)}', '#define PCE_CAR_STEER (3+7*PCE_CAR_STEPS)', '#define PCE_CAR_SPIN (PCE_CAR_STEER+4)', f'#define PCE_CAR_SPIN_FRAMES {SPIN_FRAMES}', '#define PCE_CAR_TURBO (PCE_CAR_SPIN+2*(PCE_CAR_SPIN_FRAMES-1))', 'extern const uint8_t pce_car_widths[PCE_CAR_STEPS];']
-    h += [f'#define PCE_MECH_STEPS {len(MECH_SIZES)}', f'#define PCE_MECH_ARM (3+3*PCE_MECH_STEPS*8)', 'extern const uint8_t pce_mech_sizes[PCE_MECH_STEPS];']
+    h += [f'#define PCE_CAR_STEPS {len(CAR_WIDTHS)}', '#define PCE_CAR_STEER (3+7*PCE_CAR_STEPS)', '#define PCE_CAR_SPIN (PCE_CAR_STEER+4)', f'#define PCE_CAR_SPIN_FRAMES {SPIN_FRAMES}', '#define PCE_CAR_TURBO (PCE_CAR_SPIN+2*(PCE_CAR_SPIN_FRAMES-1))', '#define PCE_CAR_EXPL (PCE_CAR_TURBO+4)', f'#define PCE_CAR_ORB (PCE_CAR_EXPL+10)', f'#define PCE_CAR_POLE (PCE_CAR_ORB+{2*len(ORB_SIZES)})', f'#define PCE_ORB_STEPS {len(ORB_SIZES)}', f'#define PCE_POLE_STEPS {len(POLE_SIZES)}', 'extern const uint8_t pce_car_widths[PCE_CAR_STEPS];']
+    h += [f'#define PCE_M6_STEPS {len(M6_SCALES)}', f'#define PCE_M6_BIG_STEPS {len(M6_BIG_SCALES)}', f"#define PCE_M6_IMAGE {next(m['m6_image'] for m in scenes if 'm6_image' in m)}UL",
+          f"#define PCE_M6_BIG {next(m['m6_big'] for m in scenes if 'm6_big' in m)}UL", f"#define PCE_M6_BIGPAL {next(m['m6_bigpal'] for m in scenes if 'm6_bigpal' in m)}UL",
+          f"#define PCE_M6_ARMT {next(m['m6_arm'] for m in scenes if 'm6_arm' in m)}UL", f"#define PCE_M6_ARMPAL {next(m['m6_armpal'] for m in scenes if 'm6_armpal' in m)}UL"]
     c.append('const uint8_t pce_car_widths[PCE_CAR_STEPS]={'+','.join(map(str,CAR_WIDTHS))+'};')
-    c.append('const uint8_t pce_mech_sizes[PCE_MECH_STEPS]={'+','.join(map(str,MECH_SIZES))+'};')
     d_table,z_table=road_tables()
     h.append('extern const uint8_t pce_road_d[384];extern const uint8_t pce_road_z[113];')
     c.append('const uint8_t pce_road_d[384] __attribute__((section(".ram_bank111.rodata")))={'+','.join(map(str,d_table))+'};')
@@ -1042,6 +1277,26 @@ def main():
     for name in ('road_tiles','road_bat','road_palette','race_map','pursuit_row','dialog_wide'):
         h.append(f"#define PCE_RACE_{name.upper()} {scenes[1]['records'][name]['offset']}UL")
     (out/'assets.h').write_text('\n'.join(h)+'\n')
+    # Ramrod's arena: the size ladder and the projection tables, indexed by the distance f in units (f >> 4, or f >> 3 for the lateral factor)
+    def at_or_above(scales, law):
+        out = []
+        for f in range(0, 1616, 16):
+            want = law / max(f, 16)
+            out.append(next((i for i, k in enumerate(scales) if k >= want), len(scales) - 1))
+        return out
+    m6 = ['/* Generated: Ramrod\'s arena (tools/pce/build_assets.py). Distances f in units; the includer defines M6_SECTION, and M6_RCP_ONLY to leave out all but the reciprocal. */',
+          'static const uint16_t m6_rcp[201] __attribute__((section(M6_SECTION)))={' + ','.join(str(round(214 * 256 / max(f, 24))) for f in range(0, 1608, 8)) + '};   /* 214 * 256 / f, f >> 3 */',
+          'static const uint8_t m6_vtab[24] __attribute__((section(M6_SECTION)))={' + ','.join(str(255 if 4 * g + 2 < 20 else round(1926 / (4 * g + 2))) for g in range(24)) + '};   /* the floor texture line (of 96) at the first of each four scanlines from 128; 255: haze */',
+          '#ifndef M6_RCP_ONLY',
+          'static const uint8_t m6_size[101] __attribute__((section(M6_SECTION)))={' + ','.join(map(str, at_or_above(M6_ALL_SCALES, 182.0 * M6_Z))) + '};   /* mech ladder index (11 and up: the big steps), f >> 4 */',
+          'static const uint8_t m6_psize[101] __attribute__((section(M6_SECTION)))={' + ','.join(map(str, at_or_above(M6_PROP_SCALES, 182.0 * M6_Z))) + '};   /* prop ladder index, f >> 4 */',
+          'static const uint8_t m6_fsize[101] __attribute__((section(M6_SECTION)))={' + ','.join(map(str, at_or_above(M6_FX_SCALES, 280.0 * M6_Z))) + '};   /* shot ladder index, f >> 4 */',
+          'static const uint8_t m6_esize[101] __attribute__((section(M6_SECTION)))={' + ','.join(map(str, at_or_above((0.3, 0.55, 0.9, 1.35), 255.0 * M6_Z))) + '};   /* burst size index, f >> 4 */',
+          'static const uint8_t m6_row[101] __attribute__((section(M6_SECTION)))={' + ','.join(str(min(95, round(9630 * M6_Z / max(f, 16)))) for f in range(0, 1616, 16)) + '};   /* rows under the horizon, f >> 4 */',
+          'static const uint16_t m6_scq[15] __attribute__((section(M6_SECTION)))={' + ','.join(str(round(k * 256)) for k in M6_ALL_SCALES) + '};   /* mech scale, Q8 */',
+          'static const uint8_t m6_armh[10] __attribute__((section(M6_SECTION)))={' + ','.join(map(str, next(m['arm_heights'] for m in scenes if m.get('arm_heights')))) + '};   /* the arm frames\' heights */',
+          '#endif']
+    (out/'m6.h').write_text('\n'.join(m6) + '\n')
     # Runtime work buffers are separate from BIOS/compiler console RAM.
     manifest = dict(format='PCE1', toolchain=str((ROOT.parent/'PCE/llvm-mos8').resolve()),
                     source='Current host pack decoder and active stage construction', scenes=scenes,

@@ -10,7 +10,7 @@ typedef struct {
     uint16_t player_x, player_y, camera_x, hp;
 } PceTelemetry;
 extern volatile PceTelemetry pce_metrics;
-extern volatile uint8_t pce_ticks, pce_raster_enabled, pce_floor_page;
+extern volatile uint8_t pce_ticks, pce_raster_enabled, pce_floor_page, pce_arena_raster;   /* pce_arena_raster: Ramrod's arena's floor raster (irq.S), set by m6_start */
 extern volatile uint8_t pce_vdc_index;
 void video_init(void);
 void video_wait(void);

@@ -10,6 +10,13 @@ import subprocess
 def main():
     p = argparse.ArgumentParser(); p.add_argument('--out', type=Path, required=True); p.add_argument('--mos', type=Path, required=True)
     args=p.parse_args(); out=args.out.resolve(); mos=args.mos.resolve()
+    # Ramrod's arena's code images go into the stage 6 archive's reserved space (build_assets.py 'm6_image'); the archive keeps its size
+    m6=out/'m6.bin'
+    if m6.exists():
+        offset=json.loads((out/'manifest.json').read_text())['scenes'][5]['m6_image']
+        archive=bytearray((out/'s6.bin').read_bytes());blob=m6.read_bytes()
+        if archive[offset:offset+len(blob)]!=blob:
+            archive[offset:offset+len(blob)]=blob;(out/'s6.bin').write_bytes(bytes(archive))
     files=['ipl.elf','app.elf',*[f's{i}.bin' for i in range(1,8)],'font.bin','ui.bin','victory.bin',*[f'voice{i}.bin' for i in range(4)]]
     result=subprocess.run([str(mos/'bin/pce-mkcd'),'--ipl','ipl.bin','saber_rider.iso',*files],cwd=out,check=True,capture_output=True,text=True)
     print(result.stderr)

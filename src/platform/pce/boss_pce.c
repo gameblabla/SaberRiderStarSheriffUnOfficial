@@ -15,7 +15,7 @@
  * 6 side out, 7 nose peeks, 8 low pass (jump it or slide under it), 9 drops in, 10 fires straight down at the hero,
  * 11 leaves upward, then the other side. It hurts on contact with its hull and takes hits throughout 4-11.
  * Phase 12 (both): the wreck falls and burns for 228 steps, then the stage clears. */
-#define BOSS_CODE PCE_BOSS
+#define BOSS_CODE PCE_X1   /* $76: the CD buffer's bank (pce_config.h); nothing here calls a loader */
 #define BOSS_DRAW __attribute__((noinline,section(".ram_bank109.text")))   /* $6d: the race road's bank, idle on the platform stages ($79 is full) */
 int16_t boss_x,boss_y;
 uint8_t boss_phase,boss_flash,boss_max;
@@ -42,7 +42,8 @@ BOSS_CODE static void bshoot(int16_t x,int16_t y,int16_t vx,int16_t vy) {
 extern vdc_sprite_t sat[2][64];
 extern uint8_t sat_page,sat_count,sprite_line_lo,sprite_line_hi,sprite_line_ok;
 extern void sprite_lines_reserve(void),sprite_lines_release(void);
-static uint8_t hull_count,hull_ready,hull_level,hull_seen_full,rider_low;   /* hull_level: 0 full size, 1 and 2 the mid and far passes */
+static uint8_t hull_count,hull_ready,hull_level,hull_seen_full,rider_low;
+static uint32_t hull_patterns;   /* the pattern set in VRAM: poses of one ship share it, so only a change of ship reloads it */   /* hull_level: 0 full size, 1 and 2 the mid and far passes */
 static int16_t hull_parts[28][3];
 PCE_MISSION static void hull_load(void) {
     uint32_t record[3];uint16_t bytes;uint8_t colors[32];
@@ -60,17 +61,20 @@ PCE_MISSION static void hull_load(void) {
     sprite_ids[14]=0xffff;sprite_pinned[14]=250;sprite_pinned[47]=250;
     arcade_read(2,record[0],colors,32);pce_vce_copy_palette(30,colors,1);
     arcade_read(2,record[1],hull_parts,hull_count*6);
-    pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-    arcade_vram(record[2],PCE_SPR_WORD+16*256,bytes);
+    if(record[2]!=hull_patterns) {   /* another pose of the ship on show keeps its patterns: only the piece list changed */
+        pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
+        arcade_vram(record[2],PCE_SPR_WORD+16*256,bytes);
+        hull_patterns=record[2];
+    }
     hull_ready=1;
 }
 PCE_MISSION void boss_release(void) {
     for(uint8_t p=16;p<40;++p)pattern_owner[p]=0;
-    sprite_pinned[14]=sprite_pinned[47]=0;hull_ready=0;
+    sprite_pinned[14]=sprite_pinned[47]=0;hull_ready=0;hull_patterns=0;
 }
 PCE_MISSION void boss_start(void) {
     uint8_t kind=pce_campaign.boss_kind;
-    hull_level=2;hull_seen_full=0;
+    hull_level=2;hull_seen_full=0;hull_patterns=0;
     overlay_call(0x6f,hull_load);
     audio_effect(12);   /* the engine pass (the source's sfx 0x13) opens the fight, and every later pass */
     boss_phase=0;boss_dir=0;rider_low=0;boss_time=boss_hold=boss_clock=0;boss_flash=boss_cd=boss_rcd=boss_fx=boss_cycle=0;boss_vy=0;
@@ -78,7 +82,7 @@ PCE_MISSION void boss_start(void) {
     boss_max=kind==1?66:48+12*pce_options.difficulty;
     pce_campaign.boss_hp=boss_max;
 }
-BOSS_CODE static void horse_step(void) {
+__attribute__((minsize)) BOSS_CODE static void horse_step(void) {
     int16_t cam=camera;
     boss_y=48+bob(boss_clock);
     switch(boss_phase) {
@@ -165,7 +169,19 @@ BOSS_CODE static void hyper_step(void) {
         if(next==2||next==4||next==7||next==9)audio_effect(12);   /* each pass and entrance has the engine's roar */
     }
 }
-BOSS_CODE void boss_tick(void) {
+static uint8_t hull_want;
+__attribute__((noinline,section(".ram_bank114.text"))) static void hull_pose(void) {
+    uint8_t kind=pce_campaign.boss_kind;
+    /* The Hyperjumper's poses (record: 0 side, 3 front, 4 side boosting, 5/6 side firing (flash frame, then the other), 7 front firing); the flash
+     * frame is the first half of each 12-step shot cycle. */
+    bool shooting=boss_cd!=0,flash=boss_cd>6;   /* the gun's cycle (night.c night_draw_layer): the muzzle-flash frame after each shot, then the other */
+    /* the engines lit while it moves about: in from the side, away, the low pass, the nose peeking in (night.c) */
+    bool boost=boss_phase==6||boss_phase==8||(boss_phase==7&&(boss_hold&2))||(boss_phase==4&&boss_hold<400);
+    hull_want=kind==1?(boss_phase>=2?rider_low?3:0:boss_phase==1?1:2)
+        :(boss_phase>=9&&boss_phase<=11)?(shooting&&flash?7:3)
+        :hull_seen_full?(shooting?(flash?5:6):boost?4:0):boss_phase>=2?1:2;
+}
+__attribute__((minsize)) BOSS_CODE void boss_tick(void) {
     uint8_t kind=pce_campaign.boss_kind;
     ++boss_clock;if(boss_flash)--boss_flash;if(boss_cd)--boss_cd;if(boss_rcd)--boss_rcd;
     if(boss_phase==12) {
@@ -186,7 +202,7 @@ BOSS_CODE void boss_tick(void) {
      * raises it again at 48 px, so the hull is not reloaded every time the hero bobs about the threshold. */
     int16_t below=player.y+8-boss_y;
     if(below>=60)rider_low=1;else if(below<48)rider_low=0;
-    uint8_t want=kind==1?(boss_phase>=2?rider_low?3:0:boss_phase==1?1:2):(boss_phase>=9&&boss_phase<=11)?3:(hull_seen_full?0:boss_phase>=2?1:2);
+    overlay_call(0x72,hull_pose);uint8_t want=hull_want;   /* which hull record (boss_pce.c hull_pose, in the cockpit bank: this one is full) */
     if(want!=hull_level){hull_level=want;hull_ready=0;}
     uint8_t vulnerable=kind==1?boss_phase==2:boss_phase>=4&&boss_phase<=11;
     if(!vulnerable)return;
@@ -235,7 +251,7 @@ __attribute__((noinline,section(".ram_bank116.text"))) static void hull_body(voi
 }
 BOSS_DRAW static void hull(bool flip) {hull_flip=flip;overlay_call(0x74,hull_body);}
 BOSS_DRAW void boss_draw(void) {
-    bool flip=pce_campaign.boss_kind==2&&hull_level==3?false:boss_phase==1?true:boss_dir;   /* the Hyperjumper's front pose is not mirrored */
+    bool flip=pce_campaign.boss_kind==2&&(hull_level==3||hull_level==7)?false:boss_phase==1?true:boss_dir;   /* the Hyperjumper's front pose is not mirrored */
     if(boss_phase==12) {
         if(boss_y<250&&(boss_time&1))hull(flip);
         for(uint8_t k=0;k<2;++k) {

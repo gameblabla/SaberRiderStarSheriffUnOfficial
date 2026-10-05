@@ -26,7 +26,7 @@ PCE_HUD void shots_draw_pass(void) {
     }
     uint16_t grenade=pce_enemy_base[pce_metrics.stage-1]+60;
     for(uint8_t n=NSHOTS;n;--n,++s)if(s->active&&s->enemy&&s->enemy!=3) {
-        if(!draw_shot(s,s->enemy==2?grenade+((s->t>>3)&7):37,false)) {
+        if(!draw_shot(s,s->enemy==4?grenade+20+(s->t>>3):s->enemy==2?grenade+((s->t>>3)&7):37,false)) {
             int16_t x=s->x-camera;if(x>-8&&x<264)shot_pressure=30;
         }
     }

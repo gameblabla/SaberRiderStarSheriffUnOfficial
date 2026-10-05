@@ -12,7 +12,7 @@ SCRIPTS = {
     5: ('darkapril.c', ['LAB_SCRIPT_INTRO','DARK_SCRIPT_CALL','DARK_SCRIPT_MEET','DARK_SCRIPT_OUTRO',
                           'DARK_SCRIPT_CALL_APRIL','DARK_SCRIPT_MEET_APRIL','DARK_SCRIPT_OUTRO_APRIL']),
     6: ('ramrod.c', ['SCRIPT_INTRO','SCRIPT_AFTER1','SCRIPT_AFTER2','SCRIPT_OUTRO']),
-    7: ('space.c', ['SCRIPT_OUTRO']),
+    7: ('space.c', ['SCRIPT_OUTRO','SCRIPT_BOSS']),   # (the cruiser's greeting is story 1, after the ending)
 }
 
 def source_script(path, name):

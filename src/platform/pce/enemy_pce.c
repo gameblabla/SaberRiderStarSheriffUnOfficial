@@ -51,6 +51,8 @@ ENEMY_CODE static void humanoid(Actor *a) {
     uint8_t kind=type==2||type==5?1:type==8||type==9?3:type==30||type==31?4:type>=6?2:0;
     int16_t px=player.x,ax=a->b.x;
     bool onscreen=ax>(int16_t)camera&&ax<(int16_t)camera+256;
+    /* An enemy dropped in from its spawn point (character.c CF_SPAWN_FALL): it was thrown up at 167 px/s and does nothing until it lands */
+    if(a->mode&8){a->b.vx=0;phys(&a->b);if(a->b.coll&4)a->mode&=~8;return;}
     if(kind<2) {
         if(a->timer) {
             a->b.vx=0;phys(&a->b);

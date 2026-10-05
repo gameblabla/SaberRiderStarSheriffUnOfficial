@@ -99,7 +99,7 @@ def add_art(root,work,stage,sprites,frame):
     dialog=len(sprites)
     for rid in BOX_TILESETS:
         box=dialog_box([get(rid,n) for n in range(9)])
-        if stage in (1,3,4,5):
+        if stage in (1,3,4,5,6):
             # BG characters carry the panel and text. Only rounded corners
             # remain sprites, preserving the scenery through their alpha.
             corners=Image.new('RGBA',box.size)
@@ -218,7 +218,39 @@ def add_art(root,work,stage,sprites,frame):
             pix=np.asarray(big.resize((16,16),Image.Resampling.BOX)).copy()
             pix[...,3]=np.where(pix[...,3]>=96,255,0)
             add(f'grenade{k}',Image.fromarray(pix),(8,8))
-    return dict(portraits=portraits,dialog=dialog,hud=hud,digits=digits,aim=aim,motion=motion,pose=pose,up_tip=up_tip,art_muzzle=art_muzzle,flash=flash,enemy=enemy,end=len(sprites))
+        # Appended so no earlier offset moves (enemy_base + 68..79): the brown grunt (type 5, the sniper's body D39700C4) runs 68-73 and falls
+        # 74-75; the pose of an enemy dropping in from its spawn point (anim 0x34, cells 9-10) is 76-77 for the blue grunt and 78-79 for the brown.
+        for name,crhc,cells in [('brown_run','D39700C4',range(6)),('brown_fall','D39700C4',(6,7)),('blue_spawn','112DF34C',(9,10)),('brown_spawn','D39700C4',(9,10))]:
+            d=(work/f'{crhc}.levl').read_bytes();aid=struct.unpack_from('<I',d,4)[0];ox,oy=struct.unpack_from('<ff',d,8)
+            for k,n in enumerate(cells):
+                add(f'{name}{k}',frame(work/'srgb'/f'{aid:08X}.srgb',n),(round(ox),round(oy)))
+        # The grenade's burst (effects 5B5EBBA3: ten cells of 64x64; five of them, 32x32, centred, 8 steps each; enemy_base + 80..84)
+        for k,n in enumerate((0,2,4,6,8)):
+            add(f'burst{k}',get(0x5B5EBBA3,n).resize((32,32),Image.Resampling.NEAREST),(16,16))
+    # Stage 5's second boss, Dark April: April's own cells (assets/april.png) as the source draws her, a dark violet shadow with a bright violet
+    # outline (darkapril.c dark_draw): idle, six run frames (the frozen one is her jump), crouch, level shot, the four aims, slide and four death
+    # cells (dark + 0..17).
+    dark=0
+    if stage==5:
+        dark=len(sprites)
+        cell=[c for h,c in pending if h==2][0]
+        def violet(im):
+            a=np.asarray(im).astype(float);lum=(a[...,0]*.3+a[...,1]*.59+a[...,2]*.11)/255
+            out=np.zeros(a.shape,np.uint8);solid=a[...,3]>=64
+            for k,(m,o) in enumerate(((120,34),(60,14),(200,66))):out[...,k]=np.clip(lum*m+o,0,255)
+            out[...,3]=np.where(solid,255,0)
+            ring=np.zeros(solid.shape,bool);ring[1:,:]|=solid[:-1,:];ring[:-1,:]|=solid[1:,:];ring[:,1:]|=solid[:,:-1];ring[:,:-1]|=solid[:,1:]
+            ring&=~solid;out[ring]=(160,60,240,255)
+            return Image.fromarray(out)
+        frames=[cell(176)]
+        for k in range(6):
+            legs=np.asarray(cell(104+k)).copy();legs[:0]=0
+            im=Image.fromarray(legs);im.alpha_composite(cell(88+k));frames.append(im)
+        stand=Image.new('RGBA',(64,64));stand.alpha_composite(cell(22))
+        up=stand.copy();up.alpha_composite(cell(38),(0,-30));down=stand.copy();down.alpha_composite(cell(46),(0,-9))
+        frames+=[cell(120),cell(40),cell(44),cell(42),up,down,cell(149)]+[cell(n) for n in (160,162,164,167)]
+        for k,im in enumerate(frames):add(f'dark_april{k}',violet(im),(32,32))
+    return dict(portraits=portraits,dialog=dialog,hud=hud,digits=digits,aim=aim,motion=motion,pose=pose,up_tip=up_tip,art_muzzle=art_muzzle,flash=flash,enemy=enemy,dark=dark,end=len(sprites))
 
 def emit_tables(out,scenes,h,c):
     m=scenes[0]['presentation']
@@ -229,6 +261,8 @@ def emit_tables(out,scenes,h,c):
     # Actor inventories vary; presentation IDs use per-scene base addresses.
     h.append('extern const uint16_t pce_dialog_base[7];')
     c.append('const uint16_t pce_dialog_base[7]={'+','.join(str(m['presentation']['dialog']) for m in scenes)+'};')
+    h.append('extern const uint16_t pce_dark_base[7];')
+    c.append('const uint16_t pce_dark_base[7]={'+','.join(str(m['presentation'].get('dark',0)) for m in scenes)+'};')
     h.append('extern const uint16_t pce_enemy_base[7];')
     c.append('const uint16_t pce_enemy_base[7]={'+','.join(str(m['presentation']['enemy']) for m in scenes)+'};')
     h.append('extern const uint16_t pce_motion_base[7];')

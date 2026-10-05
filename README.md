@@ -132,12 +132,14 @@ wipes in through venetian-blind strips while the music comes up; a button skips 
 
     tools/release.sh [--linux] [--dc] [--full-disc] [path/to/SaberRider/data]   # packs default to SaberRider/data
 
-The script writes two separate zips to `release/`:
+The script writes release packages to `release/`. Linux packaging needs `appimagetool` from AppImageKit on `PATH`;
+set `APPIMAGETOOL=/path/to/appimagetool` to use a specific executable. If it cannot download its runtime,
+set `APPIMAGE_RUNTIME=/path/to/runtime-x86_64`.
 
-- `saber_rider-linux-x86_64-<date>-<commit>.zip` has the stripped SDL3 build and
-  `saber_rider.sh`, which runs it with the bundled `lib/`. It also has `assets/`
-  and all six demo packs in `data/`, including `video.pck`. glibc, X11/Wayland,
-  GL and the sound server come from the user's system.
+- `saber_rider-linux-x86_64-<date>-<commit>.AppImage` is a self-contained Linux
+  app with the stripped SDL3 build, bundled libraries, icon, assets and all six
+  demo packs, including `video.pck`. glibc, X11/Wayland, GL and the sound server
+  come from the user's system. Run it directly; `--level N` starts at stage N.
 - `saber_rider-dreamcast-<date>-<commit>.zip` has `saber_rider.cdi`, the
   256×256 front cover, and a README.
 

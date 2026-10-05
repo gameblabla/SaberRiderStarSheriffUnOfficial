@@ -5,7 +5,8 @@
  *               bytes of the 24-bit value road_fill_b (a dot is 256, the top byte is ignored: the VDC keeps ten bits), which moves
  *               by the 24-bit road_fill_s on every line. The low bytes go to road_fill_base + m, the high ones to +256.
  * road_divide   (bank $6d) road_div_q = road_div_q / road_div_n (16 by 8 bits, unsigned).
- * road_stripes  (bank $6d) the stripe copy of every scanline: bit 5 of (road_along + the scanline's distance, low byte).
+ * road_stripes  (bank $6d) the picture copy of every scanline, 0 or 1 from bit 5 of (road_along + the scanline's distance, low byte), plus 2 in
+ *               the lower rows when the line's window wraps past the picture's right edge, 4 past its left (see build_assets.py road_assets).
  * road_advance  (bank $6f) road_k[0] += dx c + dy s, road_k[1] += dy c - dx s, in Q14 (A = dx, X = dy; c = 128 cam_c + cam_cl, s = 128 cam_s
  *               + cam_sl: the camera's sine and cosine to 14 bits, as a byte and a small remainder).
  * smul8         (bank $6f) the signed 16-bit product of two signed bytes (A, X -> A low, X high). */
@@ -64,8 +65,11 @@ road_divide:
 road_stripes:
     lda road_sel_base
     sta 0x20c0
+    sta 0x20c2
     lda road_sel_base+1
     sta 0x20c1
+    dec
+    sta 0x20c3          /* the high bytes of the lines' BXR are the page before */
     cla
     ldy #0
 1:
@@ -78,6 +82,26 @@ road_stripes:
     clc
     adc road_along
     and #32
+    beq 3f
+    lda #1
+3:
+    tax                 /* the stripe copy: 0 or 1 */
+    cpy #64
+    bcc 5f
+    lda (0x20c2),y      /* the lower rows: a window past the picture's right edge (BXR 512..1023 or more) or its left (negative) */
+    bmi 4f
+    cmp #2
+    bcc 5f
+    inx
+    inx
+    bra 5f
+4:
+    inx
+    inx
+    inx
+    inx
+5:
+    txa
     sta (0x20c0),y
     iny
     cpy #112

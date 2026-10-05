@@ -4,29 +4,28 @@
 #include "road_pce.h"
 #include "play_pce.h"
 #include "save_pce.h"
-#include "effect_pce.h"
 #include "overlay_pce.h"
 #include "campaign_pce.h"
 #include "audio_pcm.h"
 #include "presentation_pce.h"
 #include "frontend_pce.h"
+#include "ui_pce.h"
 #ifndef PCE_START_STAGE
 #define PCE_START_STAGE 1
 #endif
 uint8_t previous;
-static uint8_t stage, hero, selected, menu, heading, phase, scale=3;
+static uint8_t stage, hero, selected, menu, heading, phase;
 static uint16_t race_x=4696,race_y=4096;
-static int16_t test_x=128,test_y=144;
 static uint8_t simulation_tick;
-static uint8_t effect_demo,menu_hero,menu_mode;
+static uint8_t menu_hero,menu_mode;
 void race_briefing_frame(void);
 static const int8_t sine[32] PCE_TABLE={0,25,49,71,90,106,117,125,127,125,117,106,90,71,49,25,0,-25,-49,-71,-90,-106,-117,-125,-127,-125,-117,-106,-90,-71,-49,-25};
 PCE_FLOW static bool change_stage(uint8_t n) {
-    pce_control.stage=n;overlay_call(0x79,frontend_card);
+    pce_control.stage=n;overlay_call(0x71,frontend_card);
     pce_metrics.ready=0;stage=n;phase=heading=0;race_x=4696;race_y=4096;
     pce_metrics.phase=0;pce_metrics.camera_x=pce_metrics.hp=0;
-    test_x=128;test_y=144;
     if(!loader_scene(stage))return false;
+    if(stage==6)m6_load();   /* Ramrod's arena's code images, into the banks the scene load has just put back */
     if(!loader_voice(hero))return false;
     pce_control.stage=stage;pce_control.hero=hero;pce_control.phase=0;
     pce_campaign.state=CAM_PLAY;pce_campaign.result=pce_campaign.event=0;pce_campaign.boss_kind=0;
@@ -37,7 +36,7 @@ PCE_FLOW static bool change_stage(uint8_t n) {
         video_sat_end();
     }
     else {
-        if(!video_background(0))return false;
+        if(!video_background(stage==6?385:0))return false;   /* (Ramrod's arena opens facing the planet)*/
         if(stage!=6&&stage!=7)overlay_call(0x69,play_start);
     }
     if(!pce_campaign.diagnostic) {
@@ -47,12 +46,12 @@ PCE_FLOW static bool change_stage(uint8_t n) {
              * opening it. */
             overlay_call(0x7b,race_briefing_frame);
         }
-        else if(stage==6)overlay_call(0x72,mech_start);
+        else if(stage==6)overlay_call(0x79,M6_START);
         else if(stage==7)overlay_call(0x73,space_start);
         if(stage==2||stage==6) {pce_campaign.story=0;overlay_call(0x71,story_start);}
     }
-    video_display(true);
     audio_music(stage==1?5:stage==2?10:stage==3?13:stage==4?15:stage==5?14:stage==6?16:12);
+    ui_black();ui_fade_in();   /* every stage comes up from black (the common transition) */
     pce_metrics.ready=1;return true;
 }
 PCE_FLOW static void menu_draw(void) {
@@ -60,7 +59,7 @@ PCE_FLOW static void menu_draw(void) {
     video_text(1,4,"ARCADE CD-ROM2");
     video_text(1,6,"LEFT/RIGHT STAGE");video_number(23,6,selected);
     video_text(1,8,"UP/DOWN HERO");video_number(23,8,hero+1);
-    video_text(1,10,"RUN START  SELECT EFFECT");
+    video_text(1,10,"RUN START");
     video_text(1,12,pce_campaign.diagnostic?"II MODE: DIAGNOSTICS":"II MODE: CAMPAIGN   ");
 }
 PCE_FLOW static void render_test(uint8_t keys,uint8_t pressed) {
@@ -77,32 +76,8 @@ PCE_FLOW static void render_test(uint8_t keys,uint8_t pressed) {
         }
         pce_control.x=race_x;pce_control.y=race_y;pce_control.heading=heading<<2;pce_control.phase=phase;
         overlay_call(0x6d,road_draw);
-    } else if(stage==6) {
-        if(keys&KEY_LEFT)test_x-=2;if(keys&KEY_RIGHT)test_x+=2;
-        if(test_x<0)test_x=0;if(test_x>255)test_x=255;
-        if(pressed&KEY_UP)scale=(scale+1)&3;
-        if(pressed&KEY_DOWN)scale=(scale-1)&3;
-        uint8_t overlap=keys&KEY_2?12:16;
-        video_sat_begin();
-        video_sprite(67+scale*8,test_x,160,false,overlap);
-        video_sprite(3,60,135,true,16);
-        if(keys&KEY_1)video_sprite(0,128,90,false,16);
-        uint16_t arm=keys&KEY_1?108:99;
-        video_sprite(arm,0,0,false,16);video_sprite(arm,256,0,true,16);
-        video_sat_end();
-        video_text(1,0,"MECH SLICE / CLIP TEST");
-        video_text(1,25,"UP/DOWN SIZE  II OVERLAP");
-    } else {
-        if(keys&KEY_LEFT)test_x-=2;if(keys&KEY_RIGHT)test_x+=2;
-        if(keys&KEY_UP)test_y-=2;if(keys&KEY_DOWN)test_y+=2;
-        if(test_x<16)test_x=16;if(test_x>240)test_x=240;
-        if(test_y<24)test_y=24;if(test_y>200)test_y=200;
-        video_sat_begin();video_sprite(3,test_x,test_y,false,16);
-        video_sprite(4,210,80,true,16);video_sprite(5,200,155,true,16);
-        if(keys&KEY_1)for(uint8_t k=0;k<6;++k)video_sprite(0,test_x+24+k*16,test_y,false,16);
-        video_sat_end();video_text(1,0,"SPACE SPRITE TEST");
     }
-    pce_metrics.phase=phase;pce_metrics.player_x=stage==2?race_x:test_x;pce_metrics.player_y=stage==2?race_y:test_y;
+    pce_metrics.phase=phase;pce_metrics.player_x=race_x;pce_metrics.player_y=race_y;
 }
 PCE_FLOW void flow_main(void) {
     pce_metrics.magic[0]='S';pce_metrics.magic[1]='R';pce_metrics.magic[2]='P';pce_metrics.magic[3]='C';
@@ -138,12 +113,13 @@ PCE_FLOW void flow_main(void) {
         if(stage==2){while(pce_ticks==simulation_tick){}++pce_metrics.frames;}else video_wait();
         uint8_t elapsed=pce_ticks-simulation_tick;simulation_tick=pce_ticks;
         if(elapsed>12)elapsed=12;
+        if(pce_stall){pce_stall=0;elapsed=1;}   /* a CD seek or a big upload held the loop up: its ticks are not caught up */
         uint8_t keys=~pce_joypad_read(),pressed=keys&~previous;previous=keys;audio_tick();
         if(pressed&KEY_RUN) {
             if(menu) {
                 menu=0;
-                if(selected!=stage||hero!=menu_hero||pce_campaign.diagnostic!=menu_mode||effect_demo) {
-                    effect_demo=0;audio_stop();
+                if(selected!=stage||hero!=menu_hero||pce_campaign.diagnostic!=menu_mode) {
+                    audio_stop();
                     if(!loader_font()||!change_stage(selected))for(;;){};
                     save_store(stage,hero,0);
                 } else {
@@ -162,12 +138,11 @@ PCE_FLOW void flow_main(void) {
         }
         if(menu) {
             if(pressed&KEY_2)pce_campaign.diagnostic^=1;
-            if((pressed&KEY_SELECT)&&!effect_demo){audio_stop();effect_init();effect_demo=1;}
             if(pressed&KEY_LEFT)selected=selected==1?7:selected-1;
             if(pressed&KEY_RIGHT)selected=selected==7?1:selected+1;
             if(pressed&KEY_UP)hero=(hero+1)&3;
             if(pressed&KEY_DOWN)hero=(hero-1)&3;
-            pce_metrics.hero=hero;menu_draw();if(effect_demo)effect_draw(pce_ticks);continue;
+            pce_metrics.hero=hero;menu_draw();continue;
         }
         pce_control.keys=keys;pce_control.pressed=pressed;pce_control.elapsed=elapsed;
         if(!pce_campaign.diagnostic) {
@@ -175,6 +150,7 @@ PCE_FLOW void flow_main(void) {
             if(pce_campaign.state==CAM_POWER){overlay_call(0x69,play_present);continue;}
             if(pce_campaign.state==CAM_OVER||pce_campaign.state==CAM_END) {
                 if(pce_campaign.state==CAM_OVER) {
+                    ui_fade_out();   /* a life lost for good: to black, then the continue screen */
                     pce_control.ok=0;
                     if(pce_continues)overlay_call(0x71,frontend_continue);
                     if(pce_control.ok) {
@@ -183,6 +159,7 @@ PCE_FLOW void flow_main(void) {
                         pce_campaign.state=CAM_PLAY;pce_campaign.result=2;pce_metrics.hp=campaign_hearts();
                         simulation_tick=pce_ticks;continue;
                     }
+                    if(pce_continues)ui_fade_out();   /* the countdown ran out on the continue panel */
                     overlay_call(0x71,frontend_game_over);
                 } else overlay_call(0x71,frontend_credits);
                 pce_control.stage=0;pce_control.hero=hero;
@@ -204,22 +181,23 @@ PCE_FLOW void flow_main(void) {
             if(pce_campaign.result==2){
                 if(!(pce_cdb_adpcm_status()&ADPCM_STOPPED)){video_sat_begin();video_sat_end();continue;}
                 uint8_t resume_phase=pce_metrics.phase,resume_wave=pce_campaign.wave;
+                ui_fade_out();   /* the stage restarts from black (the platform stages fade in place: play_pce.c) */
                 pce_campaign.result=0;if(!change_stage(stage))for(;;){};
                 if(stage==2&&resume_phase){pce_control.phase=1;overlay_call(0x79,race_start);pce_campaign.state=CAM_PLAY;pce_campaign.timer=0;}
-                if(stage==6){pce_control.phase=resume_wave;overlay_call(0x72,mech_start);pce_campaign.state=CAM_PLAY;}
+                if(stage==6){pce_control.phase=resume_wave;overlay_call(0x79,M6_START);pce_campaign.state=CAM_PLAY;}
                 simulation_tick=pce_ticks;continue;}
             if(stage==2)overlay_call(0x79,race_frame);
-            else if(stage==6)overlay_call(0x72,mech_frame);
+            else if(stage==6)overlay_call(0x79,M6_FRAME);
             else if(stage==7)overlay_call(0x78,space_frame);
             else overlay_call(0x69,play_frame);
             if(pce_campaign.event){pce_campaign.event=0;overlay_call(0x71,story_start);}
             else if(pce_campaign.result==1){pce_campaign.state=CAM_CLEAR;pce_campaign.result=0;audio_music_once(6);}
             continue;
         }
-        if(stage==2||stage==6||stage==7)render_test(keys,pressed);
+        if(stage==2)render_test(keys,pressed);
         else {
             pce_control.keys=keys;pce_control.pressed=pressed;pce_control.elapsed=elapsed;
-            overlay_call(0x69,play_frame);
+            if(stage==6)overlay_call(0x79,M6_FRAME);else if(stage==7)overlay_call(0x78,space_frame);else overlay_call(0x69,play_frame);
         }
     }
 }

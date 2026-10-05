@@ -13,7 +13,7 @@
  * the road's centre lands where the circuit puts it, and reads one of two copies of the picture (BYR) for the stripes. This
  * file builds the per-scanline tables the hblank handler (irq.S) reads, for the camera of the frame:
  *   1. the circuit's points ahead of the camera are put in the camera's frame (f ahead, sd to the right);
- *   2. a point at distance f is on scanline 113 + 10080 / f and 210 * sd / f dots right of the middle (half the focal length of the cars' own scale: = sd * d / 48)
+ *   2. a point at distance f is on scanline 113 + 10080 / f and sd * d / 26.6 dots right of the middle (the picture's kerb, 120 units, is 4.5 dots a line)
  *      with d the lines below the horizon; between two points the centre is a straight line of the scanline;
  *   3. the stripe of a scanline follows the distance along the circuit (progress + 10080 / d), 32 units to a band.
  * Tables: three pages of 128 bytes (low and high byte of BXR, the copy a line reads) for each of two buffers, in the
@@ -51,12 +51,20 @@ ROAD_MATH static int32_t mulw(int16_t a,int8_t b) {
 ROAD_MATH static int32_t rotate(int16_t a,int8_t m,int8_t ml) {return (mulw(a,m)<<7)+mulw(a,ml);}
 /* Scanline of a distance (lines below the horizon, d = 10080 / f). */
 ROAD_MATH static int16_t line_of(int16_t f) {return f>=766?pce_road_d[383]:pce_road_d[f>>1];}
-/* The dots (Q4) to the right of the middle of a side offset (Q2: quarter units) at d lines below the horizon: side * d * 0.0208 * 16 / 4
- * (the picture's kerb, 120 units, is 2.5 dots a line). There is no limit: the picture is 1024 dots wide with the road in the middle and
- * sand either side, and BXR wraps round it, so while the car stays within 170 units of the road's middle (race_pce.c LAT_LIMIT) the
- * window never reaches the far kerb of the road. */
+/* The dots (Q4) to the right of the middle of a side offset (Q2: quarter units) at d lines below the horizon: side * d * 0.0376 * 16 / 4
+ * (the picture's kerb, 120 units, is 4.5 dots a line). A scanline's window is 512 dots of the 1024-dot picture and wraps round it:
+ * the lower rows (d >= 64) have wrap copies whose wrapped half is sand, so they take any offset; the upper rows, whose kerbs are
+ * under 290 dots out, show sand for the first 224 dots of either edge, and a window may run that far past it (offset 480 dots). */
+extern uint16_t cache_refs[];
 ROAD_MATH static int16_t dots_q4(int16_t side,int16_t d) {
-    return (int16_t)(((int32_t)side*d*85)>>10);   /* 0.0830 = 85 / 1024 */
+    /* side * d * 77 / 512 in 16 bits: the product by the table of quarter squares (race_proj.c) as A 256 + B, then 77 / 512 = 1/8 + 1/64 + 1/128 + 1/512 */
+    uint16_t sm=side<0?-side:side;
+    uint8_t da=sm>>8,db=sm,dd=d,m1=da>dd?da-dd:dd-da,m2=db>dd?db-dd:dd-db;uint16_t s1=(uint16_t)da+dd,s2=(uint16_t)db+dd;
+    uint16_t A=cache_refs[s1]-cache_refs[m1],B=cache_refs[s2]-cache_refs[m2];
+    uint16_t y=(((A<<6)+(A<<3)+(A<<2)+A)>>1)+(B>>3)+(B>>6)+(B>>7)+(B>>9);
+    int16_t limit=d<64?7680:12800;
+    int16_t x=y>(uint16_t)limit?limit:(int16_t)y;
+    return side<0?-x:x;
 }
 /* The knots: the circuit's points ahead of the camera, a few before it, as scanline kn_d[i] and offset kn_x[i] (Q4 dots), nearest
  * first. The first point is rotated into the camera's frame; each next one is the last plus the rotated step between them (a step is
@@ -143,6 +151,7 @@ ROAD_CODE static bool road_init(void) {
     pce_floor_pending=pce_floor_page=0;
     video_display(false);video_race_init();video_display(false);
     if(!video_race_sky())return false;
+    overlay_call(0x77,qtable_init);   /* the entities' multiplication and reciprocal tables (race_proj.c) */
     /* both buffers start as a straight road ahead (BXR 256: the road's centre in the middle of the screen) */
     for(uint16_t i=0;i<768;++i)((uint8_t*)columns)[i]=0;
     for(uint8_t m=0;m<=DMAX+1;++m){((uint8_t*)columns)[m]=0;((uint8_t*)columns)[m+256]=1;((uint8_t*)columns)[m+128]=0;((uint8_t*)columns)[m+384]=1;}

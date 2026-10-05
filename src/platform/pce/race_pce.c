@@ -20,19 +20,25 @@
 #define RACE_CODE PCE_RACE
 #define N_RIVALS 7
 #define MAX_OFF 0x1800
-#define LAT_LIMIT 170   /* units from the road's middle: 50 beyond the kerb (the far kerb of the picture shows from about 195). The road's picture has sand for that much and no more (road_pce.c) */
+#define LAT_LIMIT 170   /* units from the road's middle: 50 beyond the kerb. The picture's windows wrap round it (road_pce.c) and the upper rows tolerate about 200 */
 TrackPoint track[256] PCE_STAGE;
 Rival rv[N_RIVALS];
 Mine mines[6];
+Blast blasts[4] PCE_STAGE;
 /* Shots: 0-5 the car's own, 6-9 the enemies' (the car's firing used to fill the pool, so the enemy never got a slot). */
 Bolt race_bolts[10] PCE_STAGE;
 uint8_t boost_locked PCE_STAGE;
+uint8_t lap_banner PCE_STAGE;
 Leader boss,escort[2];
 uint16_t px,py,hd,cam_hd,phase_t,race_time,gap_dist,race_rng=0xB5AD,ps;
 int16_t speed,tilt,arg_x,arg_y,arg_dist,arg_radius,arg_speed;
 uint8_t rphase,car_hp,car_max,boost,boost_on,hurt,shake,finish_rank,spin,ram_cd,arg_damage,arg_life;
 int8_t lapp,cam_c,cam_s,cam_cl,cam_sl;
 uint8_t road_idx;
+__attribute__((noinline)) int16_t muls(int16_t a,int8_t b) {
+    uint16_t m=(uint16_t)(absolute(a)>>2)*(uint8_t)(b<0?-b:b)>>5;
+    return (a<0)!=(b<0)?-(int16_t)m:(int16_t)m;
+}
 static uint8_t pfx,pfy,fire_cd;
 static uint16_t spawn_t;
 
@@ -54,6 +60,17 @@ RACE_CODE static void track_point(uint16_t s,int16_t lat,int16_t *x,int16_t *y) 
 }
 RACE_CODE static void update_field(bool grid,int16_t plat) {arg_life=grid;arg_x=plat;overlay_call(0x6d,field_update_call);}
 RACE_CODE static void standings(void) {overlay_call(0x6d,field_standings_call);}
+/* a * b for magnitudes up to 255 by a table of quarter squares (race_proj.c): the generic 16-bit multiply took 600 cycles a product */
+extern uint16_t cache_refs[];
+static inline __attribute__((always_inline)) uint16_t umul(uint8_t a,uint8_t b) {
+    uint8_t d=a>b?a-b:b-a;
+    return cache_refs[(uint16_t)a+b]-cache_refs[d];
+}
+static inline __attribute__((always_inline)) int16_t smul(int16_t a,int16_t b) {   /* |a|, |b| <= 255 */
+    uint16_t p=umul(a<0?-a:a,b<0?-b:b);
+    return (a<0)!=(b<0)?-(int16_t)p:(int16_t)p;
+}
+static uint8_t seg_index=255;static uint16_t seg_inv;
 /* The nearest sample of the circuit to the car (searched round the last one): its progress, and the lateral offset. */
 RACE_CODE static int16_t project(void) {
     int16_t best=32000;uint8_t bi=road_idx;
@@ -68,13 +85,19 @@ RACE_CODE static int16_t project(void) {
     int16_t rx=wrapdiff(px,track[bi].x),ry=wrapdiff(py,track[bi].y);
     if(rx>240)rx=240;else if(rx<-240)rx=-240;if(ry>240)ry=240;else if(ry<-240)ry=-240;   /* keeps the products in 16 bits */
     /* where the car is along its segment, exactly (Q8): the segments are 36 to 66 units long, and a fixed length made the progress
-     * (the stripes) and the road's direction jump each time the nearest sample changed */
-    int16_t along=(int32_t)(rx*sx+ry*sy)*256/(sx*sx+sy*sy);
+     * (the stripes) and the road's direction jump each time the nearest sample changed. The division by the segment's squared length is a
+     * multiplication by its reciprocal (2^24 / length^2), made when the nearest sample changes: a 32-bit division took 3,000 cycles a step. */
+    if(seg_index!=bi){seg_index=bi;seg_inv=(uint16_t)(16777216UL/(uint16_t)(sx*sx+sy*sy));}
+    int16_t dot=smul(rx,sx)+smul(ry,sy);
+    uint16_t dm=dot<0?-dot:dot,magnitude=(uint16_t)umul(dm>>8,seg_inv>>8)+((uint16_t)(umul(dm>>8,seg_inv&255)+umul(dm&255,seg_inv>>8))>>8);   /* |dot| * inv >> 16 */
+    int16_t along=dot<0?-(int16_t)magnitude:(int16_t)magnitude;
     if(along<-256)along=-256;if(along>511)along=511;
     uint16_t s=((uint16_t)bi<<8)+along;
     if(ps>0xc000&&s<0x4000)++lapp;else if(ps<0x4000&&s>0xc000)--lapp;
     ps=s;
-    int16_t lat=((rx*-sy+ry*sx)>>1)*5>>7;
+    int16_t cross=smul(ry,sx)-smul(rx,sy);
+    uint16_t cm=cross<0?-cross:cross;cm=((cm>>2)*5)>>6;   /* cross * 5 / 256 */
+    int16_t lat=cross<0?-(int16_t)cm:(int16_t)cm;
     if(lat>LAT_LIMIT||lat<-LAT_LIMIT) {   /* the edge of the sand: the car slides along it */
         int16_t over=lat>0?lat-LAT_LIMIT:lat+LAT_LIMIT;
         if(over>60)over=60;else if(over<-60)over=-60;
@@ -161,9 +184,10 @@ RACE_CODE static void begin_pursuit(void);
 RACE_CODE void race_start(void) {
     arcade_read(1,pce_scenes[1].track,track,sizeof track);
     car_max=pce_options.difficulty==0?16:pce_options.difficulty==1?12:8;car_hp=car_max;
-    pce_metrics.hp=8;pce_campaign.lap=1;pce_campaign.rank=8;pce_campaign.boss_kind=0;pce_campaign.boss_hp=0;
+    pce_metrics.hp=8;pce_campaign.lap=1;lap_banner=0;pce_campaign.rank=8;pce_campaign.boss_kind=0;pce_campaign.boss_hp=0;
     boost=255;boost_on=boost_locked=0;hurt=spin=shake=fire_cd=ram_cd=0;speed=0;tilt=0;race_time=0;phase_t=0;
     overlay_call(0x6d,field_start_call);
+    memset(blasts,0,sizeof blasts);
     uint16_t s=63005u;
     int16_t x,y;track_point(s,48,&x,&y);
     px=x;py=y;ps=s;road_idx=s>>8;lapp=-1;
@@ -196,10 +220,13 @@ RACE_CODE static void race_tick(uint8_t keys) {
     case P_RACE: {
         ++race_time;
         drive(keys);int16_t lat=project();
-        update_field(false,lat);overlay_call(0x7a,foes_shots);standings();
-        pce_campaign.lap=lapp<0?1:lapp>=2?3:lapp+1;
+        update_field(false,lat);
+        if(arg_dist){pce_metrics.hp=1;campaign_hurt();break;}   /* every rival has finished the race: a life, and the race again (game over with no life left) */
+        overlay_call(0x7a,foes_shots);standings();
+        {uint8_t lap=lapp<0?1:lapp>=2?3:lapp+1;if(lap>pce_campaign.lap)lap_banner=150;pce_campaign.lap=lap;}   /* a new lap: its banner for 2.5 s */
+        if(lap_banner)--lap_banner;
         if(lapp>=3) {
-            rphase=P_FINISH;phase_t=0;finish_rank=pce_campaign.rank;
+            rphase=P_FINISH;phase_t=0;finish_rank=pce_campaign.rank;lap_banner=0;
             memset(mines,0,sizeof mines);memset(race_bolts,0,sizeof race_bolts);audio_stop();
         }
         break; }
@@ -221,7 +248,7 @@ RACE_CODE static void race_tick(uint8_t keys) {
         gap_dist=boss.state<2?(uint16_t)hypot16(wrapdiff(px,boss.x),wrapdiff(py,boss.y)):0;
         if(rphase==P_PURSUIT) {
             if(spawn_t)--spawn_t;
-            else if(gap_dist>700){spawn_t=(uint16_t)(180+rnd()%120);overlay_call(0x7a,foes_spawn_escort);}
+            else if(gap_dist>700){spawn_t=(uint16_t)(180+rnd()%120);overlay_call(0x72,foes_spawn_escort);}
             if(gap_dist<260&&wrapdiff(boss.y,py)<0&&boss.state==0) {   /* on his tail: he stops running, the fight is on */
                 speed=speed/2;
                 pce_campaign.story=2;pce_campaign.event=1;

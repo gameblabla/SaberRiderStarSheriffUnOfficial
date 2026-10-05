@@ -6,7 +6,7 @@ import subprocess
 import sys
 nm=Path(sys.argv[1]).resolve();elf=Path(sys.argv[2]).resolve()
 output=subprocess.check_output([str(nm),'--undefined-only',str(elf)],text=True)
-allowed=re.compile(r'__cd_(s[1-7]_bin|font_bin|ui_bin|victory_bin|voice[0-3]_bin)__sector$')
+allowed=re.compile(r'__cd_(app_elf|s[1-7]_bin|font_bin|ui_bin|victory_bin|voice[0-3]_bin)__sector$')
 bad=[line for line in output.splitlines() if not allowed.fullmatch(line.split()[-1])]
 if bad:raise SystemExit('Unresolved application symbols:\n'+'\n'.join(bad))
 symbols=subprocess.check_output([str(nm),str(elf)],text=True)
@@ -16,8 +16,8 @@ sections=subprocess.check_output([str(nm.parent/'llvm-readelf'),'-S',str(elf)],t
 rows=[];banks={}
 for name,kind,address,size in re.findall(r'\[\s*\d+\]\s+(\S+)\s+(PROGBITS|NOBITS)\s+([0-9a-f]+)\s+[0-9a-f]+\s+([0-9a-f]+)',sections):
     address,size=int(address,16),int(size,16)
-    if address>>16 in range(0x168,0x188):
-        bank=(address>>16)&255;window={104:0x4000,105:0x6000,106:0x8000,107:0xa000,108:0xc000,109:0x6000,110:0x6000,111:0x6000,112:0x6000,113:0x6000,114:0x6000,115:0x6000,116:0x6000,117:0x6000,120:0x6000,121:0x6000,122:0x6000,123:0x6000,124:0x6000}.get(bank,0xc000)
+    if address>>16 in range(0x168,0x184):
+        bank=(address>>16)&255;window={104:0x4000,105:0x6000,106:0x8000,107:0xa000,108:0xc000,109:0x6000,110:0x6000,111:0x6000,112:0x6000,113:0x6000,114:0x6000,115:0x6000,116:0x6000,117:0x6000,118:0x6000,119:0x6000,120:0x6000,121:0x6000,122:0x6000,123:0x6000,124:0x6000,128:0x6000,129:0x6000,130:0x6000,131:0x6000}.get(bank,0xc000)
         used=(address&65535)+size-window
         if not 0<=used<=8192:raise SystemExit(f'{name} exceeds bank ${bank:02x}')
         banks[bank]=max(banks.get(bank,0),used)

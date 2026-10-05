@@ -147,6 +147,11 @@ def race_hud(hud, fonts, buggy):
         im = fonts.text(text, color, True, True)
         hud.widths[name] = im.width * 2
         hud.add(name, wide(im))
+    # the banner of a new lap (shown a few seconds from the line) and the last one's
+    for name, text, color in (('lapmsg2', 'LAP 2/3', (255, 255, 255)), ('lapmsg3', 'FINAL LAP', (255, 182, 0))):
+        im = fonts.text(text, color, True, True)
+        hud.widths[name] = im.width * 2
+        hud.add(name, wide(im))
     for n, text in enumerate(('1ST', '2ND', '3RD', '4TH', '5TH', '6TH', '7TH', '8TH')):
         im = wide(fonts.text(text, (255, 182, 0) if n == 0 else (255, 255, 255), True, True))
         hud.widths[f'ord{n + 1}'] = im.width

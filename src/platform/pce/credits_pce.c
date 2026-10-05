@@ -18,12 +18,13 @@ CREDITS_CODE static void panel(void) {
 CREDITS_CODE void frontend_continue(void) {
     previous=0;audio_stop();
     if(!loader_ui()){pce_control.ok=0;return;}
-    panel();
+    ui_dark=1;panel();ui_dark=0;
     /* The panel's text area is columns 4-35 and rows 7-24: its centre is column 20 (x=160), row 16. */
     char digit[2]={'0'+pce_continues%10,0};
     ui_put(15,10,"CONTINUE ?",13);
     ui_put(9,18,"PRESS START TO CONTINUE",12);
     ui_put(12,21,"CONTINUES LEFT",14);ui_put(27,21,digit,15);
+    ui_black();ui_fade_in();
     uint8_t seconds=15,clock=0;
     pce_control.ok=0;
     for(;;) {
@@ -43,23 +44,20 @@ CREDITS_CODE void frontend_game_over(void) {
     previous=0;audio_stop();
     if(!loader_ui())return;
     ui_dark=1;ui_show(SCREEN_GAMEOVER);ui_dark=0;pce_ui_state=4;
-    ui_fade(8);ui_fade(7);video_display(true);
     audio_music_once(4);           /* the jingle plays once, then silence */
+    ui_black();ui_fade_in();       /* up from black (the common fade) */
     static const uint8_t pulse[8]={0,1,2,3,3,2,1,0};
-    uint8_t level=7,shown=0;bool leaving=false;
+    uint8_t shown=0;
     for(uint16_t t=0;;++t) {
         video_wait();ui_read_keys();
-        if(!level&&!leaving&&!(t&7)&&pulse[(t>>3)&7]!=shown) {
+        if(!(t&7)&&pulse[(t>>3)&7]!=shown) {
             shown=pulse[(t>>3)&7];
             arcade_read(2,PCE_UI_GAMEOVER_GLOW+(uint32_t)shown*PCE_UI_GAMEOVER_SLOTS*32,buffer,PCE_UI_GAMEOVER_SLOTS*32);
             pce_vce_copy_palette(PCE_UI_GAMEOVER_SLOT,buffer,PCE_UI_GAMEOVER_SLOTS);
         }
-        if(!(t%3)) {
-            if(!leaving&&level){ui_fade(--level);}
-            else if(leaving){ui_fade(++level);if(level==7)break;}
-        }
-        if(!leaving&&t>60&&(ui_pressed&(KEY_RUN|KEY_1|KEY_2))){leaving=true;ui_fade(8);level=0;}
+        if(t>60&&(ui_pressed&(KEY_RUN|KEY_1|KEY_2)))break;
     }
+    ui_fade_out();
     ui_end();audio_stop();pce_ui_state=0;previous=ui_held;
 }
 CREDITS_CODE void frontend_credits(void) {

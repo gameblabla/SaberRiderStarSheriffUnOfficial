@@ -27,8 +27,11 @@ void play_frame(void);
 void play_present(void);
 void race_start(void);
 void race_frame(void);
-void mech_start(void);
-void mech_frame(void);
+/* Ramrod's arena: code images loaded with the stage (m6/m6_state.h); the world's image is in bank $79 */
+void m6_start(void),m6_frame(void);
+#define M6_START m6_start
+#define M6_FRAME m6_frame
+void m6_load(void);
 void space_start(void);
 void space_frame(void);
 extern uint8_t ui_lift_level;

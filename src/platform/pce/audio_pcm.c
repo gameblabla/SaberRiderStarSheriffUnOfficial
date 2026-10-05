@@ -6,11 +6,13 @@
 /* Assembly reserves $2080-$20a0; the linker protects it from compiler ZP. */
 static uint8_t request,voice_seed;
 PceVoice pce_voice;
+extern volatile uint8_t psg_live;
 PCM_CODE static void stop_all(void) {
     pce_cpu_irq_disable();
     *IO_TIMER_CONTROL=0;*IO_IRQ_ACK=0;pce_pcm_active=0;
     for(uint8_t i=0;i<2;++i){pce_pcm_voices[i].left=0;pce_pcm_voices[i].loop=0;}
     for(uint8_t i=0;i<6;++i){*IO_PSG_CH_SELECT=i;*IO_PSG_CH_CONTROL=0;}
+    psg_live=0;
     pce_cpu_irq_enable();
 }
 /* The road's per-scanline interrupt has about 300 cycles of slack, so nothing may keep interrupts off for longer than that: the sample's
@@ -42,8 +44,9 @@ PCM_CODE static void start(void) {
     pce_cpu_irq_enable();
 }
 void audio_pcm_stop(void) {overlay_call(0x75,stop_all);}
+void psg_init(void);
 void audio_pcm_init(void) {
-    audio_pcm_stop();
+    audio_pcm_stop();overlay_call(0x75,psg_init);
     pce_cdb_irq_set(PCE_CDB_ID_IRQ_TIMER,pce_pcm_irq);
     pce_cdb_irq_enable(PCE_CDB_MASK_IRQ_TIMER);
 }

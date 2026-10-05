@@ -113,3 +113,8 @@ consecutive frames showed single full-width rows changing). The tables were stab
 * Bank use: the knot arithmetic, its tables and `smul8` are in `$6f`, the table filler in `$6d` with the field and the sky loader.
 * Not done: roadside scenery (posts, rocks) for a stronger sense of speed; a 30 Hz road needs a cheaper simulation tick and sprite
   pass first.
+
+## Fifth session: full-size road again, with wrap copies (2026-10-05)
+
+The half-scale road of the fourth session is gone: see docs/PCE_PLAYTEST_FIX_20261005B.md (kerb 4.5 dots a line, cars 1.17 x rows, four wrap copies of the lower rows in BAT rows 24-47
+chosen per scanline by `road_stripes`/`irq.S`). Not run on hardware or in the emulator.

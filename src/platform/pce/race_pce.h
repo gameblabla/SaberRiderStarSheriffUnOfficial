@@ -5,13 +5,16 @@
 typedef struct {uint16_t s;int8_t lap;int16_t lat,lat_t,speed;uint16_t max;uint8_t kind,hornet,hp,knock,t,t2;int16_t x,y,gap;} Rival;
 typedef struct __attribute__((packed)) {uint16_t x,y;uint8_t heading;} TrackPoint;
 typedef struct {int16_t x,y;uint8_t t;} Mine;
+typedef struct {int16_t x,y;uint8_t t;} Blast;   /* a car going up: t 1..20 steps (0 free) */
 typedef struct {int16_t x,y,vx,vy;uint8_t t,own;} Bolt;
 /* The leader and his escort: positions in Q8 (x, y are the whole units), anim the phase of the weave. */
 typedef struct {int32_t xq,yq;int16_t x,y,speed;uint16_t anim,since;uint8_t state,hp,hp_max,knock,boost,t,t2,t3;} Leader;
+typedef struct {int16_t x,y;uint16_t f;uint8_t kind;} Visible;   /* a car, mine or wreck on view (race_proj.c) */
 enum {P_COUNT,P_RACE,P_FINISH,P_PURSUIT,P_BOSS,P_VICTORY};
 extern TrackPoint track[256];
 extern Rival rv[7];
 extern Mine mines[6];
+extern Blast blasts[4];
 extern Bolt race_bolts[10];
 extern uint8_t boost_locked;
 extern Leader boss,escort[2];
@@ -31,3 +34,6 @@ void field_start_call(void),field_update_call(void),field_standings_call(void),f
 void foes_shots(void),foes_leader(void),foes_escorts(void),foes_leader_start(void),foes_spawn_escort(void);
 void foes_drop_mine(void);     /* arg_x, arg_y, arg_life */
 void foes_aimed_bolt(void);    /* arg_x, arg_y, arg_speed, arg_life */
+extern Visible vis[18];extern uint8_t nvis;
+extern int16_t bolt_sx[10],bolt_sy[10];extern uint16_t bolt_ok;extern uint8_t bolt_step[10],lap_banner;
+void project_entities(void),qtable_init(void);

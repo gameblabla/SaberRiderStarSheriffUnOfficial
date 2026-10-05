@@ -213,18 +213,19 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
         /* Straight shots fly 8 px a step, diagonals 6 on each axis (the source's 0.7 x). The shot leaves the barrel
          * of the pose drawn: pce_muzzle holds the source game's own muzzle offset per hero and pose (level, level
          * running, crouch, up, down, then up / down diagonals standing and running); the art is mirrored for left. */
-        bool side=keys&(KEY_LEFT|KEY_RIGHT),run=(player.coll&4)&&player.vx;
+        /* A fall (off a ledge, through a gap) draws the frozen run frame, so it fires from the run pose's barrel; only a jump is the ball. */
+        bool side=keys&(KEY_LEFT|KEY_RIGHT),grounded=player.coll&4,moving=player.vx!=0,ball=!grounded&&jumping;
         bool up=keys&KEY_UP,down=(keys&KEY_DOWN)&&(!crouch||(keys&(KEY_SELECT|KEY_LEFT|KEY_RIGHT)));
-        int16_t vx=facing?-8:8,vy=0;uint8_t pose=crouch?2:run;
+        int16_t vx=facing?-8:8,vy=0;uint8_t pose=crouch?2:grounded?moving:1;
         if(up||down) {
             vy=up?-8:8;
-            if(side){vx=facing?-6:6;vy=up?-6:6;pose=(up?5:6)+(run?2:0);}
+            if(side){vx=facing?-6:6;vy=up?-6:6;pose=(up?5:6)+(moving?2:0);}
             else{vx=0;pose=up?3:4;}
         }
         const int8_t *muzzle=pce_muzzle[hero][pose];
         int8_t air[2];
-        if(!(player.coll&4)) {
-            /* In the air the somersault (or the frozen run frame) is drawn whatever is aimed; the shot leaves a
+        if(ball) {
+            /* In a jump the somersault (or the frozen run frame) is drawn whatever is aimed; the shot leaves a
              * 14 px ring around the ball's centre (0,16): the source's own air muzzles (16,18) (11,7) (0,2). */
             air[0]=up||down?(side?11:0):16;air[1]=up?(side?7:2):down?(side?25:30):18;muzzle=air;
         }
@@ -280,11 +281,22 @@ PCE_BOSS void play_draw(void) {
     if(herd_on)overlay_call(0x6f,herd_draw);
     /* Admission order is priority (priority_pce.c): the boss, the enemies, the enemies' bullets, then the hero's bullets and the
      * muzzle flash, which are the first to go when the SAT or a scanline is full. */
+    uint8_t hull_first=sat_count;
     if(!pce_campaign.diagnostic)overlay_call(0x70,combat_draw);
+    uint8_t hull_end=sat_count;
     if(pce_campaign.boss_kind){pce_control.phase=0;overlay_call(0x7c,shots_draw_pass);}   /* the bosses' lasers */
     overlay_call(0x74,actors_draw);
     pce_control.phase=1;overlay_call(0x7c,shots_draw_pass);
     if(flash_time)video_sprite_optional(pce_flash_base[stage]+(flash_diag?0:4)+4-flash_time,player.x+flash_dx-camera,player.y+flash_dy-16,false,16);
+    /* The Hyperjumper (stages 3 and 4) goes behind every bullet: its sprites move to the end of the SAT (lower slots are in front). */
+    if(pce_campaign.boss_kind==2&&hull_end>hull_first&&sat_count>hull_end) {
+        uint8_t n=hull_end-hull_first,m=sat_count-hull_end;
+        vdc_sprite_t *at=sat[sat_page]+hull_first;
+        uint8_t *held=buffer+1024,*d=(uint8_t*)at;
+        memcpy(held,d,n*8);
+        for(uint8_t k=0;k<m;++k,d+=8)memcpy(d,d+n*8,8);
+        memcpy(d,held,n*8);
+    }
     /* While the herd is on screen the SAT has no room for the foreground pieces as well: they would come and go with
      * every horse's piece count, so the foreground layer is left out until it has passed. */
     bool herd=false;
@@ -303,7 +315,7 @@ PCE_BOSS void play_draw(void) {
         /* The cells go back first: the beam reaches the panel a few thousand cycles after the VBlank, and the font and palette
          * restore is slower than that (cells still holding text showed black, in a staircase, for one frame). */
         video_wait();
-        pce_vce_copy_palette(31,buffer+512,1);
+        vce_copy_now(31,buffer+512,1);
         video_panel_restore_apply();
         overlay_call(0x6e,story_graphics_restore);pce_panel_restore=0;
     }

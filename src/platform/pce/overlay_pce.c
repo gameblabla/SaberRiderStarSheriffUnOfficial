@@ -11,7 +11,7 @@ __attribute__((noinline,callback(2))) void overlay_call(uint8_t bank,void (*meth
 /* The palette snapshot (ui_fade(8)) whitened by ui_lift_level steps: the held frame whitening out before a victory painting. */
 extern uint8_t buffer[2048];
 uint8_t ui_lift_level;
-PCE_CODE void ui_lift(void) {
+__attribute__((noinline,section(".ram_bank117.text"))) void ui_lift(void) {
     uint16_t *src=(uint16_t*)buffer,*dst=src+512;
     for(uint16_t i=0;i<512;++i) {
         uint16_t c=src[i];uint8_t b=c&7,r=(c>>3)&7,g=(c>>6)&7;

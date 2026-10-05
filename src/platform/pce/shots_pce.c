@@ -17,6 +17,7 @@ SHOT_CODE static void advance(int16_t *p,uint8_t *f,int16_t v) {
 SHOT_CODE void shots_step(void) {
     for(Shot *s=shots;s<shots+NSHOTS;++s) {
         if(!s->active)continue;
+        if(s->enemy==4){if(++s->t>=40)s->active=0;continue;}   /* a grenade's burst: it burns where it fell (drawn from enemy_base + 80) */
         if(s->enemy==2) {
             uint8_t tc=s->t<60?s->t:60;
             s->vy=((((uint16_t)tc*tc>>3)*115)>>4)-((absolute(s->vx)*15)>>4);
@@ -28,12 +29,13 @@ SHOT_CODE void shots_step(void) {
         if(s->enemy!=3) {
             /* bullets stop at solid cells and ramps (bullets.c); a grenade also bursts */
             cell_x=s->x>>3;cell_y=s->y>>3;overlay_call(0x69,cell_call);
-            if(cell_value==15||(cell_value&16)){s->active=0;if(s->enemy==2)audio_effect(4);continue;}
+            if(cell_value==15||(cell_value&16)){if(s->enemy==2){s->enemy=4;s->t=0;s->vx=s->vy=0;audio_effect(4);}else s->active=0;continue;}   /* a grenade bursts into its explosion, with the burst's sound */
         }
         if(s->enemy) {
             int16_t dx=s->x-player.x,dy=s->y-player.y,r=s->enemy==2?16:8;
             if(!safe_timer&&dx>-r&&dx<r&&dy>-14&&dy<25) {
-                s->active=0;safe_timer=120;audio_effect(5);
+                if(s->enemy==2){s->enemy=4;s->t=0;s->vx=s->vy=0;audio_effect(4);}else s->active=0;   /* (a grenade bursts on him) */
+                safe_timer=120;audio_effect(5);
                 campaign_hurt();
                 if(pce_campaign.diagnostic&&!pce_metrics.hp)pce_metrics.hp=3;
             }
@@ -46,7 +48,7 @@ SHOT_CODE void shots_step(void) {
                     if(!--a->hp){a->mode|=4;a->aim=18;a->hp=1;}
                     audio_effect(7);
                 } else if(!--a->hp)actor_kill(a);else audio_effect(7);
-                audio_effect(4);break;
+                break;
             }
         }
     }
