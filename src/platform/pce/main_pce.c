@@ -14,16 +14,27 @@
 #define PCE_START_STAGE 1
 #endif
 uint8_t previous;
-static uint8_t stage, hero, selected, menu, heading, phase;
-static uint16_t race_x=4696,race_y=4096;
-static uint8_t simulation_tick,resume_phase;   /* resume_phase: the race phase / arena wave a restart after a lost life begins in (change_stage) */
+static uint8_t stage, hero;
+#ifndef RETAIL
+static uint8_t selected, menu, heading, phase;
 static uint8_t menu_hero,menu_mode;
+static uint16_t race_x=4696,race_y=4096;
+#else
+static uint8_t paused;
+void pause_show(void),pause_hide(void);
+#endif
+static uint8_t simulation_tick,resume_phase;   /* resume_phase: the race phase / arena wave a restart after a lost life begins in (change_stage) */
 void race_briefing_frame(void);
+#ifndef RETAIL
 static const int8_t sine[32] PCE_TABLE={0,25,49,71,90,106,117,125,127,125,117,106,90,71,49,25,0,-25,-49,-71,-90,-106,-117,-125,-127,-125,-117,-106,-90,-71,-49,-25};
+#endif
 PCE_FLOW static bool change_stage(uint8_t n) {
     uint8_t resume=resume_phase;resume_phase=0;
     pce_control.stage=n;overlay_call(0x71,frontend_card);
-    pce_metrics.ready=0;stage=n;phase=heading=0;race_x=4696;race_y=4096;
+    pce_metrics.ready=0;stage=n;
+#ifndef RETAIL
+    phase=heading=0;race_x=4696;race_y=4096;
+#endif
     pce_metrics.phase=0;pce_metrics.camera_x=pce_metrics.hp=0;
     if(!loader_scene(stage))return false;
     if(stage==6)m6_load();   /* Ramrod's arena's code images, into the banks the scene load has just put back */
@@ -55,6 +66,7 @@ PCE_FLOW static bool change_stage(uint8_t n) {
     ui_black();ui_fade_in();   /* every stage comes up from black (the common transition) */
     pce_metrics.ready=1;return true;
 }
+#ifndef RETAIL
 PCE_FLOW static void menu_draw(void) {
     video_text(1,2,"SABER RIDER");
     video_text(1,4,"ARCADE CD-ROM2");
@@ -80,6 +92,7 @@ PCE_FLOW static void render_test(uint8_t keys,uint8_t pressed) {
     }
     pce_metrics.phase=phase;pce_metrics.player_x=race_x;pce_metrics.player_y=race_y;
 }
+#endif
 /* The pad. A 6-button pad (in its 6-button mode) answers alternate reads with its extra buttons: the direction nibble reads 0000 (all four
  * pressed, which no D-pad can do) and the buttons nibble holds III, IV, V, VI. Two reads a frame return both sets, in either order. Button III is
  * the hero power. On a 2-button pad the power is a tap of Select (pressed and let go within 20 frames with no direction held meanwhile: Select
@@ -123,7 +136,10 @@ PCE_FLOW void flow_main(void) {
     uint8_t initial=pce_control.stage?pce_control.stage:PCE_START_STAGE;
     if(!change_stage(initial))for(;;){}
     if(resumed&&initial==checkpoint.stage&&stage==2&&checkpoint.phase){
-        phase=1;pce_metrics.phase=1;race_x=4096;heading=8;
+        pce_metrics.phase=1;
+#ifndef RETAIL
+        phase=1;race_x=4096;heading=8;
+#endif
         if(!pce_campaign.diagnostic){pce_control.phase=1;overlay_call(0x79,race_start);pce_campaign.state=CAM_PLAY;pce_campaign.timer=0;video_restore();}
     }
     simulation_tick=pce_ticks;
@@ -135,6 +151,15 @@ PCE_FLOW void flow_main(void) {
         if(elapsed>12)elapsed=12;
         if(pce_stall){pce_stall=0;elapsed=1;}   /* a CD seek or a big upload held the loop up: its ticks are not caught up */
         uint8_t power,keys=read_pad(&power),pressed=keys&~previous;previous=keys;audio_tick();
+#ifdef RETAIL
+        if((pressed&KEY_RUN)&&(paused||pce_campaign.state==CAM_PLAY)) {
+            paused^=1;
+            if(paused)pause_show();else pause_hide();
+            simulation_tick=pce_ticks;
+            continue;
+        }
+        if(paused){simulation_tick=pce_ticks;continue;}
+#else
         if(pressed&KEY_RUN) {
             if(menu) {
                 menu=0;
@@ -164,6 +189,7 @@ PCE_FLOW void flow_main(void) {
             if(pressed&KEY_DOWN)hero=(hero-1)&3;
             pce_metrics.hero=hero;menu_draw();continue;
         }
+#endif
         pce_control.keys=keys;pce_control.pressed=pressed;pce_control.elapsed=elapsed;
         pce_control.power=power;
         if(!pce_campaign.diagnostic) {
@@ -214,10 +240,12 @@ PCE_FLOW void flow_main(void) {
             else if(pce_campaign.result==1){pce_campaign.state=CAM_CLEAR;pce_campaign.result=0;if(stage!=6)audio_music_once(6);}
             continue;
         }
+#ifndef RETAIL
         if(stage==2)render_test(keys,pressed);
         else {
             pce_control.keys=keys;pce_control.pressed=pressed;pce_control.elapsed=elapsed;
             if(stage==6)overlay_call(0x79,M6_FRAME);else if(stage==7)overlay_call(0x78,space_frame);else overlay_call(0x69,play_frame);
         }
+#endif
     }
 }

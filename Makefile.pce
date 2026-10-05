@@ -3,6 +3,10 @@ MOS ?= ../PCE/llvm-mos8
 PCE_CC := $(MOS)/bin/mos-pce-cd-clang
 OUT ?= build/pce
 PCE_FLAGS := -std=gnu11 -Os -Wall -Wextra -Werror -Isrc/platform/pce -I$(OUT) -flto -mlto-zp=0
+RETAIL ?= 1
+ifeq ($(RETAIL),1)
+PCE_FLAGS += -DRETAIL
+endif
 PCE_SRC := $(wildcard src/platform/pce/*.c)
 PCE_SRC := $(filter-out src/platform/pce/ipl.c,$(PCE_SRC))
 PCE_SRC += $(wildcard src/platform/pce/*.S)
@@ -13,11 +17,15 @@ PCE_ASSETS += $(foreach stage,1 2 3 4 5 6 7,$(OUT)/s$(stage).bin) $(OUT)/font.bi
 PCE_AUDIO := $(OUT)/audio.json $(foreach track,00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17,$(OUT)/music$(track).bin $(OUT)/music$(track)_m.bin $(OUT)/music$(track)_l.bin) $(OUT)/music_end.bin $(OUT)/music_end_m.bin $(OUT)/music_end_l.bin
 PCE_AUDIO += $(OUT)/samples.h $(OUT)/pcm.h $(OUT)/psg.h $(foreach hero,0 1 2 3,$(OUT)/voice$(hero).bin)
 
-.PHONY: all assets test test-campaign test-presentation test-audio test-herd test-dialog test-wip
+.PHONY: all assets test test-campaign test-presentation test-audio test-herd test-dialog test-wip FORCE
 all: $(OUT)/saber_rider.cue
 
 $(OUT):
 	mkdir -p $@
+
+# Switching RETAIL must relink even when the source timestamps are unchanged.
+$(OUT)/build-flags: FORCE | $(OUT)
+	@printf '%s\n' '$(PCE_FLAGS)' | cmp -s - $@ || printf '%s\n' '$(PCE_FLAGS)' > $@
 
 $(OUT)/ipl.bin: tools/pce/ipl.py ../PCE/huc/src/isolink/main.c | $(OUT)
 	python3 $< ../PCE/huc/src/isolink/main.c $@
@@ -38,7 +46,7 @@ assets: | $(OUT)
 $(PCE_ASSETS) &: tools/pce/build_assets.py tools/pce/formats.py tools/pce/palfit.py tools/pce/tile_budget.py tools/pce/export.c tools/pce/export_muzzle.c tools/pce/export_track.c tools/pce/story.py tools/pce/timeline.py tools/pce/presentation.py tools/pce/frontend.py $(wildcard src/*.[ch]) $(wildcard SaberRider/data/*.pck) $(wildcard assets/*.png assets/*.txt assets/pce/*.png assets/victory/*.png assets/ramrod/*.png assets/ramrod/*.txt assets/space/*.png assets/space/*.txt assets/stage3/native/*.png) | $(OUT)
 	python3 tools/pce/build_assets.py --out $(OUT)
 
-$(OUT)/app_full.elf: $(PCE_SRC) $(wildcard src/platform/pce/*.h) $(wildcard src/platform/pce/m6/*.h) $(OUT)/assets.h $(OUT)/m6.h $(OUT)/samples.h $(OUT)/pcm.h $(OUT)/psg.h Makefile.pce tools/pce/check_elf.py src/platform/pce/link/link.ld
+$(OUT)/app_full.elf: $(PCE_SRC) $(wildcard src/platform/pce/*.h) $(wildcard src/platform/pce/m6/*.h) $(OUT)/assets.h $(OUT)/m6.h $(OUT)/samples.h $(OUT)/pcm.h $(OUT)/psg.h $(OUT)/build-flags Makefile.pce tools/pce/check_elf.py src/platform/pce/link/link.ld
 	$(PCE_CC) $(PCE_FLAGS) $(PCE_SRC) -I src/platform/pce/m6 -o $@ -T src/platform/pce/link/link.ld -Wl,-Map,$(OUT)/app.elf.map
 	python3 tools/pce/check_elf.py $(MOS)/bin/llvm-nm $@
 	$(MOS)/bin/llvm-objcopy --remove-section=.llvm_sympart --remove-section=.rela.llvm_sympart $@
