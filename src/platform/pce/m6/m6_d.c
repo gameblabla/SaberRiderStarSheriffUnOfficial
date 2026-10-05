@@ -1,14 +1,20 @@
 #pragma clang section text=".ram_bank131.text" rodata=".ram_bank131.rodata" data=".ram_bank131.data" bss=".ram_bank131.bss"
+#define M6_SECTION ".ram_bank131.rodata"
 #include "m6_common.h"
 #include <string.h>
 extern uint8_t buffer[2048];
 extern vdc_sprite_t sat[2][64];
 extern uint8_t sat_page,sat_count;
-#define M6_SECTION ".ram_bank131.rodata"
 #include "m6.h"
 #define M6_HORIZON 128
 #define BIG_FLAG 0xf000
 extern volatile uint16_t pce_scroll_y;
+extern uint8_t sprite_line_ok,sprite_line_lo,sprite_line_hi;
+void sprite_lines_reserve(void),sprite_lines_release(void);
+/* Ramrod's bolts: three frames made in advance (tools/pce/build_assets.py m6_bolts: very near 32x32, middle 16x16, far 16x16 with a small ball), kept in VRAM at $7c80 (the
+ * fixed HUD ends there; m6_c.c m6_start writes them) and drawn by the picture's own emitter in the HUD's palette 31, whichever size the bolt's distance asks for. */
+#define BOLT_FLAG 0xe000
+#define BOLT_WORD 0x7c80
 /* Ramrod's arena, the picture (the source's ramrod.c render_world / render_aim): the sky scrolls with the bearing Ramrod faces; every mech, boulder,
  * shot and burst is a sprite of the size ladder (tools/pce/build_assets.py) that its distance asks for, on the row the source's projection gives it
  * (214 / distance under the horizon), nearest first (a lower SAT slot is in front). HUD: the armour and gun-heat bars, wave, mechs left and spares,
@@ -35,6 +41,17 @@ static inline int16_t lift(uint16_t d,int16_t z) {
 static bool blit(uint8_t kind,uint16_t key,int16_t x,int16_t y,bool flip) {
     a6.blit_kind=kind;a6.blit_key=key;a6.blit_x=x;a6.blit_y=y;a6.blit_flip=flip;overlay_call(M6C_BANK,m6_blit);return a6.blit_ok;
 }
+/* a bolt (frame 0 very near, 1 middle, 2 far), its centre at (x, y): two units of every scanline for the 32-wide one */
+static void bolt_draw(uint8_t frame,int16_t x,int16_t y) {
+    bool big=frame==0;
+    int16_t size=big?32:16;
+    x-=size>>1;y-=size>>1;
+    if(x<=-32||x>=256||y<=-32||y>=224||sat_count>=64)return;
+    sprite_line_lo=y<0?0:y;sprite_line_hi=y+size>224?224:y+size;
+    sprite_lines_reserve();if(!sprite_line_ok)return;
+    if(big){sprite_lines_reserve();if(!sprite_line_ok){sprite_lines_release();return;}}
+    sat[sat_page][sat_count++]=(vdc_sprite_t){y+64,x+32,(BOLT_WORD>>5)+(frame==1?0:frame==2?2:4),VDC_SPRITE_FG|15|(big?VDC_SPRITE_WIDTH_32|VDC_SPRITE_HEIGHT_32:0)};
+}
 void m6_draw(void) {
     /* the sky: 1344 dots to the turn, the planet ahead at the start */
     uint16_t cam=(uint16_t)((a6.cam>>4)+385);
@@ -42,7 +59,7 @@ void m6_draw(void) {
     shake_y=a6.shake?(int16_t)((pce_ticks*53u)%(a6.shake>12?7:3))-(a6.shake>12?3:1):0;
     pce_scroll_hold=1;
     video_background(cam);
-    pce_scroll_x=cam+shake_x;pce_scroll_y=shake_y;
+    pce_scroll_x=cam+shake_x;pce_scroll_y=shake_y;   /* (the world's sprites below move the other way: with the background, not against it) */
     a6.floor_x=cam+shake_x;a6.floor_y=shake_y;overlay_call(M6C_BANK,m6_floor);
     /* what is on screen, nearest first */
     nitems=0;
@@ -82,7 +99,7 @@ void m6_draw(void) {
         Shot6 *s=&a6.shot[k];if(!s->life)continue;
         uint16_t d=s->dist>>2;int16_t rel=relq(s->ang);
         if(abs16(rel)>162*16)continue;
-        put(d,rel,lift(d,s->z),s->enemy?PCE_M6_PLASMA+((pce_ticks>>2)&1)*5+m6_fsize[d>>4]:PCE_M6_BOLT+m6_fsize[d>>4]);
+        put(d,rel,lift(d,s->z),s->enemy?PCE_M6_PLASMA+((pce_ticks>>2)&1)*5+m6_fsize[d>>4]:BOLT_FLAG|(d<420?0:d<760?1:2));
     }
     for(uint8_t k=0;k<10;++k) {
         Fx6 *e=&a6.fx[k];if(!e->dur)continue;
@@ -93,7 +110,7 @@ void m6_draw(void) {
         put(d>1?d-2:0,rel,lift(d,e->z),PCE_M6_EXPL+size*5+(frame>4?4:frame));
     }
     video_sat_begin();
-    a6.lock_x=lock_sx-8+shake_x;a6.lock_y=lock_sy+shake_y;a6.lock_hp=lock_d?lock_hp:0;
+    a6.lock_x=lock_sx-8-shake_x;a6.lock_y=lock_sy-shake_y;a6.lock_hp=lock_d?lock_hp:0;
     overlay_call(M6A_BANK,m6_hud);
     uint8_t front=sat_count;
     /* Ramrod's arm: in front of the world */
@@ -107,10 +124,12 @@ void m6_draw(void) {
     }
     /* the world, nearest first */
     for(uint8_t k=0;k<nitems;++k) {
+        int16_t ix=items[k].sx-shake_x,iy=items[k].sy-shake_y;
         if(items[k].id>=BIG_FLAG){
-            if(!blit(0,items[k].id&~BIG_FLAG,items[k].sx+shake_x,items[k].sy+shake_y,false))   /* refused: the biggest of the ladder in its place */
-                video_sprite_optional(PCE_M6_MECH+(((items[k].id&~BIG_FLAG)>>2)*PCE_M6_STEPS)+PCE_M6_STEPS-1,items[k].sx+shake_x,items[k].sy+shake_y,false,16);
-        } else video_sprite_optional(items[k].id,items[k].sx+shake_x,items[k].sy+shake_y,false,16);
+            if(!blit(0,items[k].id&~BIG_FLAG,ix,iy,false))   /* refused: the biggest of the ladder in its place */
+                video_sprite_optional(PCE_M6_MECH+(((items[k].id&~BIG_FLAG)>>2)*PCE_M6_STEPS)+PCE_M6_STEPS-1,ix,iy,false,16);
+        } else if(items[k].id>=BOLT_FLAG)bolt_draw(items[k].id&3,ix,iy);
+        else video_sprite_optional(items[k].id,ix,iy,false,16);
     }
     uint8_t m0=sat_count;
     overlay_call(M6A_BANK,m6_msgs);

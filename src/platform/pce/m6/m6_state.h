@@ -8,6 +8,7 @@ enum {S_OFF,S_ENTER,S_APPROACH,S_CIRCLE,S_AIM,S_FIRE,S_CHARGE,S_WINDUP,S_PUNCH,S
 typedef struct {
     int16_t ang,hp,lat0;uint16_t dist,fire_t,pref;
     uint8_t st,variant,st_t,flash,volley,dying,expl_t,anim;int8_t strafe,kick;
+    uint8_t calm;   /* steps before it may swing at Ramrod again (a mech that has just punched backs off instead of punching on) */
 } Mech6;
 typedef struct {int16_t ang,z,vang,vd,vz,lat0;uint16_t dist;uint8_t life,enemy,dmg;} Shot6;   /* lat0: Ramrod's side-stepping when a plasma ball was fired */
 typedef struct {int16_t ang,z;uint16_t dist;uint8_t t,dur,size;} Fx6;

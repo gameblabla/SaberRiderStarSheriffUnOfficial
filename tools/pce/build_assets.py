@@ -911,14 +911,16 @@ def make_scene(stage, work, previews, shared):
             for k in M6_PROP_SCALES:
                 im, anc = scaled(frame[1], frame[2], k * mult)
                 sprites.append((f'{name}_{round(k*1000)}', im, anc))
-        # shots: Ramrod's bolt (an orange streak with a white core), the Renegades' plasma (two frames of a violet ball), five sizes
-        mark('BOLT')
-        for k in M6_FX_SCALES:
-            sz = max(4, round(18 * k)); im = Image.new('RGBA', (sz * 2, sz)); dr = ImageDraw.Draw(im)
-            for frac, col in ((1.0, (255, 120, 20)), (0.7, (255, 200, 70)), (0.35, (255, 255, 230))):
-                rx, ry = sz * frac - 0.5, sz * frac / 2 - 0.5
-                dr.ellipse((sz - rx, sz / 2 - ry, sz + rx, sz / 2 + ry), fill=(*col, 255))
-            sprites.append((f'bolt_{sz}', im, (sz, sz // 2)))
+        # shots: Ramrod's bolt is three frames made here and written to VRAM at $7c80 (m6_c.c m6_start, drawn by m6_d.c bolt_draw), not cached sprites: a very near one (32x32),
+        # a middle one and a small far one (16x16), a glowing ball each (orange, yellow, white core) in the HUD's palette (their images are HUD pieces below, so the palette has
+        # their colours; the patterns are packed after the sprite table with it, at the end of make_scene)
+        def ball(size, radii):
+            im = Image.new('RGBA', (size, size)); dr = ImageDraw.Draw(im); mid = size / 2 - 0.5
+            for r, col in radii: dr.ellipse((mid - r, mid - r, mid + r, mid + r), fill=(*col, 255))
+            return im
+        bolt_images = [ball(32, ((15.5, (255, 150, 40)), (12, (240, 190, 60)), (8, (255, 235, 190)), (4.2, (255, 255, 255)))),
+                       ball(16, ((7.5, (255, 150, 40)), (5.5, (240, 190, 60)), (3.3, (255, 235, 190)), (1.6, (255, 255, 255)))),
+                       ball(16, ((3.4, (255, 150, 40)), (2.2, (240, 190, 60)), (1.0, (255, 255, 255))))]   # near, middle, far
         mark('PLASMA')
         plasma = atlas(atl, 'plasma')
         for fr in (0, 2):
@@ -1011,6 +1013,7 @@ def make_scene(stage, work, previews, shared):
         hud = hudart.Hud(sprites)
         # (the shadows, the reticle and its brackets share the HUD's palette: they are few colours and the cache has only fifteen palettes of its own)
         def hmark(name): macros.append(f'#define PCE_M6_{name} {hud.base + len(sprites) - hud.base}')
+        for nm, im in zip(('bolt_near', 'bolt_mid', 'bolt_far'), bolt_images): hud.add(nm, im)   # (their colours in the HUD's palette; never drawn from the table)
         hmark('SHADOW')
         for i, k in enumerate(M6_ALL_SCALES[::2]):
             w = min(48, max(6, round(88 * k))); h = max(3, round(w * min(0.5, max(0.08, 0.3 / (1 + i * 0.7)))))
@@ -1208,6 +1211,12 @@ def make_scene(stage, work, previews, shared):
     meta['story_offset']=story.bake(ROOT,work,stage,a,meta['presentation']['portraits'])
     meta.update(race_sky(a, previews, race_sand) if stage == 2 else native_background(bg, a, previews, f'stage{stage}'))
     sprite_table, rows, costs = add_sprites(a, list(sprites), previews)
+    if stage == 6:
+        # the bolt's patterns in the HUD's palette (add_sprites gave every 'hudp_' sprite of the stage one: the same call on the same images): middle and far 16x16 (64 words each), then the near 32x32 (TL, TR, BL, BR)
+        hud_pal = palette_for([im for name, im, _ in sprites if name.startswith('hudp_')], unique=True)
+        near, mid, far = (indexed(im, hud_pal) for im in bolt_images)
+        blob = planar_sprite(mid) + planar_sprite(far) + b''.join(planar_sprite(near[by:by + 16, bx:bx + 16]) for by, bx in ((0, 0), (0, 16), (16, 0), (16, 16)))
+        meta['m6_bolts'] = a.add('m6_bolts', blob)
     meta.update(collision=collision, sprite_table=sprite_table, sprite_count=len(rows), sprites=costs,
                 records=a.records, bytes=len(a.finish()), color_palettes=16, sprite_palettes=16)
     return a.finish(), meta
@@ -1268,7 +1277,7 @@ def main():
     h += [f'#define PCE_CAR_STEPS {len(CAR_WIDTHS)}', '#define PCE_CAR_STEER (3+7*PCE_CAR_STEPS)', '#define PCE_CAR_SPIN (PCE_CAR_STEER+4)', f'#define PCE_CAR_SPIN_FRAMES {SPIN_FRAMES}', '#define PCE_CAR_TURBO (PCE_CAR_SPIN+2*(PCE_CAR_SPIN_FRAMES-1))', '#define PCE_CAR_EXPL (PCE_CAR_TURBO+4)', f'#define PCE_CAR_ORB (PCE_CAR_EXPL+10)', f'#define PCE_CAR_POLE (PCE_CAR_ORB+{2*len(ORB_SIZES)})', f'#define PCE_ORB_STEPS {len(ORB_SIZES)}', f'#define PCE_POLE_STEPS {len(POLE_SIZES)}', 'extern const uint8_t pce_car_widths[PCE_CAR_STEPS];']
     h += [f'#define PCE_M6_STEPS {len(M6_SCALES)}', f'#define PCE_M6_BIG_STEPS {len(M6_BIG_SCALES)}', f"#define PCE_M6_IMAGE {next(m['m6_image'] for m in scenes if 'm6_image' in m)}UL",
           f"#define PCE_M6_BIG {next(m['m6_big'] for m in scenes if 'm6_big' in m)}UL", f"#define PCE_M6_BIGPAL {next(m['m6_bigpal'] for m in scenes if 'm6_bigpal' in m)}UL",
-          f"#define PCE_M6_ARMT {next(m['m6_arm'] for m in scenes if 'm6_arm' in m)}UL", f"#define PCE_M6_ARMPAL {next(m['m6_armpal'] for m in scenes if 'm6_armpal' in m)}UL"]
+          f"#define PCE_M6_BOLTS {next(m['m6_bolts'] for m in scenes if 'm6_bolts' in m)}UL", f"#define PCE_M6_ARMT {next(m['m6_arm'] for m in scenes if 'm6_arm' in m)}UL", f"#define PCE_M6_ARMPAL {next(m['m6_armpal'] for m in scenes if 'm6_armpal' in m)}UL"]
     c.append('const uint8_t pce_car_widths[PCE_CAR_STEPS]={'+','.join(map(str,CAR_WIDTHS))+'};')
     d_table,z_table=road_tables()
     h.append('extern const uint8_t pce_road_d[384];extern const uint8_t pce_road_z[113];')

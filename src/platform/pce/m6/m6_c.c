@@ -1,7 +1,7 @@
 #pragma clang section text=".ram_bank130.text" rodata=".ram_bank130.rodata" data=".ram_bank130.data" bss=".ram_bank130.bss"
+#define M6_SECTION ".ram_bank130.rodata"
 #include "m6_common.h"
 #include "arcade_pce.h"
-#define M6_SECTION ".ram_bank130.rodata"
 #define M6_RCP_ONLY
 #include "m6.h"
 /* Image C: the world (ramrod.c ramrod_update and update_shots): the clock, the waves, the shots and what they hit, the lock, the bursts. */
@@ -9,6 +9,7 @@ static const uint8_t WAVE_N[3]={3,5,4},WAVE_MAX[3]={2,3,2};
 static const uint16_t W_DELAY[3][8]={{0,240,600},{0,30,60,540,660},{0,60,420,780}};
 static inline uint16_t rcp_of(uint16_t dist_q2) {uint16_t i=dist_q2>>5;return m6_rcp[i<200?i:200];}
 extern const PceScene *video_scene_ptr;
+extern volatile uint16_t pce_scroll_x,pce_scroll_y;
 extern vdc_sprite_t sat[2][64];
 extern uint8_t sat_page,sat_count,sprite_line_ok,sprite_line_lo,sprite_line_hi;
 void sprite_lines_reserve(void),sprite_lines_release(void);
@@ -199,6 +200,8 @@ void m6_start(void) {
     uint8_t *p=(uint8_t*)&A;
     for(uint16_t k=0;k<sizeof A;++k)p[k]=0;
     A.rng=0x5AB3;A.lock=255;A.punch_t=-1;A.floor_x=385;A.floor_y=0;m6_floor();pce_arena_raster=1;
+    pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
+    arcade_vram(PCE_M6_BOLTS,0x7c80,768);   /* the bolt's three frames: $7c80 middle, $7cc0 far, $7d00 very near (32x32) */
     {   /* palette 31, the HUD's (the cache would load it with the first banner; the fixed HUD does not go through the cache) */
         uint32_t entry;uint8_t pal[32];
         arcade_read(2,video_scene_ptr->sprites+(uint32_t)pce_hud_base[5]*16+8,&entry,4);arcade_read(2,entry,pal,32);vce_copy(31,pal,1);
@@ -216,5 +219,9 @@ void m6_start(void) {
 void m6_frame(void) {
     for(uint8_t i=0;i<pce_control.elapsed&&!pce_campaign.event&&!pce_campaign.result&&pce_campaign.state==CAM_PLAY;++i)tick();
     overlay_call(M6D_BANK,m6_draw);
-    if(pce_campaign.event)arm_key[0]=arm_key[1]=255;   /* a dialogue is coming: it will write over the arm's second pattern buffer (after the draw: a punch still in flight has just loaded it) */
+    if(pce_campaign.event) {
+        arm_key[0]=arm_key[1]=255;   /* a dialogue is coming: it will write over the arm's second pattern buffer (after the draw: a punch still in flight has just loaded it) */
+        /* the world holds still behind a dialogue: no shake left in the scroll or the floor (the panel's cells and its sprite corners are placed from the scroll of the last frame) */
+        A.shake=0;pce_scroll_x=(uint16_t)((A.cam>>4)+385);pce_scroll_y=0;A.floor_x=pce_scroll_x;A.floor_y=0;m6_floor();
+    }
 }

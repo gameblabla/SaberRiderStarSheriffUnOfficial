@@ -1,7 +1,7 @@
 #pragma clang section text=".ram_bank128.text" rodata=".ram_bank128.rodata" data=".ram_bank128.data" bss=".ram_bank128.bss"
+#define M6_SECTION ".ram_bank128.rodata"
 #include "m6_common.h"
 #include "arcade_pce.h"
-#define M6_SECTION ".ram_bank128.rodata"
 #define M6_RCP_ONLY
 #include "m6.h"
 /* Image A: Ramrod itself (ramrod.c player_control): the heading, walking and side-stepping, the shoulder guns (they overheat), the fists. Also

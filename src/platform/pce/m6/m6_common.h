@@ -9,8 +9,11 @@
 #define A a6
 #define M6U __attribute__((unused))
 /* Helpers each image carries its own copy of (static: the ones an image does not use take no room). */
-static const M6U uint8_t HP[3]={16,34,90},SPEED[3]={5,6,5},VOLLEY[3]={1,3,4},SHOT_DMG[3]={8,6,8},PUNCH_DMG[3]={14,16,22};
-static const M6U uint8_t SCALE16[3]={16,17,21};
+/* (each in its own image's rodata section, like m6_rcp: left alone the link merges the copies of equal tables into one, in whichever image came first, and the others
+ * would read their own bank at that address instead. M6_SECTION is defined by the includer before this header.) */
+#define M6T M6U __attribute__((section(M6_SECTION)))
+static const M6T uint8_t HP[3]={16,34,90},SPEED[3]={5,6,5},VOLLEY[3]={1,3,4},SHOT_DMG[3]={8,6,8},PUNCH_DMG[3]={14,16,22};
+static const M6T uint8_t SCALE16[3]={16,17,21};
 static inline int16_t abs16(int16_t v) {return v<0?-v:v;}
 static inline int16_t wrapq(int16_t a) {if(a>=ARC)a-=ARC;else if(a<0)a+=ARC;return a;}
 /* a bearing relative to where Ramrod looks, in 1/16 dot, within half a turn */
@@ -43,7 +46,7 @@ M6U static void mech_damage(Mech6 *m,uint8_t dmg,bool punch) {
     m->flash=7;
     if(m->hp<=dmg) {   /* it goes down: burning, sinking into its own blast */
         m->st=S_DYING;m->dying=0;m->expl_t=0;m->hp=0;
-        ++A.killed;++pce_campaign.score;audio_effect(16);
+        ++A.killed;++pce_campaign.score;audio_effect(7);   /* the Renegade's yell (the PC's blast and big bang are the flying bosses') */
         if(A.lock<3&&&A.mech[A.lock]==m)A.lock=255;
         return;
     }
