@@ -10,6 +10,7 @@
 uint8_t pce_stall PCE_WORK;
 
 static uint8_t voice_priority;
+static uint16_t voice_frames;   /* frames left in the latched ADPCM voice (a countdown: pce_ticks is only 8 bits) */
 #define DISC_SECTOR(name) extern char __cd_##name##__sector[]
 DISC_SECTOR(s1_bin); DISC_SECTOR(s2_bin); DISC_SECTOR(s3_bin);
 DISC_SECTOR(s4_bin); DISC_SECTOR(s5_bin); DISC_SECTOR(s6_bin);
@@ -100,7 +101,7 @@ bool loader_scene(uint8_t stage) {
 }
 PCE_X3 void stop_body(void) {
     cdda_stop();
-    voice_priority=0;
+    voice_priority=0;voice_frames=0;
     audio_pcm_stop();
     pce_cdb_adpcm_stop();
 }
@@ -122,11 +123,23 @@ __attribute__((noinline,section(".ram_bank117.text"))) static void effect_body(v
     if(tone==1||(tone>=13&&tone<=15)){psg_voice=tone!=1;psg_script=tone==1?0:tone==14?2:1;overlay_call(0x75,psg_start);return;}
     if(tone==2||(tone>=5&&tone<=19)) {
         audio_pcm_voice(tone);
-        if((pce_cdb_adpcm_status()&ADPCM_STOPPED)||pce_voice.priority>=voice_priority) {
-            pce_cdb_adpcm_stop();          /* clears IFU_INT_END/HALF from the mask, so the stale state reset below cannot raise IRQ2 */
-            audio_adpcm_reset();           /* clean flags, length counter and pointers: the shared controller's state, not ours to inherit */
-            if(!pce_cdb_adpcm_play(pce_voice.address,pce_voice.bytes,pce_voice.rate,PCE_CDB_ADPCM_ONE_SHOT))
+        /* The controller's own "am I still playing?" cannot be trusted: $180c comes back as 0x29, EndReached AND Playing
+         * at once, so the BIOS reports the channel busy indefinitely and every later cue is refused - the game goes
+         * quiet for the rest of the level after one high-priority cue (a hero death), which is what the playtest
+         * reported as enemy-density dependent, and why the boss wreck (priority 2, fired on the single frame
+         * boss_time==8) never sounded. So track the voice's lifetime ourselves, from its own bytes and rate: it lasts
+         * bytes*2 nibbles at 32000/(16-rate) Hz. The priority gate then compares against a voice that is genuinely
+         * still sounding, and voice_priority expires on its own instead of surviving until the next stage change. */
+        if(!voice_frames)voice_priority=0;   /* the latched voice has run its length: nothing is owed priority */
+        if(!voice_priority||pce_voice.priority>=voice_priority) {
+            pce_cdb_adpcm_stop();          /* clears IFU_INT_END/HALF from the mask, so the reset below cannot raise IRQ2 */
+            audio_adpcm_reset();           /* clean flags, length counter and pointers: the shared controller's state */
+            if(!pce_cdb_adpcm_play(pce_voice.address,pce_voice.bytes,pce_voice.rate,PCE_CDB_ADPCM_ONE_SHOT)) {
                 voice_priority=pce_voice.priority;
+                /* 32000/(16-rate) Hz, two nibbles a byte; +1 so a voice is never cut in the frame it starts. */
+                uint16_t hz=32000/(16-pce_voice.rate);
+                voice_frames=(uint16_t)((uint32_t)pce_voice.bytes*2*60/hz)+1;
+            }
         }
         return;
     }
@@ -134,4 +147,4 @@ __attribute__((noinline,section(".ram_bank117.text"))) static void effect_body(v
 }
 void audio_effect(uint8_t tone) {effect_tone=tone;overlay_call(0x75,effect_body);}
 PCE_X3 static void audio_poll(void) {if(psg_live)psg_step();}
-void audio_tick(void) {cdda_tick();if(psg_live)overlay_call(0x75,audio_poll);}
+void audio_tick(void) {if(voice_frames)--voice_frames;cdda_tick();if(psg_live)overlay_call(0x75,audio_poll);}
