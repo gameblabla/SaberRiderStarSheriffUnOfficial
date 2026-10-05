@@ -595,6 +595,30 @@ def platform_background(stage, work):
     if stage == 1: out = scenery_background(out, work, stage)
     return out,foreground
 
+def april_palette_for(images):
+    """One shared palette for April's entire animation set, fitted to the original drawing.
+
+    Partial revert of 99d2c8f: that commit unified the poses (per-pose median
+    cuts changed identical clothing/boot pixels as each pose's histogram
+    changed) but used palette_for(..., unique=True), which gives every distinct
+    colour equal weight. April's sheet has 36 VCE colours for 15 slots, so the
+    rare colours stole entries from the dominant skin/clothing tones (mean
+    squared error ~1522 vs ~850 frequency-weighted, ~498 per-pose).
+    Fit instead with palfit.fit_colors (sqrt-weighted k-means over the 512
+    hardware colours): dominant tones stay accurate while the rare green visor
+    keeps its own entry (error ~130).
+    """
+    px = np.concatenate([np.asarray(im.convert('RGBA')).reshape(-1, 4) for im in images])
+    px = px[px[:, 3] >= 128, :3]
+    if not len(px):
+        return np.zeros(16, '<u2')
+    codes = vce_colors(px).astype(int)
+    hist = np.bincount(codes, minlength=512)
+    fitted = palfit.fit_colors(hist, 15)
+    pal = np.zeros(16, '<u2')
+    pal[1:len(fitted) + 1] = fitted
+    return pal
+
 def add_sprites(archive, sprites, previews):
     rows, costs = [], []
     fg=[im for name,im,_ in sprites if name.startswith('foreground_')]
@@ -605,7 +629,7 @@ def add_sprites(archive, sprites, previews):
     # One mapping for April's entire animation set. Per-pose median cuts
     # changed identical clothing/boot pixels as the pose's histogram changed.
     april=[im for name,im,_ in sprites if name.startswith('hero2_')]
-    april_palette=palette_for(april,unique=True) if april else None
+    april_palette=april_palette_for(april) if april else None
     power_palette={}
     for h in range(4):   # the portrait's 14 colours, then white for the name beside it (all of a hero's parts share the palette)
         parts=[im for name,im,_ in sprites if name.startswith(f'pwr{h}_') and not name.endswith('name')]
