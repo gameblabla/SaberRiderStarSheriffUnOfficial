@@ -37,7 +37,9 @@ FOES_CODE void foes_aimed_bolt(void) {
 FOES_CODE void foes_leader_start(void) {
     memset(escort,0,sizeof escort);memset(mines,0,sizeof mines);memset(race_bolts,0,sizeof race_bolts);
     memset(&boss,0,sizeof boss);
-    boss.hp=boss.hp_max=pce_options.difficulty==0?30:pce_options.difficulty==1?40:50;   /* half the source's: the PCE car is easier to hit than to catch */
+    /* The last enemy of level 2, the Hornet leader in the pursuit's fight: a little tougher than before (30/40/50), still
+     * well under the source's hull, because the PCE car is easier to hit than to catch. The gauge scales with him (race_draw_pce.c). */
+    boss.hp=boss.hp_max=pce_options.difficulty==0?40:pce_options.difficulty==1?55:70;
     boss.xq=(int32_t)4096<<8;boss.yq=((int32_t)py-1500)<<8;boss.speed=300;boss.since=600;boss.t2=180;
     set_pos(&boss);
 }

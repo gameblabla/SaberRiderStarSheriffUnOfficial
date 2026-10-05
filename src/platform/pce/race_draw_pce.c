@@ -116,8 +116,9 @@ DRAW_CODE void race_draw(void) {
         put(PCE_H2_GAP,184,8);number(250,8,gap_dist>9999?9999:gap_dist,4,0);put(PCE_H2_M,310,8);
         bar(208,30,6,fill,3);
     } else if(rphase==P_BOSS&&boss.state<2) {
-        /* the leader's hull, a red bar centred under the HUD row (it had none) */
-        bar(176,30,10,boss.hp*3,2);   /* 3 dots a hit point (30-50 points a difficulty) */
+        /* the leader's hull, a red bar centred under the HUD row (it had none). Scaled off his starting hull so the
+         * gauge reads full only at the start whatever the difficulty set (race_foes_pce.c: 40/55/70). */
+        bar(176,30,10,boss.hp*160/boss.hp_max,2);
     }
     video_sat_end();
 }
