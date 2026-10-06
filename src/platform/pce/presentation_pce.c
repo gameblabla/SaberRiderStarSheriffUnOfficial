@@ -100,8 +100,10 @@ PRESENT void actors_draw(void) {
         }
         if(a->type==28)id+=a->hp==2?0:a->hp==1?1:2+(a->anim>>2)%6;   /* the blue Outrider: stand, alarm, run */
         int16_t sx=a->b.x-camera;
+        /* the boss arena's tower sniper (type 31, the brown watchtower) is drawn 5 px higher (Y - 5) */
+        int16_t sy=a->b.y-16-(a->type==31?5:0);
         /* a refused draw is skipped for the frame, never a removal; a fighter refused on screen holds the filler spawns back */
-        if(!video_sprite_optional(id,sx,a->b.y-16,a->flip,16)&&fighter&&sx>-24&&sx<272)enemy_pressure=40;
+        if(!video_sprite_optional(id,sx,sy,a->flip,16)&&fighter&&sx>-24&&sx<272)enemy_pressure=40;
     }
 }
 void presentation_draw(void) {overlay_call(0x6e,presentation_frame);video_front_mark();}

@@ -41,7 +41,7 @@ SHOT_CODE void shots_step(void) {
             }
         } else for(Actor *a=actors;a<actors+8;++a) {
             if(!a->active||a->dead||(a->type>=11&&a->type<=28))continue;
-            int16_t dx=s->x-a->b.x,dy=s->y-a->b.y;
+            int16_t dx=s->x-a->b.x,dy=s->y-(a->b.y-(a->type==31?5:0));   /* the tower sniper draws 5px higher, so its hitbox does too */
             if(dx>-10&&dx<10&&dy>(a->type==8||a->type==9?-7:-21)&&dy<37) {
                 s->active=0;if(a->type>=30&&facing==a->flip)a->hp=1;   /* a shot in the back kills a shield sniper */
                 if(a->type>=30&&!(a->mode&4)&&facing!=a->flip){   /* the shield takes it, then burns away (4 steps a cell) */

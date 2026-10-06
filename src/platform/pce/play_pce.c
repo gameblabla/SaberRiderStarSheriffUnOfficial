@@ -123,7 +123,7 @@ PCE_CODE static Shot *new_shot(int16_t x,int16_t y,uint8_t enemy) {
 PCE_CODE void fire_call(void) {
     static const int8_t dir_x[8]={-1,-1,0,1,1,1,0,-1},dir_y[8]={0,-1,-1,-1,0,1,1,1};
     uint8_t aim=fire_aim;
-    Shot *s=new_shot(fire_actor->b.x+fire_mx,fire_actor->b.y+fire_my,1);if(!s)return;
+    Shot *s=new_shot(fire_actor->b.x+fire_mx,fire_actor->b.y+fire_my-(fire_actor->type==31?5:0),1);if(!s)return;
     int16_t v=aim&1?(fire_fast?597:496):(fire_fast?853:708);
     s->vx=dir_x[aim]>0?v:dir_x[aim]<0?-v:0;
     s->vy=dir_y[aim]>0?v:dir_y[aim]<0?-v:0;
