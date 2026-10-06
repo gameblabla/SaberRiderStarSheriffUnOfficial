@@ -148,3 +148,8 @@ __attribute__((noinline,section(".ram_bank117.text"))) static void effect_body(v
 void audio_effect(uint8_t tone) {effect_tone=tone;overlay_call(0x75,effect_body);}
 PCE_X3 static void audio_poll(void) {if(psg_live)psg_step();}
 void audio_tick(void) {if(voice_frames)--voice_frames;cdda_tick();if(psg_live)overlay_call(0x75,audio_poll);}
+/* A retirement wait must not trust the controller's busy flag (see above):
+ * back-to-back hurt+death cues can leave EndReached clear with nothing
+ * playing (the second play refused while the first was still busy), so the
+ * BIOS would report busy indefinitely and the retry would never load. */
+bool audio_voice_active(void) {return voice_frames!=0;}

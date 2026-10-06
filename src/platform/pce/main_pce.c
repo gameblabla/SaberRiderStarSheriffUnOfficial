@@ -217,7 +217,7 @@ PCE_FLOW void flow_main(void) {
                 continue;
             }
             if(pce_campaign.result==2){
-                if(!(pce_cdb_adpcm_status()&ADPCM_STOPPED)){video_sat_begin();video_sat_end();continue;}
+                if(audio_voice_active()){video_sat_begin();video_sat_end();continue;}
                 uint8_t resume_phase_of_race=pce_metrics.phase,resume_wave=pce_campaign.wave;
                 ui_fade_out();   /* the stage restarts from black (the platform stages fade in place: play_pce.c) */
                 pce_campaign.result=0;resume_phase=stage==2?resume_phase_of_race:stage==6?resume_wave:0;
