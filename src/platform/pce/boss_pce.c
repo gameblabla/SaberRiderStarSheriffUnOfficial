@@ -43,6 +43,7 @@ BOSS_CODE static void bshoot(int16_t x,int16_t y,int16_t vx,int16_t vy) {
 extern vdc_sprite_t sat[2][64];
 extern uint8_t sat_page,sat_count,sprite_line_lo,sprite_line_hi,sprite_line_ok;
 extern void sprite_lines_reserve(void),sprite_lines_release(void);
+void foreground_reset(void);
 static uint8_t hull_count,hull_ready,hull_level,hull_seen_full,rider_low;
 static uint32_t hull_patterns;   /* the pattern set in VRAM: poses of one ship share it, so only a change of ship reloads it */   /* hull_level: 0 full size, 1 and 2 the mid and far passes */
 static int16_t hull_parts[28][3];
@@ -89,6 +90,10 @@ PCE_MISSION static void hull_load(void) {
         pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
         arcade_vram(record[2],PCE_SPR_WORD+16*256,bytes);
         hull_patterns=record[2];
+        /* The hull's patterns replace cache pages that retained foreground chunks may still draw from: their SAT
+         * entries would keep showing the new ship's graphics (the tower's middle as boss frames, persisting after
+         * the sniper is gone). Drop the retained list so the same frame re-admits them beside the hull. */
+        foreground_reset();
     }
     hull_ready=1;
 }
