@@ -1,4 +1,4 @@
-/* Saturn game audio (plan 7): the SH-2 decodes and mixes nothing.
+/* Saturn game audio: resident effects use ADP68K; movies decode ADX to PCM.
  *
  * SFX and voices: celeriyacon's adp68k driver (third_party/scspadpcm, built into adp68k_bin.h by
  * `make -f Makefile.saturn adp68k`). The 68000 only programs slots; the SCSP DSP decodes 8 ADPCM channels at 44.1 kHz,
@@ -12,11 +12,12 @@
  * loop block) says whether it plays once (the block count: it then loops its silent tail) or loops (1).
  * Music: CD-DA through the DSP's CD input (cd_sat.c plays the tracks; MUSIC.TXT maps a music id to its track).
  * Movies: video_sat.c brackets a clip with aud_movie_begin / aud_movie_end. The 68000 runs an idle program and the film player
- * drives slots 0-1 over its ring at MOVIE_OFF itself (film_pcm_*); the bank below it survives, so afterwards only the
- * 8 KB driver is copied in again. A clip played from RAM (the briefing) leaves the drive to the music: the CD input then
- * goes straight to the output (slots 16 / 17's EFSDL, the DSP is off) and the music plays on under it.
+ * drives slots 0-1 over its PCM rings at MOVIE_OFF; the bank below it survives, so afterwards only the
+ * 8 KB driver is copied in again. Every movie suspends CD-DA, including RAM clips;
+ * the current track/position survives and resumes after the driver is restored.
+ * The upper 128 KB is reserved for the PCM rings; resident samples stay below it.
  *
- * Sound RAM: 0x00000 driver (control block at 0x80) | 0x02000 effect table | 0x02400 bank | 0x78000 movie ring(s). */
+ * Sound RAM: 0x00000 driver (control block at 0x80) | 0x02000 effect table | 0x02400 bank | 0x60000 movie ring(s). */
 #include "../aud.h"
 #include "../plat.h"
 #include "../../pack.h"
@@ -47,8 +48,8 @@
 #define TABLE_OFF    0x2000u   /* adp68k_effect_table: a sample's sound RAM address by id */
 #define TABLE_IDS    256
 #define BANK_OFF     0x2400u
-#define BANK_END     0x78000u
-#define MOVIE_OFF    0x78000u  /* video_sat.c: the film player's ring(s), 2 x 16 KB */
+#define BANK_END     0x60000u
+#define MOVIE_OFF    0x60000u  /* reserved PCM movie rings, 2 x 64 KB */
 
 #define ACT_PLAY     0x11u     /* adp68k.h ADP68K_ACTION_* */
 #define ACT_STOP     0x01u
@@ -88,7 +89,7 @@ static Voice voices[CHANNELS];
 static struct { uint32_t id; int track; uint32_t sectors; } tracks[MAX_TRACKS];
 static int ntracks;
 static uint16_t cd_vol = 0x4000;
-static bool cd_dirty = true, driver_ok, movie, movie_music;
+static bool cd_dirty = true, driver_ok, movie;
 static unsigned kicks_late;
 static int test_sample, test_pass;
 static uint32_t test_at;
@@ -380,7 +381,6 @@ bool aud_prepare_scene(int stage, int hero)
 }
 
 /* ---- music: CD-DA ---- */
-static void movie_cd_level(void);
 static int track_of(uint32_t id) { for (int i = 0; i < ntracks; i++) if (tracks[i].id == id) return tracks[i].track; return 0; }
 
 bool aud_music_play(uint32_t id, bool loop)
@@ -390,24 +390,14 @@ bool aud_music_play(uint32_t id, bool loop)
     return cd_sat_cdda_play(t, loop);
 }
 void aud_music_stop(void) { cd_sat_cdda_stop(); }
-void aud_music_gain(real g) { uint16_t v = vol_of(g); if (v != cd_vol) { cd_vol = v; cd_dirty = true; if (movie) movie_cd_level(); } }
+void aud_music_gain(real g) { uint16_t v = vol_of(g); if (v != cd_vol) { cd_vol = v; cd_dirty = true; } }
 void aud_music_pause(bool pause) { cd_sat_cdda_pause(pause); }
 
 /* ---- movies (video_sat.c) ---- */
-/* the CD input straight to the output while the DSP is off: EFSDL of slots 16 (EXTS0, left) / 17 (EXTS1, right) in
- * 6 dB steps, the nearest to the driver's level: 7 (0 dB) for its 0x4000 (its DSP path measured in mednafen: the same
- * passage of the briefing track at ~0.7 of the track's RMS through the driver, ~0.2 at EFSDL 5) */
-static void movie_cd_level(void)
-{
-    int l = 0;
-    if (movie_music && cd_vol) { l = 7; for (uint32_t v = cd_vol; v * 181u / 128u < 0x4000u && l > 0; v <<= 1) l--; }
-    SLOT(16, 0x16) = (uint16_t)(l << 5 | 0x1F);
-    SLOT(17, 0x16) = (uint16_t)(l << 5 | 0x0F);
-}
-
-void aud_movie_begin(bool music)
+void aud_movie_begin(void)
 {
     if (movie) return;
+    cd_sat_cdda_suspend(true);
     for (int i = 0; i < CHANNELS; i++) { voice_release(&voices[i]); voices[i].action = 0; }
     scsp_quiet();
     movie_cpu_start();   /* restart immediately after loading, before movie bookkeeping */
@@ -417,18 +407,18 @@ void aud_movie_begin(bool music)
     }
     for (int i = 0; i < nsamples; i++) samples[i].users = 0;
     SCSP_MVOL = 1u << 9 | 0xF;
-    movie = true; movie_music = music; driver_ok = false;
-    movie_cd_level();
+    movie = true; driver_ok = false;
 }
 
 void aud_movie_end(void)
 {
     if (!movie) return;
-    movie = false; movie_music = false;
-    movie_cd_level();
+    movie = false;
     sound_ram_zero(MOVIE_OFF, 0x80000u);   /* the clip's ring(s): none of its audio is left to be read */
     driver_ok = driver_start(true);
     cd_dirty = true;
+    if (driver_ok) send();   /* restore CD input gain before allowing the track to resume */
+    cd_sat_cdda_suspend(false);
     if (pend.s && sat_timer_us() - pend.us < 200000u) aud_play(pend.s, pend.gain, false);   /* the click that closed it */
     pend.s = NULL;
 }
@@ -504,9 +494,8 @@ static void sound_test(uint32_t now)
 
 void aud_update(void)
 {
-    if (movie && !movie_music) return;   /* the clip reads the disc: the music comes back after it */
+    if (movie) return;   /* the clip owns the SCSP/drive; music intent is retained */
     cd_sat_cdda_update();
-    if (movie) return;
     driver_ack();
     uint32_t now = sat_timer_us();
     sound_test(now);

@@ -78,7 +78,7 @@ SATURN_SFX_TABLE = (
     0xA8382083, 0x162864B4, 0x8BE8F136, 0xF8B5C0E8, 0x208C64D9, 0xE73A3850, 0x87265BA0, 0x1DBF470E,
     0x8AEB8147, 0xF11FCC31, 0x0AFC505A, 0x15A00BA1, 0x82EFBA26, 0x47D886A1, 0xE105C92A, 0xABC6A6E8,
 )
-SATURN_SOUND_BANK_BYTES = 0x78000 - 0x2400
+SATURN_SOUND_BANK_BYTES = 0x60000 - 0x2400
 # Every stage/hero combination must fit, including dialogue and all random variants.
 SATURN_SOUND_BANK_RESERVE = 12 * 1024
 # adpencode format for every sample: 2 = 1 bit a sample, i.e. 1.5 bits with the per-block filter/shift header
@@ -470,7 +470,8 @@ def bake_audio(data: Path, work: Path, stage: Path, out: Path, snd: pckwrite.Pac
 def bake_videos(data: Path, work: Path, stage: Path, log) -> None:
     """RGB24 FRM3/DSP3 and stereo 24 kHz ADX in finite SVM files.
 
-    Keep RGB24 for the intro; smaller UI frames use the game framebuffer.
+    Power movies use native 320x224 RGB24 NBG0. The briefing uses its
+    full displayed 256x104 source size in the room framebuffer.
     """
     dcprep = work / 'dcprep'
     subprocess.run(['cc', '-O2', '-std=c11', '-Isrc', 'tools/dc/dcprep.c', 'src/pack.c', 'src/lzo1z.c',
@@ -482,12 +483,11 @@ def bake_videos(data: Path, work: Path, stage: Path, log) -> None:
     xvid = ['-r', '25', '-f', 'm4v']   # the pack videos: raw XviD, 25 fps (tools/dc/build_disc.py)
     sound = lambda p: next((q for q in (p.with_suffix('.ogg'), p.with_suffix('.wav')) if q.exists()), None)
     svm.make(vids / 'E46721E5.m4v', stage / 'E46721E5.SVM', work / 'svm', (296, 224), '', xvid, sound(vids / 'E46721E5.m4v'), log, video_budget=12000)
-    # Quarter-size source, still drawn at 256x104: preserve the exact aspect
-    # ratio and leave SH-2 time for the room/dialogue and stock-CD reads.
-    svm.make(vids / '2FE798C3.m4v', stage / '2FE798C3.SVM', work / 'svm', (192, 78), '', xvid, sound(vids / '2FE798C3.m4v'), log, video_budget=7000)
+    # Encode the briefing at its displayed resolution; avoid upscaling.
+    svm.make(vids / '2FE798C3.m4v', stage / '2FE798C3.SVM', work / 'svm', (256, 104), '', xvid, sound(vids / '2FE798C3.m4v'), log, video_budget=12000)
     for clip in sorted((ROOT / 'assets/power').glob('*.m4v')):   # 320x240 at 24 fps, the voice in the .wav beside it
-        # Leave RAM for the resident portrait and drawn fallback on both heroes.
-        size,budget=(160,112),8000
+        # Native resolution and RGB24 VDP2 output for the full-screen cut-in.
+        size,budget=(320,224),16000
         svm.make(clip, stage / (clip.stem.upper()[:8] + '.SVM'), work / 'svm', size, 'crop=320:224:0:8',
                   ['-r', '24', '-f', 'm4v'], clip.with_suffix('.wav'), log, end_with_picture=True, video_budget=budget)
 

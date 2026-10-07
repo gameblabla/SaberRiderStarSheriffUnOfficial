@@ -2,12 +2,13 @@
  * 68000 running its idle loop. Never replace or clear the resident SFX bank. */
 #include <yaul.h>
 #include "pcmsys.h"
+#include "sv24_audio.h"
 static sysComPara controls;
 sysComPara *m68k_com = &controls;
-uint32_t getSlotAddressOffset(uint32_t slot) { return 0x78000u + slot * 16384u; }
+uint32_t getSlotAddressOffset(uint32_t slot) { return SV24_AUDIO_PCM_BASE + slot * SV24_AUDIO_RING_SAMPLES*2u; }
 uint8_t *getSlotAddress(uint32_t slot) { return (uint8_t *)(SNDRAM + getSlotAddressOffset(slot)); }
-uint32_t getSlotSize(void) { return 16384u; }
-uint32_t pcmStreamBufferSize(uint8_t bits, uint16_t rate) { (void)bits; (void)rate; return 16384u; }
+uint32_t getSlotSize(void) { return SV24_AUDIO_RING_SAMPLES*2u; }
+uint32_t pcmStreamBufferSize(uint8_t bits, uint16_t rate) { (void)bits; (void)rate; return SV24_AUDIO_RING_SAMPLES*2u; }
 short convert_bitrate_to_pitchword(uint16_t rate)
 {
     uint32_t base=44100u; int oct=0;

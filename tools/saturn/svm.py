@@ -13,7 +13,7 @@ from numba import njit
 from film import ffmpeg_exe, _adx
 FPS=15
 RATE=24000
-CACHE_VERSION=1
+CACHE_VERSION=2
 VIDEO_BUDGET=16000
 
 @njit(cache=True)
@@ -162,7 +162,7 @@ def make(source:Path,out:Path,work:Path,size:tuple[int,int],vf:str,input_args:li
     assert channels==2 and rate==RATE
     total=math.ceil(len(frames)*RATE/FPS/32);ap=(ap+bytes(total*36))[:total*36]
     a=math.sqrt(2)-math.cos(2*math.pi*500/RATE);b=math.sqrt(2)-1;c=(a-math.sqrt((a+b)*(a-b)))/b
-    coef1=round(c*4096);coef2=round(-c*c*2048)
+    coef1=int(c*16384);coef2=int(-c*c*8192)
     packets=[]
     for i,(fr,side) in enumerate(frames):
         g0=i*total//len(frames);g1=(i+1)*total//len(frames);snd=ap[g0*36:g1*36]
@@ -173,7 +173,7 @@ def make(source:Path,out:Path,work:Path,size:tuple[int,int],vf:str,input_args:li
     start=(96+len(frames)*8+2047)&~2047;pos=start;index=bytearray()
     for p in packets:index+=struct.pack('>II',pos,len(p));pos+=len(p)
     header=bytearray(struct.pack('>4sHHHHHHIIIIIIII',b'SVM1',0x100,96,w,h,FPS,1,len(frames),96,start,RATE,2,18,32,len(ah)).ljust(96,b'\0'))
-    struct.pack_into('>hhH',header,48,coef1,coef2,500);struct.pack_into('>I',header,56,total*32)
+    struct.pack_into('>hhHH',header,48,coef1,coef2,500,13);struct.pack_into('>I',header,56,total*32)
     cache.write_bytes(header+index+bytes(start-96-len(index))+b''.join(packets))
     report.write_text(json.dumps({'frames':len(frames),'bytes':pos,'bytes_per_second':pos/duration,'max_packet':max(map(len,packets)),'width':w,'height':h,'audio_samples':total*32},indent=2)+'\n')
     import shutil;shutil.copyfile(cache,out);log(f'video: {out.name}: {len(frames)} RGB24 frames, {pos/duration:.0f} B/s, stereo ADX {RATE} Hz')

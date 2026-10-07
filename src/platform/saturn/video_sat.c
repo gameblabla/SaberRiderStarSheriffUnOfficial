@@ -15,8 +15,8 @@
 #include "sv24_dual.h"
 #include "sv24_scu.h"
 #include "sv24_audio.h"
-#define QUEUE_COUNT 3u
-#define INTRO_QUEUE_COUNT 4u
+#define QUEUE_COUNT 6u
+#define INTRO_QUEUE_COUNT 12u
 #define STREAM_CACHE_BYTES (32u*1024u)
 #define RAM_CLIP_MAX (512u*1024u)
 const cdfs_filelist_entry_t *cd_sat_entry(const char *name);
@@ -35,7 +35,7 @@ static Video *prepared_video;
 static char prepared_name[16];
 static uint32_t *spare_cells;
 static uint8_t *spare_queue;
-static uint32_t spare_capacity,spare_cells_capacity;
+static uint32_t spare_capacity,spare_cells_capacity,spare_queue_count;
 volatile uint32_t sat_movie_frames,sat_movie_drops,sat_movie_errors;
 volatile uint32_t sat_movie_audio_underruns,sat_movie_audio_lead,sat_movie_audio_min_lead;
 volatile uint32_t sat_movie_decode_us,sat_movie_present_us,sat_movie_read_us;
@@ -46,7 +46,7 @@ static void spares_release(void)
 static void release_buffers(Video *v)
 {
     if(v->keep_bufs&&!spare_cells&&!spare_queue) {
-        spare_cells=v->cells;spare_cells_capacity=v->cell_capacity;spare_queue=v->queue;spare_capacity=v->packet_max;
+        spare_cells=v->cells;spare_cells_capacity=v->cell_capacity;spare_queue=v->queue;spare_capacity=v->packet_max;spare_queue_count=v->queue_count;
     } else {free(v->cells);free(v->queue);}
     v->cells=NULL;v->queue=NULL;
     free(v->index);v->index=NULL;free(v->dirty);v->dirty=NULL;
@@ -128,7 +128,7 @@ static bool read_packet(Video *v,uint32_t i)
     svm_packet_t p;
     return read_bytes(v,slot(v,i),frame_size(v,i))&&
            !svm_packet_parse(slot(v,i),frame_size(v,i),&p)&&p.frame_no==i&&p.pts==i&&
-           packet_samples(&p)>0u&&packet_samples(&p)<=(8192u-64u)/((v->queue_count?v->queue_count:QUEUE_COUNT)+1u);
+           packet_samples(&p)>0u&&packet_samples(&p)<=(SV24_AUDIO_RING_SAMPLES-64u)/((v->queue_count?v->queue_count:QUEUE_COUNT)+1u);
 }
 static bool feed(Video *v,uint32_t i)
 {
@@ -146,7 +146,7 @@ static bool feed_pending(Video *v,uint32_t last)
         svm_packet_t p;
         if(svm_packet_parse(slot(v,v->audio_next),frame_size(v,v->audio_next),&p))return false;
         uint32_t produced=(sv24_audio_groups-v->groups_base)*32u,add=packet_samples(&p);
-        if(produced>played&&produced-played+add>8192u-64u)break;
+        if(produced>played&&produced-played+add>SV24_AUDIO_RING_SAMPLES-64u)break;
         if(!feed(v,v->audio_next))return false;
         v->audio_next++;
     }
@@ -176,9 +176,12 @@ static void hook(void *ud,volatile uint16_t *unused,int pitch)
 again:
     if(v->done)return;
     uint32_t elapsed=sat_timer_us()-v->epoch;
-    if(v->started&&v->next==v->header.frames) {
+    if(v->next==v->header.frames) {
         if(!feed_pending(v,v->header.frames-1u)){sat_movie_errors++;finish_video(v);return;}
-        if(elapsed>=sample_us(v,v->timeline_samples))finish_video(v);
+        if(!v->started) {
+            if(sv24_audio_groups==v->groups_base)finish_video(v);
+            else rsat_video_audio_start(start_playback);
+        } else if(elapsed>=sample_us(v,v->timeline_samples))finish_video(v);
         return;
     }
     if(v->started) {
@@ -186,24 +189,24 @@ again:
         sat_movie_audio_lead=produced>played?produced-played:0;
         if(sat_movie_audio_lead<sat_movie_audio_min_lead)sat_movie_audio_min_lead=sat_movie_audio_lead;
         if(played>=produced) {
-            /* A drive stall outlasted the ring. Re-prime from the next video
-             * packet rather than looping stale ADX residuals through the DSP. */
-            sv24_audio_stop();sv24_audio_reprime();v->groups_base=sv24_audio_groups;
-            v->audio_origin_samples=v->timeline_samples;v->audio_next=v->next;
-            unsigned count=v->header.frames-v->next;
-            if(count>(v->queue_count?v->queue_count:QUEUE_COUNT))count=v->queue_count?v->queue_count:QUEUE_COUNT;
-            for(unsigned n=0;n<count;n++){if(!feed(v,v->next+n)){sat_movie_errors++;finish_video(v);return;}v->audio_next++;}
+            /* Stop stale PCM from looping after an exceptional drive stall.
+             * Continue at the first compressed block not yet decoded, keeping
+             * its predictor history. Never replay/skip queued ADX packets. */
+            sv24_audio_stop();sv24_audio_reprime();
+            v->audio_origin_samples+=produced;v->groups_base=sv24_audio_groups;
             v->started=false;sat_movie_audio_underruns++;
         }
     }
     uint32_t i=v->next;
     uint32_t due=sample_us(v,v->timeline_samples);
     uint32_t refresh=vdp2_tvmd_tv_standard_get()==VDP2_TVMD_TV_STANDARD_PAL?20000u:16684u;
+    if(!feed_pending(v,i+(v->queue_count?v->queue_count:QUEUE_COUNT)-1u)) {
+        sat_movie_errors++;finish_video(v);return;
+    }
     if(v->started&&elapsed+3u*refresh<due)return;
     /* Decode at most two frames when catching up. Never produce enough
-     * residual samples to overwrite the SCSP's unread 8192-sample ring. */
+     * PCM samples to overwrite the SCSP's unread ring. */
     uint32_t future=i+(v->queue_count?v->queue_count:QUEUE_COUNT);
-    if(!feed_pending(v,future-1u)){sat_movie_errors++;finish_video(v);return;}
     /* Never overwrite an audio packet that has not reached sound RAM. */
     if(v->audio_next<=i)return;
     uint32_t tick=sat_timer_us();
@@ -244,7 +247,13 @@ again:
         tick=sat_timer_us();
         r=v->sprite?rsat_video_present(v->cells,v->pitch):movie_vdp2_present(v->cells,v->dirty,!v->started);if(r)goto error;
         sat_movie_present_us=sat_timer_us()-tick;
-        if(!v->started) {if(v->sprite)rsat_video_audio_start(start_playback);else start_playback(v);}
+        if(!v->started) {
+            uint32_t primed=(sv24_audio_groups-v->groups_base)*32u;
+            /* A recovery must rebuild useful lead before key-on; restarting
+             * with one packet would turn a single stall into repeated skips. */
+            if(primed&&(primed>=v->header.rate/3u||v->audio_next==v->header.frames))
+                rsat_video_audio_start(start_playback);
+        }
     }
     v->next++;sat_movie_frames++;
     sv24_audio_tick();
@@ -261,10 +270,10 @@ static bool activate_video(Video *v)
     if(!rsat_video_open(v->w,v->h,hook,v))return false;
     v->sprite=v->h<224;
     if(!v->sprite&&!movie_vdp2_open(v->w,v->h)){rsat_video_close();return false;}
-    v->surface=true;aud_movie_begin(v->ram!=NULL);
+    v->surface=true;aud_movie_begin();
     if(sv24_audio_init(NULL,0,v->header.rate,v->header.coef1,v->header.coef2)||sv24_scu_init())return false;
     v->groups_base=sv24_audio_groups;
-    sat_movie_audio_min_lead=8192u;sat_movie_audio_lead=0;
+    sat_movie_audio_min_lead=SV24_AUDIO_RING_SAMPLES;sat_movie_audio_lead=0;
     for(uint32_t i=0;i<v->queued;i++)if(!feed(v,i))return false;
     v->audio_next=v->queued;
     return true;
@@ -292,19 +301,19 @@ static Video *open_name(const char *name,bool activate)
     /* Preserve 4-byte alignment for every packet-slot start. */
     v->packet_max=(v->packet_max+3u)&~3u;
     reason="RGB24 staging / queue RAM";
-    /* Full-height intros favor the fastest original 44-column decoder.
-     * Smaller UI clips omit padding columns and may use low work RAM:
-     * VDP1 is filled by the CPU, and the SCU sidecar has its own high-RAM scratch. */
-    v->pitch=v->header.height>=224u?44:(int)((v->header.width+7u)/8u);
+    /* The intro favors the original 44-column decoder. Power movies omit
+     * padding columns but keep high-RAM staging for RGB24 VDP2 DMA.
+     * Briefing staging may use low RAM; VDP1 uploads use high-RAM strips. */
+    v->pitch=!strcmp(name,"E46721E5.SVM")?44:(int)((v->header.width+7u)/8u);
     v->cell_capacity=((v->header.height+7u)/8u)*(unsigned)v->pitch*SV24_TILE_PIXELS*4u;
     if(spare_cells&&spare_cells_capacity>=v->cell_capacity)v->cells=spare_cells;
     else {free(spare_cells);v->cells=v->header.height>=224u?hw_memalign(32,v->cell_capacity):aligned_alloc(32,v->cell_capacity);}
     spare_cells=NULL;spare_cells_capacity=0;
-    if(spare_queue&&spare_capacity>=v->packet_max){v->queue=spare_queue;spare_queue=NULL;spare_capacity=0;}
+    if(spare_queue&&spare_capacity>=v->packet_max&&spare_queue_count>=v->queue_count){v->queue=spare_queue;spare_queue=NULL;spare_capacity=0;}
     else {free(spare_queue);spare_queue=NULL;spare_capacity=0;v->queue=lw_memalign(32,v->queue_count*v->packet_max);}
     if(!v->cells||!v->queue)goto fail;
     memset(v->cells,0,v->cell_capacity);memset(v->dirty,0,SV24_FRAME_TILES);
-    /* The briefing may stay in RAM and leave CD-DA playing. It is optional:
+    /* Short clips may stay in RAM. CD-DA is suspended for every movie:
      * streamed playback has the same lifecycle and never requires a cartridge. */
     if(entry->size<=RAM_CLIP_MAX&&(v->ram=lw_malloc(entry->size))) {
         if(fseek(stream,0,SEEK_SET)||fread(v->ram,1,entry->size,stream)!=entry->size)goto fail;

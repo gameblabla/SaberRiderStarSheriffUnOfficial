@@ -22,6 +22,7 @@ void cd_sat_stream_stop(void);   /* the data stream gives the drive up (CD-DA ta
 bool cd_sat_cdda_play(int track, bool loop);
 void cd_sat_cdda_track_length(int track, uint32_t sectors);  /* playable sectors after INDEX 01 */
 void cd_sat_cdda_stop(void);
+void cd_sat_cdda_suspend(bool suspend);  /* movie ownership; preserves music and user pause */
 void cd_sat_cdda_pause(bool pause);
 void cd_sat_cdda_update(void);
 
@@ -62,9 +63,9 @@ void rsat_bench(void);   /* SABER_RBENCH */
 bool rsat_video_open(int w, int h, void (*hook)(void *ud, volatile uint16_t *px, int pitch), void *ud);
 void rsat_video_close(void);
 void rsat_video_hold(void);   /* detach decoding, retaining the last frame for drawing */
-/* aud_sat.c: a clip has the SCSP from its start to its close (the game's sound driver stops, then starts again);
- * music: the clip doesn't read the disc (played from RAM), the CD-DA music plays on under it */
-void aud_movie_begin(bool music);
+/* aud_sat.c: a clip owns the SCSP while playing. CD-DA is suspended for RAM
+ * and streamed clips, then resumes with its music intent after driver restoration. */
+void aud_movie_begin(void);
 void aud_movie_end(void);
 /* aud_sat.c: the system clock change resets the SCSP (the driver goes around it, the sound RAM stays) */
 void aud_clock_change(bool begin);

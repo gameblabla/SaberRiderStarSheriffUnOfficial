@@ -367,6 +367,8 @@ static struct {
     uint32_t retry_at, status_at, start_at;
     uint8_t failures;
 } cdda;
+/* Temporary movie ownership is independent of the game's pause/stop intent. */
+static bool cdda_suspended;
 
 static bool music_on(void) { return cdda.track && cdda.owned && !cdda.pending && !cdda.paused; }
 
@@ -600,7 +602,7 @@ static int play_cmd(uint16_t cr1, uint16_t cr2, uint16_t cr3, uint16_t cr4)
 
 static bool cdda_start(void)
 {
-    if (!cdda.track || cdda.paused || !toc_ok) return false;
+    if (!cdda.track || cdda.paused || cdda_suspended || !toc_ok) return false;
     cdda.owned = cdda.pending = false;
     st_on = false;
     if (!transfer_end(NULL) || sel_cmd(0x3000, 0, 0xFF00, 0)) {   /* the drive to no filter: audio goes to the SCSP */
@@ -670,7 +672,23 @@ bool cd_sat_cdda_play(int track, bool loop)
     cdda.track = track; cdda.loop = loop; cdda.paused = false; cdda.partial = false;
     cdda.pending = cdda.hold_pending = cdda.stop_pending = false;
     cdda.at = 0; cdda.failures = 0; cdda.retry_at = 0;
-    return cdda_start();
+    return cdda_suspended || cdda_start();
+}
+
+void cd_sat_cdda_suspend(bool suspend)
+{
+    if (suspend == cdda_suspended) return;
+    cdda_suspended = suspend;
+    if (!suspend) return;   /* aud_update resumes after the driver/scene restoration */
+
+    bool need_hold = cdda.owned || cdda.hold_pending || cdda.stop_pending;
+    cdda_interrupt();       /* retain the current FAD, track and loop intent */
+    cdda.hold_pending = false;
+    /* A data stream has already taken the drive; do not pause that stream. */
+    bool stopped = data_busy || !need_hold || cdda_hold();
+    cdda.stop_pending = !stopped;
+    cdda.retry_at = stopped ? 0 : sat_timer_us() + 250000u;
+    if (!stopped) printf("cd: movie CD-DA hold failed; retry pending\n");
 }
 
 void cd_sat_cdda_stop(void)
@@ -687,6 +705,7 @@ void cd_sat_cdda_pause(bool pause)
     if (!cdda.track || pause == cdda.paused) return;
     cdda.paused = pause;
     if (!pause) cdda.hold_pending = false;
+    if (cdda_suspended) return;   /* change user intent without taking the movie's drive */
     if (!cdda.owned) return;   /* a read has the drive: cd_sat_cdda_update brings the music back */
     if (pause) {
         cdda.pending = false;
@@ -712,6 +731,7 @@ void cd_sat_cdda_update(void)
         }
         return;
     }
+    if (cdda_suspended) return;
     if (cdda.hold_pending) {
         uint32_t now = sat_timer_us();
         if ((int32_t)(now - cdda.retry_at) >= 0) {

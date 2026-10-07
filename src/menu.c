@@ -65,9 +65,12 @@ static bool opt_selectable(int opt)
     return true;
 }
 
-/* the music starts after the video is open: the Saturn reads the clip into RAM there, and a disc read stops CD-DA */
+/* Saturn gives the briefing soundtrack exclusive CD ownership after its movie. */
 static void open_briefing(Menu *m, Ren *r)
 {
+#ifdef PLAT_SATURN
+    music_stop();m->briefing_music_started=false;
+#endif
     const PackEntry *e = packs_find(0x29CAD5D3);   /* briefing script: line 1 = video name, rest = text */
     if (e) {
         char buf[512]; size_t n = e->size < sizeof buf - 1 ? e->size : sizeof buf - 1; memcpy(buf, e->data, n); buf[n] = 0;
@@ -75,7 +78,11 @@ static void open_briefing(Menu *m, Ren *r)
         dialog_open_text(&m->dlg, text, DLG_GREEN);
         m->video = video_open(r, 0x2FE798C3);
     }
+#ifdef PLAT_SATURN
+    if(!m->video){music_play(2,true);m->briefing_music_started=true;}
+#else
     music_play(2, true);
+#endif
 }
 
 /* Our own credits: our pages first, then the demo's entry 0x7E11BC19 (which still names Erik "Gronkh" Range,
@@ -347,10 +354,21 @@ void menu_update(Menu *m, const Input *in, real dt, int sw, Ren *r)
     case MS_BRIEFING: {
         /* FUN_00429050: text plays; START (or an action button once the text is complete) closes the box, then the
          * four hero pieces slide in (t 0..0.25), hold, fade to black (1.75..2) and character select follows */
-        if (m->video && !video_update(m->video, dt)) { /* keep the last frame on the screen */ }
+        bool movie_playing=m->video&&video_update(m->video,dt);
+#ifdef PLAT_SATURN
+        if(!movie_playing&&!m->briefing_music_started) {
+            music_play(2,true);m->briefing_music_started=true;
+        }
+#else
+        (void)movie_playing;
+#endif
         if (m->t == R(0.0f)) {
             if (m->dlg.active) dialog_update(&m->dlg, in, dt);
-            else { if (m->video) { video_close(m->video); m->video = NULL; } m->t = R(0.0001f); sfx_play(8, 0); }
+            else { if (m->video) { video_close(m->video); m->video = NULL; }
+#ifdef PLAT_SATURN
+                if(!m->briefing_music_started){music_play(2,true);m->briefing_music_started=true;}
+#endif
+                m->t = R(0.0001f); sfx_play(8, 0); }
         } else {
             m->t += dt;
             if (m->t > R(2.0f)) menu_enter(m, MS_CHARSEL);

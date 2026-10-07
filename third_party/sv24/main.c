@@ -706,6 +706,8 @@ int main(void){
     audio_rate=be32(hdr+28);pace_rate=audio_rate;
     audio_coef1=(int16_t)be16(hdr+48);
     audio_coef2=(int16_t)be16(hdr+50);
+    if(be16(hdr+54)==0) {audio_coef1*=4;audio_coef2*=4;}
+    else if(be16(hdr+54)!=13){sv24_status=0xE0030000u;goto halt;}
     if(be32(hdr)!=0x53564D31u || be16(hdr+4)!=0x0100u || be16(hdr+8)!=352u ||
        be16(hdr+10)!=240u || be16(hdr+12)!=15u || be16(hdr+14)!=1u ||
        (audio_rate<12000u || audio_rate>44100u) ||

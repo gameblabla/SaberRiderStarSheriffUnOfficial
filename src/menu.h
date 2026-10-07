@@ -27,6 +27,9 @@ typedef struct {
     int sel;                   /* main menu / options cursor (+0x70) */
     int character;             /* 0 Saber, 1 Fireball, 2 April, 3 Colt (+0x5c) */
     Video *video;
+#ifdef PLAT_SATURN
+    bool briefing_music_started;
+#endif
     Dialog dlg;                /* briefing text */
     int loading;               /* title / CONTINUE accepted: 1 + the black + LOADING frames drawn before blocking loads */
     int drawn;                 /* MISSION ACCOMPLISHED: its frames drawn (its clock waits for the first after the reads) */

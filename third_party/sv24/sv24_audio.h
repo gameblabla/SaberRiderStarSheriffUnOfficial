@@ -1,6 +1,8 @@
 #ifndef SV24_AUDIO_H
 #define SV24_AUDIO_H
 #include <stdint.h>
+#define SV24_AUDIO_RING_SAMPLES 32768u
+#define SV24_AUDIO_PCM_BASE 0x60000u
 int sv24_audio_init(const void *driver, uint32_t driver_len, uint16_t sample_rate, int16_t adx_coef1, int16_t adx_coef2);
 void sv24_audio_stream_reset(void);
 void sv24_audio_reprime(void);
