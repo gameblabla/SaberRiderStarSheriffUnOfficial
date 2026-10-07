@@ -1,0 +1,128 @@
+# Linux x86-64 AppImage build: private SDL3 + minimal FFmpeg + ogg/vorbis in
+# build/linux/deps, so the AppImage never links Void's libavcodec dependency
+# tree (x264/x265/vpx/mpg123/...) nor Void's SDL3/vorbis.
+#
+#   make -f Makefile.linux            deps (first time) + the game -> build/linux/saber_rider
+#   make -f Makefile.linux deps       only the private prefix in build/linux/deps
+#
+# SDL3 is built shared from its source tarball (SDL3_TARBALL: third_party/ or
+# the folder above the repo, same as Makefile.win). FFmpeg is a static minimal
+# build (only the MPEG-4 + PNG decoders, the MPEG-4 parser and swscale, like
+# the Windows build) so it pulls in no external codec libraries at all: in
+# particular no libmpg123, no x264/x265, no vpx/aom/dav1d. libogg/libvorbis
+# are static too, so the game binary's only shared third-party library is our
+# own libSDL3.so.0, which linuxdeploy bundles (tools/release.sh). System
+# audio/desktop integration (ALSA/PulseAudio, X11/xcb, Wayland, GL/DRM,
+# D-Bus) stays on the host on purpose: linuxdeploy's excludelist leaves those
+# to the user's desktop, which is the only correct handling for them.
+# There is deliberately no private mpg123: nothing in the game uses MP3
+# (music is Ogg Vorbis via vorbisfile, sfx are WAV/ADPCM, video is MPEG-4
+# part 2). mpg123 only appeared in `ldd` before through Void's full FFmpeg
+# (libmp3lame -> libmpg123) and Void's PulseAudio chain
+# (pulsecommon -> libsndfile -> libmpg123); the minimal FFmpeg removes the
+# first, and the second stays host-provided via linuxdeploy's audio excludes.
+CC       ?= cc
+JOBS     ?= $(shell nproc)
+
+LINUX    := build/linux
+DEPS     := $(abspath $(LINUX)/deps)
+SDL3_TARBALL   ?= $(firstword $(wildcard third_party/SDL3-*.tar.gz ../SDL3-*.tar.gz))
+FFMPEG_VERSION ?= 7.1.2
+FFMPEG_TARBALL ?= $(LINUX)/ffmpeg-$(FFMPEG_VERSION).tar.xz
+FFMPEG_URL     ?= https://ffmpeg.org/releases/ffmpeg-$(FFMPEG_VERSION).tar.xz
+OGG_VERSION    ?= 1.3.6
+OGG_TARBALL    ?= $(LINUX)/libogg-$(OGG_VERSION).tar.xz
+OGG_URL        ?= https://downloads.xiph.org/releases/ogg/libogg-$(OGG_VERSION).tar.xz
+VORBIS_VERSION ?= 1.3.7
+VORBIS_TARBALL ?= $(LINUX)/libvorbis-$(VORBIS_VERSION).tar.xz
+VORBIS_URL     ?= https://downloads.xiph.org/releases/vorbis/libvorbis-$(VORBIS_VERSION).tar.xz
+
+SDL3_LIB   := $(DEPS)/lib/libSDL3.so
+FFMPEG_LIB := $(DEPS)/lib/libavcodec.a
+OGG_LIB    := $(DEPS)/lib/libogg.a
+VORBIS_LIB := $(DEPS)/lib/libvorbisfile.a
+# Private .pc files first; the system paths stay visible so sdl3.pc's own
+# Requires (x11, pulse, alsa, ...) still resolve to the host's dev packages.
+PKGCONF    := PKG_CONFIG_PATH=$(DEPS)/lib/pkgconfig:$(DEPS)/lib64/pkgconfig:$(DEPS)/share/pkgconfig pkg-config
+
+CFLAGS  := -std=gnu11 -Wall -Wextra -Wno-unused-parameter -O2 -Isrc -I$(DEPS)/include
+LDFLAGS := -Wl,-rpath,$(DEPS)/lib -Wl,-rpath,$(DEPS)/lib64
+
+SRC := $(wildcard src/*.c) $(wildcard src/platform/sdl3/*.c) $(wildcard src/platform/common/*.c)
+OBJ := $(SRC:src/%.c=$(LINUX)/obj/%.o)
+BIN := $(LINUX)/saber_rider
+
+.PHONY: all deps clean distclean
+all: $(BIN)
+deps: $(SDL3_LIB) $(OGG_LIB) $(VORBIS_LIB) $(FFMPEG_LIB)
+
+# ---------------------------------------------------------------- SDL3 (shared, from the tarball)
+$(SDL3_LIB):
+	@test -n "$(SDL3_TARBALL)" || { echo "no SDL3 tarball (put SDL3-x.y.z.tar.gz in third_party/ or pass SDL3_TARBALL=)"; exit 1; }
+	rm -rf $(LINUX)/sdl3-src $(LINUX)/sdl3-build; mkdir -p $(LINUX)/sdl3-src
+	tar xzf $(SDL3_TARBALL) -C $(LINUX)/sdl3-src --strip-components=1
+	cmake -S $(LINUX)/sdl3-src -B $(LINUX)/sdl3-build -G "Unix Makefiles" \
+	    -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$(DEPS) -DCMAKE_INSTALL_LIBDIR=lib \
+	    -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
+	cmake --build $(LINUX)/sdl3-build -j$(JOBS)
+	cmake --install $(LINUX)/sdl3-build
+
+# ---------------------------------------------------------------- libogg (static)
+$(OGG_TARBALL):
+	@mkdir -p $(dir $@)
+	curl -fL -o $@.part $(OGG_URL) && mv $@.part $@
+
+$(OGG_LIB): $(OGG_TARBALL)
+	rm -rf $(LINUX)/ogg-src; mkdir -p $(LINUX)/ogg-src
+	tar xJf $(OGG_TARBALL) -C $(LINUX)/ogg-src --strip-components=1
+	cd $(LINUX)/ogg-src && ./configure --prefix=$(DEPS) --disable-shared --enable-static --with-pic
+	$(MAKE) -C $(LINUX)/ogg-src -j$(JOBS)
+	$(MAKE) -C $(LINUX)/ogg-src install
+
+# ---------------------------------------------------------------- libvorbis + libvorbisfile (static)
+$(VORBIS_TARBALL):
+	@mkdir -p $(dir $@)
+	curl -fL -o $@.part $(VORBIS_URL) && mv $@.part $@
+
+$(VORBIS_LIB): $(OGG_LIB) $(VORBIS_TARBALL)
+	rm -rf $(LINUX)/vorbis-src; mkdir -p $(LINUX)/vorbis-src
+	tar xJf $(VORBIS_TARBALL) -C $(LINUX)/vorbis-src --strip-components=1
+	cd $(LINUX)/vorbis-src && PKG_CONFIG_PATH=$(DEPS)/lib/pkgconfig:$(DEPS)/lib64/pkgconfig ./configure \
+	    --prefix=$(DEPS) --disable-shared --enable-static --with-pic --with-ogg=$(DEPS)
+	$(MAKE) -C $(LINUX)/vorbis-src -j$(JOBS)
+	$(MAKE) -C $(LINUX)/vorbis-src install
+
+# ---------------------------------------------------------------- FFmpeg (static, decoders the game uses only)
+$(FFMPEG_TARBALL):
+	@mkdir -p $(dir $@)
+	curl -fL -o $@.part $(FFMPEG_URL) && mv $@.part $@
+
+$(FFMPEG_LIB): $(FFMPEG_TARBALL)
+	rm -rf $(LINUX)/ffmpeg-src; mkdir -p $(LINUX)/ffmpeg-src
+	tar xJf $(FFMPEG_TARBALL) -C $(LINUX)/ffmpeg-src --strip-components=1
+	cd $(LINUX)/ffmpeg-src && ./configure --prefix=$(DEPS) \
+	    --cc="$(CC)" --extra-cflags="-fPIC -I$(DEPS)/include" --extra-ldflags="-L$(DEPS)/lib" --pkg-config=pkg-config \
+	    --enable-static --disable-shared --disable-programs --disable-doc --disable-debug --disable-network \
+	    --disable-autodetect --enable-pthreads --enable-zlib \
+	    --disable-everything --disable-avdevice --disable-avformat --disable-avfilter --disable-swresample \
+	    --enable-decoder=mpeg4,png --enable-parser=mpeg4video --enable-swscale
+	$(MAKE) -C $(LINUX)/ffmpeg-src -j$(JOBS)
+	$(MAKE) -C $(LINUX)/ffmpeg-src install-libs install-headers
+
+# ---------------------------------------------------------------- the game (private SDL3 shared, private FFmpeg/vorbis static)
+$(LINUX)/obj/%.o: src/%.c $(SDL3_LIB) $(OGG_LIB) $(VORBIS_LIB) $(FFMPEG_LIB)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(shell $(PKGCONF) --cflags sdl3 vorbisfile libavcodec libswscale libavutil) -MMD -MP -c $< -o $@
+
+$(BIN): $(OBJ)
+	$(CC) $(LDFLAGS) $^ -o $@ \
+	    $(shell $(PKGCONF) --static --libs vorbisfile libavcodec libswscale libavutil) \
+	    $(shell $(PKGCONF) --libs sdl3) -lm
+
+-include $(OBJ:.o=.d)
+
+clean:
+	rm -rf $(LINUX)/obj $(BIN)
+
+distclean:
+	rm -rf $(LINUX)

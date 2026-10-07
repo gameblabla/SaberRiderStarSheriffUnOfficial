@@ -50,6 +50,28 @@ Everything goes under `build/win/`, and `make -f Makefile.win distclean` removes
 `SaberRider/data` under the current folder when it exists, else `data/` next to itself (the package layout).
 The Windows icon comes from `tools/win/` (the demo's own `icon.png`).
 
+## Linux AppImage build
+
+`Makefile.linux` builds the game against a private prefix so the AppImage
+does not inherit the distro's SDL3/FFmpeg tree (which is where the old
+`libmpg123`/codec breakage came from). It needs a C compiler, CMake,
+pkg-config, curl and zlib.
+
+    make -f Makefile.linux -j16        # first run also builds build/linux/deps -> build/linux/saber_rider
+
+- **SDL3** is built shared from its source tarball (same lookup as
+  `Makefile.win`: `third_party/SDL3-*.tar.gz`, then `../SDL3-*.tar.gz`, or
+  `SDL3_TARBALL=`).
+- **FFmpeg** is a minimal static build (same as Windows: MPEG-4/PNG decoders,
+  MPEG-4 parser, swscale), so no external codec libraries — notably no
+  `libmpg123` — are needed. **libogg/libvorbis** are static too.
+- The binary's only shared third-party library is the private `libSDL3`;
+  `tools/release.sh --linux` bundles it with `linuxdeploy`, which leaves the
+  desktop/audio stack (X11/Wayland, GL, ALSA/PulseAudio) to the host.
+
+Everything goes under `build/linux/`, and `make -f Makefile.linux distclean`
+removes it.
+
 ## Dreamcast build
 
 The Dreamcast target uses KallistiOS, the native PowerVR renderer, AICA ADPCM
@@ -136,14 +158,18 @@ With a VGA cable, OPTIONS > SCREEN also offers `VGA 832x480`, this mode requires
 
     tools/release.sh [--linux] [--dc] [--full-disc] [path/to/SaberRider/data]   # packs default to SaberRider/data
 
-The script writes release packages to `release/`. Linux packaging needs `appimagetool` from AppImageKit on `PATH`;
-set `APPIMAGETOOL=/path/to/appimagetool` to use a specific executable. If it cannot download its runtime,
-set `APPIMAGE_RUNTIME=/path/to/runtime-x86_64`.
+The script writes release packages to `release/`. Linux packaging builds its
+own SDL3 plus a minimal static FFmpeg/Vorbis stack (`make -f Makefile.linux`,
+needs an SDL3 source tarball in `third_party/` or next to the repo) and
+bundles the AppDir with `linuxdeploy`, which is downloaded on first use;
+set `LINUXDEPLOY=/path/to/linuxdeploy` to use a specific executable. If it
+cannot download its runtime, set `APPIMAGE_RUNTIME=/path/to/runtime-x86_64`.
 
 - `saber_rider-linux-x86_64-<date>-<commit>.AppImage` is a self-contained Linux
-  app with the stripped SDL3 build, bundled libraries, icon, assets and all six
-  demo packs, including `video.pck`. glibc, X11/Wayland, GL and the sound server
-  come from the user's system. Run it directly; `--level N` starts at stage N.
+  app with the private SDL3 build, statically linked video/audio decoders,
+  icon, assets and all six demo packs, including `video.pck`. glibc,
+  X11/Wayland, GL and the sound server come from the user's system. Run it
+  directly; `--level N` starts at stage N.
 - `saber_rider-dreamcast-<date>-<commit>.zip` has `saber_rider.cdi`, the
   256×256 front cover, and a README.
 
