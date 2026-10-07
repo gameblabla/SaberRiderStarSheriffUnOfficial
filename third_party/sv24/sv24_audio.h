@@ -3,6 +3,7 @@
 #include <stdint.h>
 int sv24_audio_init(const void *driver, uint32_t driver_len, uint16_t sample_rate, int16_t adx_coef1, int16_t adx_coef2);
 void sv24_audio_stream_reset(void);
+void sv24_audio_reprime(void);
 int sv24_audio_feed_adx(const uint8_t *data, uint32_t len);
 void sv24_audio_start(uint8_t volume);
 void sv24_audio_tick(void);

@@ -7,6 +7,7 @@ void vdp1_sync_wait(void) { }
 volatile uint32_t sv24_audio_groups;
 uint32_t sat_timer_us(void) { return mock_us; }
 vdp2_tvmd_tv_standard_t vdp2_tvmd_tv_standard_get(void) { return VDP2_TVMD_TV_STANDARD_NTSC; }
+void sv24_audio_reprime(void) { }
 void sv24_audio_start(uint8_t volume) { (void)volume; }
 void sv24_audio_tick(void) { }
 int sv24_audio_feed_adx(const uint8_t *p,uint32_t size)
@@ -26,6 +27,9 @@ int sv24_decode_abs_slice_frame(const uint8_t *p,size_t size,uint16_t y,uint8_t 
 int sv24_scu_begin(const uint8_t *p,uint32_t size,uint32_t *cells) { return 0; }
 int sv24_scu_end(uint32_t *cells) { return 0; }
 int movie_vdp2_present(const uint32_t *c,uint8_t *dirty,bool first) { mock_us+=2000u;return 0; }
+static void (*pending_start)(void *);
+void rsat_video_audio_start(void (*start)(void *)) { pending_start=start; }
+int rsat_video_present(const uint32_t *c,int pitch) { mock_us+=2000u;return 0; }
 void sv24_audio_stop(void) { stops++; }
 void aud_movie_end(void) { ends++; }
 void rsat_video_hold(void) { holds++; }
@@ -43,9 +47,10 @@ static Video *clip(bool streamed,bool keep)
     v->surface=v->started=true;v->keep_bufs=keep;return v;
 }
 static void put32(uint8_t *p,uint32_t x) {p[0]=x>>24;p[1]=x>>16;p[2]=x>>8;p[3]=x;}
-static void audio_clock(void)
+static void audio_clock(bool stall,bool sprite)
 {
-    Video *v=calloc(1,sizeof *v);assert(v);v->header.frames=4;v->header.rate=24000;
+    unsigned frame_base=sat_movie_frames,drop_base=sat_movie_drops;
+    Video *v=calloc(1,sizeof *v);assert(v);v->sprite=sprite;v->header.frames=4;v->header.rate=24000;
     v->header.fps_num=15;v->header.fps_den=1;v->header.height=104;v->pitch=32;
     v->packet_max=1900;v->ram=calloc(1,7600);v->ram_size=7600;
     v->queue=calloc(3,1900);v->index=calloc(8,4);v->dirty=calloc(SV24_FRAME_TILES,1);v->cells=calloc(64,4);
@@ -58,14 +63,28 @@ static void audio_clock(void)
         v->index[i*2]=pos;v->index[i*2+1]=size;pos+=size;
     }
     v->ram_size=pos;v->surface=true;v->groups_base=sv24_audio_groups;
-    for(unsigned i=0;i<3;i++){assert(read_packet(v,i));assert(feed(v,i));}
+    for(unsigned i=0;i<3;i++){assert(read_packet(v,i));assert(feed(v,i));}v->audio_next=3;
     mock_us=100000;hook(v,NULL,0);
+    if(sprite) {
+        assert(!v->started&&pending_start==start_playback);
+        mock_us+=40000;pending_start(v);pending_start=NULL;
+        assert(v->epoch==mock_us&&v->started);
+    }
     /* Refill overwrites packet 0's slot with packet 3: its saved sample
      * duration must survive, including the ADX header's extra bytes. */
     assert(v->started&&v->next==1&&v->timeline_samples==1568);
+    if(stall) {
+        uint32_t underruns=sat_movie_audio_underruns;
+        mock_us=v->epoch+400000;hook(v,NULL,0);
+        assert(v->next==2&&v->audio_origin_samples==1568&&v->started);
+        assert(sat_movie_audio_underruns==underruns+1);
+        mock_us=v->epoch+70000;hook(v,NULL,0);
+        assert(sat_movie_audio_underruns==underruns+1&&!v->done);
+        video_close(v);puts("PASS: starvation re-primes remaining packets without repeating underruns");return;
+    }
     mock_us=v->epoch+66000;hook(v,NULL,0);assert(v->next==2&&v->timeline_samples==3200);
     mock_us=v->epoch+210000;hook(v,NULL,0);assert(v->next==4&&v->timeline_samples==6400);
-    assert(sat_movie_frames==4&&sat_movie_drops==1&&!sat_movie_errors);
+    assert(sat_movie_frames==frame_base+4&&sat_movie_drops==drop_base+1&&!sat_movie_errors);
     mock_us=v->epoch+266665;hook(v,NULL,0);assert(!v->done);
     mock_us=v->epoch+266666;hook(v,NULL,0);assert(v->done);video_close(v);
     puts("PASS: ADX sample clock, overwritten packet-slot duration, two-frame catch-up, audio drain at EOF");
@@ -89,5 +108,11 @@ int main(void)
     v=clip(false,true);v->surface=v->started=false;e=ends;unsigned a=stops;
     video_close(v);assert(ends==e&&stops==a);spares_release();
     puts("PASS: end/error/skip cleanup, RAM/stream, retained surface, reusable buffers, close after end, unused preload");
-    audio_clock();
+    audio_clock(false,false);audio_clock(true,false);audio_clock(false,true);
+    Video rate={0};rate.header.rate=24000;playback_clock(&rate);
+    assert(sample_us(&rate,24000)==1000500u);
+    assert(played_samples(&rate,1000000)==23987u);
+    rate.audio_origin_samples=1568;assert(ring_played(&rate,sample_us(&rate,1568))==0);
+    v=clip(false,false);v->sprite=true;unsigned u=surfaces;video_close(v);assert(surfaces==u);
+    puts("PASS: quantized SCSP pitch clock and VDP1 surface closes without VDP2 restoration");
 }

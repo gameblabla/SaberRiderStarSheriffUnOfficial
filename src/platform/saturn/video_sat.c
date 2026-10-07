@@ -16,6 +16,7 @@
 #include "sv24_scu.h"
 #include "sv24_audio.h"
 #define QUEUE_COUNT 3u
+#define INTRO_QUEUE_COUNT 4u
 #define STREAM_CACHE_BYTES (32u*1024u)
 #define RAM_CLIP_MAX (512u*1024u)
 const cdfs_filelist_entry_t *cd_sat_entry(const char *name);
@@ -25,9 +26,10 @@ struct Video {
     FILE *stream;
     uint8_t *ram,*queue,*dirty,*cache;
     uint32_t *index,*cells;
-    uint32_t ram_size,ram_pos,packet_max,next,queued,epoch,groups_base,timeline_samples,cell_capacity,cache_pos,cache_size,cache_capacity,file_left;
+    uint32_t ram_size,ram_pos,packet_max,next,queued,queue_count,epoch,groups_base,timeline_samples,cell_capacity,cache_pos,cache_size,cache_capacity,file_left;
+    uint32_t rate_num,rate_den,audio_origin_samples,audio_next;
     int w,h,logical_w,logical_h,pitch;
-    bool done,surface,started,keep_bufs;
+    bool done,surface,started,keep_bufs,sprite;
 };
 static Video *prepared_video;
 static char prepared_name[16];
@@ -35,6 +37,7 @@ static uint32_t *spare_cells;
 static uint8_t *spare_queue;
 static uint32_t spare_capacity,spare_cells_capacity;
 volatile uint32_t sat_movie_frames,sat_movie_drops,sat_movie_errors;
+volatile uint32_t sat_movie_audio_underruns,sat_movie_audio_lead,sat_movie_audio_min_lead;
 volatile uint32_t sat_movie_decode_us,sat_movie_present_us,sat_movie_read_us;
 static void spares_release(void)
 {
@@ -86,20 +89,46 @@ static bool read_bytes(Video *v,void *dst,uint32_t n)
     return true;
 }
 static uint32_t frame_size(const Video *v,uint32_t i) {return v->index[2*i+1];}
-static uint8_t *slot(Video *v,uint32_t i) {return v->queue+(i%QUEUE_COUNT)*v->packet_max;}
+static uint8_t *slot(Video *v,uint32_t i) {return v->queue+(i%(v->queue_count?v->queue_count:QUEUE_COUNT))*v->packet_max;}
 static uint32_t packet_samples(const svm_packet_t *p)
 {
     uint32_t head=p->audio_size>=20u&&svm_be16(p->audio)==0x8000u?svm_be16(p->audio+2)+4u:0u;
     if(head>p->audio_size||(p->audio_size-head)%36u)return 0;
     return (p->audio_size-head)/36u*32u;
 }
-static uint32_t sample_us(const Video *v,uint32_t samples) {return (uint32_t)((uint64_t)samples*1000000u/v->header.rate);}
+/* Use the exact OCT/FNS ratio programmed by pcm_game.c. At 24 kHz
+ * the feeder plays 23987.98828125 Hz; an ideal-rate timer slowly eats headroom. */
+static void playback_clock(Video *v)
+{
+    uint32_t base=44100u;int oct=0;
+    while(v->header.rate<base&&oct>-8){base>>=1;oct--;}
+    uint32_t fns=((uint32_t)v->header.rate-base)*1024u/base;
+    v->rate_num=44100u*(1024u+fns);v->rate_den=1024u<<-oct;
+}
+static uint32_t sample_us(const Video *v,uint32_t samples)
+{
+    return v->rate_num?(uint32_t)((uint64_t)samples*1000000u*v->rate_den/v->rate_num):
+        (uint32_t)((uint64_t)samples*1000000u/v->header.rate);
+}
+static uint32_t played_samples(const Video *v,uint32_t us)
+{
+    return v->rate_num?(uint32_t)((uint64_t)us*v->rate_num/(1000000ull*v->rate_den)):
+        (uint32_t)((uint64_t)us*v->header.rate/1000000u);
+}
+static uint32_t ring_played(const Video *v,uint32_t us)
+{
+    uint32_t absolute=played_samples(v,us);
+    /* The epoch uses a rounded-down microsecond duration. Immediately
+     * after re-prime this can be one sample below the segment origin. */
+    return absolute>v->audio_origin_samples?absolute-v->audio_origin_samples:0;
+}
+
 static bool read_packet(Video *v,uint32_t i)
 {
     svm_packet_t p;
     return read_bytes(v,slot(v,i),frame_size(v,i))&&
            !svm_packet_parse(slot(v,i),frame_size(v,i),&p)&&p.frame_no==i&&p.pts==i&&
-           packet_samples(&p)>0u&&packet_samples(&p)<=(8192u-64u)/(QUEUE_COUNT+1u);
+           packet_samples(&p)>0u&&packet_samples(&p)<=(8192u-64u)/((v->queue_count?v->queue_count:QUEUE_COUNT)+1u);
 }
 static bool feed(Video *v,uint32_t i)
 {
@@ -107,6 +136,23 @@ static bool feed(Video *v,uint32_t i)
     if(svm_packet_parse(slot(v,i),frame_size(v,i),&p))return false;
     return sv24_audio_feed_adx(p.audio,p.audio_size)==0;
 }
+/* Video decode may proceed while the audio ring is full. Keep its audio
+ * in the packet queue until playback makes room, rather than postponing
+ * the picture's decode/CD work until almost its presentation deadline. */
+static bool feed_pending(Video *v,uint32_t last)
+{
+    uint32_t played=v->started?ring_played(v,sat_timer_us()-v->epoch):0;
+    while(v->audio_next<=last&&v->audio_next<v->header.frames) {
+        svm_packet_t p;
+        if(svm_packet_parse(slot(v,v->audio_next),frame_size(v,v->audio_next),&p))return false;
+        uint32_t produced=(sv24_audio_groups-v->groups_base)*32u,add=packet_samples(&p);
+        if(produced>played&&produced-played+add>8192u-64u)break;
+        if(!feed(v,v->audio_next))return false;
+        v->audio_next++;
+    }
+    return true;
+}
+
 static void mark_dirty(Video *v,const sv24_v03_frame_t *fr)
 {
     for(unsigned s=0;s<fr->slice_count;s++) {
@@ -117,6 +163,12 @@ static void mark_dirty(Video *v,const sv24_v03_frame_t *fr)
             v->dirty[(sl->tile_y0+t/44u)*pitch+t%44u]=1;
     }
 }
+static void start_playback(void *ud)
+{
+    Video *v=ud;
+    sv24_audio_start(7u);v->epoch=sat_timer_us()-sample_us(v,v->audio_origin_samples);v->started=true;
+}
+
 static void hook(void *ud,volatile uint16_t *unused,int pitch)
 {
     (void)unused;(void)pitch;Video *v=ud;
@@ -125,8 +177,24 @@ again:
     if(v->done)return;
     uint32_t elapsed=sat_timer_us()-v->epoch;
     if(v->started&&v->next==v->header.frames) {
+        if(!feed_pending(v,v->header.frames-1u)){sat_movie_errors++;finish_video(v);return;}
         if(elapsed>=sample_us(v,v->timeline_samples))finish_video(v);
         return;
+    }
+    if(v->started) {
+        uint32_t produced=(sv24_audio_groups-v->groups_base)*32u,played=ring_played(v,elapsed);
+        sat_movie_audio_lead=produced>played?produced-played:0;
+        if(sat_movie_audio_lead<sat_movie_audio_min_lead)sat_movie_audio_min_lead=sat_movie_audio_lead;
+        if(played>=produced) {
+            /* A drive stall outlasted the ring. Re-prime from the next video
+             * packet rather than looping stale ADX residuals through the DSP. */
+            sv24_audio_stop();sv24_audio_reprime();v->groups_base=sv24_audio_groups;
+            v->audio_origin_samples=v->timeline_samples;v->audio_next=v->next;
+            unsigned count=v->header.frames-v->next;
+            if(count>(v->queue_count?v->queue_count:QUEUE_COUNT))count=v->queue_count?v->queue_count:QUEUE_COUNT;
+            for(unsigned n=0;n<count;n++){if(!feed(v,v->next+n)){sat_movie_errors++;finish_video(v);return;}v->audio_next++;}
+            v->started=false;sat_movie_audio_underruns++;
+        }
     }
     uint32_t i=v->next;
     uint32_t due=sample_us(v,v->timeline_samples);
@@ -134,14 +202,10 @@ again:
     if(v->started&&elapsed+3u*refresh<due)return;
     /* Decode at most two frames when catching up. Never produce enough
      * residual samples to overwrite the SCSP's unread 8192-sample ring. */
-    uint32_t future=i+QUEUE_COUNT;
-    if(v->started&&future<v->header.frames) {
-        uint32_t produced=(sv24_audio_groups-v->groups_base)*32u;
-        uint32_t played=(uint32_t)(((uint64_t)elapsed*v->header.rate)/1000000u);
-        svm_packet_t queued;
-        uint32_t add=svm_packet_parse(slot(v,i),frame_size(v,i),&queued)?2032u:packet_samples(&queued)+32u;
-        if(produced>played&&produced-played+add>8192u-64u)return;
-    }
+    uint32_t future=i+(v->queue_count?v->queue_count:QUEUE_COUNT);
+    if(!feed_pending(v,future-1u)){sat_movie_errors++;finish_video(v);return;}
+    /* Never overwrite an audio packet that has not reached sound RAM. */
+    if(v->audio_next<=i)return;
     uint32_t tick=sat_timer_us();
     svm_packet_t pk;sv24_v03_frame_t fr;int r=svm_packet_parse(slot(v,i),frame_size(v,i),&pk);
     uint32_t frame_samples=r?0u:packet_samples(&pk);
@@ -165,7 +229,7 @@ again:
      * This queue slot is safe to overwrite after both decoders have joined. */
     if(future<v->header.frames) {
         tick=sat_timer_us();
-        if(!read_packet(v,future)||!feed(v,future))goto error;
+        if(!read_packet(v,future)||!feed_pending(v,future))goto error;
         sat_movie_read_us=sat_timer_us()-tick;
     }
     elapsed=sat_timer_us()-v->epoch;
@@ -178,9 +242,9 @@ again:
          * must not replace that callback while the list is still in flight. */
         vdp1_sync_wait();
         tick=sat_timer_us();
-        r=movie_vdp2_present(v->cells,v->dirty,!v->started);if(r)goto error;
+        r=v->sprite?rsat_video_present(v->cells,v->pitch):movie_vdp2_present(v->cells,v->dirty,!v->started);if(r)goto error;
         sat_movie_present_us=sat_timer_us()-tick;
-        if(!v->started) {sv24_audio_start(7u);v->epoch=sat_timer_us();v->started=true;}
+        if(!v->started) {if(v->sprite)rsat_video_audio_start(start_playback);else start_playback(v);}
     }
     v->next++;sat_movie_frames++;
     sv24_audio_tick();
@@ -195,11 +259,14 @@ static bool activate_video(Video *v)
     sv24_output_tiles_x=(unsigned)v->pitch;
     sv24_output_tile_rows=(v->header.height+7u)/8u;
     if(!rsat_video_open(v->w,v->h,hook,v))return false;
-    if(!movie_vdp2_open(v->w,v->h)){rsat_video_close();return false;}
+    v->sprite=v->h<224;
+    if(!v->sprite&&!movie_vdp2_open(v->w,v->h)){rsat_video_close();return false;}
     v->surface=true;aud_movie_begin(v->ram!=NULL);
     if(sv24_audio_init(NULL,0,v->header.rate,v->header.coef1,v->header.coef2)||sv24_scu_init())return false;
     v->groups_base=sv24_audio_groups;
+    sat_movie_audio_min_lead=8192u;sat_movie_audio_lead=0;
     for(uint32_t i=0;i<v->queued;i++)if(!feed(v,i))return false;
+    v->audio_next=v->queued;
     return true;
 }
 static Video *open_name(const char *name,bool activate)
@@ -214,6 +281,7 @@ static Video *open_name(const char *name,bool activate)
     uint32_t n=v->header.frames;
     v->index=lw_malloc(n*8u);v->dirty=lw_malloc(SV24_FRAME_TILES);
     if(!v->index||!v->dirty||fseek(stream,v->header.index,SEEK_SET)||fread(v->index,8,n,stream)!=n)goto fail;
+    v->queue_count=v->header.height>=224u?INTRO_QUEUE_COUNT:QUEUE_COUNT;playback_clock(v);
     uint32_t off=v->header.data;
     for(uint32_t i=0;i<n;i++) {
         uint8_t *p=(uint8_t *)v->index+i*8u;uint32_t at=svm_be32(p),sz=svm_be32(p+4);
@@ -225,14 +293,15 @@ static Video *open_name(const char *name,bool activate)
     v->packet_max=(v->packet_max+3u)&~3u;
     reason="RGB24 staging / queue RAM";
     /* Full-height intros favor the fastest original 44-column decoder.
-     * Smaller UI clips omit padding columns to fit beside resident stages. */
+     * Smaller UI clips omit padding columns and may use low work RAM:
+     * VDP1 is filled by the CPU, and the SCU sidecar has its own high-RAM scratch. */
     v->pitch=v->header.height>=224u?44:(int)((v->header.width+7u)/8u);
     v->cell_capacity=((v->header.height+7u)/8u)*(unsigned)v->pitch*SV24_TILE_PIXELS*4u;
     if(spare_cells&&spare_cells_capacity>=v->cell_capacity)v->cells=spare_cells;
-    else {free(spare_cells);v->cells=hw_memalign(32,v->cell_capacity);}
+    else {free(spare_cells);v->cells=v->header.height>=224u?hw_memalign(32,v->cell_capacity):aligned_alloc(32,v->cell_capacity);}
     spare_cells=NULL;spare_cells_capacity=0;
     if(spare_queue&&spare_capacity>=v->packet_max){v->queue=spare_queue;spare_queue=NULL;spare_capacity=0;}
-    else {free(spare_queue);spare_queue=NULL;spare_capacity=0;v->queue=lw_memalign(32,QUEUE_COUNT*v->packet_max);}
+    else {free(spare_queue);spare_queue=NULL;spare_capacity=0;v->queue=lw_memalign(32,v->queue_count*v->packet_max);}
     if(!v->cells||!v->queue)goto fail;
     memset(v->cells,0,v->cell_capacity);memset(v->dirty,0,SV24_FRAME_TILES);
     /* The briefing may stay in RAM and leave CD-DA playing. It is optional:
@@ -248,7 +317,7 @@ static Video *open_name(const char *name,bool activate)
     }
     v->w=v->logical_w=v->header.width;v->h=v->logical_h=v->header.height;
     reason="packet prefill";
-    v->queued=n<QUEUE_COUNT?n:QUEUE_COUNT;
+    v->queued=n<v->queue_count?n:v->queue_count;
     for(uint32_t i=0;i<v->queued;i++)if(!read_packet(v,i))goto fail;
     if(activate&&!activate_video(v)){video_close(v);return NULL;}
     printf("video: %s %dx%d RGB24, %u frames, ADX %u Hz%s\n",name,v->w,v->h,(unsigned)n,(unsigned)v->header.rate,activate?"":" (preloaded)");return v;
@@ -298,6 +367,6 @@ void video_size(const Video *v,int *w,int *h){if(w)*w=v?v->logical_w:0;if(h)*h=v
 void video_close(Video *v)
 {
     if(!v)return;finish_video(v);
-    if(v->surface){rsat_video_close();spares_release();movie_vdp2_close();v->surface=false;}
+    if(v->surface){rsat_video_close();spares_release();if(!v->sprite)movie_vdp2_close();v->surface=false;}
     video_free(v);
 }

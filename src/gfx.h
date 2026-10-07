@@ -44,6 +44,7 @@ bool  gfx_keep_cblock(const CBlock *c);
 /* the Saturn: a cblock the scene only draws by whole frames (cblock_draw_frame) - its frames baked whole are kept and
  * its tile sheet let go (the power cut-in's pieces: 66 KB less for the stage); elsewhere gfx_keep_cblock */
 bool  gfx_keep_cblock_frames(const CBlock *c);
+bool  gfx_keep_cblock_frame(const CBlock *c,int frame); /* retain only one baked Saturn frame */
 void  gfx_keep_loaded(void);              /* retain the warmed scene set at the music ownership boundary */
 /* the same, but reload anything the load tail already evicted before keeping it (the disc is still unlocked here):
  * returns how many textures could not be made resident, each named on stderr. Without this, a texture dropped during

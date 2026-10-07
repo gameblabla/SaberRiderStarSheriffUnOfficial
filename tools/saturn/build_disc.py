@@ -470,7 +470,7 @@ def bake_audio(data: Path, work: Path, stage: Path, out: Path, snd: pckwrite.Pac
 def bake_videos(data: Path, work: Path, stage: Path, log) -> None:
     """RGB24 FRM3/DSP3 and stereo 24 kHz ADX in finite SVM files.
 
-    Bake native UI sizes: RGB24 NBG0 does not support horizontal reduction.
+    Keep RGB24 for the intro; smaller UI frames use the game framebuffer.
     """
     dcprep = work / 'dcprep'
     subprocess.run(['cc', '-O2', '-std=c11', '-Isrc', 'tools/dc/dcprep.c', 'src/pack.c', 'src/lzo1z.c',
@@ -481,11 +481,13 @@ def bake_videos(data: Path, work: Path, stage: Path, log) -> None:
         subprocess.run([dcprep, 'video', data, vids], check=True, capture_output=True)
     xvid = ['-r', '25', '-f', 'm4v']   # the pack videos: raw XviD, 25 fps (tools/dc/build_disc.py)
     sound = lambda p: next((q for q in (p.with_suffix('.ogg'), p.with_suffix('.wav')) if q.exists()), None)
-    svm.make(vids / 'E46721E5.m4v', stage / 'E46721E5.SVM', work / 'svm', (296, 224), '', xvid, sound(vids / 'E46721E5.m4v'), log)
-    svm.make(vids / '2FE798C3.m4v', stage / '2FE798C3.SVM', work / 'svm', (256, 104), '', xvid, sound(vids / '2FE798C3.m4v'), log)
+    svm.make(vids / 'E46721E5.m4v', stage / 'E46721E5.SVM', work / 'svm', (296, 224), '', xvid, sound(vids / 'E46721E5.m4v'), log, video_budget=12000)
+    # Quarter-size source, still drawn at 256x104: preserve the exact aspect
+    # ratio and leave SH-2 time for the room/dialogue and stock-CD reads.
+    svm.make(vids / '2FE798C3.m4v', stage / '2FE798C3.SVM', work / 'svm', (192, 78), '', xvid, sound(vids / '2FE798C3.m4v'), log, video_budget=7000)
     for clip in sorted((ROOT / 'assets/power').glob('*.m4v')):   # 320x240 at 24 fps, the voice in the .wav beside it
-        # Saber's larger resident stage sprites leave less RAM than Fireball's.
-        size,budget=((160,112),8000) if clip.stem.lower()=='saber' else ((224,144),10000)
+        # Leave RAM for the resident portrait and drawn fallback on both heroes.
+        size,budget=(160,112),8000
         svm.make(clip, stage / (clip.stem.upper()[:8] + '.SVM'), work / 'svm', size, 'crop=320:224:0:8',
                   ['-r', '24', '-f', 'm4v'], clip.with_suffix('.wav'), log, end_with_picture=True, video_budget=budget)
 

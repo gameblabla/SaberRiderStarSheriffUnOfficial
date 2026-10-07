@@ -77,6 +77,13 @@ void sv24_audio_stream_reset(void)
     adx_dsp_reset_history();
 }
 
+void sv24_audio_reprime(void)
+{
+    sv24_audio_stream_reset();
+    /* Mid-clip packets carry ADX blocks without another file header. */
+    header_pending=0;
+}
+
 int sv24_audio_feed_adx(const uint8_t *data, uint32_t len)
 {
     uint32_t p = 0;

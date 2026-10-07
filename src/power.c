@@ -42,8 +42,13 @@ static int hero_of(const Power *pw) { return pw->hero & 3; }
  * Called from level_start right after the stage trim; power_reset()'s own preload then finds it cached. */
 void power_warm_cutin(int hero, bool bomb)
 {
-    if (!bomb && CLIP[hero & 3]) return;   /* Saber and Fireball draw a .SVM clip instead (the final phase's bomb is drawn for all) */
-    gfx_keep_cblock_frames(cblock_get(0x2DEF1664));   /* drawn by whole frames only (power_draw) */
+    /* Saturn also needs the drawn fallback for the second use. */
+#if !defined(PLAT_SATURN)
+    if (!bomb && CLIP[hero & 3]) return;
+#endif
+    gfx_keep_sprite(sprite_get(PORTRAIT[hero & 3]));
+
+    gfx_keep_cblock_frame(cblock_get(0x2DEF1664),PIECE[hero & 3]);
 }
 
 static void preload_clip(const Power *pw)
@@ -51,7 +56,7 @@ static void preload_clip(const Power *pw)
     const char *clip = pw->bomb ? NULL : CLIP[hero_of(pw)];
     if (!clip) {   /* the drawn cut-in: the briefing's face and the portrait, read now and not under the music */
         video_preload_file(NULL, 0);
-        gfx_keep_cblock_frames(cblock_get(0x2DEF1664));
+        gfx_keep_cblock_frame(cblock_get(0x2DEF1664),PIECE[hero_of(pw)]);
         Sprite *po = sprite_get(PORTRAIT[hero_of(pw)]); if (po) sprite_tex(po);
         return;
     }
@@ -86,6 +91,10 @@ void power_start(Power *pw, Ren *ren)
     music_set_duck(R(0.28f));
     sfx_play_file(asset_path("power/saber_intermission.wav"));
     const char *clip = pw->bomb ? NULL : CLIP[hero_of(pw)];
+#ifdef PLAT_SATURN
+    if(pw->movie_used)clip=NULL;
+    pw->movie_used=true;
+#endif
     if (clip) {
         char buf[64]; snprintf(buf, sizeof buf, "%s.m4v", clip);
         pw->video = video_open_file(ren, asset_path(buf), R(24.0f));

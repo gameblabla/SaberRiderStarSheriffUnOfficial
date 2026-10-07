@@ -555,6 +555,23 @@ bool gfx_keep_cblock_frames(const CBlock *cc)
 #endif
 }
 
+bool gfx_keep_cblock_frame(const CBlock *cc,int frame)
+{
+    if(!gfx_keep_cblock_frames(cc))return false;
+#ifdef PLAT_SATURN
+    extern RTex *rsat_tex_frame_copy(RTex *,int,int,int,int);
+    CBlock *c=(CBlock *)cc;
+    if(!c->ftex||frame<0||frame>=c->frames||c->fper_row<1)return false;
+    int w=c->cols*c->tw,h=c->rows*c->th;
+    RTex *t=rsat_tex_frame_copy(c->ftex,(frame%c->fper_row)*w,(frame/c->fper_row)*h,w,h);
+    if(!t)return false;
+    rtex_destroy(c->ftex);c->ftex=t;
+#else
+    (void)frame;
+#endif
+    return true;
+}
+
 void gfx_keep_loaded(void)
 {
     for (int i = 0; i < g_nspr; i++) if (g_spr[i].tex) g_spr[i].retained = true;

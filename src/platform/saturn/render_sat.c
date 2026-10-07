@@ -168,8 +168,15 @@ static void slot_remove(int i)
 /* the video surface (video_sat.c): the top of the texture area, taken while a video plays (VID_*) */
 enum { VID_NONE=0, VID_READY=2 };
 static int vid_state;
+static bool pending;
+static void submit(int floor_slot);
+static volatile uint32_t slave_buf __uncached;
 static void (*vid_hook)(void *ud, volatile uint16_t *px, int pitch); static void *vid_ud;
-static uint32_t tex_end(void) { return TEX_END; }
+static void (*vid_audio_start)(void *ud);
+static uint32_t vid_bytes;
+static int vid_width,vid_height,vid_pitch;
+static bool vid_sprite;
+static uint32_t tex_end(void) { return TEX_END-vid_bytes; }
 
 /* first fit; 32-byte aligned (a colour table's rule) */
 static int gap_fit(uint32_t size, uint32_t *off)
@@ -486,6 +493,32 @@ RTex *rtex_create_baked(Ren *r, uint8_t *block, size_t size)
     RTex *t = tex_from_block(r, block, size, true);
     if (!t) free(block);
     return t;
+}
+
+/* Retain one baked frame for a power cut-in. Keep source coordinates and
+ * packed pixels unchanged; discard the other heroes' parts from CPU RAM. */
+RTex *rsat_tex_frame_copy(RTex *t,int x,int y,int w,int h)
+{
+    if(!t)return NULL;
+    const Unit *u=NULL;
+    for(int i=0;i<t->nunits;i++)if(t->units[i].x==x&&t->units[i].y==y&&t->units[i].w==w&&t->units[i].h==h){u=&t->units[i];break;}
+    if(!u||!u->n||u->first+u->n>t->nparts)return NULL;
+    size_t head=(44u+20u*u->n+2u*t->npal+3u)&~3u,size=head;
+    for(unsigned i=0;i<u->n;i++)size+=t->parts[u->first+i].len;
+    uint8_t *b=calloc(1,size);if(!b)return NULL;
+    memcpy(b,t->block,32);b[8]=1;b[9]=0;b[10]=(uint8_t)u->n;b[11]=(uint8_t)(u->n>>8);
+    memset(b+16,0,16);b[24]=32;b[28]=44;
+    uint32_t uoff=le32(t->block+24),poff=le32(t->block+28);
+    memcpy(b+32,t->block+uoff+(size_t)(u-t->units)*12,12);b[40]=b[41]=0;
+    memcpy(b+44u+20u*u->n,t->pal,2u*t->npal);
+    size_t at=head;
+    for(unsigned i=0;i<u->n;i++) {
+        const Part *p=&t->parts[u->first+i];uint8_t *d=b+44u+20u*i;
+        memcpy(d,t->block+poff+20u*(u->first+i),20);
+        d[12]=(uint8_t)(at>>24);d[13]=(uint8_t)(at>>16);d[14]=(uint8_t)(at>>8);d[15]=(uint8_t)at;
+        memcpy(b+at,t->block+p->off,p->len);at+=p->len;
+    }
+    return rtex_create_baked(t->r,b,size);
 }
 
 /* a runtime RGBA texture as a SAT1 block: one unit, 16bpp bands of at most STAGING_SIZE bytes, stored raw */
@@ -1119,6 +1152,17 @@ static void video_cmd(const int32_t *q)
     int32_t ox = vp_on ? viewport.x << 16 : 0, oy = vp_on ? viewport.y << 16 : 0;
     RRect d={fl16(q[0]+ox),fl16(q[1]+oy),fl16(q[2]),fl16(q[3])},cut;
     if(!r_rect_intersect(&d,&c,&cut))return;
+    if(vid_sprite) {
+        uint16_t pm=PM_ECD|PM_SPD|PM_RGB;
+        pm|=clip_bits(&c,d.x,d.y,d.x+d.w-1,d.y+d.h-1);
+        Cmd *k=cmd_new();if(!k)return;
+        k->ctrl=C_SCALED;k->pmod=pm;k->colr=0;
+        k->srca=(uint16_t)(tex_end()/8u);
+        k->size=(uint16_t)((vid_pitch/8)<<8|vid_height);
+        k->xa=(int16_t)d.x;k->ya=(int16_t)d.y;
+        k->xc=(int16_t)(d.x+d.w-1);k->yc=(int16_t)(d.y+d.h-1);
+        ren.prims++;return;
+    }
     movie_vdp2_geometry(d.x,d.y,d.w,d.h,&cut);
     /* Clear a hole at this point in the VDP1 list. NBG0 supplies the RGB24
      * picture; sprites submitted later (dialogue/portraits) still cover it. */
@@ -1169,13 +1213,54 @@ bool rsat_video_open(int w, int h, void (*hook)(void *ud, volatile uint16_t *px,
 {
     slave_idle();
     if (w <= 0 || h <= 0 || w > 352 || h > 240 || vid_state != VID_NONE) return false;
+    if(pending){submit((int)slave_buf);pending=false;}
+    vdp1_sync_wait();
+    vid_sprite=h<224;
+    vid_width=w;vid_height=h;vid_pitch=(w+7)&~7;
+    vid_bytes=vid_sprite?(uint32_t)vid_pitch*h*2u:0u;
+    /* The movie owns the top of VDP1 VRAM. Wait for the old list before
+     * removing cached parts that overlap it; their handles remain reloadable. */
+    for(int i=nslots-1;i>=0;i--)if(slots[i].off+slots[i].size>tex_end())slot_remove(i);
     vid_hook = hook; vid_ud = ud;
     vid_state = VID_READY;
     return true;
 }
 
+/* RGB24 decoder output is cell-major 0x80BBGGRR. UI clips share the
+ * game's RGB555 framebuffer, leaving VDP2 planes and register state intact. */
+int rsat_video_present(const uint32_t *cells,int pitch)
+{
+    if(!vid_sprite||!cells)return -1;
+    vdp1_sync_wait();
+    uint32_t strip[352*8/2] __aligned(32);
+    /* Read whole cells consecutively so low work RAM does not thrash the
+     * SH-2 cache on each raster row. Stack RAM is high work RAM, so the
+     * packed strip can DMA to VDP1 without another heap allocation. */
+    for(int ty=0;ty<vid_height;ty+=8) {
+      for(int tx=0;tx<vid_pitch;tx+=8) {
+        const uint32_t *tile=cells+((ty/8)*pitch+tx/8)*64;
+        for(int dy=0;dy<8&&ty+dy<vid_height;dy++)for(int dx=0;dx<8;dx+=2) {
+            uint32_t a=tx+dx<vid_width?tile[dy*8+dx]:0;
+            uint32_t b=tx+dx+1<vid_width?tile[dy*8+dx+1]:0;
+            uint32_t pa=0x8000u|((a>>19)&31u)<<10|((a>>11)&31u)<<5|((a>>3)&31u);
+            uint32_t pb=0x8000u|((b>>19)&31u)<<10|((b>>11)&31u)<<5|((b>>3)&31u);
+            strip[(dy*vid_pitch+tx+dx)/2]=(pa<<16)|pb;
+        }
+      }
+      unsigned rows=vid_height-ty<8?vid_height-ty:8;
+      unsigned bytes=rows*(unsigned)vid_pitch*2u;
+      cpu_cache_area_purge(strip,bytes);
+      scu_dma_transfer(1,(void *)(VDP1_VRAM_BASE+tex_end()+ty*vid_pitch*2u),strip,bytes);
+      scu_dma_transfer_wait(1);
+    }
+    return 0;
+}
+
+void rsat_video_audio_start(void (*start)(void *)) { vid_audio_start=start; }
+
 void rsat_video_hold(void)
 {
+    vid_audio_start=NULL;
     vid_hook = NULL; vid_ud = NULL;
 }
 
@@ -1184,7 +1269,9 @@ void rsat_video_close(void)
     slave_idle();
     if (vid_state == VID_NONE) return;
     rsat_video_hold();
-    vid_state = VID_NONE;
+    if(pending){submit((int)slave_buf);pending=false;}
+    vdp1_sync_wait();
+    vid_state = VID_NONE;vid_bytes=0;vid_sprite=false;
 }
 
 void rsat_video_draw(const RFRect *dst)
@@ -1786,7 +1873,7 @@ static void replay(int buf)
 
 /* ---- the slave */
 static volatile uint32_t slave_busy __uncached;   /* 1 while the slave replays */
-static volatile uint32_t slave_buf __uncached;    /* the record buffer it replays */
+
 static volatile uint32_t slave_replays __uncached;   /* replays the slave has taken (0: it never ran one) */
 
 /* The slave's ICI handler. It replays only when there is a frame to: a second notification (slave_idle's, when the
@@ -1836,8 +1923,7 @@ static void slave_idle(void)
     cpu_cache_purge();   /* the slave wrote the renderer's state */
 }
 
-static bool pending;   /* a replay whose list hasn't gone to VDP1 yet */
-static void submit(int floor_slot);
+/* pending: a replay whose list has not gone to VDP1 yet. */
 
 /* The floor of the frame the slave is replaying, done now, while it does (floor_submit then only points VDP2 at it):
  * streaming its torus at race speed took 4-6 ms of stage 2's frame, and the master waits for the replay anyway.
@@ -1858,7 +1944,7 @@ void rsat_frame_begin(void)
 {
     floor_state[rec_w].valid = false;
     if (!use_slave) return;
-    if (pending && vid_state == VID_NONE) floor_ahead((int)slave_buf);
+    if (pending && (vid_state == VID_NONE || vid_sprite)) floor_ahead((int)slave_buf);
     uint32_t tw = sat_timer_us();
     slave_idle();                   /* the replay of the frame before */
     tm_slave_wait += sat_timer_us() - tw;
@@ -1967,7 +2053,7 @@ void rsat_timing(uint32_t *planes, uint32_t *vdp1_wait, uint32_t *put, uint32_t 
 static void submit(int floor_slot)
 {
     uint32_t t0 = sat_timer_us();
-    if (vid_state == VID_NONE) floor_submit(floor_slot);
+    if (vid_state == VID_NONE || vid_sprite) floor_submit(floor_slot);
     floor_state[floor_slot].valid = false;
     uint32_t t1 = sat_timer_us();
     video_step();
@@ -1983,6 +2069,13 @@ static void submit(int floor_slot)
     vdp1_sync_cmdt_put((const vdp1_cmdt_t *)cmds, (uint16_t)res.ncmd, 0);
     vdp1_sync_render();
     vdp1_sync();
+    if(vid_audio_start) {
+        /* The first UI movie command list must be visible before starting
+         * its soundtrack clock; room/portrait uploads can delay this list. */
+        vdp1_sync_wait();
+        void (*start)(void *)=vid_audio_start;vid_audio_start=NULL;
+        start(vid_ud);
+    }
     uint32_t t3 = sat_timer_us();
     tm_planes += t1 - t0 + (t3a - t2); tm_wait += t2 - t1; tm_put += t3 - t3a; tm_frames++;
     tm_ntex += (uint32_t)res.ntex; tm_upl += res.upload_bytes;

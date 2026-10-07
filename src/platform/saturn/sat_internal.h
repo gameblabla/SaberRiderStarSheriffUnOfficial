@@ -107,3 +107,7 @@ bool rsat_movie_dual_available(void);
 void rsat_movie_vram_invalidate(void);
 void sat_planes_movie_begin(void);
 bool sat_planes_movie_end(void);
+
+int rsat_video_present(const uint32_t *cells,int pitch);
+
+void rsat_video_audio_start(void (*start)(void *));

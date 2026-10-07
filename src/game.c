@@ -173,6 +173,12 @@ static bool level_start(Game *g)
     /* stages 3 and 4 inherit the spares left over from the stage before (a fresh --level 3/4 falls back to the option) */
     g->player.lives = (stage >= 3 && carry >= 0) ? carry : g->menu.lives;
     g->player.hp = g->player.max_hp = hearts_for(g->menu.difficulty);
+#ifdef PLAT_SATURN
+    /* Retain the level's larger textures before reserving movie packets.
+     * Evicting one here and rebuilding it at the final scene lock leaves
+     * only small heap gaps, despite enough total free RAM. */
+    if(gfx_prepare_scene())return false;
+#endif
     power_reset(&g->power, g->menu.character, false);   /* two power attacks a stage */
     g->hero_speed = g->player.ch.speed;
     enemies_reset(&g->enemies);
