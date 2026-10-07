@@ -17,6 +17,7 @@
 #include "../../pack.h"
 #include "lz40s.h"
 #include "sat_internal.h"
+#include "../plat.h"
 #include <yaul.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,6 +71,7 @@ static struct {
  * video memory (the line scroll table not shown) and the registers at the vblank VDP1's frame changes. */
 static struct { fix16_t x[4], y[4]; bool ls[4]; } latch;
 static volatile bool latch_ready;
+static bool movie_active;
 static int ls_shown;            /* the line scroll tables on screen (0, 1) */
 
 static uint32_t be32(const void *p) { const uint8_t *b = p; return (uint32_t)b[0] << 24 | (uint32_t)b[1] << 16 | (uint32_t)b[2] << 8 | b[3]; }
@@ -83,7 +85,7 @@ static bool load_cells(uint32_t level, uint32_t ncells)
     if (ncells * 32u > CELLS_END) { printf("planes %08X: %u KB of cells, more than fits\n", (unsigned)level, (unsigned)(ncells / 32)); return false; }
     for (uint32_t k = 0; k * CELL_CHUNK < ncells; k++) {
         uint32_t id = level ^ (SPC_XOR + k), want = (ncells - k * CELL_CHUNK < CELL_CHUNK ? ncells - k * CELL_CHUNK : CELL_CHUNK) * 32;
-        const PackEntry *e = packs_find_type(id, RES_DATA);
+        const PackEntry *e = movie_active ? packs_restore_data(id) : packs_find_type(id, RES_DATA);
         if (!e || e->size < want) { printf("planes %08X: cell block %u missing\n", (unsigned)level, (unsigned)k); return false; }
         volatile uint32_t *d = VRAM(k * CELL_CHUNK * 32u);
         const uint32_t *s = (const uint32_t *)e->data;   /* big-endian on disc: the SH-2's order */
@@ -141,8 +143,8 @@ static void set_cycle_patterns(void)
  * tables at the vblank that shows their frame (sat_planes_shown), before the scroll that shows them. A frame that
  * writes more (a level's first frame: the whole view) writes the queue itself in the vblanks as it fills. */
 enum { NQ_MAX = 2048 };
-static uint32_t nq_val[NQ_MAX];
-static uint16_t nq_at[NQ_MAX];     /* the entry's long word from PAGE(0) (NBGn's page at n * 4096) */
+static uint32_t nq_val[NQ_MAX] PLAT_CPU_BSS;
+static uint16_t nq_at[NQ_MAX] PLAT_CPU_BSS;     /* the entry's long word from PAGE(0) (NBGn's page at n * 4096) */
 static int nq_n;
 static uint32_t ls_ram[2][SAT_SCREEN_H];   /* NBG0-1's line scroll table of the frame, for the vblank */
 
@@ -386,6 +388,7 @@ static void update_band(BandRt *br, int sw)
  * next, before the core asks for the next frame's layers) */
 void sat_planes_frame(int sw)
 {
+    if (movie_active) { latch_ready = false; return; }
     latch_ready = false;
     if (!P.asked || !P.h) {
         vdp2_scrn_display_set(sat_floor_visible() ? VDP2_SCRN_DISPTP_RBG0 : VDP2_SCRN_DISP_NONE);
@@ -434,7 +437,7 @@ void sat_planes_frame(int sw)
  * list is drawn): the planes' scroll of that frame, in the registers (and in libyaul's copy, which it commits after) */
 void sat_planes_shown(void)
 {
-    if (!latch_ready || !P.h) return;
+    if (movie_active || !latch_ready || !P.h) return;
     latch_ready = false;
     nq_write();   /* the columns this frame's scroll brings into view */
     vdp2_ioregs_t *sh = vdp2_regs_get();
@@ -458,4 +461,24 @@ void sat_planes_shown(void)
     volatile uint16_t *to = (volatile uint16_t *)&hw->sc0;
     for (unsigned k = 0; k < (unsigned)((const uint8_t *)&sh->scn3 + sizeof sh->scn3 - (const uint8_t *)&sh->sc0) / 2; k++) to[k] = from[k];
     if (flip) ls_shown ^= 1;
+}
+
+/* RGB24 movies temporarily own VRAM. CPU-side level metadata and texture
+ * handles survive; reload only overwritten cells and rebuild the name ring. */
+void sat_planes_movie_begin(void) { movie_active = true; latch_ready = false; nq_n = 0; }
+bool sat_planes_movie_end(void)
+{
+    bool ok = true;
+    if (P.h) {
+        vdp2_scrn_display_set(VDP2_SCRN_DISP_NONE);
+        *(volatile uint16_t *)(VDP2_IOREG_BASE + 0x20u) = 0;
+        set_upload_patterns();
+        ok = load_cells(P.level, P.h->ncells);
+        setup_screens();
+        set_cycle_patterns();
+        for (int i=0;i<P.h->nbands;i++) { P.band[i].lo = P.band[i].hi = -1; }
+        P.shown = false; P.asked = false;
+    }
+    movie_active = false;
+    return ok;
 }

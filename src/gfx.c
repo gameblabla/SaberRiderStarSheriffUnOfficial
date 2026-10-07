@@ -295,7 +295,7 @@ void cblock_draw_tile_rows(const CBlock *c, int t, real x, real y, bool flip, in
 
 /* ---- tile batches: one r_tex_batch for a run of tiles out of one bank ---- */
 #define BATCH_MAX 512
-static struct { const CBlock *c; RTex *tex; int n, shift; RFRect src[BATCH_MAX], dst[BATCH_MAX]; } g_batch;
+static struct { const CBlock *c; RTex *tex; int n, shift; RFRect src[BATCH_MAX], dst[BATCH_MAX]; } g_batch PLAT_CPU_BSS;
 
 static void batch_flush(void)
 {

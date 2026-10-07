@@ -22,6 +22,8 @@
 #include "../render.h"
 #include "../plat.h"
 #include "sat_internal.h"
+#include "video_vdp2_sat.h"
+#include "sv24_dual.h"
 #include "lz40s.h"
 #include <yaul.h>
 #include <stdio.h>
@@ -130,7 +132,7 @@ static uint32_t le32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] 
 /* ---------------------------------------------------------------- the video memory cache */
 typedef struct { uint32_t off, size; RTex *t; uint16_t part; uint32_t used; } Slot;   /* sorted by off; used: once orphaned */
 #define MAX_SLOTS 1536
-static Slot slots[MAX_SLOTS]; static int nslots;
+static Slot slots[MAX_SLOTS] PLAT_CPU_BSS; static int nslots;
 static uint32_t frame_no = 2;
 static uint8_t *staging;
 static unsigned uploads_frame, upload_bytes_frame, evictions, cram_uploads;
@@ -164,10 +166,10 @@ static void slot_remove(int i)
     nslots--;
 }
 /* the video surface (video_sat.c): the top of the texture area, taken while a video plays (VID_*) */
-enum { VID_NONE, VID_PENDING, VID_READY, VID_CLOSING };
-static int vid_state; static uint32_t vid_off, vid_bytes, vid_frame; static int vid_w, vid_h, vid_pitch;
+enum { VID_NONE=0, VID_READY=2 };
+static int vid_state;
 static void (*vid_hook)(void *ud, volatile uint16_t *px, int pitch); static void *vid_ud;
-static uint32_t tex_end(void) { return vid_state == VID_NONE ? TEX_END : vid_off; }
+static uint32_t tex_end(void) { return TEX_END; }
 
 /* first fit; 32-byte aligned (a colour table's rule) */
 static int gap_fit(uint32_t size, uint32_t *off)
@@ -384,10 +386,6 @@ static uint16_t part_resident(RTex *t, int i)
 {
     const Part *p = &t->parts[i];
     t->used[i] = frame_no;
-    if (t->loc[i] && vid_state != VID_NONE && (uint32_t)t->loc[i] * 8 >= vid_off) {   /* in the video's area: move it */
-        int k = slot_find((uint32_t)t->loc[i] * 8);
-        if (k >= 0) slot_remove(k); else t->loc[i] = 0;
-    }
     if (t->loc[i]) return t->loc[i];
     uint32_t raw = part_raw_size(p), off;
     if (raw > STAGING_SIZE || !vram_alloc(raw, t, i, &off)) {
@@ -1114,19 +1112,20 @@ void r_tex_rot(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, fx angle, 
 { (void)r; rec_tex(t, src, dst, angle, center, flip); }
 void r_tex_batch(Ren *r, RTex *t, const RFRect *src, const RFRect *dst, int n) { (void)r; for (int i = 0; i < n; i++) rec_tex(t, &src[i], &dst[i], 0, NULL, R_FLIP_NONE); }
 
-/* the video surface as a 16bpp sprite (dst in viewport coordinates, 16.16) */
+/* VDP2 RGB24 surface (dst in viewport coordinates, 16.16). */
 static void video_cmd(const int32_t *q)
 {
     RRect c; if (!draw_clip(&c)) return;
     int32_t ox = vp_on ? viewport.x << 16 : 0, oy = vp_on ? viewport.y << 16 : 0;
-    int x0 = fl16(q[0] + ox), y0 = fl16(q[1] + oy), x1 = fl16(q[0] + q[2] + ox) - 1, y1 = fl16(q[1] + q[3] + oy) - 1;
-    if (x1 < x0 || y1 < y0 || x1 < c.x || y1 < c.y || x0 >= c.x + c.w || y0 >= c.y + c.h) return;
-    uint16_t pm = PM_ECD | PM_SPD | PM_RGB;
-    pm |= clip_bits(&c, x0, y0, x1, y1);
-    Cmd *k = cmd_new(); if (!k) return;
-    k->pmod = pm; k->srca = (uint16_t)(vid_off / 8); k->size = (uint16_t)((vid_pitch / 8) << 8 | vid_h);
-    if (x1 - x0 + 1 == vid_pitch && y1 - y0 + 1 == vid_h) { k->ctrl = C_NORMAL; k->xa = (int16_t)x0; k->ya = (int16_t)y0; }
-    else { k->ctrl = C_SCALED; k->xa = (int16_t)x0; k->ya = (int16_t)y0; k->xc = (int16_t)x1; k->yc = (int16_t)y1; }
+    RRect d={fl16(q[0]+ox),fl16(q[1]+oy),fl16(q[2]),fl16(q[3])},cut;
+    if(!r_rect_intersect(&d,&c,&cut))return;
+    movie_vdp2_geometry(d.x,d.y,d.w,d.h,&cut);
+    /* Clear a hole at this point in the VDP1 list. NBG0 supplies the RGB24
+     * picture; sprites submitted later (dialogue/portraits) still cover it. */
+    Cmd *k=cmd_new();if(!k)return;
+    k->ctrl=C_POLYGON;k->pmod=PM_ECD|PM_SPD;k->colr=0;
+    k->xa=k->xd=(int16_t)cut.x;k->xb=k->xc=(int16_t)(cut.x+cut.w-1);
+    k->ya=k->yb=(int16_t)cut.y;k->yc=k->yd=(int16_t)(cut.y+cut.h-1);
     ren.prims++;
 }
 
@@ -1164,21 +1163,14 @@ static void replay_ops(const Rec *R, int n)
     }
 }
 
-/* ---------------------------------------------------------------- the video surface (video_sat.c)
- * A video's frame lives in VDP1's video memory, at the top of the texture area: `hook` writes it (RGB555, bit 15 set)
- * once a frame while VDP1 is idle (submit, between the end of one list and the start of the next), and rsat_video_draw
- * draws it as a 16bpp sprite. The area is taken from the texture cache: new parts go below it at once, and it becomes
- * the video's when no list in flight can still draw a part that was there (a few frames); on close it goes back the
- * same way. */
+/* A VDP2 movie owns NBG0 while this renderer clears a transparent window
+ * in its framebuffer. The callback runs between slave replay and VDP1 DMA. */
 bool rsat_video_open(int w, int h, void (*hook)(void *ud, volatile uint16_t *px, int pitch), void *ud)
 {
     slave_idle();
-    int pitch = (w + 7) & ~7;
-    uint32_t bytes = ((uint32_t)pitch * (uint32_t)h * 2u + 31u) & ~31u;
-    if (w <= 0 || h <= 0 || h > 255 || pitch > 504 || bytes > TEX_END - TEX_OFF - 0x10000u) return false;
-    vid_w = w; vid_h = h; vid_pitch = pitch; vid_bytes = bytes; vid_off = TEX_END - bytes;
+    if (w <= 0 || h <= 0 || w > 352 || h > 240 || vid_state != VID_NONE) return false;
     vid_hook = hook; vid_ud = ud;
-    vid_state = VID_PENDING; vid_frame = frame_no;
+    vid_state = VID_READY;
     return true;
 }
 
@@ -1192,7 +1184,7 @@ void rsat_video_close(void)
     slave_idle();
     if (vid_state == VID_NONE) return;
     rsat_video_hold();
-    vid_state = VID_CLOSING; vid_frame = frame_no;
+    vid_state = VID_NONE;
 }
 
 void rsat_video_draw(const RFRect *dst)
@@ -1201,17 +1193,12 @@ void rsat_video_draw(const RFRect *dst)
     memcpy(e->v.i, dst, sizeof *dst);
 }
 
-/* in submit: VDP1 is idle, no replay runs */
+/* In submit, no CPU replay runs. Decode/CD work can overlap the previous
+ * VDP1 drawing; the movie owns VDP2 banks and waits for its DMA channels. */
 static void video_step(void)
 {
-    if (vid_state == VID_PENDING && frame_no >= vid_frame + 3) {
-        for (int i = nslots - 1; i >= 0; i--) if (slots[i].off + slots[i].size > vid_off) slot_remove(i);
-        volatile uint32_t *d = (volatile uint32_t *)(VDP1_VRAM_BASE + vid_off);
-        for (uint32_t i = 0; i < vid_bytes / 4; i++) d[i] = 0x80008000u;   /* black until the first frame */
-        vid_state = VID_READY;
-    }
-    if (vid_state == VID_READY && vid_hook) vid_hook(vid_ud, (volatile uint16_t *)(VDP1_VRAM_BASE + vid_off), vid_pitch);
-    if (vid_state == VID_CLOSING && frame_no >= vid_frame + 3) vid_state = VID_NONE;
+    movie_vdp2_geometry_tick();
+    if (vid_state == VID_READY && vid_hook) vid_hook(vid_ud, NULL, 352);
 }
 
 static RFloor *floor_hw_floor;
@@ -1763,7 +1750,7 @@ void rsat_init(void)
     memset(cram_copy, 0, sizeof cram_copy);
     cram_ready = true;
     cmds = hw_memalign(32, sizeof(Cmd) * CMD_MAX);
-    staging = hw_memalign(32, STAGING_SIZE);
+    staging = lw_memalign(32, STAGING_SIZE);
     recbuf[0] = malloc(sizeof(Rec) * REC_MAX); recbuf[1] = malloc(sizeof(Rec) * REC_MAX);
     if (!cmds || !staging || !recbuf[0] || !recbuf[1]) printf("render: no RAM for the command list\n");
     use_slave = !plat_getenv("SABER_NOSLAVE");
@@ -1871,7 +1858,7 @@ void rsat_frame_begin(void)
 {
     floor_state[rec_w].valid = false;
     if (!use_slave) return;
-    if (pending) floor_ahead((int)slave_buf);
+    if (pending && vid_state == VID_NONE) floor_ahead((int)slave_buf);
     uint32_t tw = sat_timer_us();
     slave_idle();                   /* the replay of the frame before */
     tm_slave_wait += sat_timer_us() - tw;
@@ -1931,7 +1918,7 @@ void rsat_set_backdrops(RTex **t, const int *x, const int *y, int n, bool clear)
  * frame's sprites, or the black of a screen before: the floor stopped 40 lines short of the bottom) */
 static void draw_backdrops(void)
 {
-    bool clear = clear_fb || replay_floor;
+    bool clear = clear_fb || replay_floor || vid_state != VID_NONE;
     if (clear) {
         Cmd *k = cmd_new();
         if (k) {
@@ -1980,9 +1967,10 @@ void rsat_timing(uint32_t *planes, uint32_t *vdp1_wait, uint32_t *put, uint32_t 
 static void submit(int floor_slot)
 {
     uint32_t t0 = sat_timer_us();
-    floor_submit(floor_slot);
+    if (vid_state == VID_NONE) floor_submit(floor_slot);
     floor_state[floor_slot].valid = false;
     uint32_t t1 = sat_timer_us();
+    video_step();
     vdp1_sync_wait();   /* the frame before is on screen: its planes' scroll too (sat_planes_shown) */
     uint32_t t2 = sat_timer_us();
     sat_planes_frame(scr_w);
@@ -1991,7 +1979,6 @@ static void submit(int floor_slot)
     if (res.clofen) { regs->clofsl = 0; regs->coar = res.coar; regs->coag = res.coag; regs->coab = res.coab; }
     vdp2_scrn_back_color_set(VDP2_VRAM_ADDR(3, 0x01FFFE), (rgb1555_t){ .raw = res.back_color });
     gouraud_upload();
-    video_step();
     uint32_t t3a = sat_timer_us();
     vdp1_sync_cmdt_put((const vdp1_cmdt_t *)cmds, (uint16_t)res.ncmd, 0);
     vdp1_sync_render();
@@ -2032,6 +2019,22 @@ void rsat_frame_end(void)
     pending = true;
     rec_w = done;
     backdrop_dy[rec_w] = 0; rec_cv0[rec_w] = m_cv;
+}
+
+/* The movie hook runs with replay idle. Return the ICI callback before the
+ * next game command list is handed to the renderer's slave. */
+void rsat_movie_decode_end(void)
+{
+    if(sv24_dual_fault){slave_start();sv24_dual_fault=0;}
+    else cpu_dual_slave_set(slave_entry);
+}
+bool rsat_movie_dual_available(void) { return use_slave; }
+void rsat_movie_vram_invalidate(void)
+{
+    slave_idle();
+    floor_hw_off(); /* hw_ready false: regenerate floor cells/maps on next draw */
+    floor_visible = false;
+    floor_done[0] = floor_done[1] = false;
 }
 
 void rsat_stats(unsigned *parts_resident, unsigned *vram_used, unsigned *uploads, unsigned *evicted)

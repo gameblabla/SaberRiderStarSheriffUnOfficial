@@ -25,7 +25,7 @@ def word(name):
 def flag(name):
     return read(symbol(name), 1)[0]
 def image():
-    return bytes.fromhex(emu.call('mem_read', 'vdp1vram', word('vid_off'), word('vid_bytes')))
+    return bytes.fromhex(emu.call('mem_read', 'vdp2vram', 0, 3 * 0x20000))
 
 try:
     emu.call('load', ROOT / 'build/saturn/saber_rider.cue', 'ss')
@@ -56,14 +56,13 @@ try:
     assert word('vid_state') == 2, 'last frame surface must stay READY'
     assert word('vid_ud') == 0
     assert flag('driver_ok'), 'game sound driver must resume at movie end'
-    assert word('baseSoundMemory') == 0 and word('soundBufferSize') == 0
     last = image()
     assert len(set(last)) > 2, 'retained frame must contain the movie image'
     run(frame + 120)
     assert word('vid_state') == 2 and not word('vid_hook')
     assert image() == last, 'last movie image changed after playback ended'
     assert flag('driver_ok')
-    print('PASS: natural briefing end restores game audio, detaches decoding, and retains identical VDP1 pixels for 120 fields')
+    print('PASS: natural briefing end restores game audio, detaches decoding, and retains identical RGB24 VDP2 pixels for 120 fields')
     print('Retained image SHA256:', hashlib.sha256(last).hexdigest())
 finally:
     emu.close()

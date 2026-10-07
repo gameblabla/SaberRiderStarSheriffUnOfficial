@@ -80,6 +80,7 @@ static void report_memory(const char *when)
 
 static void __attribute__((noreturn, noinline)) game_main(void)
 {
+    sat_cpu_bss_init();
     sat_timer_init();
     sat_diag_stage(5);
     printf("saber rider: saturn build " __DATE__ " " __TIME__ "\n");
@@ -97,6 +98,7 @@ static void __attribute__((noreturn, noinline)) game_main(void)
     printf("boot: game\n");
     if (!app_init(rsat_renderer(), plat_default_data_dir(), lv ? atoi(lv) : 0)) {
         printf("app_init failed\n");
+        report_memory("init failed");
         for (;;) vdp2_sync(), vdp2_sync_wait();
     }
     report_memory("init");

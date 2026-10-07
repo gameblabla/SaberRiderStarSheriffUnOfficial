@@ -1,72 +1,93 @@
-/* Exercise the actual Saturn video backend with decoder/audio/renderer stubs.
- * Pixel decoding and hardware timing are covered separately by movie_hold.py. */
+/* Exercise the actual Saturn backend's cleanup without hardware or disc I/O. */
 #include <assert.h>
 #include "../../../src/platform/saturn/video_sat.c"
-
-static unsigned resets, ends, holds, closes, unbinds, stream_stops, tasks;
-static playback_status_t next_status;
-void film_audio_reset(void) { resets++; }
+static unsigned stops, ends, holds, closes, surfaces, stream_stops;
+static uint32_t mock_us;
+void vdp1_sync_wait(void) { }
+volatile uint32_t sv24_audio_groups;
+uint32_t sat_timer_us(void) { return mock_us; }
+vdp2_tvmd_tv_standard_t vdp2_tvmd_tv_standard_get(void) { return VDP2_TVMD_TV_STANDARD_NTSC; }
+void sv24_audio_start(uint8_t volume) { (void)volume; }
+void sv24_audio_tick(void) { }
+int sv24_audio_feed_adx(const uint8_t *p,uint32_t size)
+{
+    svm_packet_t pk={.audio=p,.audio_size=size};sv24_audio_groups+=packet_samples(&pk)/32u;return 0;
+}
+int sv24_v03_frame_parse(const uint8_t *p,size_t size,sv24_v03_frame_t *fr)
+{
+    if(size!=16u)return -1;memset(fr,0,sizeof *fr);
+    fr->frame_no=svm_be32(p);fr->pts=svm_be32(p+4);fr->coding_flags=SV24_FRM3_MAP_DMA_SAFE;return 0;
+}
+bool rsat_movie_dual_available(void) { return false; }
+void rsat_movie_decode_end(void) { }
+void sv24_dual_init(void) { }
+int sv24_dual_decode_frame(const sv24_v03_frame_t *f,uint32_t *c,sv24_slice_dma_plan_t *p,unsigned gap) { return 0; }
+int sv24_decode_abs_slice_frame(const uint8_t *p,size_t size,uint16_t y,uint8_t rows,uint32_t *c) { return 0; }
+int sv24_scu_begin(const uint8_t *p,uint32_t size,uint32_t *cells) { return 0; }
+int sv24_scu_end(uint32_t *cells) { return 0; }
+int movie_vdp2_present(const uint32_t *c,uint8_t *dirty,bool first) { mock_us+=2000u;return 0; }
+void sv24_audio_stop(void) { stops++; }
 void aud_movie_end(void) { ends++; }
 void rsat_video_hold(void) { holds++; }
 void rsat_video_close(void) { closes++; }
-void film_buff_io_clear(void) { unbinds++; }
+void movie_vdp2_close(void) { surfaces++; }
 void cd_sat_stream_stop(void) { stream_stops++; }
-void cpk_task(decode_work_t *w) { tasks++; w->play_status = next_status; }
-void cpk_display_finished(decode_work_t *w) { w->isDisplayReady = false; }
 void rsat_video_draw(const RFRect *dst) { (void)dst; }
-
-static Video *clip(bool streamed, bool keep)
+static Video *clip(bool streamed,bool keep)
 {
-    Video *v = calloc(1, sizeof *v);
-    assert(v);
-    v->work = calloc(1, sizeof *v->work);
-    v->sample_mem = malloc(SAMPLE_BUFFER_BYTES);
-    v->ram = streamed ? NULL : malloc(128);
-    v->stream = streamed ? tmpfile() : NULL;
-    assert(v->work && v->sample_mem && (streamed ? v->stream != NULL : v->ram != NULL));
-    v->w = v->logical_w = 256; v->h = v->logical_h = 104;
-    v->surface = true; v->keep_bufs = keep;
-    v->work->play_status = PLAY;
-    return v;
+    Video *v=calloc(1,sizeof *v);assert(v);
+    v->cells=malloc(1024);v->queue=malloc(1024);v->dirty=malloc(16);v->index=malloc(16);
+    v->ram=streamed?NULL:malloc(128);v->stream=streamed?tmpfile():NULL;
+    assert(v->cells&&v->queue&&v->dirty&&v->index&&(streamed?v->stream!=NULL:v->ram!=NULL));
+    v->w=v->logical_w=256;v->h=v->logical_h=104;v->packet_max=256;
+    v->surface=v->started=true;v->keep_bufs=keep;return v;
 }
-
+static void put32(uint8_t *p,uint32_t x) {p[0]=x>>24;p[1]=x>>16;p[2]=x>>8;p[3]=x;}
+static void audio_clock(void)
+{
+    Video *v=calloc(1,sizeof *v);assert(v);v->header.frames=4;v->header.rate=24000;
+    v->header.fps_num=15;v->header.fps_den=1;v->header.height=104;v->pitch=32;
+    v->packet_max=1900;v->ram=calloc(1,7600);v->ram_size=7600;
+    v->queue=calloc(3,1900);v->index=calloc(8,4);v->dirty=calloc(SV24_FRAME_TILES,1);v->cells=calloc(64,4);
+    unsigned samples[4]={1568,1632,1600,1600},pos=0;
+    for(unsigned i=0;i<4;i++) {
+        unsigned head=i==0?40:0,snd=head+samples[i]/32*36,size=48+snd;uint8_t *p=v->ram+pos;
+        put32(p,0x504b5430);put32(p+4,size);put32(p+8,i);put32(p+12,i);put32(p+16,16);put32(p+20,snd);
+        put32(p+32,i);put32(p+36,i);
+        if(head){p[48]=0x80;p[51]=36;}
+        v->index[i*2]=pos;v->index[i*2+1]=size;pos+=size;
+    }
+    v->ram_size=pos;v->surface=true;v->groups_base=sv24_audio_groups;
+    for(unsigned i=0;i<3;i++){assert(read_packet(v,i));assert(feed(v,i));}
+    mock_us=100000;hook(v,NULL,0);
+    /* Refill overwrites packet 0's slot with packet 3: its saved sample
+     * duration must survive, including the ADX header's extra bytes. */
+    assert(v->started&&v->next==1&&v->timeline_samples==1568);
+    mock_us=v->epoch+66000;hook(v,NULL,0);assert(v->next==2&&v->timeline_samples==3200);
+    mock_us=v->epoch+210000;hook(v,NULL,0);assert(v->next==4&&v->timeline_samples==6400);
+    assert(sat_movie_frames==4&&sat_movie_drops==1&&!sat_movie_errors);
+    mock_us=v->epoch+266665;hook(v,NULL,0);assert(!v->done);
+    mock_us=v->epoch+266666;hook(v,NULL,0);assert(v->done);video_close(v);
+    puts("PASS: ADX sample clock, overwritten packet-slot duration, two-frame catch-up, audio drain at EOF");
+}
 int main(void)
 {
-    volatile uint16_t pixels[8] = {0x8123, 0x8456, 0x8789};
-    playback_status_t terminal[] = {END, ERROR, PAUSE};
-    for (unsigned status = 0; status < 3; status++)
-    for (int streamed = 0; streamed < 2; streamed++)
-    for (int keep = 0; keep < 2; keep++) {
-        Video *v = clip(streamed, keep);
-        decode_work_t *work = v->work;
-        uint8_t *samples = v->sample_mem;
-        unsigned r = resets, e = ends, h = holds, c = closes, s = stream_stops;
-        next_status = terminal[status];
-        hook(v, pixels, 256);
-        assert(v->done && v->surface && !v->work && !v->sample_mem && !v->ram && !v->stream);
-        assert(resets == r + 1 && ends == e + 1 && holds == h + 1 && closes == c);
-        assert(stream_stops == s + streamed && !video_update(v, R(1)));
-        int w, hgt;
-        video_size(v, &w, &hgt);
-        assert(w == 256 && hgt == 104);
-        video_draw_rect(v, NULL, 0, 0, R(256), R(104));
-        assert(pixels[0] == 0x8123 && pixels[1] == 0x8456 && pixels[2] == 0x8789);
-        if (keep) assert(spare_work == work && spare_samples == samples);
-        unsigned t = tasks, u = unbinds;
-        hook(v, pixels, 256); /* even a stale callback cannot decode again */
-        video_close(v);     /* closing the held image cannot reset game audio */
-        assert(tasks == t && resets == r + 1 && ends == e + 1 && unbinds == u && closes == c + 1);
-        if (keep) assert(spare_work == work && spare_samples == samples);
-        spares_release();
+    for(int streamed=0;streamed<2;streamed++)for(int keep=0;keep<2;keep++) {
+        Video *v=clip(streamed,keep);uint32_t *cells=v->cells;uint8_t *queue=v->queue;
+        unsigned a=stops,e=ends,h=holds,c=closes,s=stream_stops,u=surfaces;
+        finish_video(v);
+        assert(v->done&&v->surface&&!v->cells&&!v->queue&&!v->dirty&&!v->index&&!v->ram&&!v->stream);
+        assert(stops==a+1&&ends==e+1&&holds==h+1&&closes==c&&surfaces==u&&stream_stops==s+streamed);
+        assert(!video_update(v,R(1)));int w,hgt;video_size(v,&w,&hgt);assert(w==256&&hgt==104);
+        video_draw_rect(v,NULL,0,0,R(256),R(104));
+        if(keep)assert(spare_cells==cells&&spare_queue==queue&&spare_capacity==256);
+        finish_video(v);video_close(v);
+        assert(stops==a+1&&ends==e+1&&holds==h+1&&closes==c+1&&surfaces==u+1);
+        spares_release();assert(!spare_cells&&!spare_queue&&!spare_capacity);
     }
-    Video *v = clip(true, false);
-    unsigned e = ends;
-    video_close(v); /* early skip releases playback exactly once */
-    assert(ends == e + 1);
-    v = clip(false, true); v->surface = false;
-    e = ends;
-    video_close(v); /* discarding a preload must not restart the game driver */
-    assert(ends == e);
-    spares_release();
-    puts("PASS: END/ERROR/PAUSE, RAM/stream cleanup, retained image, reusable power buffers, close after end, skip and unused preload");
+    Video *v=clip(true,false);unsigned e=ends;video_close(v);assert(ends==e+1);
+    v=clip(false,true);v->surface=v->started=false;e=ends;unsigned a=stops;
+    video_close(v);assert(ends==e&&stops==a);spares_release();
+    puts("PASS: end/error/skip cleanup, RAM/stream, retained surface, reusable buffers, close after end, unused preload");
+    audio_clock();
 }

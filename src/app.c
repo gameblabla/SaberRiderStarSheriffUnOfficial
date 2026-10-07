@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static Game g;   /* static: several hundred KB, too big for a console's main stack */
+static Game g PLAT_CPU_BSS;   /* static: several hundred KB, too big for a console's main stack */
 static const char *script, *script_loop; static int script_n; static char script_keys[16];
 static int shot_frames = -1; static char shot_path[256];
 #ifndef REAL_FIXED

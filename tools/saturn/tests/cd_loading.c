@@ -189,6 +189,16 @@ int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
     reset(); check_read(); assert(plays == 1 && !pauses && queries < 25);
+    /* An aligned read inside a previous packet's read-ahead must not seek
+     * backwards or issue any command: those sectors left the partition. */
+    reset();
+    ra_buf=(uint8_t *)output;ra_fad=1000;ra_count=8;
+    for(unsigned i=0;i<8*1024;i++)output[i]=(uint16_t)i;
+    CdFile cached={.name="TEST.PCK",.fad=1000,.fad_end=1008,.size=16384,.pos=2048};
+    TestFile f={.cookie=&cached};uint16_t copy[1024];
+    assert(cd_read(&f,(unsigned char *)copy,sizeof copy)==sizeof copy);
+    assert(!commands&&!plays&&cached.pos==4096);
+    for(unsigned i=0;i<1024;i++)assert(copy[i]==1024+i);
     reset(); reply_delay = 1500; data_delay = 3500; check_read();
     reset(); wait_count = 3; check_read(); assert(waits_total == 3 && !retries_total);
     reset(); reject_count = 1; check_read(); assert(retries_total == 1 && pauses == 1);
@@ -208,5 +218,5 @@ int main(void)
     assert(fails_total == 1 && retries_total == 3 && !ends && now - start < 10000000);
     reset(); now = UINT32_MAX - 40000; next_periodic = now + 16700;
     check_read();
-    puts("PASS: command rate, delayed ESEL/EHST, WAIT, REJECT, short transfers, sector stalls/gaps, drive errors, absent media, retry limits, timer wrap");
+    puts("PASS: cached aligned reads, command rate, delayed ESEL/EHST, WAIT, REJECT, short transfers, sector stalls/gaps, drive errors, absent media, retry limits, timer wrap");
 }

@@ -138,10 +138,10 @@ void packs_lock(bool locked) { g_locked = locked; if (locked) g_refused = 0; }
 unsigned packs_refused(void) { return g_refused; }
 
 /* read (and decompress) a block */
-static bool entry_load(const Pack *p, PackEntry *pe)
+static bool entry_load(const Pack *p, PackEntry *pe, bool restore)
 {
     if (pe->data) return true;
-    if (g_locked) {
+    if (g_locked && !restore) {
         unsigned n = g_refused < 64 ? g_refused : 64, i = 0;
         while (i < n && g_refused_id[i] != pe->id) i++;
         if (i == n) {
@@ -195,7 +195,7 @@ static PackEntry *pack_lookup_type(const Pack *p, uint32_t id, ResType t)
 const PackEntry *pack_find(const Pack *p, uint32_t id)
 {
     PackEntry *e = pack_lookup(p, id);
-    return e && entry_load(p, e) ? e : NULL;
+    return e && entry_load(p, e, false) ? e : NULL;
 }
 
 /* ---- registry ---- */
@@ -228,7 +228,7 @@ const PackEntry *packs_peek(uint32_t id)
 
 const PackEntry *packs_find(uint32_t id)
 {
-    for (int i = 0; i < g_npacks; i++) { PackEntry *e = pack_lookup(&g_packs[i], id); if (e) return entry_load(&g_packs[i], e) ? e : NULL; }
+    for (int i = 0; i < g_npacks; i++) { PackEntry *e = pack_lookup(&g_packs[i], id); if (e) return entry_load(&g_packs[i], e, false) ? e : NULL; }
     return NULL;
 }
 const PackEntry *packs_peek_type(uint32_t id, ResType t)
@@ -238,7 +238,15 @@ const PackEntry *packs_peek_type(uint32_t id, ResType t)
 }
 const PackEntry *packs_find_type(uint32_t id, ResType t)
 {
-    for (int i = 0; i < g_npacks; i++) { PackEntry *e = pack_lookup_type(&g_packs[i], id, t); if (e) return entry_load(&g_packs[i], e) ? e : NULL; }
+    for (int i = 0; i < g_npacks; i++) { PackEntry *e = pack_lookup_type(&g_packs[i], id, t); if (e) return entry_load(&g_packs[i], e, false) ? e : NULL; }
+    return NULL;
+}
+const PackEntry *packs_restore_data(uint32_t id)
+{
+    for (int i=0;i<g_npacks;i++) {
+        PackEntry *e=pack_lookup_type(&g_packs[i],id,RES_DATA);
+        if(e)return entry_load(&g_packs[i],e,true)?e:NULL;
+    }
     return NULL;
 }
 uint8_t *packs_take_type(uint32_t id, ResType t)

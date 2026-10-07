@@ -5,6 +5,14 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/* Saturn CPU-only zero-initialized state: the SCU cannot access low RAM.
+ * Its platform startup clears this section before any allocation. */
+#ifdef PLAT_SATURN
+#define PLAT_CPU_BSS __attribute__((section(".saturn_low_bss")))
+#else
+#define PLAT_CPU_BSS
+#endif
+
 typedef struct Ren Ren;
 
 #define PLAT_CLAMP(x, a, b) ((x) < (a) ? (a) : (x) > (b) ? (b) : (x))

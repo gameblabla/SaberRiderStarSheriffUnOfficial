@@ -9,6 +9,7 @@
 #define SAT_WIDE_W   352
 
 /* cd_sat.c: the ISO's file list (fopen reads the CD through it) */
+void sat_cpu_bss_init(void);
 void *lw_malloc(size_t n);
 void *lw_memalign(size_t align, size_t n);
 
@@ -56,8 +57,8 @@ void rsat_set_backdrops(struct RTex **t, const int *x, const int *y, int n, bool
 void rsat_backdrops_dy(int dy);   /* the frame being recorded: the backdrops drawn dy higher (with the planes' scroll) */
 
 void rsat_bench(void);   /* SABER_RBENCH */
-/* video_sat.c: a w x h 16bpp surface in VDP1 memory, written by hook(ud, pixels, pitch in pixels) once a frame while VDP1
- * is idle; drawn by rsat_video_draw (a record, like any draw) */
+/* video_sat.c: RGB24 VDP2 movie. The hook runs while the slave renderer
+ * is idle; rsat_video_draw records its viewport and framebuffer mask. */
 bool rsat_video_open(int w, int h, void (*hook)(void *ud, volatile uint16_t *px, int pitch), void *ud);
 void rsat_video_close(void);
 void rsat_video_hold(void);   /* detach decoding, retaining the last frame for drawing */
@@ -100,3 +101,9 @@ static inline void sat_diag_stage(unsigned s) { (void)s; }
 static inline void sat_diag_vblank(void) { }
 static inline void sat_diag_alive(void) { }
 #endif
+
+void rsat_movie_decode_end(void);
+bool rsat_movie_dual_available(void);
+void rsat_movie_vram_invalidate(void);
+void sat_planes_movie_begin(void);
+bool sat_planes_movie_end(void);

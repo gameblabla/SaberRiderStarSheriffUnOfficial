@@ -2,16 +2,20 @@
  * debugger (tools/saturn/mednafen_run.py finds `saber_log` in the ELF's symbols). It replaces the Dreamcast's serial
  * console. Layout: "SABERLOG", u32 size, u32 head (bytes written so far; the text is buf[i % size]), buf. */
 #include "sat_internal.h"
+#include "../plat.h"
 #include <stdio.h>
 #include <string.h>
 
 #define LOG_SIZE 16384
 
 struct SaberLog { char magic[8]; uint32_t size; volatile uint32_t head; char buf[LOG_SIZE]; };
-struct SaberLog saber_log __attribute__((aligned(16))) = { { 'S', 'A', 'B', 'E', 'R', 'L', 'O', 'G' }, LOG_SIZE, 0, { 0 } };
+struct SaberLog saber_log PLAT_CPU_BSS __attribute__((aligned(16)));
 
 void log_sat_write(const char *s, size_t n)
 {
+    if(saber_log.size!=LOG_SIZE) {
+        memcpy(saber_log.magic,"SABERLOG",8);saber_log.size=LOG_SIZE;saber_log.head=0;
+    }
     uint32_t h = saber_log.head;
     for (size_t i = 0; i < n; i++) saber_log.buf[(h + i) % LOG_SIZE] = s[i];
     saber_log.head = h + (uint32_t)n;

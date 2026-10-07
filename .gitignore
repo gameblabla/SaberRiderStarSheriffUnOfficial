@@ -10,3 +10,6 @@ release/
 /obj-saturn/
 /obj-saturn-diag/
 /obj-wasm/
+
+/obj-sv24-sample/
+/artifacts/saturn-sv24/

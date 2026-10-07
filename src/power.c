@@ -42,7 +42,7 @@ static int hero_of(const Power *pw) { return pw->hero & 3; }
  * Called from level_start right after the stage trim; power_reset()'s own preload then finds it cached. */
 void power_warm_cutin(int hero, bool bomb)
 {
-    if (!bomb && CLIP[hero & 3]) return;   /* Saber and Fireball draw a .CPK clip instead (the final phase's bomb is drawn for all) */
+    if (!bomb && CLIP[hero & 3]) return;   /* Saber and Fireball draw a .SVM clip instead (the final phase's bomb is drawn for all) */
     gfx_keep_cblock_frames(cblock_get(0x2DEF1664));   /* drawn by whole frames only (power_draw) */
 }
 
@@ -91,7 +91,7 @@ void power_start(Power *pw, Ren *ren)
         pw->video = video_open_file(ren, asset_path(buf), R(24.0f));
         if (pw->video) {
 #if !defined(PLAT_SATURN)
-            /* PC/Dreamcast clips use the sidecar WAV.  Saturn's generated CPK
+            /* PC/Dreamcast clips use the sidecar WAV.  Saturn's generated SVM
              * already multiplexes that WAV as ADX, so playing it here too would
              * double the voice over the movie audio. */
             snprintf(buf, sizeof buf, "%s.wav", clip);

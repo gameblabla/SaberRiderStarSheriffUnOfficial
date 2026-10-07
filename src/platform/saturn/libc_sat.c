@@ -34,15 +34,27 @@
 #define LWBIG_END  (LWRAM_END - LW_SMALL)
 
 extern uint8_t __end[];          /* the linker script's ___end: end of .bss / .uncached */
+extern uint8_t __saturn_low_bss_start[], __saturn_low_bss_end[];
 static tlsf_t hw_heap, lw_heap, ls_heap;   /* high RAM, low RAM's big pool, low RAM's small pool */
 static size_t hw_used, lw_used;            /* (lw_used: both low RAM pools) */
+
+static bool cpu_bss_ready;
+void sat_cpu_bss_init(void)
+{
+    if(cpu_bss_ready)return;
+    memset(__saturn_low_bss_start,0,(size_t)(__saturn_low_bss_end-__saturn_low_bss_start));
+    cpu_bss_ready=true;
+}
 
 static void heaps_init(void)
 {
     if (hw_heap) return;
     uintptr_t start = ((uintptr_t)__end + 63) & ~(uintptr_t)63;
     hw_heap = tlsf_pool_create((void *)start, HWRAM_END - start);
-    lw_heap = tlsf_pool_create((void *)LWRAM_BASE, LWBIG_END - LWRAM_BASE);
+    /* NOLOAD CPU-only globals are omitted from the disc image. */
+    sat_cpu_bss_init();
+    uintptr_t low_start = (uintptr_t)__saturn_low_bss_end;
+    lw_heap = tlsf_pool_create((void *)low_start, LWBIG_END - low_start);
     ls_heap = tlsf_pool_create((void *)LWBIG_END, LW_SMALL);
 }
 
@@ -128,7 +140,7 @@ void sat_heap_stats(size_t *hw_free, size_t *lw_free, size_t *hwu, size_t *lwu)
     heaps_init();
     uintptr_t start = ((uintptr_t)__end + 63) & ~(uintptr_t)63;
     if (hw_free) *hw_free = HWRAM_END - start - hw_used;
-    if (lw_free) *lw_free = LWRAM_END - LWRAM_BASE - lw_used;
+    if (lw_free) *lw_free = LWRAM_END - (uintptr_t)__saturn_low_bss_end - lw_used;
     if (hwu) *hwu = hw_used;
     if (lwu) *lwu = lw_used;
 }

@@ -28,16 +28,16 @@ endif
 SH_PROGRAM    := saber_rider
 SH_BUILD_DIR  := $(OBJ)
 SH_OUTPUT_DIR := $(OUT)
-SH_SRCS := $(wildcard src/*.c) $(filter-out %/render_sat.c %/vdp2_planes.c %/video_sat.c,$(wildcard src/platform/saturn/*.c))
+SH_SRCS := $(wildcard src/*.c) $(filter-out %/render_sat.c %/vdp2_planes.c %/video_sat.c %/video_vdp2_sat.c,$(wildcard src/platform/saturn/*.c))
 SH_SRCS += src/platform/saturn/lz40s.sx   # the LZ40S decoder (SH-2 assembly)
 ifeq ($(RENDER),null)
 SH_SRCS   += src/platform/null/render_null.c src/platform/null/video_null.c
 SH_CFLAGS += -DSAT_RENDER_NULL
 else
-CPK_DIR := third_party/libyaul_cinepak
-SH_SRCS += src/platform/saturn/render_sat.c src/platform/saturn/vdp2_planes.c src/platform/saturn/video_sat.c \
-	$(addprefix $(CPK_DIR)/,base.c film_buff.c film_cvid.c film_lib.c film_snd.c pcmsys.c snd_adx.c)
-SH_CFLAGS += -I$(CPK_DIR)
+SV24_DIR := third_party/sv24
+SH_SRCS += src/platform/saturn/render_sat.c src/platform/saturn/vdp2_planes.c src/platform/saturn/video_sat.c src/platform/saturn/video_vdp2_sat.c \
+	$(addprefix $(SV24_DIR)/,svm.c sv24_slice.c sv24_frame_v03.c sv24_dual.c sv24_scu.c sv24_vdp2_layout.c sv24_audio.c pcm_game.c scsp_dsp.c adx_dsp_sega.c)
+SH_CFLAGS += -I$(SV24_DIR)
 endif
 
 # REAL_FIXED, FX_NO_FLOAT: the core in 16.16 fixed point (src/real.h), no float anywhere - the SH-2 has no FPU, and the
@@ -49,7 +49,7 @@ SH_CFLAGS += -std=gnu11 -O2 -g -Isrc/platform/saturn/include -Isrc \
 	-DREAL_FIXED -DFX_NO_FLOAT -Wdouble-promotion -Wfloat-conversion \
 	-Wno-shadow -Wno-bad-function-cast -Wno-null-dereference -Wno-unused-parameter -Wno-sign-compare \
 	-Wno-missing-field-initializers -Wno-implicit-fallthrough -Wno-misleading-indentation -Wno-unused-function
-SH_LDFLAGS +=
+SH_LDFLAGS += -Wl,-T,src/platform/saturn/lowbss.ld
 
 IMAGE_DIRECTORY        := $(OUT)/stage
 AUDIO_TRACKS_DIRECTORY := $(OUT)/tracks

@@ -80,9 +80,18 @@ typedef struct { uint16_t hirq_mask, cr1, cr2, cr3, cr4; } CdRegs;
 #ifndef CD_REG_READ
 #define CD_REG_READ(off) (*(volatile uint16_t *)(0x25890000u + (off)))
 #define CD_REG_WRITE(off, value) (*(volatile uint16_t *)(0x25890000u + (off)) = (value))
+#define CD_CPU_DMA 1
 #endif
 #define CD_HIRQ     CD_REG_READ(0x08)
 #define CD_DTR      CD_REG_READ(0x00)
+#ifndef CD_DATA_LONG
+#ifdef CD_CPU_DMA
+#define CD_DATA_LONG() (*(volatile uint32_t *)0x25810000u)
+#else
+static uint32_t cd_data_long(void) { uint32_t hi=CD_DTR;return hi<<16|CD_DTR; }
+#define CD_DATA_LONG() cd_data_long()
+#endif
+#endif
 #define HIRQ_CMOK   0x0001u
 #define HIRQ_DRDY   0x0002u
 #define HIRQ_CSCT   0x0004u
@@ -244,6 +253,19 @@ static size_t cd_read(FILE *f, unsigned char *dst, size_t n)
     size_t done = 0;
     while (done < n) {
         uint32_t sec = c->pos / 2048, off = c->pos % 2048, left = (uint32_t)(n - done);
+        /* Consume read-ahead before the direct aligned path. A previous
+         * unaligned packet may have already removed these sectors from the
+         * CD partition; reading them again would seek backwards every other
+         * movie packet and discard the drive's streaming lead. */
+        fad_t cached = c->fad + sec;
+        if (cached >= ra_fad && cached < ra_fad + ra_count) {
+            uint32_t from = (cached - ra_fad) * 2048u + off;
+            uint32_t take = ra_count * 2048u - from;
+            if (take > left) take = left;
+            memcpy(dst + done, ra_buf + from, take);
+            done += take; c->pos += take;
+            continue;
+        }
         if (off == 0 && left >= 2048 && ((uintptr_t)(dst + done) & 1) == 0) {
             uint32_t whole = left & ~2047u;
             if (!read_sectors(c->fad + sec, dst + done, whole / 2048u, c->fad_end)) break;
@@ -489,8 +511,24 @@ static bool sectors_take(void *dst, uint32_t sectors)
     if (err > 0) return false;  /* WAIT/REJECT: nothing to end */
     transfer_active = command_sent;  /* also close a transfer whose response timed out */
     if (err || !hirq_wait(HIRQ_DRDY, COMMAND_US)) return false;
-    uint16_t *d = dst;
-    for (uint32_t i = 0; i < sectors * 1024u; i++) d[i] = CD_DTR;
+    /* Sega's CD communication supplement requires CPU accesses in longword
+     * units. SH-2 DMAC can write low work RAM; SCU DMA cannot. Channel 0 is
+     * owned only during this synchronous foreground read. */
+#ifdef CD_CPU_DMA
+    if(!((uintptr_t)dst&3u)) {
+    cpu_dmac_channel_wait(0);
+    cpu_cache_area_purge(dst,sectors*2048u);
+    const cpu_dmac_cfg_t cfg={.channel=0,.src_mode=CPU_DMAC_SOURCE_FIXED,
+        .dst_mode=CPU_DMAC_DESTINATION_INCREMENT,.stride=CPU_DMAC_STRIDE_4_BYTES,
+        .src=0x25810000u,.dst=(uint32_t)(uintptr_t)dst,.len=sectors*2048u,.ihr=NULL};
+    cpu_dmac_channel_config_set(&cfg);cpu_dmac_channel_start(0);cpu_dmac_channel_wait(0);
+    cpu_cache_area_purge(dst,sectors*2048u);
+    } else
+#endif
+    {
+        uint16_t *d=dst;
+        for(uint32_t i=0;i<sectors*512u;i++){uint32_t value=CD_DATA_LONG();d[2*i]=(uint16_t)(value>>16);d[2*i+1]=(uint16_t)value;}
+    }
     uint32_t words = 0;
     bool ended = transfer_end(&words);
     if (!ended || words != sectors * 1024u) {
@@ -509,7 +547,7 @@ static bool toc_read(void)
     transfer_active = command_sent;
     if (err || !hirq_wait(HIRQ_DRDY, COMMAND_US)) { transfer_end(NULL); return false; }
     bool ok = st.cr2 == 204;
-    if (ok) for (int i = 0; i < 102; i++) { uint32_t hi = CD_DTR; toc[i] = hi << 16 | CD_DTR; }
+    if (ok) for (int i = 0; i < 102; i++) toc[i] = CD_DATA_LONG();
     uint32_t words = 0;
     return transfer_end(&words) && ok && words == 204;
 }

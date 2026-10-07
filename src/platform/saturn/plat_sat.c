@@ -8,7 +8,7 @@
 
 /* SABER_* debug switches: NAME=value lines in SABER.ENV on the disc, '#' comments (as the Dreamcast's saber.env) */
 #define MAX_ENV 32
-static struct { char name[32], value[256]; } env[MAX_ENV]; static int nenv = -1;
+static struct { char name[32], value[256]; } env[MAX_ENV] PLAT_CPU_BSS; static int nenv = -1;
 
 static void env_load(const char *path)
 {
@@ -39,10 +39,19 @@ const char *plat_getenv(const char *name)
 /* ---- time: the FRT counts at the system clock / 32 (26.87 MHz in the 320 modes: 0x348 counts a millisecond); its
  * 16-bit counter overflows every ~78 ms into `frt_high` */
 static volatile uint32_t frt_high, vblanks;
+/* ST-013-R3 clock tables: PAL has its own oscillator in both modes.
+ * Integer "counts per millisecond" constants lose precision over a movie. */
+static uint32_t clock_hz(bool wide)
+{
+    bool pal=vdp2_tvmd_tv_standard_get()==VDP2_TVMD_TV_STANDARD_PAL;
+    return wide?(pal?28437500u:28636400u):(pal?26656400u:26842600u);
+}
+static uint64_t us_per_count = (32000000ull << 16) / 26842600u;
 static void frt_overflow(void) { frt_high++; }
 
 void sat_timer_init(void)
 {
+    us_per_count = (32000000ull << 16) / clock_hz(false);
     cpu_frt_init(CPU_FRT_CLOCK_DIV_32);
     cpu_frt_ovi_set(frt_overflow);
     cpu_frt_count_set(0);
@@ -50,7 +59,6 @@ void sat_timer_init(void)
 
 /* counts * 1000 / COUNT_1MS as a multiply by a 16.16 constant (a 64-bit division is a libgcc call of hundreds of
  * cycles); counts stays under 2^40 for days. The 352 modes run the clock at 28.64 MHz (sat_timer_clock). */
-static uint64_t us_per_count = (1000ull << 16) / CPU_FRT_NTSC_320_32_COUNT_1MS;
 static uint32_t us_base;   /* the time when the counter last restarted (a clock change) */
 
 uint32_t sat_timer_us(void)
@@ -64,7 +72,7 @@ uint32_t sat_timer_us(void)
  * modes' clock */
 void sat_busy_wait_us(uint32_t us, bool mode352)
 {
-    uint32_t want = (uint32_t)(((uint64_t)us * (mode352 ? CPU_FRT_NTSC_352_32_COUNT_1MS : CPU_FRT_NTSC_320_32_COUNT_1MS)) / 1000u), got = 0;
+    uint32_t want = (uint32_t)(((uint64_t)us * clock_hz(mode352)) / 32000000u), got = 0;
     uint16_t last = cpu_frt_count_get();
     while (got < want) { uint16_t now = cpu_frt_count_get(); got += (uint16_t)(now - last); last = now; }
 }
@@ -74,7 +82,7 @@ void sat_busy_wait_us(uint32_t us, bool mode352)
 void sat_timer_clock(bool mode352, uint32_t now)
 {
     uint32_t sr = cpu_intc_mask_get(); cpu_intc_mask_set(15);
-    us_per_count = (1000ull << 16) / (mode352 ? CPU_FRT_NTSC_352_32_COUNT_1MS : CPU_FRT_NTSC_320_32_COUNT_1MS);
+    us_per_count = (32000000ull << 16) / clock_hz(mode352);
     cpu_frt_init(CPU_FRT_CLOCK_DIV_32);   /* the BIOS's clock change leaves the FRT at its reset setting (clock / 8, no
                                            * overflow interrupt) */
     cpu_frt_ovi_set(frt_overflow);

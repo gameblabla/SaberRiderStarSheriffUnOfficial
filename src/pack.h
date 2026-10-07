@@ -40,6 +40,9 @@ const PackEntry *pack_find(const Pack *p, uint32_t id);
 bool  packs_open(const char *data_dir, const char *const *names, int n);
 const PackEntry *packs_find(uint32_t id);
 const PackEntry *packs_find_type(uint32_t id, ResType t);
+/* Explicit hardware restoration: read one RES_DATA block even during the
+ * stage lock. Other lookups and refused-read accounting retain their lock. */
+const PackEntry *packs_restore_data(uint32_t id);
 /* Transfer an already loaded block to its caller; caller must free it. A block read by us has PACK_SLACK bytes of room
  * after its size (a decoder's over-read, or a file moved down over its 32-byte header with its zeroed tail). */
 #define PACK_SLACK 96

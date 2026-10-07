@@ -62,7 +62,7 @@ static void play_table(int idx)
 
 static int rnd(int n) { return rand() % (n + 1); }   /* FUN_0040cf30(0, n) inclusive per the switch usage */
 
-static struct { int n; char file[4][256]; } sfx_over[24];   /* per-hero replacements for the player's grunts (game sfx ids) */
+static struct { int n; char file[4][256]; } sfx_over[24] PLAT_CPU_BSS;   /* per-hero replacements for the player's grunts (game sfx ids) */
 
 void sfx_play(int id, int delay)
 {
