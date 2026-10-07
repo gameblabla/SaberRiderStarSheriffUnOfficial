@@ -8,6 +8,10 @@
 #define SAT_SCREEN_H 224
 #define SAT_WIDE_W   352
 
+/* Fixed SCSP space for the Cinepak player's two 64 KiB PCM rings. */
+#define SAT_MOVIE_PCM_BASE          0x60000u
+#define SAT_MOVIE_PCM_CHANNEL_BYTES (64u * 1024u)
+
 /* cd_sat.c: the ISO's file list (fopen reads the CD through it) */
 void *lw_malloc(size_t n);
 void *lw_memalign(size_t align, size_t n);
@@ -61,8 +65,7 @@ void rsat_bench(void);   /* SABER_RBENCH */
 bool rsat_video_open(int w, int h, void (*hook)(void *ud, volatile uint16_t *px, int pitch), void *ud);
 void rsat_video_close(void);
 void rsat_video_hold(void);   /* detach decoding, retaining the last frame for drawing */
-/* aud_sat.c: a clip has the SCSP from its start to its close (the game's sound driver stops, then starts again);
- * music: the clip doesn't read the disc (played from RAM), the CD-DA music plays on under it */
+/* aud_sat.c: a clip owns the SCSP from its start to close; music says CD-DA may play underneath */
 void aud_movie_begin(bool music);
 void aud_movie_end(void);
 /* aud_sat.c: the system clock change resets the SCSP (the driver goes around it, the sound RAM stays) */

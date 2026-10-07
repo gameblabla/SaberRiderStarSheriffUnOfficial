@@ -223,8 +223,8 @@ static Video *open_name(const char *name, bool activate)
     v->params.pcmChannels = 1;
     v->params.pcmPan = 0;
     v->params.pcmTransferMode = PCM_XFER_SH2_DMA;
-    v->params.audioBufferAddr = (int32_t)(uintptr_t)(SNDRAM + 0x78000);   /* aud_sat.c MOVIE_OFF: above the sample bank */
-    v->params.audioBufferSize = 16384;
+    v->params.audioBufferAddr = (int32_t)(uintptr_t)(SNDRAM + SAT_MOVIE_PCM_BASE);
+    v->params.audioBufferSize = SAT_MOVIE_PCM_CHANNEL_BYTES;
     v->work->decodeParams = &v->params;
 
     /* Keep the game's existing CDFS streamer in charge of the drive.  The

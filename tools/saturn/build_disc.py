@@ -78,7 +78,7 @@ SATURN_SFX_TABLE = (
     0xA8382083, 0x162864B4, 0x8BE8F136, 0xF8B5C0E8, 0x208C64D9, 0xE73A3850, 0x87265BA0, 0x1DBF470E,
     0x8AEB8147, 0xF11FCC31, 0x0AFC505A, 0x15A00BA1, 0x82EFBA26, 0x47D886A1, 0xE105C92A, 0xABC6A6E8,
 )
-SATURN_SOUND_BANK_BYTES = 0x78000 - 0x2400
+SATURN_SOUND_BANK_BYTES = 0x60000 - 0x2400
 # Every stage/hero combination must fit, including dialogue and all random variants.
 SATURN_SOUND_BANK_RESERVE = 12 * 1024
 # adpencode format for every sample: 2 = 1 bit a sample, i.e. 1.5 bits with the per-block filter/shift header

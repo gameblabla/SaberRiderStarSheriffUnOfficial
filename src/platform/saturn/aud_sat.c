@@ -11,12 +11,14 @@
  * 0x2000 gives the driver a sample's address by id. Every sample is encoded looping at its start: the word at +2 (the
  * loop block) says whether it plays once (the block count: it then loops its silent tail) or loops (1).
  * Music: CD-DA through the DSP's CD input (cd_sat.c plays the tracks; MUSIC.TXT maps a music id to its track).
- * Movies: video_sat.c brackets a clip with aud_movie_begin / aud_movie_end. The 68000 runs an idle program and the film player
- * drives slots 0-1 over its ring at MOVIE_OFF itself (film_pcm_*); the bank below it survives, so afterwards only the
- * 8 KB driver is copied in again. A clip played from RAM (the briefing) leaves the drive to the music: the CD input then
- * goes straight to the output (slots 16 / 17's EFSDL, the DSP is off) and the music plays on under it.
+ * Movies: video_sat.c brackets a clip with aud_movie_begin / aud_movie_end. The 68000 runs an idle program and the film
+ * player drives slots 0-1 over two 64 KB PCM rings above the resident sample bank (film_pcm_*). Resident samples stay
+ * in place, so afterwards only the 8 KB driver is copied in again. A clip played from RAM (the briefing)
+ * leaves the drive to the music: the CD input then goes straight to the output (slots 16 / 17's EFSDL, the DSP is off)
+ * and the music plays on under it.
  *
- * Sound RAM: 0x00000 driver (control block at 0x80) | 0x02000 effect table | 0x02400 bank | 0x78000 movie ring(s). */
+ * Sound RAM: 0x00000 driver (control block at 0x80) | 0x02000 effect table | 0x02400 bank (up to 0x60000) | two
+ * 64 KB movie PCM rings at 0x60000. */
 #include "../aud.h"
 #include "../plat.h"
 #include "../../pack.h"
@@ -47,8 +49,8 @@
 #define TABLE_OFF    0x2000u   /* adp68k_effect_table: a sample's sound RAM address by id */
 #define TABLE_IDS    256
 #define BANK_OFF     0x2400u
-#define BANK_END     0x78000u
-#define MOVIE_OFF    0x78000u  /* video_sat.c: the film player's ring(s), 2 x 16 KB */
+#define BANK_END     SAT_MOVIE_PCM_BASE
+#define MOVIE_OFF    SAT_MOVIE_PCM_BASE  /* video_sat.c: two 64 KB PCM rings */
 
 #define ACT_PLAY     0x11u     /* adp68k.h ADP68K_ACTION_* */
 #define ACT_STOP     0x01u
