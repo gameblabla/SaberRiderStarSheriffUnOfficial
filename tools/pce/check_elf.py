@@ -30,6 +30,6 @@ compiler=subprocess.check_output([str(nm.parent/'mos-pce-cd-clang'),'--version']
 report=dict(compiler=compiler,flags=['-std=gnu11','-Os','-flto','-mlto-zp=0'],sections=rows,
             banks=[dict(bank=b,used=n,free=8192-n) for b,n in sorted(banks.items())],
             arcade_asset_limit=0x1e0000,arcade_tile_directory_bytes=0x20000,
-            vram_normal=[dict(name=n,start_word=a,end_word=b) for n,a,b in [('BAT',0,0x800),('BG cache',0x800,0x4000),('dialog characters',0x4000,0x4200),('font',0x4200,0x4800),('sprite cache',0x4800,0x7800),('clip patterns',0x7800,0x7f00),('SAT',0x7f00,0x8000)]],
-            vram_floor=[dict(name=n,start_word=a,end_word=b) for n,a,b in [('BAT',0,0x2000),('road characters',0x2000,0x3000),('sky',0x3000,0x4200),('font',0x4200,0x4800),('sprite cache',0x4800,0x7800),('clip patterns',0x7800,0x7f00),('SAT',0x7f00,0x8000)]])
+            vram_normal=[dict(name=n,start_word=a,end_word=b) for n,a,b in [('BAT',0,0x800),('BG cache',0x800,0x4000),('dialog characters',0x4000,0x4200),('font',0x4200,0x4800),('sprite cache',0x4800,0x7800),('HUD/clip patterns',0x7800,0x7e00),('SAT alternate',0x7e00,0x7f00),('SAT',0x7f00,0x8000)]],
+            vram_floor=[dict(name=n,start_word=a,end_word=b) for n,a,b in [('BAT',0,0x2000),('road characters',0x2000,0x3000),('sky',0x3000,0x4200),('font',0x4200,0x4800),('sprite cache',0x4800,0x7800),('HUD/clip patterns',0x7800,0x7e00),('SAT alternate',0x7e00,0x7f00),('SAT',0x7f00,0x8000)]])
 (elf.parent/'runtime.json').write_text(json.dumps(report,indent=2)+'\n')

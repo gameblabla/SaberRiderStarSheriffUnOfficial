@@ -7,6 +7,7 @@
 .extern pce_road_off, pce_road_prev, columns
 .extern pce_scroll_x, pce_scroll_y, pce_vdc_index
 .extern pce_floor_pending, pce_scroll_hold
+.extern pce_sat_pending,pce_sat_scroll_x,pce_sat_scroll_y
 .extern pce_sky_far,pce_sky_near
 .extern pce_race_dialog
 .extern pce_draws
@@ -80,21 +81,35 @@ pce_vblank:
     st2 #0
     bra .Ldone
 .Lnormal:
-    /* A platform draw holds the hardware scroll until its SAT is uploaded (video_sat_end releases
-     * it), so the background and the sprites always change on the same frame. */
+    /* A queued generation owns its frozen scroll even if the next draw has
+     * begun. Both axes stay held while an unfinished draw uploads patterns. */
+    lda pce_sat_pending
+    beq .Lscroll_live
+    st0 #7
+    lda pce_sat_scroll_x
+    sta 2
+    lda pce_sat_scroll_x+1
+    sta 3
+    st0 #8
+    lda pce_sat_scroll_y
+    sta 2
+    lda pce_sat_scroll_y+1
+    sta 3
+    bra .Lscroll_done
+.Lscroll_live:
     lda pce_scroll_hold
-    bne 1f
+    bne .Lscroll_done
     st0 #7
     lda pce_scroll_x
     sta 2
     lda pce_scroll_x+1
     sta 3
-1:
     st0 #8
     lda pce_scroll_y
     sta 2
     lda pce_scroll_y+1
     sta 3
+.Lscroll_done:
     st0 #6
     st1 #255
     st2 #3
@@ -106,6 +121,7 @@ pce_vblank:
     st1 #192
     st2 #0
 .Ldone:
+    stz pce_sat_pending
     /* The palettes queued for the VCE (vce_pce.c): written now, in the vertical blank, 16 bytes a block move. */
     phx
     ldx vce_q_head

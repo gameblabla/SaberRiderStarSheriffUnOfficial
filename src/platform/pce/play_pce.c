@@ -256,10 +256,14 @@ PCE_BOSS static void sat_to_end(uint8_t first,uint8_t end) {
     for(uint8_t k=0;k<m;++k,d+=8)memcpy(d,d+n*8,8);
     memcpy(d,held,n*8);
 }
+void boss_prepare(void);
 PCE_BOSS void play_draw(void) {
     /* The hardware scroll stays put until this frame's SAT is uploaded (see irq.S). */
     pce_scroll_hold=1;
-    video_background(camera);video_sat_begin();foreground_prepare();presentation_draw();
+    video_background(camera);video_sat_begin();
+    if(!pce_campaign.diagnostic&&pce_campaign.boss_kind&&pce_campaign.boss_kind!=3&&pce_campaign.boss_hp)
+        overlay_call(0x7c,boss_prepare);
+    foreground_prepare();presentation_draw();
     uint8_t world_first=sat_count;
     uint8_t keys=pce_control.keys,stage=pce_metrics.stage-1;
     bool grounded=player.coll&4,side=keys&(KEY_LEFT|KEY_RIGHT);
@@ -322,8 +326,8 @@ PCE_BOSS void play_draw(void) {
      * Apply after admission so a changing shake never splits horse columns. */
     uint8_t shake_y=herd_on?((frame*13^(frame>>2))&3):0;
     if(shake_y)for(uint8_t i=world_first;i<sat_count;++i)sat[sat_page][i].y-=shake_y;
-    video_sat_end();
     pce_scroll_y=shake_y;
+    video_sat_end();
     if(pce_panel_restore) {
         /* The cells go back first: the beam reaches the panel a few thousand cycles after the VBlank, and the font and palette
          * restore is slower than that (cells still holding text showed black, in a staircase, for one frame). */

@@ -30,7 +30,8 @@ PCE_FLOW static void pause_copy(uint16_t word,uint16_t *data,uint16_t count,bool
 }
 PCE_FLOW void pause_show(void) {
     uint16_t *saved=(uint16_t*)(buffer+1024);
-    pause_copy(PCE_SAT_WORD,saved,256,true);
+    uint16_t target=video_sat_target();
+    pause_copy(pce_sat_word,saved,256,true);
     pause_copy(PAUSE_WORD,saved+256,192,true);
     pce_vce_copy_palette_to_ram(saved+448,31,1);
     /* Black outline and white ink, with transparent index zero. */
@@ -56,18 +57,19 @@ PCE_FLOW void pause_show(void) {
     }
     /* Put PAUSE first so the hardware sprite limits cannot hide the label.
      * The last three actors are omitted only while paused; all 64 restore. */
-    pause_copy(PCE_SAT_WORD+12,saved,244,false);
+    pause_copy(target+12,saved,244,false);
     vdc_sprite_t *label=sat[1];
     for(uint8_t i=0;i<3;++i)label[i]=(vdc_sprite_t){64+104,32+(pce_raster_enabled?232:104)+i*16,
         (PAUSE_WORD>>5)+i*2,VDC_SPRITE_FG|15};
-    pause_copy(PCE_SAT_WORD,(uint16_t*)label,12,false);
-    video_vdc(VDC_REG_SATB_START,PCE_SAT_WORD);
+    pause_copy(target,(uint16_t*)label,12,false);
+    video_sat_replace(target);
 }
 PCE_FLOW void pause_hide(void) {
     uint16_t *saved=(uint16_t*)(buffer+1024);
     pause_copy(PAUSE_WORD,saved+256,192,false);
     pce_vce_copy_palette(31,saved+448,1);
-    pause_copy(PCE_SAT_WORD,saved,256,false);
-    video_vdc(VDC_REG_SATB_START,PCE_SAT_WORD);
+    uint16_t target=video_sat_target();
+    pause_copy(target,saved,256,false);
+    video_sat_replace(target);
 }
 #endif

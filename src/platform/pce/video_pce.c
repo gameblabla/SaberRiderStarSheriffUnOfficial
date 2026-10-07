@@ -12,6 +12,10 @@ volatile uint16_t pce_draws;
 volatile uint8_t pce_vdc_index;
 volatile uint16_t pce_scroll_x, pce_scroll_y;
 volatile uint8_t pce_scroll_hold;
+/* VRAM SAT sources alternate independently of the RAM drawing/scratch pages. */
+uint16_t pce_sat_word=PCE_SAT_WORD;
+volatile uint8_t pce_sat_pending;
+volatile uint16_t pce_sat_scroll_x,pce_sat_scroll_y;
 volatile uint8_t pce_floor_pending;
 volatile uint8_t pce_race_dialog;
 static const PceScene *scene;
@@ -37,7 +41,7 @@ uint8_t sprite_screen_height=224;
 vdc_sprite_t sat[2][64];
 uint8_t sat_page, sat_count;
 uint16_t generic_id;int16_t generic_x,generic_y;uint8_t generic_flip,generic_scale,generic_count,generic_slot,generic_ok;
-static uint8_t front_start,front_keep,sat_previous=64;
+static uint8_t front_start,front_keep;
 int16_t sprite_emit_x,sprite_emit_y;
 uint16_t sprite_emit_id,video_nsprites;
 uint8_t sprite_optional;   /* set by video_sprite_optional: a refusal is not an essential overflow */
@@ -133,7 +137,7 @@ extern void foreground_reset(void);
 PCE_RENDER void video_scene(const PceScene *s) {
     pce_race_dialog=0;
     foreground_reset();vce_hold=0;
-    scene = s;video_scene_ptr=s;sat_previous=64;video_nsprites=s->nsprites;
+    scene = s;video_scene_ptr=s;video_nsprites=s->nsprites;
     memset(sprite_slot_of,0xff,sizeof sprite_slot_of);
     sprite_screen_height=224;sprite_exact=1;   /* 224-line mode everywhere: playfield rows 28-29 are simply not shown */
     timing(false);
@@ -343,31 +347,52 @@ __attribute__((noinline)) static void sat_transfer(uint16_t word,const void *src
     sat_copy_word=word;sat_copy_src=(uint16_t)src;sat_copy_len=bytes;
     overlay_call(0x6e,sat_copy);
 }
-/* HUD, then foreground occluders, then actors: lower SAT slots win. Segments
- * are uploaded in that order straight from the build order, without moving
- * entries in RAM. Slots left from the previous frame are hidden by Y=0. */
+/* Wait before recycling the previous source. The other page can be written
+ * while the VDC finishes DMA from the submitted page during this VBlank. */
+PCE_RENDER uint16_t video_sat_target(void) {
+    while(pce_sat_pending) {}
+    return pce_sat_word==PCE_SAT_WORD?PCE_SAT_ALT_WORD:PCE_SAT_WORD;
+}
+PCE_RENDER static void sat_publish(uint16_t word,bool drawing) {
+    /* Drain the last VRAM write before exposing the source to DMA. */
+    (void)*IO_VDC_DATA_LO;
+    pce_cpu_irq_disable();
+    if(drawing){pce_sat_scroll_x=pce_scroll_x;pce_sat_scroll_y=pce_scroll_y;pce_scroll_hold=0;}
+    pce_sat_word=word;
+    pce_vdc_index=VDC_REG_SATB_START;
+    *(volatile uint8_t*)0x20f7=VDC_REG_SATB_START;
+    *IO_VDC_INDEX=VDC_REG_SATB_START;
+    *IO_VDC_DATA_LO=word;*IO_VDC_DATA_HI=word>>8;
+    pce_sat_pending=1;
+    ++pce_draws;
+    pce_cpu_irq_enable();
+}
+PCE_RENDER void video_sat_commit(uint16_t word) {sat_publish(word,true);}
+/* Retirement and pause retain the displayed coordinates, including while a
+ * new draw is held. They must not move old entries to that draw's camera. */
+PCE_RENDER void video_sat_replace(uint16_t word) {sat_publish(word,false);}
+/* HUD, foreground occluders, then actors: lower SAT slots win. Each inactive
+ * source receives a complete table, including a hidden tail. Its previous
+ * entry count may differ from both the displayed table and the RAM page. */
 PCE_RENDER void video_sat_end(void) {
+    uint16_t word=video_sat_target();
     vdc_sprite_t *s = sat[sat_page];
     if(!(pce_metrics.frames&31)){uint8_t peak=0;for(uint8_t l=0,n=sprite_exact?224:30;l<n;++l)if(sprite_occupancy[l]>peak)peak=sprite_occupancy[l];
         if(peak>pce_metrics.max_units)pce_metrics.max_units=peak;}
-    for(uint8_t k=sat_count;k<sat_previous;++k)s[k].y=0;
+    for(uint8_t k=sat_count;k<64;++k)s[k].y=0;
     pce_vdc_index = 2; *(volatile uint8_t *)0x20f7 = 2;
-    /* Atomic address/index setup, then <=64-byte transfers with IRQ service
-     * between them. HBlank/VBlank restore index 2 and leave MAWR untouched. */
+    /* Atomic address/index setup, then short transfers with IRQ service. */
     if(front_start<sat_count) {
         uint8_t fg=sat_count-front_start;
-        if(front_keep)sat_transfer(PCE_SAT_WORD,s,(uint16_t)front_keep*8);
-        sat_transfer(PCE_SAT_WORD+(uint16_t)front_keep*4,s+front_start,(uint16_t)fg*8);
+        if(front_keep)sat_transfer(word,s,(uint16_t)front_keep*8);
+        sat_transfer(word+(uint16_t)front_keep*4,s+front_start,(uint16_t)fg*8);
         if(front_start>front_keep)
-            sat_transfer(PCE_SAT_WORD+(uint16_t)(front_keep+fg)*4,s+front_keep,(uint16_t)(front_start-front_keep)*8);
-    } else if(sat_count)sat_transfer(PCE_SAT_WORD,s,(uint16_t)sat_count*8);
-    if(sat_previous>sat_count)
-        sat_transfer(PCE_SAT_WORD+(uint16_t)sat_count*4,s+sat_count,(uint16_t)(sat_previous-sat_count)*8);
-    sat_previous=sat_count;
-    video_vdc(VDC_REG_SATB_START, PCE_SAT_WORD);
-    pce_scroll_hold=0;   /* the new SAT is queued: from the next VBlank both it and the scroll apply */
+            sat_transfer(word+(uint16_t)(front_keep+fg)*4,s+front_keep,(uint16_t)(front_start-front_keep)*8);
+    } else if(sat_count)sat_transfer(word,s,(uint16_t)sat_count*8);
+    if(sat_count<64)
+        sat_transfer(word+(uint16_t)sat_count*4,s+sat_count,(uint16_t)(64-sat_count)*8);
+    video_sat_commit(word);
     pce_metrics.sat_count = sat_count;
-    ++pce_draws;
 }
 PCE_RENDER void video_race_init(void) {
     pce_raster_enabled = 1;

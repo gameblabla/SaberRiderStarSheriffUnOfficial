@@ -30,6 +30,12 @@ bool video_sprite_optional(uint16_t id,int16_t x,int16_t y,bool flip,uint8_t sca
 void video_front_mark(void);
 void video_front_begin(void);
 void video_sat_end(void);
+extern uint16_t pce_sat_word;
+/* All direct SAT edits must copy the active source into this target and
+ * commit only after the entire table is ready. RAM sat[1] stays scratch. */
+uint16_t video_sat_target(void);
+void video_sat_commit(uint16_t word);
+void video_sat_replace(uint16_t word);
 void video_vdc(uint8_t index, uint16_t value);
 void video_race_init(void);
 bool video_race_sky(void);

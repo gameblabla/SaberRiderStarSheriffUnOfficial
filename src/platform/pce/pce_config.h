@@ -31,9 +31,10 @@
 #define PCE_BG_WORD 0x0800
 #define PCE_SPR_WORD 0x4800
 #define PCE_SAT_WORD 0x7f00
+#define PCE_SAT_ALT_WORD 0x7e00   /* $7800-$7dff remains available to the arena HUD/bolts */
 #define PCE_BG_MAX_TILES 896
 #define PCE_FONT_WORD 0x4200
-#define PCE_SPR_BYTES 0x6e00
+#define PCE_SPR_BYTES 0x6c00
 
 _Static_assert(sizeof(int) == 2 && sizeof(void *) == 2, "PCE ABI changed");
 _Static_assert(sizeof(uint32_t) == 4, "32-bit asset handles required");

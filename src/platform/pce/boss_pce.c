@@ -48,26 +48,28 @@ static uint8_t hull_count,hull_ready,hull_level,hull_seen_full,rider_low;
 static uint32_t hull_patterns;   /* the pattern set in VRAM: poses of one ship share it, so only a change of ship reloads it */   /* hull_level: 0 full size, 1 and 2 the mid and far passes */
 static int16_t hull_parts[28][3];
 /* hull_load replaces sprite patterns (and palette 14) that sprites of the SAT on show may still draw from: for the rest of that frame, and while a CD seek holds the
- * loop up, they showed the new ship's graphics. The VRAM SAT is read back, every entry that draws from the overwritten patterns or palette is hidden, and the
+ * loop up, they showed the new ship's graphics. The active VRAM SAT is copied into the inactive source, hiding entries that draw from the overwritten patterns or palette, and the
  * VBlank that takes the edited table is waited for before anything is written. (The cache's pins only protect its own uploads.) */
 PCE_HUD static void hull_hide(void) {
     const uint16_t lo=PCE_SPR_WORD+16*256,hi=PCE_SPR_WORD+40*256;
+    uint16_t target=video_sat_target();
     bool hid=false;
     for(uint8_t k=0;k<64;++k) {
-        uint16_t e[4],a=PCE_SAT_WORD+k*4;
+        uint16_t e[4],a=pce_sat_word+k*4;
         pce_cpu_irq_disable();
         pce_vdc_index=1;*(volatile uint8_t*)0x20f7=1;*IO_VDC_INDEX=1;*IO_VDC_DATA_LO=a;*IO_VDC_DATA_HI=a>>8;
         pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;*IO_VDC_INDEX=2;
         for(uint8_t j=0;j<4;++j){uint8_t l=*IO_VDC_DATA_LO;e[j]=l|(uint16_t)*IO_VDC_DATA_HI<<8;}
         pce_cpu_irq_enable();
-        if(!(e[0]&1023))continue;
+        bool visible=(e[0]&1023)!=0;
         uint16_t start=(e[2]&0x3ff)<<5,words=64;
         if(e[3]&VDC_SPRITE_WIDTH_32)words<<=1;
         switch((e[3]>>12)&3){case 1:words<<=1;break;case 3:words<<=2;break;}
-        if(!((start<hi&&start+words>lo)||(e[3]&15)==14))continue;
-        video_vdc(0,a);video_vdc(2,0);hid=true;
+        if(visible&&((start<hi&&start+words>lo)||(e[3]&15)==14)){e[0]=0;hid=true;}
+        video_vdc(0,target+k*4);
+        for(uint8_t j=0;j<4;++j)video_vdc(2,e[j]);
     }
-    if(hid){video_vdc(VDC_REG_SATB_START,PCE_SAT_WORD);video_wait();}
+    if(hid){video_sat_replace(target);video_wait();}
 }
 PCE_MISSION static void hull_load(void) {
     uint32_t record[3];uint16_t bytes;uint8_t colors[32];
@@ -83,7 +85,7 @@ PCE_MISSION static void hull_load(void) {
         pattern_owner[p]=48;
     }
     sprite_ids[14]=0xffff;sprite_pinned[14]=250;sprite_pinned[47]=250;
-    arcade_read(2,record[0],colors,32);pce_vce_copy_palette(30,colors,1);
+    arcade_read(2,record[0],colors,32);
     arcade_read(2,record[1],hull_parts,hull_count*6);
     if(record[2]!=hull_patterns) {   /* another pose of the ship on show keeps its patterns: only the piece list changed */
         overlay_call(0x7c,hull_hide);
@@ -95,6 +97,7 @@ PCE_MISSION static void hull_load(void) {
          * the sniper is gone). Drop the retained list so the same frame re-admits them beside the hull. */
         foreground_reset();
     }
+    pce_vce_copy_palette(30,colors,1);
     hull_ready=1;
 }
 PCE_MISSION void boss_release(void) {
@@ -279,11 +282,17 @@ __attribute__((noinline,section(".ram_bank116.text"))) static void hull_body(voi
     }
 }
 BOSS_DRAW static void hull(bool flip) {hull_flip=flip;overlay_call(0x74,hull_body);}
+/* Claim/reload the hull before any actors or retained foreground are admitted.
+ * A draw-time reload could otherwise invalidate patterns already in this SAT. */
+PCE_HUD void boss_prepare(void) {
+    bool white=boss_flash!=0&&boss_phase!=12;
+    if(hull_white&&!white)hull_ready=0;
+    hull_white=white;
+    if(!hull_ready&&(boss_phase!=12||(boss_y<250&&(boss_time&1))))overlay_call(0x6f,hull_load);
+}
 BOSS_DRAW void boss_draw(void) {
     bool flip=pce_campaign.boss_kind==2&&(hull_level==3||hull_level==7)?false:boss_phase==1?true:boss_dir;   /* the Hyperjumper's front pose is not mirrored */
     bool white=boss_flash!=0&&boss_phase!=12;   /* a hit blanks the whole hull white (palette 30 is the hull's alone); the colours come back with the hull's load */
-    if(hull_white&&!white)hull_ready=0;
-    hull_white=white;
     if(boss_phase==12) {
         if(boss_y<250&&(boss_time&1))hull(flip);
         for(uint8_t k=0;k<2;++k) {
