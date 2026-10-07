@@ -905,16 +905,18 @@ def make_scene(stage, work, previews, shared):
             for frame_no in (6,12):
                 composite=im.copy();composite.alpha_composite(cblock_whole_frame(art,frame_no));rider.append(composite)
         poses=None
+        rider_poses=hull_set(rider,anchor) if rider else None
         if name=='hyperjumper':
             # Records 0 and 4-6: the side hull normal, boosting (engines lit: moving about) and the two frames of its gun firing (night.c
             # night_draw_layer: the muzzle-flash frame, then the other), one set of patterns (23 cells), four piece lists.
             poses=hull_set([im]+[Image.open(ROOT/f'assets/hyperjumper/{n}.png').convert('RGBA') for n in ('side_boost','side_fire1','side_fire2')],anchor)
         for scale in (1.0,0.75,0.5):
             if poses and scale==1.0:hull_records+=poses[0];continue
+            if rider_poses and scale==1.0:hull_records+=rider_poses[0];continue
             source=rider[0] if rider and scale==1.0 else im
             hull=source if scale==1.0 else source.resize((round(source.width*scale),round(source.height*scale)),Image.Resampling.LANCZOS)
             hull_records+=hull_record(hull,tuple(round(v*scale) for v in anchor))
-        if rider:hull_records+=hull_record(rider[1],anchor)
+        if rider_poses:hull_records+=rider_poses[1]
         if name=='hyperjumper':
             # The Hyperjumper's front pose (it drops in facing the hero, fires straight down and leaves upward; night.c front_pose)
             # is a record of its own, the fourth: Arcade RAM keeps it and it replaces the side hull in the pattern pages while the

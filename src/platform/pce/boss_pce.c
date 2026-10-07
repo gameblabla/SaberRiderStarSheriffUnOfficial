@@ -76,15 +76,6 @@ PCE_MISSION static void hull_load(void) {
     uint32_t address=pce_boss_big[pce_metrics.stage-1]+(uint16_t)hull_level*15;
     arcade_read(2,address,record,12);arcade_read(2,address+12,&bytes,2);
     arcade_read(2,address+14,&hull_count,1);
-    for(uint8_t p=16;p<40;++p) {
-        uint8_t owner=pattern_owner[p];
-        if(owner&&owner!=48) {
-            sprite_ids[owner-1]=0xffff;
-            for(uint8_t q=0;q<48;++q)if(pattern_owner[q]==owner)pattern_owner[q]=0;
-        }
-        pattern_owner[p]=48;
-    }
-    sprite_ids[14]=0xffff;sprite_pinned[14]=250;sprite_pinned[47]=250;
     arcade_read(2,record[0],colors,32);
     arcade_read(2,record[1],hull_parts,hull_count*6);
     if(record[2]!=hull_patterns) {   /* another pose of the ship on show keeps its patterns: only the piece list changed */
@@ -100,6 +91,26 @@ PCE_MISSION static void hull_load(void) {
     pce_vce_copy_palette(30,colors,1);
     hull_ready=1;
 }
+/* Claim the hull's storage without erasing the displayed actors. Keep each
+ * displaced owner's other pages pinned until a complete replacement SAT has
+ * moved those actors to the remaining cache. Only then may hull_load overwrite
+ * the old patterns or palette 14. This runs before boss HP enables hull drawing. */
+PCE_MISSION static void hull_claim(void) {
+    for(uint8_t p=16;p<40;++p) {
+        uint8_t owner=pattern_owner[p];
+        if(owner)sprite_ids[owner-1]=0xffff;
+        pattern_owner[p]=48;
+    }
+    sprite_ids[14]=0xffff;sprite_pinned[14]=250;sprite_pinned[47]=250;
+    foreground_reset();
+    overlay_call(0x7b,play_draw);
+    video_wait();
+    for(uint8_t p=0;p<48;++p) {
+        if(p>=16&&p<40)continue;
+        uint8_t owner=pattern_owner[p];
+        if(owner&&sprite_ids[owner-1]==0xffff)pattern_owner[p]=0;
+    }
+}
 PCE_MISSION void boss_release(void) {
     for(uint8_t p=16;p<40;++p)pattern_owner[p]=0;
     sprite_pinned[14]=sprite_pinned[47]=0;hull_ready=0;hull_patterns=0;
@@ -107,6 +118,8 @@ PCE_MISSION void boss_release(void) {
 PCE_MISSION void boss_start(void) {
     uint8_t kind=pce_campaign.boss_kind;
     hull_level=2;hull_seen_full=0;hull_patterns=0;
+    pce_campaign.boss_hp=0;
+    hull_claim();
     overlay_call(0x6f,hull_load);
     audio_effect(12);   /* the engine pass (the source's sfx 0x13) opens the fight, and every later pass */
     boss_phase=0;boss_dir=0;rider_low=0;boss_time=boss_hold=boss_clock=0;boss_flash=boss_cd=boss_rcd=boss_fx=boss_cycle=0;boss_vy=0;
