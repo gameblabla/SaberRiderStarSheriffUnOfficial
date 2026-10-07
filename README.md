@@ -1,10 +1,27 @@
 # Saber Rider and the Star Sheriffs — demo reconstruction
 
-A C11 + SDL3 re-implementation of the cancelled 2017–2019 Kickstarter game's public demo
+A C11 + SDL3 **Unofficial** re-implementation of the cancelled 2017–2019 Kickstarter game's public demo
 (the "Hero Mode" level 1 with Fireball), reverse-engineered from the Linux demo executable
 and its E2DM data packs. The game reads the **original** `data/*.pck` files directly; the demo's
 six packs are kept unchanged in `SaberRider/data/`, the default data folder of every build
 and run script (pass another `data/` folder to use your own copy).
+
+**Updated**
+
+I want to be extremely clear to avoid any confusion :
+the game that the Kickstarter promised, was **never released**.
+The last update we got from Chris Straub was from 2018 !
+We only got a single demo out of it.
+
+My point is that i used AI (Claude Opus in this instance, among others) for this project precisely
+because Chris **failed to delivery the rewards and the game he promised in the first place**.
+
+If you don't like AI and want to have the 'human-made' version,
+there's the one level demo that Chris released back in 2017 that you can play instead.
+I understand the irony of fully stating this but the point is, **there is no current alternative**.
+
+Please read my full statement in the Release page to learn more, thanks.
+
 
 ## Build
 
