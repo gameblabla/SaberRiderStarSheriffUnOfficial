@@ -248,13 +248,7 @@ RACE_CODE static void race_tick(uint8_t keys) {
         if(phase_t>=192) {
             if(finish_rank<=3) {
                 pce_campaign.story=1;pce_campaign.event=1;
-                /* BM_WRITE runs at low CPU speed with IRQs masked. Hide the
-                 * scanline-scrolled road while saving, then let VBlank reset
-                 * its raster before showing the retained scene and dialogue. */
-                video_wait();video_display(false);
-                save_store(2,pce_control.hero,1);
-                video_wait();video_display(true);
-                audio_music(14);   /* the pursuit's own track (mode7.c PH_PURSUIT) */
+                save_store(2,pce_control.hero,1);audio_music(14);   /* the pursuit's own track (mode7.c PH_PURSUIT) */
             } else {pce_metrics.hp=1;campaign_hurt();}   /* must finish 3rd or better: a life, and the race again */
         }
         break;
