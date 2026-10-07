@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Package a release in release/
-#   saber_rider-linux-x86_64-<version>.AppImage  the SDL3 build, bundled libraries, assets/ and data/*.pck
+#   saber_rider-linux-x86_64-<version>.AppImage  the Linux build (private SDL3 + minimal static FFmpeg/vorbis
+#     via Makefile.linux, bundled with linuxdeploy), assets/ and data/*.pck
 #   saber_rider-windows-x86_64-<version>.zip  the MinGW-w64 static build (no DLLs to ship), assets/ and the demo's data/*.pck
 #   saber_rider-dreamcast-<version>.zip     the self-booting CDI (the packs are on the disc)
 #   saber_rider-saturn-<version>.zip        the CD image (a single cue/bin, like a retail disc; the packs are baked onto it)
@@ -43,58 +44,66 @@ if [ $want_linux = 1 ] || [ $want_win = 1 ] || [ $want_dc = 1 ] || [ $want_sat =
 fi
 
 VERSION="$(date +%Y%m%d)-$(git rev-parse --short HEAD)"
-git diff --quiet HEAD -- src assets Makefile Makefile.dc Makefile.pce Makefile.win Makefile.saturn tools || VERSION="$VERSION-dirty"
+git diff --quiet HEAD -- src assets Makefile Makefile.linux Makefile.dc Makefile.pce Makefile.win Makefile.saturn tools || VERSION="$VERSION-dirty"
 OUT="$ROOT/release"
 mkdir -p "$OUT"
 
 # ---------------------------------------------------------------- Linux
+# Hermetic AppImage: the game is built by Makefile.linux against a private
+# prefix (build/linux/deps) holding our own SDL3 (shared) plus a minimal
+# static FFmpeg (MPEG-4/PNG decoders only) and static ogg/vorbis, so the
+# binary links none of Void's libavcodec dependency tree (x264/x265/vpx,
+# libmp3lame, ...) and no system SDL3/vorbis. There is no private mpg123
+# because nothing uses MP3 (music is Ogg, sfx are WAV/ADPCM, video is
+# MPEG-4): mpg123 used to leak in only via Void's full FFmpeg and Void's
+# PulseAudio->sndfile chain. linuxdeploy then bundles the private libSDL3
+# and the remaining loadable libraries, while its excludelist correctly
+# leaves the desktop/audio integration (X11/xcb, Wayland, GL/DRM, ALSA,
+# PulseAudio incl. its sndfile/mpg123 chain, D-Bus) to the host.
 package_linux() {
     echo "== Linux AppImage build"
-    local appimagetool="${APPIMAGETOOL:-appimagetool}"
-    command -v "$appimagetool" >/dev/null 2>&1 || {
-        echo "appimagetool not found; install AppImageKit or set APPIMAGETOOL to its executable" >&2
+    make -f Makefile.linux -j"$(nproc)"
+    local bin="build/linux/saber_rider"
+    # Direct Void linkage must be gone: only our own libSDL3 may appear, and
+    # none of Void's full-FFmpeg tree may be needed anymore.
+    if ldd "$bin" | grep -E "libavcodec|libavutil|libswscale|libvorbisfile|libx264|libx265|libvpx|libmp3lame" >/dev/null; then
+        echo "private Linux build still links system FFmpeg/vorbis libs:" >&2
+        ldd "$bin" | grep -E "libavcodec|libavutil|libswscale|libvorbisfile|libx264|libx265|libvpx|libmp3lame" >&2
         exit 1
-    }
-    make -j"$(nproc)"
+    fi
+    local sdl3_path
+    sdl3_path="$(ldd "$bin" | awk '$1 == "libSDL3.so.0" { print $3 }')"
+    case "$sdl3_path" in
+        "$ROOT/build/linux/deps/"*) ;;
+        *) echo "saber_rider does not link the private SDL3 (got: $sdl3_path)" >&2; exit 1 ;;
+    esac
+
+    # Fetch linuxdeploy (AppImage) unless LINUXDEPLOY points at one already.
+    local linuxdeploy="${LINUXDEPLOY:-$ROOT/build/linux/tools/linuxdeploy-x86_64.AppImage}"
+    if [ ! -x "$linuxdeploy" ]; then
+        mkdir -p "$(dirname "$linuxdeploy")"
+        echo "downloading linuxdeploy to $linuxdeploy"
+        curl -fL -o "$linuxdeploy.part" \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+        mv "$linuxdeploy.part" "$linuxdeploy"
+        chmod +x "$linuxdeploy"
+    fi
+
     local stage="$OUT/linux/AppDir"
-    local bin="$stage/usr/bin/saber_rider" lib="$stage/usr/lib"
     local share="$stage/usr/share/saber-rider"
     rm -rf "$stage"
-    mkdir -p "$stage/usr/bin" "$lib" "$share/data" "$stage/usr/share/doc/saber-rider"
+    mkdir -p "$stage/usr/bin" "$share/data" "$stage/usr/share/doc/saber-rider"
 
-    strip --strip-debug -o "$bin" saber_rider
+    # Stripped copy for linuxdeploy to plant in usr/bin (keeps the build
+    # tree unstripped for debugging).
+    strip --strip-debug -o "$stage/usr/bin/saber_rider" "$bin"
     cp -r assets "$share/"
     for p in "${PACKS[@]}"; do cp "$DATA/$p" "$share/data/"; done
-
-    # Bundle everything the binary links except glibc and the libraries that must match the user's desktop
-    # (X11 / xcb / Wayland / GL / DRM, ALSA / PulseAudio / D-Bus and the libraries PulseAudio pulls in).
-    local keep_exact='^(ld-linux-x86-64|linux-vdso|libc|libm|libdl|libpthread|librt|libresolv|libutil|libXau|libXdmcp|libasound|libdbus-1|libffi|libsndfile|libFLAC|libmpg123|libasyncns|libsystemd|libcap|libgbm)\.so'
-    local keep_family='^(libX11|libxcb|libwayland|libGL|libEGL|libOpenGL|libdrm|libpulse)'
-    ldd saber_rider | awk '$2 == "=>" && $3 ~ /^\// { print $1, $3 }' | while read -r name path; do
-        name="${name##*/}"                 # the loader is listed by path (/lib64/ld-linux-x86-64.so.2 => ...)
-        [[ "$name" =~ $keep_exact || "$name" =~ $keep_family ]] && continue
-        cp -L "$path" "$lib/$name"
-    done
-    if LD_LIBRARY_PATH="$lib" ldd "$bin" | grep -q "not found"; then
-        LD_LIBRARY_PATH="$lib" ldd "$bin" | grep "not found" >&2; exit 1
-    fi
-    local glibc
-    glibc="$(objdump -T "$bin" "$lib"/*.so* 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1 | cut -d_ -f2)"
-
-    cat > "$stage/AppRun" <<'EOF'
-#!/bin/sh
-# AppImage runtime sets APPDIR; readlink also supports direct AppRun use while developing the AppDir.
-APPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
-export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export SABER_ASSETS="$APPDIR/usr/share/saber-rider/assets"
-exec "$APPDIR/usr/bin/saber_rider" "$APPDIR/usr/share/saber-rider/data" "$@"
-EOF
-    chmod +x "$stage/AppRun" "$bin"
 
     cat > "$stage/saber-rider.desktop" <<'EOF'
 [Desktop Entry]
 Name=Saber Rider and the Star Sheriffs
-Exec=AppRun
+Exec=saber_rider
 Icon=saber_rider
 Type=Application
 Categories=Game;ArcadeGame;
@@ -102,13 +111,63 @@ Terminal=false
 EOF
     cp SaberRider/icon.png "$stage/saber_rider.png"
 
+    # Custom AppRun: linuxdeploy deploys this verbatim (--custom-apprun) and
+    # still bundles usr/lib + the desktop/icon around it.
+    local apprun_src="$OUT/linux/apprun.sh"
+    cat > "$apprun_src" <<'EOF'
+#!/bin/sh
+# AppImage runtime sets APPDIR; readlink also supports direct AppRun use while developing the AppDir.
+APPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
+export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export SABER_ASSETS="$APPDIR/usr/share/saber-rider/assets"
+exec "$APPDIR/usr/bin/saber_rider" "$APPDIR/usr/share/saber-rider/data" "$@"
+EOF
+    chmod +x "$apprun_src"
+
+    local appimage="$OUT/saber_rider-linux-x86_64-$VERSION.AppImage"
+    rm -f "$appimage"
+    # linuxdeploy runs everywhere via EXTRACT_AND_RUN (no FUSE needed) and
+    # ships the appimage output plugin, so no separate appimagetool needed.
+    # A custom runtime can be injected with APPIMAGE_RUNTIME= (passed to the
+    # plugin as LDAI_RUNTIME_FILE). Phase 1 only fills the AppDir (libraries,
+    # desktop/icon, custom AppRun); phase 2 packs the AppImage once the README
+    # with the real glibc floor is in place.
+    local deploy_common=(
+        "$linuxdeploy" --appdir AppDir
+            --executable AppDir/usr/bin/saber_rider
+            --desktop-file AppDir/saber-rider.desktop
+            --icon-file AppDir/saber_rider.png
+            --custom-apprun apprun.sh
+    )
+    (   cd "$OUT/linux"
+        APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 \
+        ${APPIMAGE_RUNTIME:+LDAI_RUNTIME_FILE="$APPIMAGE_RUNTIME"} \
+        "${deploy_common[@]}"
+    )
+
+    # The bundle must not contain host-GPU or Void-only codec blobs: those
+    # would come from a hand-rolled ldd copy, which is exactly what
+    # linuxdeploy replaces.
+    if ls "$stage/usr/lib" | grep -iE "OpenCL|cuda|x264|x265|libvpx|mp3lame|mpg123" >/dev/null 2>&1; then
+        echo "unexpected host/codec libraries bundled (should be left to linuxdeploy's excludelist):" >&2
+        ls "$stage/usr/lib" | grep -iE "OpenCL|cuda|x264|x265|libvpx|mp3lame|mpg123" >&2
+        exit 1
+    fi
+    if LD_LIBRARY_PATH="$stage/usr/lib" ldd "$stage/usr/bin/saber_rider" | grep -q "not found"; then
+        LD_LIBRARY_PATH="$stage/usr/lib" ldd "$stage/usr/bin/saber_rider" | grep "not found" >&2; exit 1
+    fi
+    local glibc
+    glibc="$(objdump -T "$stage/usr/bin/saber_rider" "$stage"/usr/lib/*.so* 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1 | cut -d_ -f2)"
+
     cat > "$stage/usr/share/doc/saber-rider/README.txt" <<EOF
 Saber Rider and the Star Sheriffs - demo reconstruction, Linux x86_64 AppImage ($VERSION)
 
 Run the AppImage (or pass --level N to start on stage N, 1-7).
 
 Needs glibc $glibc or newer, and an X11 or Wayland desktop with ALSA or PulseAudio/PipeWire sound.
-The AppImage bundles the game, SDL3, FFmpeg, Vorbis, assets and the demo's .pck packs.
+The AppImage bundles the game with its own SDL3 and its video/audio decoders (minimal FFmpeg, Vorbis),
+plus assets and the demo's .pck packs. The desktop's audio/display stack (ALSA/PulseAudio, X11/Wayland,
+GL) is used from the host.
 
 Controls: arrows move, W/A jump, S/D shoot, hold Q/E to aim (8 directions), X/F power attack,
 Enter starts / pauses, Alt+Enter toggles fullscreen. Down+jump slides; down+jump on a platform drops through.
@@ -116,11 +175,13 @@ Gamepad: d-pad/stick, South jump, East/West shoot, North power attack, shoulders
 OPTIONS sets the screen (fullscreen / window size), ratio and filter; OPTIONS > CONTROLS remaps the keyboard
 and the gamepad (saved in ~/.local/share/SaberRider/SaberRider/controls.cfg).
 EOF
-    local appimage="$OUT/saber_rider-linux-x86_64-$VERSION.AppImage"
-    rm -f "$appimage"
-    local runtime_args=()
-    if [ -n "${APPIMAGE_RUNTIME:-}" ]; then runtime_args=(--runtime-file "$APPIMAGE_RUNTIME"); fi
-    APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 "$appimagetool" "${runtime_args[@]}" "$stage" "$appimage"
+    # Phase 2: pack the AppImage (the README above is included too).
+    (   cd "$OUT/linux"
+        APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 \
+        OUTPUT="$appimage" LDAI_OUTPUT="$appimage" \
+        ${APPIMAGE_RUNTIME:+LDAI_RUNTIME_FILE="$APPIMAGE_RUNTIME"} \
+        "${deploy_common[@]}" --output appimage
+    )
     chmod +x "$appimage"
     echo "-> $appimage ($(du -h "$appimage" | cut -f1))"
 }
