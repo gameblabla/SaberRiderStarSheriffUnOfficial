@@ -14,7 +14,7 @@ The last update we got from Chris Straub was from 2018 !
 We only got a single demo out of it.
 
 My point is that i used AI (Claude Opus in this instance, among others) for this project precisely
-because Chris **failed to delivery the rewards and the game he promised in the first place**.
+because Chris **failed to deliver the rewards and the game he promised in the first place**.
 
 If you don't like AI and want to have the 'human-made' version,
 there's the one level demo that Chris released back in 2017 that you can play instead.
