@@ -79,6 +79,9 @@ POWER_CODE void power_frame(void) {
     uint8_t stage=pce_metrics.stage,col0=pce_scroll_x>>3,row0=7+(pce_scroll_y>>3);
     uint32_t wave=pce_power_wave[stage-1];
     if(!t) {
+        /* End the space flash's palette ownership before the cut-in starts
+         * fading; otherwise its writes only update the held flash palette. */
+        if(stage==7)overlay_call(0x78,space_screen_flash_end);
         if(stage<6)pce_scroll_y=0;   /* (a shake left over from the last frame) */
         row0=7;
         ui_fade(8);   /* every palette, into the snapshot */

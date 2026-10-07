@@ -29,6 +29,11 @@ static const int8_t sine[32] PCE_TABLE={0,25,49,71,90,106,117,125,127,125,117,10
 #endif
 PCE_FLOW static bool change_stage(uint8_t n) {
     uint8_t resume=resume_phase;resume_phase=0;
+    /* Every card owns the standard font. Race dialogue replaces it with
+     * double-width glyphs, and front-end screens can replace it too. Reload
+     * only after hiding the old screen, before the card publishes any text. */
+    audio_stop();video_display(false);pce_raster_enabled=0;
+    if(!loader_font())return false;
     pce_control.stage=n;overlay_call(0x71,frontend_card);
     pce_metrics.ready=0;stage=n;
 #ifndef RETAIL
@@ -130,7 +135,6 @@ PCE_FLOW void flow_main(void) {
     pce_metrics.arcade_ports=arcade_selftest();if(pce_metrics.arcade_ports!=15)for(;;){}
     pce_control.stage=0;pce_control.hero=hero;
     overlay_call(0x72,frontend_start);if(!pce_control.ok)for(;;){};
-    if(!loader_font())for(;;){}
     hero=pce_control.hero;
     uint8_t initial=pce_control.stage?pce_control.stage:PCE_START_STAGE;
     if(!change_stage(initial))for(;;){}
@@ -157,7 +161,7 @@ PCE_FLOW void flow_main(void) {
                 menu=0;
                 if(selected!=stage||hero!=menu_hero||pce_campaign.diagnostic!=menu_mode) {
                     audio_stop();
-                    if(!loader_font()||!change_stage(selected))for(;;){};
+                    if(!change_stage(selected))for(;;){};
                 } else {
                     video_restore();
                     if(stage==2){overlay_call(0x6d,road_start);if(!pce_control.ok)for(;;){};video_display(true);}
@@ -193,7 +197,6 @@ PCE_FLOW void flow_main(void) {
                     if(pce_continues)overlay_call(0x71,frontend_continue);
                     if(pce_control.ok) {
                         /* A continue restarts the current stage (or race phase) with fresh lives. */
-                        if(!loader_font())for(;;){}
                         pce_campaign.state=CAM_PLAY;pce_campaign.result=2;pce_metrics.hp=campaign_hearts();
                         simulation_tick=pce_ticks;continue;
                     }
@@ -202,7 +205,6 @@ PCE_FLOW void flow_main(void) {
                 } else overlay_call(0x71,frontend_credits);
                 pce_control.stage=0;pce_control.hero=hero;
                 overlay_call(0x72,frontend_start);if(!pce_control.ok)for(;;){};
-                if(!loader_font())for(;;){}
                 hero=pce_control.hero;
                 if(!change_stage(1))for(;;){};
                 simulation_tick=pce_ticks;
@@ -212,7 +214,7 @@ PCE_FLOW void flow_main(void) {
                 if(stage!=6)overlay_call(0x72,frontend_victory);else audio_stop();   /* (the arena runs straight on into the cruiser: no victory painting, and the disc reads that follow want the music stopped) */
                 if(stage==7){pce_campaign.state=CAM_END;continue;}
                 pce_campaign.powers=2;
-                if(!loader_font()||!change_stage(stage+1))for(;;){};
+                if(!change_stage(stage+1))for(;;){};
                 simulation_tick=pce_ticks;
                 continue;
             }

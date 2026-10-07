@@ -16,12 +16,15 @@ volatile uint16_t pce_sky_far,pce_sky_near;
 int16_t space_hull_x;uint16_t space_hull_char;
 /* The hull's cells and the black playfield round them (the whole 64x32 BAT: the dialogue's cells and the beam's are wiped too). */
 PCE_SCENERY void space_hull_bat(void) {
+    /* The power cut-in restores this BAT while its palette snapshot still
+     * occupies buffer[0..1023]. Keep background staging in the scratch half. */
+    uint16_t *cells=(uint16_t*)(buffer+1024);
     video_vdc(0,0);
     for(uint16_t i=0;i<2048;++i)video_vdc(2,PCE_BG_WORD>>4);
-    arcade_read(2,pce_boss_bg[6]+192,buffer,23*13*2);
+    arcade_read(2,pce_boss_bg[6]+192,cells,23*13*2);
     for(uint8_t y=0;y<13;++y) {
         video_vdc(0,(uint16_t)y*64);
-        for(uint8_t x=0;x<23;++x)video_vdc(2,((uint16_t*)buffer)[(uint16_t)y*23+x]+(PCE_BG_WORD>>4));
+        for(uint8_t x=0;x<23;++x)video_vdc(2,cells[(uint16_t)y*23+x]+(PCE_BG_WORD>>4));
     }
 }
 /* The nose cannon's beam, a stripe of cells left of the hull (BAT columns 54-63) at the nose's rows, drawn in the BG so that it moves with the
@@ -98,6 +101,9 @@ PCE_SCENERY void space_screen_flash(uint8_t frames) {
         pce_vce_copy_palette(0,flash_palette,32);space_flashing=0;
     }
 }
+
+/* No-argument entry for cut-ins in another overlay bank. */
+PCE_SCENERY void space_screen_flash_end(void) {space_screen_flash(0);}
 
 /* Platform dialogue corners are ordinary cached sprites now (story_pce.c draws the two halves, which hold
  * only the four rounded corners): no reserved patterns, and shared sprite palette 31 stays the foreground's. */
