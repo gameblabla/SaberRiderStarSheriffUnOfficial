@@ -18,7 +18,10 @@ import subprocess
 FPS = 12
 RATE = 22050
 MAX_STRIPS = 2       # libyaul_cinepak has two strip codebooks
-CACHE_VERSION = 4    # CPK/FILM + ADX, continuous audio timestamps
+CD_SAFE_BYTES_PER_SECOND = 250_000  # 250 kB/s target, below the Saturn drive's ~290 kB/s soft limit
+DEFAULT_QUALITY = 2  # FFmpeg Cinepak default; larger qscale values spend fewer bits
+MAX_QUALITY = 31     # FFmpeg's generic fixed-quality scale ceiling
+CACHE_VERSION = 5    # CPK/FILM + ADX + enforced Saturn CD data rate
 END_FADE = 0.15      # make(end_with_picture=True): seconds the audio fades out over, up to the picture's end
 
 
@@ -85,6 +88,68 @@ def _adx(path: Path) -> tuple[bytes, bytes, int, int, int]:
         raise RuntimeError(f'{path}: ADX payload is not aligned to {group}-byte channel groups')
     samples = (len(payload) // group) * 32
     return data[:header_size], payload, channels, rate, samples
+
+
+def _rate_stats(path: Path) -> tuple[int, int]:
+    """Return peak one-second and whole-file rates, in bytes/second.
+
+    CPK audio samples use time=0xffffffff and are written immediately before
+    the video sample for their interval. Count those bytes in that interval;
+    audio that outlasts the picture is charged after the final video frame.
+    """
+    data = path.read_bytes()
+    if len(data) < 64 or data[:4] != b'FILM' or data[16:20] != b'FDSC' or data[48:52] != b'STAB':
+        raise RuntimeError(f'{path}: not a Sega FILM file')
+    head_size = _be32(data, 4)
+    ticks = _be32(data, 56)
+    count = _be32(data, 60)
+    if ticks == 0 or count == 0 or head_size > len(data) or 64 + count * 16 > head_size:
+        raise RuntimeError(f'{path}: invalid FILM sample table')
+
+    events: list[tuple[int, int]] = []
+    pending_audio: list[tuple[int, int]] = []
+    last_video_end = 0
+    movie_end = 0
+    for i in range(count):
+        offset, length, time, duration = struct.unpack_from('>IIII', data, 64 + i * 16)
+        if head_size + offset + length > len(data):
+            raise RuntimeError(f'{path}: truncated FILM sample {i}')
+        if time == 0xFFFFFFFF:
+            pending_audio.append((length, max(duration, 1)))
+            continue
+        # Bit 31 marks keyframes in normal sample timestamps too. The explicit
+        # terminal no-op sample is identified by its 12-byte Cinepak header.
+        sample = data[head_size + offset:head_size + offset + length]
+        if length == 12 and sample[:4] == b'\x01\x00\x00\x0c':
+            movie_end = max(movie_end, time & 0x7FFFFFFF)
+            continue
+
+        time &= 0x7FFFFFFF
+        if pending_audio:
+            events.append((time, sum(size for size, _ in pending_audio)))
+            pending_audio.clear()
+        events.append((time, length))
+        last_video_end = max(last_video_end, time + max(duration, 1))
+
+    tail_time = last_video_end
+    for size, duration in pending_audio:
+        events.append((tail_time, size))
+        tail_time += duration
+    duration_ticks = max(movie_end, last_video_end, tail_time, 1)
+    events.sort()
+
+    window_ticks = min(ticks, duration_ticks)
+    left = total = peak_bytes = 0
+    for right, (time, size) in enumerate(events):
+        total += size
+        while time - events[left][0] >= window_ticks:
+            total -= events[left][1]
+            left += 1
+        peak_bytes = max(peak_bytes, total)
+
+    peak_rate = math.ceil(peak_bytes * ticks / window_ticks)
+    average_rate = math.ceil(len(data) * ticks / duration_ticks)
+    return peak_rate, average_rate
 
 
 def _mux(video_film: Path, adx_file: Path, out: Path) -> tuple[int, int, int, int, int]:
@@ -180,21 +245,32 @@ def make(source: Path, out: Path, work: Path, size: tuple[int, int], vf: str,
     key_data = [str(source), source.stat().st_size, source.stat().st_mtime,
                 str(audio_path), audio_path.stat().st_size if audio_path else 0,
                 audio_path.stat().st_mtime if audio_path else 0,
-                size, vf, list(in_args), FPS, RATE, MAX_STRIPS, CACHE_VERSION, end_with_picture and END_FADE]
+                size, vf, list(in_args), FPS, RATE, MAX_STRIPS, CD_SAFE_BYTES_PER_SECOND,
+                DEFAULT_QUALITY, MAX_QUALITY, CACHE_VERSION, end_with_picture and END_FADE]
     key = hashlib.sha1(json.dumps(key_data).encode()).hexdigest()[:16]
     cached = work / f'{out.stem}.{key}.cpk'
     if cached.exists() and cached.stat().st_size:
-        shutil.copy2(cached, out)
-        return
+        try:
+            peak_rate, average_rate = _rate_stats(cached)
+        except (RuntimeError, struct.error):
+            peak_rate = average_rate = CD_SAFE_BYTES_PER_SECOND + 1
+        if peak_rate <= CD_SAFE_BYTES_PER_SECOND and average_rate <= CD_SAFE_BYTES_PER_SECOND:
+            shutil.copy2(cached, out)
+            return
 
     work.mkdir(parents=True, exist_ok=True)
     ff = [ffmpeg_exe(), '-nostdin', '-hide_banner', '-loglevel', 'error', '-y']
     video_film = work / f'{out.stem}.{key}.video.cpk'
     adx = work / f'{out.stem}.{key}.adx'
     filters = ','.join(x for x in (vf, f'scale={width}:{height}:flags=lanczos', f'fps={FPS}') if x)
-    subprocess.run(ff + list(in_args) + ['-i', str(source), '-an', '-vf', filters, '-pix_fmt', 'rgb24',
-                                        '-c:v', 'cinepak', '-max_strips', str(MAX_STRIPS),
-                                        '-f', 'film_cpk', str(video_film)], check=True)
+
+    def encode_video(quality: int) -> None:
+        subprocess.run(ff + list(in_args) + ['-i', str(source), '-an', '-vf', filters, '-pix_fmt', 'rgb24',
+                                            '-c:v', 'cinepak', '-q:v', str(quality),
+                                            '-max_strips', str(MAX_STRIPS),
+                                            '-f', 'film_cpk', str(video_film)], check=True)
+
+    encode_video(DEFAULT_QUALITY)
 
     audio_source = audio_path if audio_path else source
     audio_args = [] if audio_path else list(in_args)
@@ -214,9 +290,35 @@ def make(source: Path, out: Path, work: Path, size: tuple[int, int], vf: str,
         subprocess.run(ff + ['-f', 'lavfi', '-i', f'anullsrc=r={RATE}:cl=mono', '-t', f'{duration:.6f}',
                              '-c:a', 'adpcm_adx', '-f', 'adx', str(adx)], check=True)
 
-    w, h, nframes, nentries, rate = _mux(video_film, adx, out)
+    candidate = work / f'{out.stem}.{key}.rate-check.cpk'
+    selected_quality = None
+    movie_info = None
+    peak_rate = average_rate = 0
+    for quality in range(DEFAULT_QUALITY, MAX_QUALITY + 1):
+        if quality != DEFAULT_QUALITY:
+            encode_video(quality)
+        movie_info = _mux(video_film, adx, candidate)
+        peak_rate, average_rate = _rate_stats(candidate)
+        if peak_rate <= CD_SAFE_BYTES_PER_SECOND and average_rate <= CD_SAFE_BYTES_PER_SECOND:
+            selected_quality = quality
+            break
+        log(f'video {out.name}: Cinepak q={quality} exceeds Saturn CD limit '
+            f'(peak {peak_rate / 1024:.1f}, average {average_rate / 1024:.1f} KiB/s); retrying')
+
+    if selected_quality is None:
+        candidate.unlink(missing_ok=True)
+        raise RuntimeError(f'{out.name}: Cinepak cannot meet Saturn CD limit of '
+                           f'{CD_SAFE_BYTES_PER_SECOND / 1000:.0f} kB/s even at q={MAX_QUALITY} '
+                           f'(peak {peak_rate / 1024:.1f}, average {average_rate / 1024:.1f} KiB/s)')
+
+    shutil.copy2(candidate, out)
+    candidate.unlink(missing_ok=True)
     shutil.copy2(out, cached)
     # ffprobe understands the output as a normal Sega FILM/Cinepak + ADX file.
+    assert movie_info is not None
+    w, h, nframes, nentries, rate = movie_info
     secs = nframes / FPS
     log(f'video {out.name}: {w}x{h}, {nframes} frames ({secs:.1f} s), {out.stat().st_size // 1024} KB, '
-        f'{out.stat().st_size / secs / 1024 if secs else 0:.0f} KB/s, {nentries} samples, ADX {rate} Hz')
+        f'{out.stat().st_size / secs / 1024 if secs else 0:.0f} KB/s, {nentries} samples, ADX {rate} Hz, '
+        f'Cinepak q={selected_quality}, peak {peak_rate / 1024:.1f} KiB/s, '
+        f'average {average_rate / 1024:.1f} KiB/s')
