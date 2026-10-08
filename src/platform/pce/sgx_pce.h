@@ -11,6 +11,14 @@ typedef struct {
     uint8_t vdc1_max_units, vdc1_sat_count;
 } PceSgxTelemetry;
 
+typedef struct __attribute__((packed)) {
+    uint32_t tiles,map;
+    uint16_t bytes;
+    uint8_t bat_cols;
+    uint32_t foreground_slow;
+    uint16_t nforeground_slow;
+} PceSgxSkyRecord;
+
 #define PCE_SGX_ACTIVE       0x01
 #define PCE_SGX_PRIORITY     0x02
 #define PCE_SGX_PAIR_ACTIVE  0x04

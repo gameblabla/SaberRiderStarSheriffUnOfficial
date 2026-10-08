@@ -318,7 +318,7 @@ sprite_lines_clear:
  * Scratch: $d8/d9 record pointer, $da remaining, $db last band, $c0/c1 SAT out,
  * $c4/c5 screen X word. */
 .global fg_emit
-.extern fg_parts, fg_count, fg_camera, sat, sat_count, sprite_used
+.extern fg_parts, fg_count, fg_camera, fg_camera_slow, sat, sat_count, sprite_used
 fg_emit:
     lda fg_count
     bne 1f
@@ -349,6 +349,20 @@ fg_emit:
     tax
     lda #1
     sta sprite_used,x
+    ldy #11
+    lda ($20d8),y
+    beq .Lfnormal
+    ldy #2
+    sec
+    lda ($20d8),y
+    sbc fg_camera_slow
+    sta $20c4
+    iny
+    lda ($20d8),y
+    sbc fg_camera_slow+1
+    sta $20c5
+    bra .Lfposition
+.Lfnormal:
     ldy #2
     sec
     lda ($20d8),y
@@ -358,6 +372,7 @@ fg_emit:
     lda ($20d8),y
     sbc fg_camera+1
     sta $20c5
+.Lfposition:
     beq .Lflow
     cmp #1
     bne .Lfskip

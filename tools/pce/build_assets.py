@@ -213,6 +213,43 @@ def thin_foreground(fg,max_pieces=FG_MAX_PIECES,max_units=FG_MAX_UNITS):
     print(f'  foreground thinned: {removed} chunks removed', flush=True)
     return Image.fromarray(a)
 
+def thin_foreground_layers(images,camera_width,max_pieces=37,max_units=12):
+    """Thin independently scrolling 1.2x and 1.0x foreground maps against their combined visible window."""
+    arrays=[np.asarray(im).copy() for im in images]
+    blocks=[]
+    for a in arrays:
+        h,w=a.shape[:2];b=np.zeros((h//16,w//16),bool)
+        for y in range(b.shape[0]):
+            for x in range(b.shape[1]):b[y,x]=(a[y*16:y*16+16,x*16:x*16+16,3]>0).any()
+        blocks.append(b)
+    removed=[0]*len(blocks)
+    rates=(1.2,1.0)
+    again=True
+    while again:
+        again=False
+        for cam in range(0,max(1,camera_width-255),16):
+            windows=[];total=0;rows=np.zeros(blocks[0].shape[0],np.int32)
+            for i,b in enumerate(blocks):
+                layer_cam=(cam*6)//5 if rates[i]==1.2 else cam
+                c0=max(0,(layer_cam-31)//16);c1=min(b.shape[1],(layer_cam+256)//16+1)
+                sub=b[:,c0:c1];windows.append((c0,c1,sub))
+                total+=int(sub.sum());rows+=sub.sum(1)
+            if total<=max_pieces and int(rows.max())<=max_units:continue
+            best=None
+            for i,(c0,c1,_) in enumerate(windows):
+                b=blocks[i]
+                for cy in range(0,b.shape[0],2):
+                    for cx in range((c0//2)*2,c1,2):
+                        n=int(b[cy:cy+2,cx:cx+2].sum())
+                        if n and (best is None or n>best[0]):best=(n,i,cy,cx)
+            if best is None:continue
+            _,i,cy,cx=best
+            blocks[i][cy:cy+2,cx:cx+2]=False
+            arrays[i][cy*16:cy*16+32,cx*16:cx*16+32]=0
+            removed[i]+=1;again=True;break
+    print(f'  foreground thinned: 1.2x={removed[0]} and 1.0x={removed[1]} chunks removed',flush=True)
+    return [Image.fromarray(a) for a in arrays]
+
 # A scrolling column releases the tiles only it used (up to 30) but they stay unavailable until the next frame, because the
 # old picture is still being displayed from them (video_pce.c, held slots); the column scrolling in needs its own new tiles
 # meanwhile. A window filled to the brim of the cache left no room for that, and the left edge showed another column's tiles.
@@ -599,6 +636,16 @@ def platform_background(stage, work, sgx=False):
     out = Image.new('RGBA', (width, 240), (0, 0, 0, 255))
     sgx_main = Image.new('RGBA', (width, 240), (0, 0, 0, 0)) if sgx and stage in (1, 3, 4, 5) else None
     foreground = Image.new('RGBA',(width,240))
+    after_player=False
+    slow_layers=[]
+    if sgx:
+        for ly in level.layers:
+            if ly.name=='PlayerSprites':after_player=True
+            elif after_player and ly.is_tilemap and ly.parallax>1.0:
+                if abs(ly.parallax-1.2)>0.001:raise ValueError(f'{ly.name}: unsupported SGX foreground parallax {ly.parallax}')
+                slow_layers.append(ly)
+    slow_width=max([width]+[math.ceil(ly.w*banks[ly.cblock].tw/256)*256 for ly in slow_layers])
+    foreground_slow=Image.new('RGBA',(slow_width,240))
     continuous = {}
     after = False
     flat_sky = None
@@ -629,6 +676,7 @@ def platform_background(stage, work, sgx=False):
             if stage==4 and ly.name=='ForegroundStuf2' and not sgx:continue   # PCE uses the sprite fallback; SGX retains the plants as foreground
             bank=banks[ly.cblock]
             if stage==4 and ly.name=='SkyBG': layer=flat_sky
+            elif sgx and after_player and ly.parallax>1.0:continue
             elif after_player: layer=levl.render_layer(ly,bank,x,256,240,None)
             elif ly.name in continuous: layer=continuous[ly.name][:,x:x+256].copy()
             else: layer=levl.render_layer(ly,bank,levl.layer_offset(ly,x),256,240,None)
@@ -645,10 +693,19 @@ def platform_background(stage, work, sgx=False):
         out.paste(Image.fromarray(pixels),(x,0))
         if sgx_main is not None: sgx_main.paste(Image.fromarray(sgx_pixels),(x,0))
         foreground.paste(Image.fromarray(front),(x,0))
+    if slow_layers:
+        pixels=np.zeros((240,slow_width,4),np.uint8)
+        for ly in slow_layers:
+            layer=levl.render_layer(ly,banks[ly.cblock],levl.layer_offset(ly,0),slow_width,240,None)
+            if stage==3:
+                tint=np.array(NIGHT_TINT.get(ly.name,(100,100,160)),np.int32)
+                layer[...,:3]=(layer[...,:3].astype(np.int32)*tint//255).astype(np.uint8)
+            pixels=np.where(layer[...,3:4]>=128,layer,pixels)
+        foreground_slow=Image.fromarray(pixels)
     if stage == 1:
         out = scenery_background(out, work, stage)
         if sgx_main is not None: sgx_main = scenery_background(sgx_main, work, stage)
-    return out,foreground,sgx_main,sgx_sky
+    return out,foreground,foreground_slow,sgx_main,sgx_sky
 
 def april_palette_for(images):
     """One shared palette for April's entire animation set, fitted to the original drawing.
@@ -869,7 +926,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
     sgx_main = sgx_sky = None
     if stage in (1, 3, 4, 5):
         meta.update(json.loads((work / f'stage{stage}.json').read_text()))
-        bg,foreground,sgx_main,sgx_sky = platform_background(stage, work, sgx=sgx)
+        bg,foreground,foreground_slow,sgx_main,sgx_sky = platform_background(stage, work, sgx=sgx)
         # Native collision matrix is column-major for a hot 32-column cache.
         raw = np.frombuffer((work / f'stage{stage}.collision').read_bytes(), np.uint8).reshape(meta['rows'], meta['cols'])
         collision = a.add('collision_columns', raw.T.tobytes())
@@ -1430,6 +1487,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
     if stage in (1,3,4,5,7): a.add('power_wave', power_wave())
     if stage == 7: a.add('dialog_original_font', font_glyphs(work))   # (the cut-in puts the font back; the other stages' copy comes with their dialogue panels)
     meta['foreground_offset']=0;meta['foreground_count']=0
+    meta['foreground_slow_offset']=0;meta['foreground_slow_count']=0
     if stage in (1,3,4,5):
         # Platform playfields now include the source's top 16 lines. Gameplay
         # sprites passed in world-16 coordinates are baked 16 lines lower, so
@@ -1441,15 +1499,21 @@ def make_scene(stage, work, previews, shared, sgx=False):
         if stage in (1,3) and not sgx:   # on PCE the remaining props flicker; SGX keeps the source layer with its separate actor pass
             foreground=Image.new('RGBA',foreground.size);print(f'  stage {stage}: foreground removed', flush=True)
         elif sgx:
-            # The VDC1 actor pass leaves the VDC0 SAT for the hero, HUD and
-            # foreground. Keep the retained SAT below its 40-part runtime
-            # table, with four scanline units reserved for the hero.
-            foreground=thin_foreground(foreground,max_pieces=40,max_units=12)
+            # VDC1 carries movable actors, leaving VDC0's 37-part foreground
+            # table four scanline units free for the hero. Model both camera
+            # rates together so neither layer overloads a shifted window.
+            foreground_slow,foreground=thin_foreground_layers([foreground_slow,foreground],foreground.width)
         else: foreground=thin_foreground(foreground)
         entries=presentation.add_foreground(foreground,sprites)
         meta['foreground_offset']=a.add('foreground_sprites',b''.join(struct.pack('<hhH',*v) for v in entries))
         meta['foreground_count']=len(entries)
-        foreground.crop((0,0,1024,224)).save(previews/f'foreground{stage}.png')
+        slow_entries=presentation.add_foreground(foreground_slow,sprites) if sgx else []
+        meta['foreground_slow_offset']=a.add('foreground_slow_sprites',b''.join(struct.pack('<hhH',*v) for v in slow_entries))
+        meta['foreground_slow_count']=len(slow_entries)
+        foreground_preview=foreground.copy()
+        foreground_preview.alpha_composite(foreground_slow.crop((0,0,foreground.width,240)))
+        foreground_preview.crop((0,0,1024,224)).save(previews/f'foreground{stage}.png')
+        if sgx:foreground_slow.crop((0,0,1024,224)).save(previews/f'foreground_slow{stage}.png')
     if stage == 6: meta['m6_image'] = a.add('m6_image', bytes(4 * 8192), 2048)   # the arena's code images are put here after the application is linked (m6_image.py, build_disc.py)
     meta['story_offset']=story.bake(ROOT,work,stage,a,meta['presentation']['portraits'])
     if stage==2:
@@ -1469,7 +1533,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
                                   palette_fit=(palette,sky_groups),write_palette=False,static_bat=True,return_preview=True)
             if sky['tile_bytes']>0xffff:raise ValueError(f'stage{stage}: SGX sky patterns exceed scene record')
             meta['sgx_pal']=main['pal'];meta['sgx_tiles']=main['tiles'];meta['sgx_map']=main['map']
-            meta['sgx_sky_record']=a.add('sgx_sky_record',struct.pack('<IIHB',sky['tiles'],sky['map'],sky['tile_bytes'],sky['bat_cols']))
+            meta['sgx_sky_record']=a.add('sgx_sky_record',struct.pack('<IIHBIH',sky['tiles'],sky['map'],sky['tile_bytes'],sky['bat_cols'],meta['foreground_slow_offset'],meta['foreground_slow_count']))
             backdrop=np.asarray(vce_rgb(presentation.sky_color(stage)),np.uint8).reshape(3)
             composite=Image.new('RGBA',(256,224),tuple(int(v) for v in backdrop)+(255,))
             composite.alpha_composite(sky['preview'].crop((0,0,256,224)))

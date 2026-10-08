@@ -23,12 +23,6 @@
 #define SGX_UI_TILE_WORD 0x0800
 #define SGX_UI_SPRITE_WORD 0x6800
 #define SGX_UI_MAX_TILES ((SGX_UI_SPRITE_WORD - SGX_UI_TILE_WORD) / 16)
-typedef struct __attribute__((packed)) {
-    uint32_t tiles,map;
-    uint16_t bytes;
-    uint8_t bat_cols;
-} SgxSkyRecord;
-
 volatile PceSgxTelemetry pce_sgx_metrics;
 /* The IRQ publishes VDC1's SAT at the same boundary as VDC0's. */
 volatile uint8_t pce_sgx_sat1_alt PCE_WORK;
@@ -156,7 +150,7 @@ static SGX_AUX_CODE void vdc1_write_aux(uint8_t reg, uint16_t value) {
 
 SGX_AUX_CODE void pce_sgx_sky_load_body(void) {
     const PceScene *scene = &pce_scenes[pce_metrics.stage - 1];
-    SgxSkyRecord sky={0};
+    PceSgxSkyRecord sky={0};
     uint8_t sky_read=scene->occlusion && arcade_read(2,scene->occlusion,&sky,sizeof sky);
     uint16_t map_bytes = (uint16_t)sky.bat_cols * 64;
     uint16_t pattern_word=sky.bat_cols == 128 ? 0x1000 : PCE_BG_WORD;

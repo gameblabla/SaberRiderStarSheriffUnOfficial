@@ -6,6 +6,7 @@
 
 #ifdef PCE_SGX
 #define SGX_SPLIT_CODE __attribute__((noinline,minsize,section(".ram_bank129.text")))
+#define SGX_SPLIT_HELPER __attribute__((noinline,minsize,section(".ram_bank116.text")))
 
 extern uint8_t buffer[2048];
 extern uint8_t actors_mode;
@@ -13,13 +14,19 @@ extern uint8_t sat_count,sat_page,sprite_occupancy[240],sprite_last_free;
 extern vdc_sprite_t sat[2][64];
 extern void sprite_lines_clear(void);
 
-static SGX_SPLIT_CODE void split_sat_to_end(uint8_t first,uint8_t end) {
-    if(end<=first||sat_count<=end)return;
+static uint8_t split_first PCE_WORK,split_end PCE_WORK;
+SGX_SPLIT_HELPER static void split_sat_to_end_body(void) {
+    uint8_t first=split_first,end=split_end;
     uint8_t n=end-first,m=sat_count-end;
     uint8_t *at=(uint8_t *)(sat[1]+first),*held=buffer+1024;
     memcpy(held,at,(uint16_t)n*8);
     for(uint8_t k=0;k<m;++k)memcpy(at+(uint16_t)k*8,at+(uint16_t)(k+n)*8,8);
     memcpy(at+(uint16_t)m*8,held,(uint16_t)n*8);
+}
+static SGX_SPLIT_CODE void split_sat_to_end(uint8_t first,uint8_t end) {
+    if(end<=first||sat_count<=end)return;
+    split_first=first;split_end=end;
+    overlay_call(0x74,split_sat_to_end_body);
 }
 
 /* Keep the player, HUD and foreground on VDC0. Draw the remaining platform
