@@ -181,7 +181,7 @@ def horse_frames(work, archive):
 
 FG_MAX_PIECES, FG_MAX_UNITS = 20, 8    # foreground sprite pieces per 288-px window / per 16-line row
 
-def thin_foreground(fg):
+def thin_foreground(fg,max_pieces=FG_MAX_PIECES,max_units=FG_MAX_UNITS):
     """Drop the foreground chunks that cannot be drawn steadily. The foreground is sprite pieces re-emitted every
     frame after the actors; the SAT holds 64 (HUD ~16, hero ~10, shots and enemies the rest) and a scanline 16
     units, so where more than FG_MAX_PIECES pieces (or FG_MAX_UNITS in one row) fall inside the camera window
@@ -199,7 +199,7 @@ def thin_foreground(fg):
         for cam in range(0, max(1, w - 255), 16):
             c0, c1 = max(0, (cam - 31) // 16), (cam + 256) // 16 + 1
             sub = blocks[:, c0:c1]
-            if sub.sum() <= FG_MAX_PIECES and sub.sum(1).max() <= FG_MAX_UNITS: continue
+            if sub.sum() <= max_pieces and sub.sum(1).max() <= max_units: continue
             best = None
             for cy in range(0, blocks.shape[0], 2):
                 for cx in range((c0 // 2) * 2, c1, 2):
@@ -626,7 +626,7 @@ def platform_background(stage, work, sgx=False):
             if ly.name=='PlayerSprites':after_player=True
             if not ly.is_tilemap:continue
             if stage in (1,3) and ly.name=='SkyBG':continue
-            if stage==4 and ly.name=='ForegroundStuf2':continue   # the plants: they flickered as sprites and cost a tile each as background
+            if stage==4 and ly.name=='ForegroundStuf2' and not sgx:continue   # PCE uses the sprite fallback; SGX retains the plants as foreground
             bank=banks[ly.cblock]
             if stage==4 and ly.name=='SkyBG': layer=flat_sky
             elif after_player: layer=levl.render_layer(ly,bank,x,256,240,None)
@@ -1438,8 +1438,13 @@ def make_scene(stage, work, previews, shared, sgx=False):
         for i,(name,im,(ax,ay)) in enumerate(sprites):
             if i<hud0 or aim0<=i<meta['presentation']['power']:   # gameplay, aim and motion poses (not the HUD, not the power portraits)
                 sprites[i]=(name,im,(ax,ay-16))
-        if stage in (1,3):   # no foreground layer at all: whatever is left of it flickers (stage 4 keeps its cabin walls)
+        if stage in (1,3) and not sgx:   # on PCE the remaining props flicker; SGX keeps the source layer with its separate actor pass
             foreground=Image.new('RGBA',foreground.size);print(f'  stage {stage}: foreground removed', flush=True)
+        elif sgx:
+            # The VDC1 actor pass leaves the VDC0 SAT for the hero, HUD and
+            # foreground. Keep the retained SAT below its 40-part runtime
+            # table, with four scanline units reserved for the hero.
+            foreground=thin_foreground(foreground,max_pieces=40,max_units=12)
         else: foreground=thin_foreground(foreground)
         entries=presentation.add_foreground(foreground,sprites)
         meta['foreground_offset']=a.add('foreground_sprites',b''.join(struct.pack('<hhH',*v) for v in entries))
