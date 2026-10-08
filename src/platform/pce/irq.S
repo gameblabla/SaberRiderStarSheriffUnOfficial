@@ -366,7 +366,7 @@ pce_vblank:
     beq .Lsgx_sat1_done
     VDC1_INDEX 5
     lda pce_sgx_metrics+5
-    and #0x10
+    and #0x50
     beq .Lsgx_sat1_sprite_only
     lda #0xc0
     bra .Lsgx_sat1_control

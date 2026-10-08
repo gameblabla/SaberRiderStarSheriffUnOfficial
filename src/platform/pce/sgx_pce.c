@@ -208,13 +208,11 @@ SGX_GAME_CODE void pce_sgx_gameplay_begin_body(void) {
     vdc1_write(VDC_REG_BG_SCROLL_X, 0);
     vdc1_write(VDC_REG_BG_SCROLL_Y, 0);
 
-    if (pce_metrics.stage == 6 || pce_metrics.stage == 7) {
-        pce_sgx_vdc1_hidden = 1;
-        pce_sgx_sat1_alt = 0;
-        pce_sgx_sat1_pending = 0;
-        pce_sgx_arena_bg_pending_page = 0xff;
-        vdc1_write(VDC_REG_SATB_START, PCE_SAT_WORD);
-    }
+    pce_sgx_vdc1_hidden = 1;
+    pce_sgx_sat1_alt = 0;
+    pce_sgx_sat1_pending = 0;
+    pce_sgx_arena_bg_pending_page = 0xff;
+    vdc1_write(VDC_REG_SATB_START, PCE_SAT_WORD);
 
     if (pce_metrics.stage == 6) {
         /* VDC1 owns the arena panorama/floor. VDC0's zero tile and BAT let

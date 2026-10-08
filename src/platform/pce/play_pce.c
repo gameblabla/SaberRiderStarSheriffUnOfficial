@@ -7,6 +7,9 @@
 #include "arcade_pce.h"
 #include "assets.h"
 #include "scenery_pce.h"
+#ifdef PCE_SGX
+#include "sgx_pce.h"
+#endif
 extern uint8_t actors_mode;
 extern uint8_t buffer[2048];
 #include <string.h>
@@ -301,6 +304,13 @@ PCE_BOSS void play_draw(void) {
      * muzzle flash, which are the first to go when the SAT or a scanline is full. */
     /* The scenery props (the security camera...) are admitted first, right after the hero and the herd, so they are the last thing to be refused when the SAT or a
      * scanline is full (a shot or an extra enemy never makes the camera vanish); their entries then move to the end of the table, behind everything (below). */
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay()&&(pce_metrics.stage==1||pce_metrics.stage==3||
+                            pce_metrics.stage==4||pce_metrics.stage==5)) {
+        overlay_call(0x81,pce_sgx_platform_actor_pass_body);
+    } else
+#endif
+    {
     uint8_t props_first=sat_count;
     actors_mode=1;overlay_call(0x74,actors_draw);
     uint8_t props_end=sat_count;
@@ -310,10 +320,13 @@ PCE_BOSS void play_draw(void) {
     if(pce_campaign.boss_kind){pce_control.phase=0;overlay_call(0x7c,shots_draw_pass);}   /* the bosses' lasers */
     actors_mode=2;overlay_call(0x74,actors_draw);actors_mode=0;
     pce_control.phase=1;overlay_call(0x7c,shots_draw_pass);
-    if(pce_campaign.state!=CAM_OVER&&flash_time)video_sprite_optional(pce_flash_base[stage]+(flash_diag?0:4)+4-flash_time,player.x+flash_dx-camera,player.y+flash_dy-16,false,16);
     /* The Hyperjumper (stages 3 and 4) goes behind every bullet: its sprites move to the end of the SAT (lower slots are in front). */
     if(pce_campaign.boss_kind==2)sat_to_end(hull_first,hull_end);
     sat_to_end(props_first,props_end);
+    }
+    actors_mode=0;
+    /* The hero's muzzle flash remains with the hero on VDC0. */
+    if(pce_campaign.state!=CAM_OVER&&flash_time)video_sprite_optional(pce_flash_base[stage]+(flash_diag?0:4)+4-flash_time,player.x+flash_dx-camera,player.y+flash_dy-16,false,16);
     /* While the herd is on screen the SAT has no room for the foreground pieces as well: they would come and go with
      * every horse's piece count, so the foreground layer is left out until it has passed. */
     bool herd=false;

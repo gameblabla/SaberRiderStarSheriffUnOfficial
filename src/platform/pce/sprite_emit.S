@@ -67,7 +67,7 @@ sprite_fast:
     lda sat_page
     beq .Lvdc1_cache_ready
     lda pce_sgx_metrics+5
-    and #0x30
+    and #0x80
     beq .Lvdc1_cache_ready
     lda sprite_pb_hi,x
     bpl .Lbail

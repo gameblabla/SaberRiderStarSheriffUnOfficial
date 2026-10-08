@@ -33,9 +33,7 @@ static inline bool pce_sgx_gameplay(void) {
     return pce_sgx_active && (pce_sgx_metrics.paired_screen & PCE_SGX_GAMEPLAY) != 0;
 }
 static inline __attribute__((always_inline)) bool pce_sgx_vdc1_sprites(void) {
-    return pce_sgx_active &&
-        (pce_sgx_metrics.paired_screen &
-         (PCE_SGX_ARENA_SPRITES | PCE_SGX_SPACE_SPRITES)) != 0;
+    return pce_sgx_gameplay();
 }
 static inline __attribute__((always_inline)) bool pce_sgx_arena_sprites(void) {
     return pce_sgx_active &&
@@ -62,8 +60,10 @@ void pce_sgx_vdc1_sat_upload_body(void);
 void pce_sgx_vdc1_stats_body(void);
 void pce_sgx_sprite_upload_body(void);
 void pce_sgx_vdc1_hide_body(void);
+void pce_sgx_platform_actor_pass_body(void);
 #else
 static inline bool pce_sgx_gameplay(void) { return false; }
 static inline bool pce_sgx_vdc1_sprites(void) { return false; }
 static inline bool pce_sgx_arena_sprites(void) { return false; }
+static inline void pce_sgx_platform_actor_pass_body(void) {}
 #endif
