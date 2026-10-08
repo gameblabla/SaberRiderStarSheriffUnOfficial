@@ -15,6 +15,7 @@
  * $d0/d1 object Y             $d2/d3 object X          $d4/d5 pattern word */
 .section .ram_bank116.text,"ax",@progbits
 .global sprite_fast
+.comm sprite_piece_wide,1
 .extern descriptor, sprite_emit_x, sprite_emit_y, sprite_emit_id, sprite_emit_flip
 .extern sprite_emit_ok, sprite_fast_miss, video_nsprites
 .extern sprite_line_lo, sprite_line_hi, sprite_line_ok
@@ -22,6 +23,7 @@
 .extern sprite_slot_of, sprite_ids, sprite_used, sprite_len, sprite_p0, sprite_p1, sprite_p2
 .extern sprite_pb_hi, sprite_attr, sprite_words
 #ifdef PCE_SGX
+.extern sprite_probe
 .extern pce_sgx_metrics
 .extern sprite_words1
 #endif
@@ -29,7 +31,11 @@
 sprite_fast:
     bra .Lstart
 .Lbail:
+#ifdef PCE_SGX
+    jmp sprite_probe
+#else
     rts
+#endif
 .Lstart:
     lda #1
     sta sprite_fast_miss
@@ -79,8 +85,6 @@ sprite_fast:
     beq .Lbail
 .Lvdc1_cache_ready:
 #endif
-    lda #1
-    sta sprite_used,x
     stz sprite_fast_miss
     /* Piece list: Arcade port 2 (registers $1a22-$1a24 hold the address). */
     lda sprite_p0,x
@@ -197,6 +201,18 @@ sprite_fast:
     stz $20ca
 .Lpiece:
     ldx $20ca
+#ifdef PCE_SGX
+    lda descriptor+5,x
+    and #$40
+    beq 1f
+    jmp .Lskip
+1:
+    stz sprite_piece_wide
+    lda descriptor+5,x
+    bpl 1f
+    inc sprite_piece_wide
+1:
+#endif
     lda $20cf
     bne .Lflip
     clc
@@ -213,13 +229,38 @@ sprite_fast:
     sta $20c4
     lda $20c3
     sbc descriptor+1,x
+#ifdef PCE_SGX
+    sta $20c5
+    lda sprite_piece_wide
+    beq 1f
+    sec
+    lda $20c4
+    sbc #16
+    sta $20c4
+    lda $20c5
+    sbc #0
+    bra .Lxdone
+1:
+    lda $20c5
+#endif
 .Lxdone:
     sta $20c5
     beq .Lyadd
     cmp #$ff
     bne .Lxwide
+#ifdef PCE_SGX
+    lda sprite_piece_wide
+    beq 1f
+    lda $20c4
+    cmp #$e1
+    bra 2f
+1:
+#endif
     lda $20c4
     cmp #$f1
+#ifdef PCE_SGX
+2:
+#endif
     bcs .Lyadd
     jmp .Lskip
 .Lxwide:
@@ -271,10 +312,24 @@ sprite_fast:
     sta sprite_line_hi
     lda sat_count
     cmp #64
-    bcs .Lrefuse
+    bcc 1f
+    jmp .Lrefuse
+1:
     jsr sprite_lines_reserve
     lda sprite_line_ok
-    beq .Lrefuse
+    bne 1f
+    jmp .Lrefuse
+1:
+#ifdef PCE_SGX
+    lda sprite_piece_wide
+    beq .Lwidth_reserved
+    jsr sprite_lines_reserve
+    lda sprite_line_ok
+    bne .Lwidth_reserved
+    jsr sprite_lines_release
+    jmp .Lrefuse
+.Lwidth_reserved:
+#endif
     ldx $20ca
     lda descriptor+4,x
     asl
@@ -313,6 +368,9 @@ sprite_fast:
     sta ($20c0),y
     iny
     lda $20cf
+#ifdef PCE_SGX
+    ora sprite_piece_wide
+#endif
     sta ($20c0),y
     clc
     lda $20c0
@@ -331,6 +389,15 @@ sprite_fast:
     bcs .Lok
     jmp .Lpiece
 .Lok:
+    /* Refused and fully off-screen objects own no displayed patterns. Keep
+     * an earlier successful use of this same slot, but do not pin retries. */
+    lda sat_count
+    cmp $20cd
+    beq 1f
+    ldx $20cc
+    lda #1
+    sta sprite_used,x
+1:
     inc sprite_emit_ok
     rts
 /* Roll back the entries this object added, releasing their bands. */
@@ -373,4 +440,12 @@ sprite_fast:
 .Lrhi:
     sta sprite_line_hi
     jsr sprite_lines_release
+#ifdef PCE_SGX
+    ldy #7
+    lda ($20c0),y
+    and #1
+    beq 1f
+    jsr sprite_lines_release
+1:
+#endif
     bra .Lrefuse

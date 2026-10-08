@@ -24,10 +24,12 @@ Body player;
 Actor actors[8] PCE_WORK;
 Shot shots[NSHOTS] PCE_WORK;
 Body *phys_body;int16_t cell_x,cell_y;uint8_t cell_value;
-static uint8_t collision[32][32] PCE_WORK;
-static uint16_t column_tags[32];
+uint8_t collision[32][32] PCE_WORK;
+uint16_t column_tags[32];
+uint8_t collision_rows;
 const PceScene *play_scene;
 #define scene play_scene
+#define PHYS_CODE __attribute__((noinline,section(".ram_bank129.text")))
 uint16_t camera,frame;
 uint8_t hero,facing,safe_timer;
 uint8_t slide_time,pce_panel_restore;
@@ -41,20 +43,21 @@ static uint8_t walk_in;
 #define WALK_CAMERA 48
 #define WALK_STOP_X 144
 
-PCE_CODE static uint8_t cell(int16_t x,int16_t y) {
-    if(x<0||(uint16_t)x>=scene->ccols||y<0||(uint16_t)y>=scene->crows) return 0;
+uint8_t cell(int16_t x,int16_t y);
+PHYS_CODE uint8_t cell_slow(int16_t x,int16_t y) {
+    if((uint16_t)x>=scene->ccols||(uint16_t)y>=scene->crows) return 0;
     uint8_t slot=x&31;
     if(column_tags[slot]!=(uint16_t)x) {
         arcade_read(1,scene->collision+(uint32_t)(uint16_t)x*scene->crows,collision[slot],scene->crows);
         column_tags[slot]=x;
     }
-    return collision[slot][y];
+    return collision[slot][(uint8_t)y];
 }
 /* Spawn probe (the source's face_and_probe): an enemy that appears at the screen edge walks 64 px ahead in its
  * mind; if a wall is in the way (a crashed car) its spawn point is raised 8 px and the walk lengthened, until the
  * body clears, so it drops onto the roof instead of being born inside the car and jittering there. */
 int16_t probe_x,probe_y;uint8_t probe_left;
-PCE_CODE void spawn_clear(void) {
+PHYS_CODE void spawn_clear(void) {
     int16_t y=probe_y,n=64;
     while(y>8) {
         int16_t r0=(y+9-23)>>3,r1=(y+9+23)>>3,x=probe_x+4,c0=probe_left?(x-8-n)>>3:(x+8)>>3,c1=probe_left?(x-8)>>3:(x+8+n)>>3;
@@ -65,11 +68,11 @@ PCE_CODE void spawn_clear(void) {
     }
     probe_y=y;
 }
-PCE_CODE static void advance(int16_t *p,uint8_t *fraction,int16_t velocity) {
+static inline __attribute__((always_inline)) void advance(int16_t *p,uint8_t *fraction,int16_t velocity) {
     int16_t sum=(int16_t)*fraction+velocity;
     *p+=sum>>8;*fraction=sum;
 }
-PCE_CODE __attribute__((minsize)) static void physics(Body *b) {
+PHYS_CODE static void physics(Body *b) {
 #ifdef PCE_SGX
     /* Platform collision data is immutable. A stationary grounded enemy
      * cannot leave its floor until its AI gives it a velocity. Preserve the
@@ -156,17 +159,17 @@ PCE_CODE void grenade_call(void) {
     Shot *s=new_shot(bx+(a->aim?14:-15),by-4,2);if(!s)return;
     s->vx=(spd<<2)+(spd>>2);if(!a->aim)s->vx=-s->vx;   /* Q8 px a step = speed/60*256; aim 0 = left, 4 = right */
 }
-PCE_CODE void phys_call(void) {physics(phys_body);}
-PCE_CODE void cell_call(void) {cell_value=cell(cell_x,cell_y);}
+PHYS_CODE void phys_call(void) {physics(phys_body);}
+PHYS_CODE void cell_call(void) {cell_value=cell(cell_x,cell_y);}
 PCE_CODE void play_init(uint8_t stage,uint8_t selected) {
-    scene=&pce_scenes[stage-1];hero=selected;hero_sprite=selected*9;camera=frame=0;
+    scene=&pce_scenes[stage-1];collision_rows=scene->crows;hero=selected;hero_sprite=selected*9;camera=frame=0;
     facing=fire_timer=safe_timer=crouch=slide_time=death_time=jumping=jump_time=pce_death=0;drop_y=-32767;
     player=(Body){.x=scene->sx,.y=scene->sy};safe_x=player.x;safe_y=player.y;
     memset(actors,0,sizeof actors);memset(shots,0,sizeof shots);
     memset(column_tags,0xff,sizeof column_tags);
     walk_in=0;
     if(stage>=3&&stage<=5&&!pce_campaign.diagnostic){walk_in=1;player.x=safe_x=WALK_START_X;camera=WALK_CAMERA;}
-    overlay_call(0x70,encounter_init);
+    encounter_init();
     pce_metrics.hp=campaign_hearts();
     overlay_call(0x70,combat_start);
 }
@@ -210,7 +213,7 @@ PCE_CODE void play_tick(uint8_t keys,uint8_t pressed) {
         if(keys&KEY_RIGHT)facing=0;
     }
     if(slide_time){crouch=1;player.vx=(int16_t)slide_time*43;if(facing)player.vx=-player.vx;--slide_time;}
-    physics(&player);
+    phys_body=&player;overlay_call(0x81,phys_call);
     if(player.y>=drop_y)drop_y=-32767;   /* clear of the platform it dropped through: it can be landed on again */
     if(player.coll&4)jumping=0;else if(jumping&&jump_time<255)++jump_time;
     /* The screen only scrolls forwards: the left edge is a wall. */
@@ -286,6 +289,7 @@ PCE_BOSS void play_draw(void) {
 #endif
     uint8_t world_first=sat_count;
 #ifdef PCE_SGX
+    pce_sgx_hero_visible=0;
     if(sgx_foreground_stage)pce_sgx_hero_first=world_first;
 #endif
     uint8_t keys=pce_control.keys,stage=pce_metrics.stage-1;
@@ -316,7 +320,13 @@ PCE_BOSS void play_draw(void) {
     /* The last death tick clears pce_death before this final frame is drawn.
      * Keep the hero hidden throughout the GAME OVER fade instead of showing
      * a living pose for a frame. */
-    if(pce_campaign.state!=CAM_OVER&&(!safe_timer||(frame&4)||pce_death))video_sprite(id,player.x-camera,player.y-16,facing,16);
+    if(pce_campaign.state!=CAM_OVER&&(!safe_timer||(frame&4)||pce_death)) {
+#ifdef PCE_SGX
+        if(sgx_foreground_stage)pce_sgx_hero_visible=1;
+        else
+#endif
+        video_sprite(id,player.x-camera,player.y-16,facing,16);
+    }
 #ifdef PCE_SGX
     /* Admit HUD/hero cache pages before new optional scenery can take the
      * space left by a boss claim. The split pass preserves this VDC0 prefix. */

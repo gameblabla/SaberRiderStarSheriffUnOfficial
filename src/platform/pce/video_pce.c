@@ -169,6 +169,9 @@ PCE_RENDER void video_scene(const PceScene *s) {
     scene = s;video_scene_ptr=s;video_nsprites=s->nsprites;
     memset(sprite_slot_of,0xff,sizeof sprite_slot_of);
     sprite_screen_height=224;sprite_exact=1;   /* 224-line mode everywhere: playfield rows 28-29 are simply not shown */
+#ifdef PCE_SGX
+    if(pce_sgx_active&&(pce_metrics.stage==1||pce_metrics.stage==3||pce_metrics.stage==4||pce_metrics.stage==5))sprite_exact=0;
+#endif
     timing(false);
     memset(cache_refs, 0, sizeof cache_refs);held_count=0;
     memset(cache_ids, 0xff, sizeof cache_ids);
@@ -382,6 +385,10 @@ PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8
     uint8_t count=cached?sprite_count[slot]:entry[12];
     if(!cached) {
         if (!count || count > 32 || entry[13]) return false;
+#ifdef PCE_SGX
+        sprite_requested_palette=(uint32_t)entry[8]|(uint32_t)entry[9]<<8|(uint32_t)entry[10]<<16|(uint32_t)entry[11]<<24;
+        sprite_palette_needs_upload=1;
+#endif
         slot=sprite_slot(id,count);
         if(slot==48){if(!sprite_optional){pce_sprite_refused_id=id;++pce_metrics.essential_overflow;}return false;}
         if (sprite_ids[slot] != id) {
@@ -395,9 +402,14 @@ PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8
 #else
             arcade_vram(pat,sprite_words[slot],count*128);
 #endif
-            arcade_read(2, pal, colors, 32);
-            uint8_t palette=sprite_palette(id,slot);
-            pce_vce_copy_palette(16 + palette, colors, 1);
+#ifdef PCE_SGX
+            if(!pce_sgx_gameplay()||pce_metrics.stage>=6||pce_metrics.stage==2||sprite_palette_needs_upload)
+#endif
+            {
+                arcade_read(2, pal, colors, 32);
+                uint8_t palette=sprite_palette(id,slot);
+                pce_vce_copy_palette(16 + palette, colors, 1);
+            }
             sprite_ids[slot] = id;
             pce_metrics.uploads += count * 128;
         }
@@ -428,10 +440,9 @@ PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8
         if(!sprite_emit_ok&&!sprite_optional){pce_sprite_refused_id=id;++pce_metrics.essential_overflow;}
         return sprite_emit_ok;
     }
-    sprite_used[slot] = 1;
     arcade_read(2, (uint32_t)sprite_p0[slot] | (uint32_t)sprite_p1[slot]<<8 | (uint32_t)sprite_p2[slot]<<16, descriptor, count * 6);
     generic_id=id;generic_x=x;generic_y=y;generic_flip=flip;generic_scale=scale;generic_count=count;generic_slot=slot;
-    overlay_call(0x71,sprite_generic);
+    overlay_call(0x74,sprite_generic);
     return generic_ok;
 }
 void video_front_mark(void) {front_keep=sat_count;}
@@ -511,7 +522,12 @@ PCE_RENDER __attribute__((minsize)) void video_sat_end(void) {
     vdc_sprite_t *s = sat[sat_page];
     if(!(pce_metrics.frames&31)){uint8_t peak=0;for(uint8_t l=0,n=sprite_exact?224:30;l<n;++l)if(sprite_occupancy[l]>peak)peak=sprite_occupancy[l];
         if(peak>pce_metrics.max_units)pce_metrics.max_units=peak;}
+#ifdef PCE_SGX
+    uint8_t page=word==PCE_SAT_ALT_WORD,previous=sat_previous_count[page];
+    for(uint8_t k=sat_count;k<previous;++k)s[k].y=0;
+#else
     for(uint8_t k=sat_count;k<64;++k)s[k].y=0;
+#endif
     pce_vdc_index = 2; *(volatile uint8_t *)0x20f7 = 2;
     /* Atomic address/index setup, then short transfers with IRQ service. */
     if(front_start<sat_count) {
@@ -524,7 +540,6 @@ PCE_RENDER __attribute__((minsize)) void video_sat_end(void) {
 #ifdef PCE_SGX
     /* Clear every formerly live entry in this source, then leave its already
      * hidden tail alone. Each alternating VRAM source has its own history. */
-    uint8_t page=word==PCE_SAT_ALT_WORD,previous=sat_previous_count[page];
     if(sat_count<previous)
         sat_transfer(word+(uint16_t)sat_count*4,s+sat_count,(uint16_t)(previous-sat_count)*8);
     sat_previous_count[page]=sat_count;

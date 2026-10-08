@@ -22,7 +22,7 @@ ENEMY_CODE static uint8_t rnd(void) {
     uint8_t carry=rng&1;rng>>=1;if(carry)rng^=0xB400;
     return (uint8_t)(rng^(rng>>8));
 }
-ENEMY_CODE static void phys(Body *b) {phys_body=b;overlay_call(0x69,phys_call);}
+ENEMY_CODE static void phys(Body *b) {phys_body=b;overlay_call(0x81,phys_call);}
 ENEMY_CODE static void advance(int16_t *p,uint8_t *f,int16_t v) {
     int16_t sum=(int16_t)*f+v;
     *p+=sum>>8;*f=sum;

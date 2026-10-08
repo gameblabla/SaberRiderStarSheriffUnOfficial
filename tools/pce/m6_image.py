@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ramrod's arena's four code images: app_full.elf (the whole link) holds them in virtual banks 144,129-131 (src/platform/pce/link/link.ld), where nothing is
+"""Ramrod's arena's four code images: app_full.elf (the whole link) holds them in virtual banks 144,145,130-131 (src/platform/pce/link/link.ld), where nothing is
 loaded on the console. They are cut out into m6.bin (four 8 KiB banks, in the order of m6_load in video_pce.c: $76, $77, $79, $7a), and app.elf, which
 the disc carries, is the link without those four banks. Higher banks remain available for resident data such as streamed PCM samples.
 build_disc.py puts m6.bin into the stage 6 archive's reserved space."""
@@ -11,7 +11,7 @@ from pathlib import Path
 def main():
     p = argparse.ArgumentParser(); p.add_argument('--mos', type=Path, required=True); p.add_argument('--out', type=Path, required=True)
     a = p.parse_args(); out = a.out.resolve(); data = bytearray(); objcopy = str(a.mos / 'bin/llvm-objcopy')
-    arena_banks=(144,129,130,131)
+    arena_banks=(144,145,130,131)
     for k, image in enumerate('abcd'):
         binary = out / f'm6_{image}.bin'
         subprocess.run([objcopy, '-O', 'binary', '--only-section=.ram_bank%d' % arena_banks[k], str(out / 'app_full.elf'), str(binary)], check=True)

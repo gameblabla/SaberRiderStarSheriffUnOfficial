@@ -278,6 +278,7 @@ SGX_GAME_CODE void pce_sgx_vdc1_sat_upload_body(void) {
     /* Clear entries retired from this particular DMA source. Its remaining
        tail is already hidden, so it need not be uploaded every frame. */
     uint8_t count=sat1_previous_count[pce_sgx_sat1_alt];
+    for(uint8_t k=sat_count;k<count;++k)sat[1][k].y=0;
     if(count<sat_count)count=sat_count;
     sat_copy_len = (uint16_t)count*8;
     sat1_previous_count[pce_sgx_sat1_alt]=sat_count;
@@ -294,7 +295,8 @@ SGX_STATS_CODE void pce_sgx_vdc1_stats_body(void) {
     if(pce_metrics.frames&31)return;
     uint8_t peak=0;
     const uint8_t *lines=pce_sgx_split_active?(const uint8_t *)(((uint16_t)(buffer+512)&0xff00)|((uint16_t)sprite_occupancy&255)):sprite_occupancy;
-    for(uint8_t line=0;line<224;++line)
+    extern uint8_t sprite_exact;
+    for(uint8_t line=0,n=sprite_exact?224:30;line<n;++line)
         if(lines[line]>peak)peak=lines[line];
     if(peak>pce_sgx_metrics.vdc1_max_units)
         pce_sgx_metrics.vdc1_max_units=peak;

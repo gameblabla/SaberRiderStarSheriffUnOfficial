@@ -28,7 +28,7 @@ SHOT_CODE void shots_step(void) {
         if(sx<-16||sx>272||s->y<0||s->y>240){s->active=0;continue;}
         if(s->enemy!=3) {
             /* bullets stop at solid cells and ramps (bullets.c); a grenade also bursts */
-            cell_x=s->x>>3;cell_y=s->y>>3;overlay_call(0x69,cell_call);
+            cell_x=s->x>>3;cell_y=s->y>>3;overlay_call(0x81,cell_call);
             if(cell_value==15||(cell_value&16)){if(s->enemy==2){s->enemy=4;s->t=0;s->vx=s->vy=0;audio_effect(4);}else s->active=0;continue;}   /* a grenade bursts into its explosion, with the burst's sound */
         }
         if(s->enemy) {

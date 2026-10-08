@@ -17,16 +17,22 @@ static uint8_t trigger_spawned[100];
 static Trigger trigger;
 static int16_t stop_zones[4][4];
 static uint8_t stop_count,stop_done;
+static uint8_t convoy_triggers[4],convoy_count;
 Trigger trigger_cache[60] PCE_STAGE;   /* (Ramrod's arena uses this staging memory for its own state: mech_pce.h) */
 static int16_t trigger_lo[60] PCE_STAGE,trigger_hi[60] PCE_STAGE;
-PCE_COMBAT void encounter_init(void) {
+PCE_CODE void encounter_init(void) {
     const PceScene *scene=play_scene;
+    convoy_count=0;
     uint8_t counts[3];arcade_read(2,scene->rules,counts,3);
     stop_count=counts[2]>4?4:counts[2];stop_done=0;herd_on=herd_locked=herd_pending=herd_flee=0;
     arcade_read(2,scene->rules+3+(uint16_t)counts[0]*16+(uint16_t)counts[1]*12,stop_zones,stop_count*8);
     for(uint8_t k=0;k<scene->ntr;++k) {
         arcade_read(2,scene->triggers+(uint32_t)k*sizeof trigger,&trigger,sizeof trigger);
         if(k<60) {trigger_cache[k]=trigger;trigger_lo[k]=trigger.type==10?32767:trigger.cx-trigger.hx-8;trigger_hi[k]=trigger.cx+trigger.hx+8;}
+        if(trigger.type==11) {
+            if(convoy_count<4)convoy_triggers[convoy_count++]=k;
+            else convoy_count=255; /* Future scenes with more convoys use the full scan. */
+        }
         trigger_timers[k]=trigger.delay;trigger_remaining[k]=trigger.remaining;trigger_spawned[k]=0;
         if(trigger.type>=24&&trigger.type<=27)trigger_remaining[k]=0;   /* background airships: not drawn here, so never spawned */
     }
@@ -59,12 +65,18 @@ PCE_SCENERY void encounters(void)   /* $78: the mission bank is full */ {
     /* Nothing else is brought in as a convoy is about to start (its zone is within a screen): the stampede runs through
      * a cleared stretch, so no enemy is drawn, cached or fired from while its sprite budget is spoken for. */
     bool convoy_near=herd_on;
-    if(scene->horse&&!convoy_near)
-        for(const Trigger *t=trigger_cache;k<scene->ntr;++k,++t)
-            if(t->type==11&&trigger_remaining[k]&&px>trigger_lo[k]-160&&px<trigger_hi[k]+160){convoy_near=true;break;}
+    if(scene->horse&&!convoy_near) {
+        if(convoy_count==255) {
+            for(const Trigger *t=trigger_cache;k<scene->ntr;++k,++t)
+                if(t->type==11&&trigger_remaining[k]&&px>trigger_lo[k]-160&&px<trigger_hi[k]+160){convoy_near=true;break;}
+        } else for(uint8_t j=0;j<convoy_count;++j) {
+            uint8_t n=convoy_triggers[j];
+            if(trigger_remaining[n]&&px>trigger_lo[n]-160&&px<trigger_hi[n]+160){convoy_near=true;break;}
+        }
+    }
     k=0;
     for(const Trigger *t=trigger_cache;k<scene->ntr;++k,++t) {
-        if(px<trigger_lo[k]||px>trigger_hi[k]||!trigger_remaining[k]) continue;
+        if(!trigger_remaining[k]||px<trigger_lo[k]||px>trigger_hi[k]) continue;
         if(player.y+9<t->cy-t->hy-23||player.y+9>t->cy+t->hy+23) continue;
         if(trigger_timers[k]) {trigger_timers[k]=trigger_timers[k]>4?trigger_timers[k]-4:0;continue;}
         if(t->type==11) {
@@ -95,7 +107,7 @@ PCE_SCENERY void encounters(void)   /* $78: the mission bank is full */ {
             if(x>30000)x=camera+288;else if(x< -30000)x=camera-32;
             if(y>30000)y=256;else if(y< -30000)y=-32;
             if(y< -999)y=-1000-y;
-            if(edge&&t->type<6){probe_x=x+8;probe_y=y+19;probe_left=player.x<x;overlay_call(0x69,spawn_clear);y=probe_y-19;}
+            if(edge&&t->type<6){probe_x=x+8;probe_y=y+19;probe_left=player.x<x;overlay_call(0x81,spawn_clear);y=probe_y-19;}
             actors[i]=(Actor){.b={.x=t->type>=11&&t->type<=27?x:x+8,.y=t->type>=11&&t->type<=27?y:y+19},.active=1,.type=t->type,.hp=t->type==28?2:t->type>=30?(pce_options.difficulty==0?4:pce_options.difficulty==1?6:8):1,.timer=t->type>=30&&t->type<=31?60:0,.flip=player.x<x,.aim=4,.mode=1};
             if(drop_in){actors[i].mode|=8;actors[i].b.vy=-711;}   /* 166.7 px/s, in Q8 a step */
             if(trigger_remaining[k]>0)--trigger_remaining[k];

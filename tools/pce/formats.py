@@ -60,7 +60,7 @@ def indexed(image, palette):
     lut = _index_luts[key]
     return np.where(a[..., 3] >= 128, lut[vce_colors(a[..., :3])], 0).astype(np.uint8)
 
-def pack_sprite(image, anchor=(0, 0), palette=None):
+def pack_sprite(image, anchor=(0, 0), palette=None, wide=False):
     if palette is None: palette = palette_for([image])
     idx = indexed(image, palette)
     h, w = idx.shape
@@ -84,6 +84,23 @@ def pack_sprite(image, anchor=(0, 0), palette=None):
     for _, y, _ in pieces:
         sy = y + anchor[1]
         occupancy[sy:sy + 16] += 1
+    if wide:
+        # Keep the pattern count and byte layout unchanged. Even neighboring
+        # patterns form a native 32x16 cell; its partner descriptor is a no-op.
+        # $8000 marks width 32, $4000 marks the no-op. The cache directory still
+        # counts 128-byte patterns, so old upload/page budgets remain valid.
+        merged = list(pieces)
+        k = 0
+        while k + 1 < len(pieces):
+            x, y, pattern = pieces[k]
+            nx, ny, npattern = pieces[k + 1]
+            if not (pattern & 1) and ny == y and nx == x + 16 and npattern == pattern + 1:
+                merged[k] = (x, y, pattern | 0x8000)
+                merged[k + 1] = (32767, 32767, 0x4000)
+                k += 2
+            else:
+                k += 1
+        pieces = merged
     return b''.join(patterns), pieces, palette, int(occupancy.max(initial=0))
 
 def pair_characters():

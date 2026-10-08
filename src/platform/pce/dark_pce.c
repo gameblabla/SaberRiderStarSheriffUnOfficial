@@ -90,7 +90,7 @@ DARK_CODE void dark_tick(void) {
     if(da.st==D_FIGHT&&!(w&KEY_SELECT)&&!da.crouch){if(w&KEY_LEFT)da.b.vx=-427;else if(w&KEY_RIGHT)da.b.vx=427;}
     da.face=da.b.vx?da.b.vx<0:player.x<da.b.x;   /* she faces the hero unless she is walking away from him */
     if((w&KEY_2)&&ground)da.b.vy=-1237;
-    phys_body=&da.b;overlay_call(0x69,phys_call);
+    phys_body=&da.b;overlay_call(0x81,phys_call);
     if(da.st==D_FIGHT)overlay_call(0x70,hits);
 }
 DARK_HIT void dark_draw(void) {

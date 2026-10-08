@@ -23,12 +23,14 @@
 .macro occupancy op, offset=0
 .Loccupancy\@:
     \op sprite_occupancy+\offset,x
-    .pushsection .ram_bank110.rodata,"a",@progbits
-    .word .Loccupancy\@+2
+    .pushsection .ram_bank110.text.select,"ax",@progbits
+    sta .Loccupancy\@+2
     .popsection
 .endm
-.pushsection .ram_bank110.rodata,"a",@progbits
-.Loccupancy_patches:
+.pushsection .ram_bank110.text.select,"ax",@progbits
+.global sprite_lines_select
+sprite_lines_select:
+    lda sprite_lines_hi
 .popsection
 #endif
 
@@ -415,26 +417,9 @@ sprite_lines_clear:
     rts
 
 #ifdef PCE_SGX
-.pushsection .ram_bank110.rodata,"a",@progbits
-.Loccupancy_patches_end:
-.popsection
-.section .ram_bank110.text,"ax",@progbits
-.global sprite_lines_select
-sprite_lines_select:
-    ldx #0
-1:
-    lda .Loccupancy_patches,x
-    sta $20d0
-    lda .Loccupancy_patches+1,x
-    sta $20d1
-    lda sprite_lines_hi
-    ldy #0
-    sta ($20d0),y
-    inx
-    inx
-    cpx #(.Loccupancy_patches_end-.Loccupancy_patches)
-    bne 1b
+.pushsection .ram_bank110.text.select,"ax",@progbits
     rts
+.popsection
 #endif
 .section .ram_bank116.text,"ax",@progbits
 
@@ -613,4 +598,61 @@ fg_emit:
     beq .Lfdone
     jmp .Lfpart
 .Lfdone:
+    rts
+
+/* LLVM-MOS ABI: x in A/X, y in rc2/rc3, byte result in A.
+ * Cached tags imply an in-range column; cold probes retain the C bounds and
+ * Arcade Card loader. Private scratch is unused by interrupts. */
+.section .ram_bank129.text,"ax",@progbits
+.global cell
+.extern cell_slow, collision, column_tags, collision_rows
+cell:
+    sta $20d2
+    stx $20d3
+    txa
+    bmi .Lcell_zero
+    lda $2003
+    bne .Lcell_zero
+    lda $2002
+    cmp collision_rows
+    bcs .Lcell_zero
+    lda $20d2
+    and #31
+    asl
+    tax
+    lda column_tags,x
+    cmp $20d2
+    bne .Lcell_cold
+    lda column_tags+1,x
+    cmp $20d3
+    bne .Lcell_cold
+    txa
+    lsr
+    lsr
+    lsr
+    lsr
+    sta $20d1
+    txa
+    lsr
+    and #7
+    asl
+    asl
+    asl
+    asl
+    asl
+    clc
+    adc #<collision
+    sta $20d0
+    lda $20d1
+    adc #>collision
+    sta $20d1
+    ldy $2002
+    lda ($20d0),y
+    rts
+.Lcell_cold:
+    lda $20d2
+    ldx $20d3
+    jmp cell_slow
+.Lcell_zero:
+    cla
     rts

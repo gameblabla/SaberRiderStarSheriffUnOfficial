@@ -65,7 +65,7 @@ extern volatile uint8_t pce_sgx_vdc1_hidden;
 extern volatile uint8_t pce_sgx_arena_bg_pending_page;
 extern volatile uint16_t pce_sgx_sprite_id;
 extern volatile uint8_t pce_sgx_sprite_slot, pce_sgx_sprite_upload_ok;
-extern uint8_t pce_sgx_hero_first;
+extern uint8_t pce_sgx_hero_first,pce_sgx_hero_visible;
 extern uint8_t pce_sgx_split_active,pce_sgx_split_count,pce_sgx_split_last,pce_sgx_split_last_lo;
 extern uint8_t pce_sgx_actor_plane[8],pce_sgx_actor_stage;
 

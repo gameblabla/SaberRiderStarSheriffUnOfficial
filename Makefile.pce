@@ -3,7 +3,7 @@ MOS ?= ../PCE/llvm-mos8
 PCE_CC := $(MOS)/bin/mos-pce-cd-clang
 SGX ?= 0
 OUT ?= $(if $(filter 1,$(SGX)),build/sgx,build/pce)
-PCE_FLAGS := -std=gnu11 -Os -Wall -Wextra -Werror -Isrc/platform/pce -I$(OUT) -flto -mlto-zp=0
+PCE_FLAGS := -std=gnu11 -Os -Wall -Wextra -Werror -Isrc/platform/pce -I$(OUT) -flto -mlto-zp=$(if $(filter 1,$(SGX)),96,0)
 RETAIL ?= 1
 ifeq ($(RETAIL),1)
 PCE_FLAGS += -DRETAIL

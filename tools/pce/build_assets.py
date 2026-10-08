@@ -740,7 +740,7 @@ def april_palette_for(images):
     pal[1:len(fitted) + 1] = fitted
     return pal
 
-def add_sprites(archive, sprites, previews):
+def add_sprites(archive, sprites, previews, sgx=False):
     rows, costs = [], []
     fg=[im for name,im,_ in sprites if name.startswith('foreground_')]
     fg_palette=palette_for(fg) if fg else None
@@ -760,13 +760,33 @@ def add_sprites(archive, sprites, previews):
         power_palette[h]=pal
     boss=[im for name,im,_ in sprites if name in ('gunship_left','gunship_right','hyperjumper_left','hyperjumper_right')]
     boss_palette=palette_for(boss) if boss else None
+    shared = {}
+    palette_offsets = {}
+    if sgx:
+        for family in ('hero0', 'hero1', 'hero3', 'walker', 'grunt', 'sniper',
+                       'kneel', 'shield', 'brown', 'blue', 'grenade', 'burst'):
+            frames = [im for name, im, _ in sprites if name.split('_')[0] == family
+                      or (family == 'kneel' and name.startswith('kneel'))
+                      or (family == 'grenade' and name.startswith('grenade'))
+                      or (family == 'burst' and name.startswith('burst'))]
+            if frames:
+                shared[family] = palette_for(frames)
     for name, im, anchor in sprites:
-        pat, parts, palette, line = pack_sprite(im, anchor,april_palette if name.startswith('hero2_') else boss_palette if name in ('gunship_left','gunship_right','hyperjumper_left','hyperjumper_right') else fg_palette if name.startswith("foreground_") else hud_palette if name.startswith('hudp_') else power_palette[int(name[3])] if name.startswith('pwr') else None)
+        family = name.split('_')[0]
+        if name.startswith('grenade'): family = 'grenade'
+        if name.startswith('burst'): family = 'burst'
+        pat, parts, palette, line = pack_sprite(im, anchor,april_palette if name.startswith('hero2_') else boss_palette if name in ('gunship_left','gunship_right','hyperjumper_left','hyperjumper_right') else fg_palette if name.startswith("foreground_") else hud_palette if name.startswith('hudp_') else power_palette[int(name[3])] if name.startswith('pwr') else shared.get(family), wide=sgx and (family.startswith('hero') or family in shared))
         if (not parts and name != 'battle_cruiser') or len(parts)>32:
             raise ValueError(f'{name}: expected 1..32 visible sprite pieces, got {len(parts)}')
         offset = archive.add(name + '_patterns', pat)
         desc = archive.add(name + '_pieces', b''.join(struct.pack('<hhH', *p) for p in parts))
-        pal = archive.add(name + '_palette', palette.tobytes())
+        palette_bytes = palette.tobytes()
+        if sgx and palette_bytes in palette_offsets:
+            pal = palette_offsets[palette_bytes]
+            archive.records[name + '_palette'] = dict(offset=pal, bytes=32)
+        else:
+            pal = archive.add(name + '_palette', palette_bytes)
+            palette_offsets[palette_bytes] = pal
         rows.append((offset, desc, pal, len(parts), im.width, im.height))
         costs.append(dict(name=name, patterns=len(pat), entries=len(parts), units_per_line=line,
                           width=im.width, height=im.height, facing_variants=1))
@@ -1596,7 +1616,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
             composite=far['preview'].crop((0,0,256,224))
             composite.alpha_composite(closer['preview'].crop((0,0,256,224)))
             composite.save(previews/'stage7_sgx_composite.png')
-    sprite_table, rows, costs = add_sprites(a, list(sprites), previews)
+    sprite_table, rows, costs = add_sprites(a, list(sprites), previews, sgx=sgx)
     if stage in (1,3,4,5):
         # The cache reserves two four-page HUD blocks and three two-page
         # hero blocks. Fail the bake if presentation layout or size changes.

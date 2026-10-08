@@ -15,6 +15,35 @@ uint8_t sprite_slot_of[PCE_SPRITE_IDS],sprite_count[48],sprite_len[48],sprite_p0
  * slots, descriptors and generation pins remain shared through the VCE. */
 uint16_t sprite_words1[48] __attribute__((section(".ram_bank104.cache")));
 uint8_t pattern_owner1[54];
+uint32_t sprite_requested_palette;
+uint32_t sprite_palette_key[48] __attribute__((section(".ram_bank129.palette")));
+uint8_t sprite_palette_needs_upload;
+static uint8_t palette_slot;
+static uint8_t palette_result;
+/* Pattern slots are independent of the VCE's twelve actor palettes. Exact
+ * archive palette identity lets all poses retain the same hardware colors. */
+__attribute__((noinline,section(".ram_bank129.text")))
+static void palette_prepare(void) {
+    uint16_t protected=0;
+    palette_result=255;sprite_palette_needs_upload=1;
+    for(uint8_t q=0;q<48;++q) {
+        if(sprite_ids[q]==65535)continue;
+        uint8_t pal=sprite_attr[q]&15;
+        if(pal>=12)continue;
+        if(sprite_palette_key[q]==sprite_requested_palette) {
+            palette_result=pal;sprite_palette_needs_upload=0;return;
+        }
+        if(sprite_used[q]||sprite_pinned[q])protected|=(uint16_t)1<<pal;
+    }
+    for(uint8_t pal=0;pal<12;++pal)if(!(protected&((uint16_t)1<<pal))) {
+        palette_result=pal;
+        for(uint8_t q=0;q<48;++q)if(q!=palette_slot && (sprite_attr[q]&15)==pal) {
+            sprite_ids[q]=65535;sprite_pb_hi[q]=0;
+        }
+        return;
+    }
+}
+
 uint8_t sprite_pb_hi[48] PCE_WORK,sprite_attr[48] PCE_WORK;
 #else
 uint8_t sprite_pb_hi[48],sprite_attr[48];
@@ -28,14 +57,14 @@ uint8_t sprite_cache_stage;
 __attribute__((noinline,minsize,section(".ram_bank107.text")))
 uint8_t sprite_palette(uint16_t id,uint8_t slot) {
 #ifdef PCE_SGX
-    if(pce_sgx_gameplay()&&pce_metrics.stage<6&&pce_metrics.stage!=2&&id>=sprite_cache_foreground_first)
-        return 12;
+    if(pce_sgx_gameplay()&&pce_metrics.stage<6&&pce_metrics.stage!=2)
+        return id>=sprite_cache_foreground_first?12:sprite_attr[slot]&15;
 #else
     (void)id;
 #endif
     return slot<15?slot:15;
 }
-#define CACHE_CODE __attribute__((noinline,minsize,section(".ram_bank116.text")))
+#define CACHE_CODE __attribute__((noinline,section(".ram_bank129.text")))
 CACHE_CODE static void allocate(void) {
     uint16_t id=cache_id;uint8_t count=cache_count;
     const PceScene *s=&pce_scenes[pce_metrics.stage-1];
@@ -72,10 +101,14 @@ CACHE_CODE static void allocate(void) {
         high=12;
 #endif
     cache_result=48;
-    uint8_t slot=high;
+    uint8_t slot;
 #ifdef PCE_SGX
+    if(split&&low==0)high=48;
+    slot=high;
     if(cached)slot=known;
     else
+#else
+    slot=high;
 #endif
     {
     for(uint8_t i=low;i<high;++i)
@@ -125,10 +158,17 @@ CACHE_CODE static void allocate(void) {
             first=8;limit=12;step=2;
         } else if(id>=hud+16&&id<hud+26) {first=48;limit=50;}
     }
+#ifdef PCE_SGX
+    if(second&&hud&&first==14)first=0;
+    else if(split&&hud&&first==14&&id<sprite_cache_foreground_first)first=8;
+#endif
     /* Race dialogue glyphs extend through $4dff; leave those six pages
      * reserved throughout the race, including before a panel opens. */
     for(uint8_t base=first;base<=limit;base+=step) {
-        if(hud&&first==14&&base<=50&&base+pages>48)continue;
+#ifdef PCE_SGX
+        if(second&&hud&&first==0&&base<14&&base+pages>8)continue;
+#endif
+        if(hud&&first!=48&&base<=50&&base+pages>48)continue;
         bool available=true;uint8_t age=255;
         for(uint8_t p=base;p<base+pages;++p) {
             uint8_t owner=owners[p];
@@ -142,6 +182,22 @@ CACHE_CODE static void allocate(void) {
     if(chosen==255)return;
     uint8_t base=chosen;
 #ifdef PCE_SGX
+    if(split&&!cached) {
+        if(id>=sprite_cache_foreground_first)palette_result=12;
+        else if(hud&&id>=hud&&id<hud+26)palette_result=15;
+        else {
+            palette_slot=slot;palette_prepare();
+            if(palette_result==255)return;
+        }
+        if(palette_result>=12) {
+            for(uint8_t q=0;q<48;++q)
+                if(sprite_ids[q]!=65535&&(sprite_attr[q]&15)==palette_result&&
+                   sprite_palette_key[q]==sprite_requested_palette) {sprite_palette_needs_upload=0;break;}
+        }
+        sprite_attr[slot]=palette_result;
+        sprite_palette_key[slot]=sprite_requested_palette;
+    }
+
     if(split&&!cached) {
         /* Reusing a palette/descriptor slot retires its allocations on both
            VDCs. The shared pins above protect either displayed generation. */
@@ -172,7 +228,7 @@ CACHE_CODE static void allocate(void) {
 }
 
 uint8_t sprite_slot(uint16_t id,uint8_t count) {
-    cache_id=id;cache_count=count;overlay_call(0x74,allocate);return cache_result;
+    cache_id=id;cache_count=count;overlay_call(0x81,allocate);return cache_result;
 }
 
 #ifdef PCE_SGX

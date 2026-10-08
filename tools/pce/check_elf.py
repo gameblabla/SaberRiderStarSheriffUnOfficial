@@ -17,7 +17,8 @@ all_addresses={p[2]:int(p[0],16) for line in symbols.splitlines()
 # These functions are entered through fixed overlay calls. Moving their
 # bodies without their callers otherwise links successfully and jumps into
 # a different bank's code. Resident copy/admission also has linker guards.
-fixed_banks={'panel_draw':115,'loader_card_restore':113}
+fixed_banks={'panel_draw':115,'loader_card_restore':113,
+             'phys_call':129,'cell_call':129,'cell':129,'spawn_clear':129,'allocate':129}
 if 'space_vdc1_actor_pass' in addresses:
     fixed_banks.update(space_vdc1_actor_pass=119,space_vdc1_sprite_body=116,
                        video_arena_bg_clear_body=113,arena_bg_palette=113)
@@ -52,8 +53,8 @@ sections=subprocess.check_output([str(nm.parent/'llvm-readelf'),'-S',str(elf)],t
 rows=[];banks={}
 for name,kind,address,size in re.findall(r'\[\s*\d+\]\s+(\S+)\s+(PROGBITS|NOBITS)\s+([0-9a-f]+)\s+[0-9a-f]+\s+([0-9a-f]+)',sections):
     address,size=int(address,16),int(size,16)
-    if address>>16 in range(0x168,0x188) or address>>16==0x190:
-        bank=(address>>16)&255;window={104:0x4000,105:0x6000,106:0x8000,107:0xa000,108:0xc000,109:0x6000,110:0x6000,111:0x6000,112:0x6000,113:0x6000,114:0x6000,115:0x6000,116:0x6000,117:0x6000,118:0x6000,119:0x6000,120:0x6000,121:0x6000,122:0x6000,123:0x6000,124:0x6000,128:0x6000,129:0x6000,130:0x6000,131:0x6000,144:0x6000}.get(bank,0xc000)
+    if address>>16 in range(0x168,0x188) or address>>16 in (0x190,0x191):
+        bank=(address>>16)&255;window={104:0x4000,105:0x6000,106:0x8000,107:0xa000,108:0xc000,109:0x6000,110:0x6000,111:0x6000,112:0x6000,113:0x6000,114:0x6000,115:0x6000,116:0x6000,117:0x6000,118:0x6000,119:0x6000,120:0x6000,121:0x6000,122:0x6000,123:0x6000,124:0x6000,128:0x6000,129:0x6000,130:0x6000,131:0x6000,144:0x6000,145:0x6000}.get(bank,0xc000)
         used=(address&65535)+size-window
         if not 0<=used<=8192:raise SystemExit(f'{name} exceeds bank ${bank:02x}')
         banks[bank]=max(banks.get(bank,0),used)
@@ -63,7 +64,8 @@ for name,kind,address,size in re.findall(r'\[\s*\d+\]\s+(\S+)\s+(PROGBITS|NOBITS
                               ' or the reserved software stack')
         rows.append(dict(name=name,address=address&65535,bytes=size))
 compiler=subprocess.check_output([str(nm.parent/'mos-pce-cd-clang'),'--version'],text=True).strip()
-report=dict(compiler=compiler,flags=['-std=gnu11','-Os','-flto','-mlto-zp=0'],sections=rows,
+flags=(elf.parent/'build-flags').read_text().split()
+report=dict(compiler=compiler,flags=flags,sections=rows,
             banks=[dict(bank=b,used=n,free=8192-n) for b,n in sorted(banks.items())],
             arcade_asset_limit=0x1e0000,arcade_tile_directory_bytes=0x20000,
             vram_platform_cache=[dict(name=n,start_word=a,end_word=b) for n,a,b in [('HUD generations',0x4800,0x5000),('hero generations',0x5000,0x5600),('actors/foreground',0x5600,0x7800),('counter generations',0x7800,0x7b00),('actors/foreground spare',0x7b00,0x7e00)]],

@@ -37,6 +37,7 @@ void pce_sgx_copy(void *dst,const void *src,uint16_t bytes) {
 extern void sprite_lines_release(void),sprite_lines_reserve(void);
 extern uint8_t sprite_line_lo,sprite_line_hi;
 uint8_t pce_sgx_hero_first PCE_WORK;
+uint8_t pce_sgx_hero_visible;
 uint8_t pce_sgx_split_active PCE_WORK,pce_sgx_split_count PCE_WORK,pce_sgx_split_last PCE_WORK,pce_sgx_split_last_lo PCE_WORK;
 uint8_t pce_sgx_actor_plane[8] PCE_WORK,pce_sgx_actor_stage PCE_WORK;
 
@@ -51,6 +52,7 @@ static void platform_begin_body(void) {
         int16_t y=(int16_t)sat[0][--sat_count].y-64;
         sprite_line_lo=y<0?0:y;sprite_line_hi=y+16>224?224:y+16;
         sprite_lines_release();
+        if(sat[0][sat_count].attr&VDC_SPRITE_WIDTH_32)sprite_lines_release();
     }
     /* Reserve the foreground's VDC0 SAT and scanlines before actors/shots
        retry there. Otherwise firing steals those slots and makes retained
@@ -59,6 +61,7 @@ static void platform_begin_body(void) {
     pce_sgx_split_count=sat_count;pce_sgx_split_last=sprite_last_free;pce_sgx_split_last_lo=sprite_last_lo;pce_sgx_split_active=1;
     sat_page=1;sat_count=count;
     overlay_call(0x6e,pce_sgx_budget_body);sprite_lines_clear();
+    if(pce_sgx_hero_visible)video_sprite(hero_sprite,player.x-camera,player.y-16,facing,16);
     if(count) {
         uint8_t slot=sprite_slot_of[hero_sprite];
         if(!(sprite_pb_hi[slot]&0x80)) {
@@ -73,6 +76,7 @@ static void platform_begin_body(void) {
             int16_t y=(int16_t)sat[1][k].y-64;
             sprite_line_lo=y<0?0:y;sprite_line_hi=y+16>224?224:y+16;
             sprite_lines_reserve();
+            if(sat[1][k].attr&VDC_SPRITE_WIDTH_32)sprite_lines_reserve();
         }
     }
 }
@@ -94,8 +98,7 @@ static SGX_SPLIT_CODE void split_sat_to_end(uint8_t first,uint8_t end) {
 
 __attribute__((noinline,minsize,section(".ram_bank128.text")))
 void pce_sgx_story_world_body(void) {
-    pce_sgx_hero_first=sat_count;
-    video_sprite(hero_sprite,player.x-camera,player.y-16,facing,16);
+    pce_sgx_hero_visible=1;pce_sgx_hero_first=sat_count;
     overlay_call(0x74,foreground_prepare);
     overlay_call(0x72,pce_sgx_platform_actor_pass_body);
 }
@@ -136,7 +139,6 @@ SGX_SPLIT_CODE void pce_sgx_platform_actor_pass_body(void) {
     if(pce_metrics.stage==3)overlay_call(0x80,pce_sgx_moon_draw_body);
     uint8_t shake=(herd_on?((frame*13^(frame>>2))&3):0);
     if(shake)for(uint8_t k=0;k<sat_count;++k)sat[1][k].y-=shake;
-    for(uint8_t k=sat_count;k<64;++k)sat[1][k].y=0;
     overlay_call(0x71,pce_sgx_vdc1_stats_body);
     overlay_call(0x78,pce_sgx_vdc1_sat_upload_body);
 

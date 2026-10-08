@@ -1,5 +1,5 @@
-#pragma clang section text=".ram_bank129.text" rodata=".ram_bank129.rodata" data=".ram_bank129.data" bss=".ram_bank129.bss"
-#define M6_SECTION ".ram_bank129.rodata"
+#pragma clang section text=".ram_bank145.text" rodata=".ram_bank145.rodata" data=".ram_bank145.data" bss=".ram_bank145.bss"
+#define M6_SECTION ".ram_bank145.rodata"
 #include "m6_common.h"
 #define M6_RCP_ONLY
 #include "m6.h"
