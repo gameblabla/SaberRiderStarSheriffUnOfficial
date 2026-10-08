@@ -9,6 +9,7 @@ extern uint8_t sat_page,sat_count;
 extern uint8_t sprite_occupancy[240];
 void sprite_lines_clear(void);
 #include "m6.h"
+#include <pce/bank.h>
 #define M6_HORIZON 128
 #define BIG_FLAG 0xf000
 extern volatile uint16_t pce_scroll_y;
@@ -51,6 +52,14 @@ static inline int16_t lift(uint16_t d,int16_t z) {
 static bool blit(uint8_t kind,uint16_t key,int16_t x,int16_t y,bool flip) {
     a6.blit_kind=kind;a6.blit_key=key;a6.blit_x=x;a6.blit_y=y;a6.blit_flip=flip;overlay_call(M6C_BANK,m6_blit);return a6.blit_ok;
 }
+#ifdef PCE_SGX
+static void arena_bg_draw(void) {
+    uint8_t previous=pce_bank6_get();
+    pce_bank6_set(135);
+    pce_sgx_arena_bg_draw_body();
+    pce_bank6_set(previous);
+}
+#endif
 /* a bolt (frame 0 very near, 1 middle, 2 far), its centre at (x, y): two units of every scanline for the 32-wide one */
 static void bolt_draw(uint8_t frame,int16_t x,int16_t y) {
     bool big=frame==0;
@@ -152,7 +161,7 @@ void m6_draw(void) {
             a6.blit_key=items[big].id&~BIG_FLAG;
             a6.blit_x=items[big].sx-shake_x;a6.blit_y=items[big].sy-shake_y;
         } else a6.blit_key=0xffff;
-        overlay_call(0x71,pce_sgx_arena_bg_draw_body);
+        arena_bg_draw();
     }
 #endif
     video_sat_begin();

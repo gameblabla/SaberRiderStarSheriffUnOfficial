@@ -1,4 +1,4 @@
-#pragma clang section text=".ram_bank113.text" rodata=".ram_bank113.rodata" data=".ram_bank113.data" bss=".ram_bank113.bss"
+#pragma clang section text=".ram_bank135.text" rodata=".ram_bank135.rodata" data=".ram_bank135.data" bss=".ram_bank135.bss"
 #include "arcade_pce.h"
 #include "assets.h"
 #include "m6/m6_state.h"
@@ -71,7 +71,7 @@ static void arena_map_row(uint8_t page,uint8_t y,uint8_t first,uint8_t end,
 /* The two 256-character pages alternate in the inactive BAT half. A pose is
  * converted offline to BG-format 8x8 tiles; the live draw only uploads a new
  * pose when a page's cache key changes and rewrites its dirty BAT rows. */
-void pce_sgx_arena_bg_draw_body(void) {
+__attribute__((noinline)) void pce_sgx_arena_bg_draw_body(void) {
     uint8_t active=(pce_sgx_metrics.paired_screen&PCE_SGX_ARENA_BG_PAGE)!=0;
     uint8_t page=active^1;
     uint16_t key=a6.blit_key,tile_count=0;
