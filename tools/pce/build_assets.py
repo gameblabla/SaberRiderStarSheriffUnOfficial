@@ -294,18 +294,17 @@ def native_background(image, archive, previews, name, npal=16, sgx=False, record
     if return_preview:result['preview']=preview_image
     return result
 
-BOSS_BG_W,BOSS_BG_H=180,98     # the battle cruiser (224x123 in the source) at four fifths: the screen is 256 dots wide, not 320
-BOSS_COLS,BOSS_ROWS=23,13
-
-def boss_background(archive, previews):
-    """The stage 7 cruiser as background characters (a 23x13 character picture on a black playfield), moved about with the scroll
-    registers instead of as sprites. Record: u16 tile count, u8 columns, u8 rows; per column the first and last solid row (the hull's
-    outline, 255: none), 4 palettes, the character map (tile | palette << 12, tile 0 blank) and the tiles themselves."""
-    im = Image.open(ROOT / 'assets/space/boss.png').convert('RGBa').resize((BOSS_BG_W, BOSS_BG_H), Image.Resampling.LANCZOS).convert('RGBA')
-    canvas = Image.new('RGBA', (BOSS_COLS * 8, BOSS_ROWS * 8), (0, 0, 0, 0)); canvas.paste(im, (0, 0))
+def boss_background(archive, previews, large=False, record_name='boss_bg', preview_name='boss_bg'):
+    """The stage 7 cruiser as background characters, moved about with the scroll
+    registers instead of as sprites. The SGX record uses the full source size;
+    the original PCE record retains its smaller, screen-safe rendition."""
+    width,height=(224,123) if large else (180,98)
+    cols,rows=(28,16) if large else (23,13)
+    im = Image.open(ROOT / 'assets/space/boss.png').convert('RGBa').resize((width, height), Image.Resampling.LANCZOS).convert('RGBA')
+    canvas = Image.new('RGBA', (cols * 8, rows * 8), (0, 0, 0, 0)); canvas.paste(im, (0, 0))
     px = np.asarray(canvas).copy()
     px[..., 3] = np.where(px[..., 3] >= 128, 255, 0)
-    cells = px.reshape(BOSS_ROWS, 8, BOSS_COLS, 8, 4).transpose(0, 2, 1, 3, 4).reshape(-1, 8, 8, 4)
+    cells = px.reshape(rows, 8, cols, 8, 4).transpose(0, 2, 1, 3, 4).reshape(-1, 8, 8, 4)
     palettes, groups = palfit.fit_palettes(cells, 4, verbose=False)
     idx = palfit.index_cells(cells, palettes, groups)
     tiles, lookup, entries = [planar_tile(np.zeros((8, 8), np.uint8))], {}, []
@@ -315,10 +314,10 @@ def boss_background(archive, previews):
         if enc not in lookup: lookup[enc] = len(tiles); tiles.append(enc)
         entries.append(lookup[enc] | (int(groups[k]) << 12) if idx[k].any() else 0)
     solid = px[..., 3] > 0
-    top = bytearray([255] * 24); bottom = bytearray([255] * 24)
-    for c in range(BOSS_COLS):
-        rows = np.nonzero(solid[:, c * 8:c * 8 + 8].any(1))[0]
-        if len(rows): top[c], bottom[c] = int(rows[0]), int(rows[-1])
+    top = bytearray([255] * cols); bottom = bytearray([255] * cols)
+    for c in range(cols):
+        solid_rows = np.nonzero(solid[:, c * 8:c * 8 + 8].any(1))[0]
+        if len(solid_rows): top[c], bottom[c] = int(solid_rows[0]), int(solid_rows[-1])
     # The nose cannon's beam as background characters (palette 4, kept after the tiles): five tiles whose lines are the beam's vertical
     # profile (1 white core, 2 pale yellow, 3 orange, 4 red edge): rows 5-6 make the 11-dot beam, rows 4-7 the 22-dot one of the last stage.
     def beam_tile(profile):
@@ -330,19 +329,21 @@ def boss_background(archive, previews):
     tiles += beam
     beam_pal = np.zeros(16, '<u2')
     for k, c in enumerate([(255, 255, 255), (255, 255, 150), (255, 150, 40), (210, 40, 20)]): beam_pal[k + 1] = vce_colors(np.asarray(c, np.uint8))
-    blob = bytearray(struct.pack('<HBB', len(tiles), BOSS_COLS, BOSS_ROWS)) + top + bottom
+    blob = bytearray(struct.pack('<HBB', len(tiles), cols, len(cells)//cols)) + top + bottom
     blob += bytes(64 - len(blob))
     blob += np.asarray(palettes, '<u2').tobytes()                       # offset 64: 4 palettes of 16 words
-    blob += np.asarray(entries, '<u2').tobytes().ljust(640, b'\0')       # offset 192: the map, row by row
-    blob += b''.join(tiles)                                             # offset 832 (the last five are the beam's), then the beam's palette
+    map_bytes=len(entries)*2
+    map_storage=(map_bytes+63)&~63
+    blob += np.asarray(entries, '<u2').tobytes().ljust(map_storage, b'\0')  # offset 192: aligned map
+    blob += b''.join(tiles)                                             # the last five are the beam's, followed by its palette
     blob += beam_pal.tobytes()
-    preview = np.zeros((BOSS_ROWS * 8, BOSS_COLS * 8, 3), np.uint8)
+    preview = np.zeros((len(cells)//cols*8, cols * 8, 3), np.uint8)
     for k in range(len(cells)):
-        y, x = divmod(k, BOSS_COLS)
+        y, x = divmod(k, cols)
         preview[y * 8:y * 8 + 8, x * 8:x * 8 + 8] = vce_rgb(palettes[groups[k]])[idx[k]] * (idx[k][..., None] > 0)
-    Image.fromarray(preview).save(previews / 'boss_bg.png')
-    print(f'  stage 7 cruiser: {len(tiles)} characters', flush=True)
-    return archive.add('boss_bg', bytes(blob), 32), len(tiles)
+    Image.fromarray(preview).save(previews / f'{preview_name}.png')
+    print(f'  stage 7 cruiser {width}x{height}: {len(tiles)} characters', flush=True)
+    return archive.add(record_name, bytes(blob), 32), len(tiles)
 
 ROAD_LINES = 112          # image lines: scanlines 112..223 of the road region (the horizon is scanline 113)
 ROAD_STRIPE_FIRST = 24    # image line where the two stripe phases start (the lines above are the haze rows)
@@ -1279,6 +1280,9 @@ def make_scene(stage, work, previews, shared, sgx=False):
         # Keep the fixed ID; the complete cruiser is background art, never a sprite.
         sprites.append(('battle_cruiser',Image.new('RGBA',(1,1)),(0,0)))
         meta['boss_bg_offset'], meta['boss_bg_tiles'] = boss_background(a, previews)
+        if sgx:
+            meta['sgx_boss_bg_offset'], meta['sgx_boss_bg_tiles'] = boss_background(
+                a, previews, large=True, record_name='sgx_boss_bg', preview_name='sgx_boss_bg')
         sprites+=atlas(ROOT/'assets/space/atlas.png','drone')+atlas(ROOT/'assets/space/atlas.png','mine')
         sprites+=atlas(ROOT/'assets/space/atlas.png','cap')
         # The ships' explosions (space.c blast: six frames of 64x64, a big one and smaller ones round it; the sixth is a fade too faint
@@ -1521,6 +1525,9 @@ def main():
     h+=ui_h;c+=ui_c
     h.append('extern const uint32_t pce_boss_bg[7];')
     c.append('const uint32_t pce_boss_bg[7]={'+','.join(str(m.get('boss_bg_offset',0))+'UL' for m in scenes)+'};')
+    if args.sgx:
+        h.append('extern const uint32_t pce_sgx_boss_bg[7];')
+        c.append('const uint32_t pce_sgx_boss_bg[7]={'+','.join(str(m.get('sgx_boss_bg_offset',0))+'UL' for m in scenes)+'};')
     h.append('extern const uint32_t pce_boss_big[7];')
     c.append('const uint32_t pce_boss_big[7]={'+','.join(str(m.get('boss_big_offset',0))+'UL' for m in scenes)+'};')
     h.append('extern const uint32_t pce_power_wave[7];')

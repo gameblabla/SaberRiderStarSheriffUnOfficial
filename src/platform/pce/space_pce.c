@@ -7,6 +7,9 @@
 #include "hud_pce.h"
 #include "scenery_pce.h"
 #include "sprite_cache_pce.h"
+#ifdef PCE_SGX
+#include <pce/bank.h>
+#endif
 extern uint8_t buffer[2048];
 extern volatile uint16_t pce_sky_far;
 #define SPACE_CODE __attribute__((noinline,minsize,section(".ram_bank115.text")))
@@ -26,15 +29,52 @@ static uint8_t space_flash,hull_flash,foe_flash[2],foe_white;   /* foe_flash: th
 static uint8_t event_index,event_count,pending,gun_clock,hurt,power,bombs,boss_die,boss_gone,noise;
 static int16_t ship_x,ship_y,pickup_x,pickup_y,space_boss_y;
 static uint8_t pickup,port_hp[7],dead_t;
-/* The cruiser's gun ports in dots from the hull's place (boss.txt at four fifths: x 76 + 0.82 x, y 0.8 y); the first five are open, the strut's two
- * open under two thirds. Plain tables: both the simulation's bank and the cruiser's use them. */
-static const uint8_t port_x[7]={153,169,187,203,229,234,223},port_y[7]={40,40,39,38,60,52,67};
+/* SGX loads source-size gun positions with the larger cruiser; PCE starts
+   with the original four-fifths coordinates. */
+uint8_t space_hull_port_x[7] PCE_WORK={153,169,187,203,229,234,223};
+uint8_t space_hull_port_y[7] PCE_WORK={40,40,39,38,60,52,67};
 /* The cruiser (space.c boss_*): ph 0 not yet, 1 WARNING (the music stops, the screen fades), 2 flying in from the right, 3 its greeting is up,
  * 4 the fight, with the nose cannon (laser 0 charging up its wait, 1 gathering, 2 firing, 3 fading), the hangar's drone swarms and the mine rack. */
 typedef struct {uint8_t ph,laser,beam,gather;uint16_t t;} SBoss;
 static SBoss sb PCE_WORK;
+#ifdef PCE_SGX
+static void space_contact_wrapper(void),boss_step_wrapper(void);
+static void event_load_wrapper(void),spawn_wrapper(void);
+static void space_external_wrapper(void);
+static uint8_t space_external_op PCE_WORK,space_external_arg PCE_WORK;
+enum { SPACE_EXT_HURT,SPACE_EXT_EFFECT,SPACE_EXT_STOP,SPACE_EXT_MUSIC,SPACE_EXT_HULL_LOAD };
+__attribute__((noinline,section(".ram_bank113.text"))) static void space_external_call(uint8_t op,uint8_t arg) {
+    space_external_op=op;space_external_arg=arg;
+    space_external_wrapper();
+}
+__attribute__((noinline,section(".ram_bank113.text"))) static void space_external_wrapper(void) {
+    uint8_t previous=pce_bank6_get();pce_bank6_set(0x6c);
+    if(space_external_op==SPACE_EXT_HURT)campaign_hurt();
+    else if(space_external_op==SPACE_EXT_EFFECT)audio_effect(space_external_arg);
+    else if(space_external_op==SPACE_EXT_STOP)audio_stop();
+    else if(space_external_op==SPACE_EXT_MUSIC)audio_music(space_external_arg);
+    else if(space_external_op==SPACE_EXT_HULL_LOAD)overlay_call(0x78,space_hull_load);
+    pce_bank6_set(previous);
+}
+#define SPACE_BOSS_HURT() space_external_call(SPACE_EXT_HURT,0)
+#define SPACE_BOSS_EFFECT(tone) space_external_call(SPACE_EXT_EFFECT,(tone))
+#define SPACE_BOSS_STOP() space_external_call(SPACE_EXT_STOP,0)
+#define SPACE_BOSS_MUSIC(track) space_external_call(SPACE_EXT_MUSIC,(track))
+#define SPACE_BOSS_HULL_LOAD() space_external_call(SPACE_EXT_HULL_LOAD,0)
+#else
+#define SPACE_BOSS_HURT() campaign_hurt()
+#define SPACE_BOSS_EFFECT(tone) audio_effect(tone)
+#define SPACE_BOSS_STOP() audio_stop()
+#define SPACE_BOSS_MUSIC(track) audio_music(track)
+#define SPACE_BOSS_HULL_LOAD() overlay_call(0x78,space_hull_load)
+#endif
 __attribute__((noinline)) static int16_t dist(int16_t a,int16_t b) {int16_t n=a-b;return n<0?-n:n;}
-SPACE_CODE static void event_load(void) {
+#ifdef PCE_SGX
+#define SPACE_EVENT_CODE __attribute__((noinline,minsize,section(".ram_bank135.text")))
+#else
+#define SPACE_EVENT_CODE SPACE_CODE
+#endif
+SPACE_EVENT_CODE static void event_load(void) {
     if(event_index<event_count)arcade_read(2,pce_scenes[6].track+1+(uint16_t)event_index*10,&next_event,10);
 }
 SPACE_CODE void space_start(void) {
@@ -42,7 +82,12 @@ SPACE_CODE void space_start(void) {
     flight_clock=spawn_clock=beam_clock=0;space_flash=hull_flash=foe_flash[0]=foe_flash[1]=foe_white=0;space_hull_ready=0;space_flashing=0;pce_sky_far=0;event_index=pending=gun_clock=hurt=pickup=0;
     pce_campaign.power_cd=pce_campaign.timer=0;
     power=1;bombs=3;ship_x=48;ship_y=112;space_boss_y=80;
-    arcade_read(2,pce_scenes[6].track,&event_count,1);event_load();
+    arcade_read(2,pce_scenes[6].track,&event_count,1);
+#ifdef PCE_SGX
+    overlay_call(0x71,event_load_wrapper);
+#else
+    event_load();
+#endif
     for(uint8_t k=0;k<7;++k)port_hp[k]=20;
     pce_campaign.boss_kind=0;pce_campaign.boss_hp=1200;pce_campaign.boss_round=0;pce_metrics.hp=4;pce_death=dead_t=0;
 }
@@ -67,7 +112,12 @@ SPACE_CODE static void foe_kill(Foe *f) {
     f->kind=0;++pce_campaign.score;
     if(f->drop){pickup=f->drop;pickup_x=f->x;pickup_y=f->y;}
 }
-SPACE_CODE static void spawn(void) {
+#ifdef PCE_SGX
+__attribute__((noinline,minsize,section(".ram_bank135.text")))
+#else
+SPACE_CODE
+#endif
+static void spawn(void) {
     for(uint8_t k=0;k<8;++k)if(!foes[k].kind) {
         uint8_t n=next_event.n-pending;
         foes[k]=(Foe){272,next_event.y+(next_event.kind==4?0:n*next_event.gap),
@@ -77,17 +127,35 @@ SPACE_CODE static void spawn(void) {
         if(!--pending){++event_index;event_load();}return;
     }
 }
-__attribute__((noinline,minsize,section(".ram_bank114.text"))) static void space_contact(void) {   /* bank $72: $78 is full */
+#ifdef PCE_SGX
+__attribute__((noinline,minsize,section(".ram_bank135.text")))
+#else
+__attribute__((noinline,minsize,section(".ram_bank114.text")))
+#endif
+static void space_contact(void) {
     if(space_hull_hit(ship_x+12-space_hull_x,ship_y-space_boss_y)) {
-        if(!hurt){hurt=90;campaign_hurt();}
+        if(!hurt){hurt=90;SPACE_BOSS_HURT();}
         while(ship_x>16&&space_hull_hit(ship_x+12-space_hull_x,ship_y-space_boss_y))--ship_x;
     }
 }
-#define BOSS_STEP __attribute__((noinline,minsize,section(".ram_bank119.text")))   /* the cruiser's show runs in the CD buffer's second bank ($77, overlay_call) */
+#ifdef PCE_SGX
+__attribute__((noinline,section(".ram_bank113.text"))) static void event_load_wrapper(void) {
+    uint8_t previous=pce_bank6_get();pce_bank6_set(135);event_load();pce_bank6_set(previous);
+}
+__attribute__((noinline,section(".ram_bank113.text"))) static void spawn_wrapper(void) {
+    uint8_t previous=pce_bank6_get();pce_bank6_set(135);spawn();pce_bank6_set(previous);
+}
+__attribute__((noinline,section(".ram_bank113.text"))) static void space_contact_wrapper(void) {
+    uint8_t previous=pce_bank6_get();pce_bank6_set(135);space_contact();pce_bank6_set(previous);
+}
+#define BOSS_STEP __attribute__((noinline,minsize,section(".ram_bank135.text")))
+#else
+#define BOSS_STEP __attribute__((noinline,minsize,section(".ram_bank119.text")))
+#endif
 /* One shot out of a gun port, aimed at Ramrod: 3 dots a step across, the vertical part follows the aim (dy / 32 for the 100-odd dots between). */
 BOSS_STEP static void port_shot(uint8_t k,int8_t spread) {
-    int16_t y=space_boss_y+port_y[k]+3,vy=((ship_y-y)>>5)+spread;
-    bolt(port_x[k]-4+space_hull_x,y,-3,vy>3?3:vy<-3?-3:vy,true);
+    int16_t y=space_boss_y+space_hull_port_y[k]+3,vy=((ship_y-y)>>5)+spread;
+    bolt(space_hull_port_x[k]-4+space_hull_x,y,-3,vy>3?3:vy<-3?-3:vy,true);
 }
 BOSS_STEP static void foe_in(int16_t x,int16_t y,uint8_t kind,uint8_t hp,uint8_t pattern,uint8_t drop) {
     for(uint8_t k=0;k<8;++k)if(!foes[k].kind){foes[k]=(Foe){x,y,kind,hp,pattern,drop,0,0};return;}
@@ -103,7 +171,7 @@ BOSS_STEP static void boss_guns(void) {
     }
     /* the hangar: a swarm of drones out of the bay (5 + the stage, one every 16 steps; the last carries a gift), then the mine rack from the second stage */
     uint16_t cycle=beam_clock%(round==0?600:round==1?520:460);
-    if(cycle<16*(5+round)&&!(cycle&15)){foe_in(212+space_hull_x,space_boss_y+69,1,2,1,cycle==16*(4+round)?1+((beam_clock>>9)&1):0);audio_effect(13);}
+    if(cycle<16*(5+round)&&!(cycle&15)){foe_in(212+space_hull_x,space_boss_y+69,1,2,1,cycle==16*(4+round)?1+((beam_clock>>9)&1):0);SPACE_BOSS_EFFECT(13);}
     if(round&&cycle==300){foe_in(161+space_hull_x,space_boss_y+85,4,3,0,0);foe_in(161+space_hull_x,space_boss_y+97,4,3,0,0);}
 }
 static void boss_step(void);
@@ -143,7 +211,13 @@ SPACE_CODE static void space_tick(void) {
     if(ship_x<16)ship_x=16;if(ship_x>240)ship_x=240;
     if(ship_y<16)ship_y=16;if(ship_y>208)ship_y=208;
     if(pce_campaign.boss_kind&&ship_x>112)ship_x=112;
-    if(sb.ph==4&&space_hull_ready)overlay_call(0x72,space_contact);
+    if(sb.ph==4&&space_hull_ready) {
+#ifdef PCE_SGX
+        overlay_call(0x71,space_contact_wrapper);
+#else
+        overlay_call(0x72,space_contact);
+#endif
+    }
     if((keys&KEY_1)&&!gun_clock) {bolt(ship_x+22,ship_y,6,0,false);gun_clock=8;audio_effect(1);}
     if((pce_control.pressed&KEY_2)&&bombs) {
         --bombs;space_flash=6;hull_flash=12;audio_effect(8);audio_effect(4);
@@ -157,9 +231,20 @@ SPACE_CODE static void space_tick(void) {
         }
         hurt=60;
     }
-    if(pending){if(spawn_clock)--spawn_clock;else spawn();}
+    if(pending){if(spawn_clock)--spawn_clock;else {
+#ifdef PCE_SGX
+        overlay_call(0x71,spawn_wrapper);
+#else
+        spawn();
+#endif
+    }}
     else if(event_index<event_count&&flight_clock>=next_event.time) {
-        pending=next_event.n;spawn();
+        pending=next_event.n;
+#ifdef PCE_SGX
+        overlay_call(0x71,spawn_wrapper);
+#else
+        spawn();
+#endif
         /* Keep the current recipe until all its entities have spawned. */
     }
     for(uint8_t k=0;k<8;++k) {
@@ -176,7 +261,13 @@ SPACE_CODE static void space_tick(void) {
         }
         if(f->x< -48)f->kind=0;
     }
-    if(sb.ph||flight_clock>=6360)overlay_call(0x77,boss_step);   /* the cruiser's whole show */
+    if(sb.ph||flight_clock>=6360) {
+#ifdef PCE_SGX
+        overlay_call(0x71,boss_step_wrapper);
+#else
+        overlay_call(0x77,boss_step);
+#endif
+    }
     for(uint8_t k=0;k<10;++k)if(expl[k].t){expl[k].x-=1;if(++expl[k].t>30)expl[k].t=0;}
     for(uint8_t k=0;k<12;++k) {
         Bolt *b=&bolts[k];if(!b->on)continue;
@@ -194,7 +285,7 @@ SPACE_CODE static void space_tick(void) {
             if(b->on&&sb.ph==4&&space_hull_hit(b->x-space_hull_x,b->y-space_boss_y)) {
                 b->on=0;hull_flash=4;audio_effect(22);
                 uint16_t damage=power;
-                for(uint8_t j=0;j<7;++j)if(port_hp[j]&&(j<5||pce_campaign.boss_round)&&dist(b->y,space_boss_y+port_y[j])<4) {
+                for(uint8_t j=0;j<7;++j)if(port_hp[j]&&(j<5||pce_campaign.boss_round)&&dist(b->y,space_boss_y+space_hull_port_y[j])<4) {
                     port_hp[j]=port_hp[j]>power?port_hp[j]-power:0;if(!port_hp[j])damage+=30;break;
                 }
                 pce_campaign.boss_hp=pce_campaign.boss_hp>damage?pce_campaign.boss_hp-damage:0;
@@ -218,16 +309,22 @@ BOSS_STEP static void boss_step(void) {
     case 0:   /* the timeline's end (106 s), once the field is clear or six seconds on: no more events, the music stops, WARNING */
         if(flight_clock<6360)return;
         for(uint8_t k=0;k<8;++k)if(foes[k].kind&&flight_clock<6720)return;
-        sb.ph=1;sb.t=0;event_index=event_count;pending=0;audio_stop();audio_effect(12);
+        sb.ph=1;sb.t=0;event_index=event_count;pending=0;SPACE_BOSS_STOP();SPACE_BOSS_EFFECT(12);
         return;
     case 1:   /* the screen fades to black (space_hull_load), then the cruiser's cells wait off screen right */
         if(++sb.t<216)return;
         sb.ph=2;sb.t=0;pce_campaign.boss_kind=5;beam_clock=0;
-        memset(foes,0,sizeof foes);space_boss_y=56;space_hull_x=180;
-        overlay_call(0x78,space_hull_load);audio_music(11);audio_effect(12);
+        memset(foes,0,sizeof foes);space_boss_y=pce_sgx_gameplay()?48:56;space_hull_x=180;
+        SPACE_BOSS_HULL_LOAD();SPACE_BOSS_MUSIC(11);SPACE_BOSS_EFFECT(12);
         return;
     case 2: {   /* flies in over five seconds, slowing (space.c boss_update: 1 - (1 - p)^3) */
         uint16_t u=300-sb.t;
+#ifdef PCE_SGX
+        if(pce_sgx_gameplay()) {
+            uint16_t q=(u>>1)*(u>>1)/125;
+            space_hull_x=(q*4)/3;
+        } else
+#endif
         space_hull_x=((u>>1)*(u>>1))/125;   /* 180 (u / 300)^2: 180 at the start, 0 at the end */
         if(++sb.t>=300){sb.ph=3;space_hull_x=0;pce_campaign.story=1;pce_campaign.event=1;}   /* its greeting (SCRIPT_BOSS) */
         return; }
@@ -235,8 +332,8 @@ BOSS_STEP static void boss_step(void) {
         return;
     }
     if(boss_die) {   /* the cruiser breaks up (space.c PH_BOSS_DIE): its fire stops, fireballs burst over the hull to the big bang, then the ship is gone */
-        if(!--boss_die){boss_gone=1;space_boss_y&=~7;blast(164,space_boss_y+48,false);audio_effect(17);pce_campaign.result=1;pce_campaign.story=0;pce_campaign.event=1;}
-        else if(!(boss_die%5)){blast(84+random()%160,space_boss_y+random()%90,random()&1);if(random()%5<2)audio_effect(random()&1?7:8);}   /* (space.c: the bursts yell now and then) */
+        if(!--boss_die){boss_gone=1;space_boss_y&=~7;blast(164,space_boss_y+space_hull_cannon_y(),false);SPACE_BOSS_EFFECT(17);pce_campaign.result=1;pce_campaign.story=0;pce_campaign.event=1;}
+        else if(!(boss_die%5)){blast(84+random()%160,space_boss_y+random()%90,random()&1);if(random()%5<2)SPACE_BOSS_EFFECT(random()&1?7:8);}   /* (space.c: the bursts yell now and then) */
         return;
     }
     if(!pce_campaign.boss_hp) {
@@ -252,14 +349,19 @@ BOSS_STEP static void boss_step(void) {
     if(++sb.t>=wait+93+fire)sb.t=0;
     sb.laser=sb.t<wait?0:sb.t<wait+78?1:sb.t<wait+78+fire?2:3;
     sb.gather=sb.laser==1?sb.t-wait:0;
-    if(sb.t==wait)audio_effect(18);else if(sb.t==wait+78)audio_effect(19);   /* the PC's charge.wav and beam.wav */
-    if(sb.laser==2&&!hurt&&ship_x<84+space_hull_x&&dist(ship_y,space_boss_y+48)<(round>=2?12:7)){hurt=90;campaign_hurt();}
+    if(sb.t==wait)SPACE_BOSS_EFFECT(18);else if(sb.t==wait+78)SPACE_BOSS_EFFECT(19);   /* the PC's charge.wav and beam.wav */
+    if(sb.laser==2&&!hurt&&ship_x<space_hull_cannon_x()+space_hull_x&&
+       dist(ship_y,space_boss_y+space_hull_cannon_y())<(round>=2?12:7)){hurt=90;campaign_hurt();}
     /* the cruiser swings about the whole height of the field (34-106, a lap every 4 s, a pixel a step) and rocks forward and back (the hull moves 0-20 dots to the
      * right of its place, a lap every 3 s); both stop while the cannon gathers and fires (the beam is cells of the hull), and in the last stage the beam chases Ramrod */
-    if(sb.laser==2&&round==2)space_boss_y+=ship_y<space_boss_y+48?-1:1;
+    if(sb.laser==2&&round==2)space_boss_y+=ship_y<space_boss_y+space_hull_cannon_y()?-1:1;
     else if(sb.laser==0||sb.laser==3) {
         uint8_t c=(beam_clock>>1)&127,tri=c<64?c:128-c;
+#ifdef PCE_SGX
+        int16_t want=(pce_sgx_gameplay()?26:34)+tri+(tri>>3);
+#else
         int16_t want=34+tri+(tri>>3);
+#endif
         space_boss_y+=want>space_boss_y?1:want<space_boss_y?-1:0;
         uint8_t u=(beam_clock/3)&63,rock=u<32?u:64-u;
         int16_t forward=(rock*5)>>3;
@@ -268,6 +370,11 @@ BOSS_STEP static void boss_step(void) {
     if(space_boss_y<30)space_boss_y=30;if(space_boss_y>120)space_boss_y=120;
     boss_guns();   /* the ports and the hangar */
 }
+#ifdef PCE_SGX
+__attribute__((noinline,section(".ram_bank113.text"))) static void boss_step_wrapper(void) {
+    uint8_t previous=pce_bank6_get();pce_bank6_set(135);boss_step();pce_bank6_set(previous);
+}
+#endif
 /* Scenery and flight drawing share bank $78; simulation stays in $73. */
 PCE_SCENERY void space_dialog_ship(void) {   /* the dialogues (story_pce.c draw) keep Ramrod's ship on view where it flies */
     if(!pce_death)video_sprite(3,ship_x,ship_y,false,16);
@@ -306,7 +413,8 @@ PCE_SCENERY void space_frame(void) {
     for(uint8_t k=0;k<10;++k)if(expl[k].t)video_sprite_optional(12+(expl[k].small?5:0)+(expl[k].t-1)/6,expl[k].x,expl[k].y,false,16);
     /* the nose cannon: sparks drawn into its mouth while it gathers; the beam itself is cells of the playfield (space_beam), set when the state changes */
     if(sb.laser==1) {
-        int16_t reach=(78-sb.gather)>>2,x=84+space_hull_x,y=space_boss_y+48;
+        int16_t reach=(78-sb.gather)>>2,x=space_hull_cannon_x()+space_hull_x,
+                y=space_boss_y+space_hull_cannon_y();
         video_sprite_optional(1,x+reach,y,false,16);video_sprite_optional(1,x-reach,y,false,16);
         video_sprite_optional(1,x,y+reach,false,16);video_sprite_optional(1,x,y-reach,false,16);
     }

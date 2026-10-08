@@ -4,20 +4,33 @@
 #include "race_pce.h"
 #include "campaign_pce.h"
 #include "sgx_pce.h"
+#include "overlay_pce.h"
 
 extern uint8_t buffer[2048];
-uint8_t space_hull_ready,space_hull_top[24],space_hull_bottom[24];
+uint8_t space_hull_ready,space_hull_top[28],space_hull_bottom[28];
+int16_t space_hull_draw_y PCE_WORK;
+uint8_t space_hull_draw_flash PCE_WORK,space_hull_draw_gone PCE_WORK;
 uint16_t flash_palette[512] PCE_STAGE;
-static uint16_t hull_palette[64] PCE_STAGE;
+uint16_t hull_palette[64] PCE_STAGE;
 uint8_t space_flashing;
-static uint8_t hull_lit;   /* the hull palette on the VCE: 0 plain, 1 warmed by a hit (written only when it changes) */
-static uint8_t hull_gone;
-static uint8_t space_beam_width;
+uint8_t hull_lit,hull_gone,space_beam_width;
 volatile uint16_t pce_sky_far,pce_sky_near;
 
-int16_t space_hull_x;uint16_t space_hull_char;
+int16_t space_hull_x PCE_WORK;uint16_t space_hull_char PCE_WORK;
+#ifdef PCE_SGX
+extern volatile uint8_t space_hull_sgx_ok;
+void space_hull_sgx_load_wrapper(void),space_hull_sgx_bat_wrapper(void);
+void space_hull_sgx_draw_wrapper(void);
+#endif
 /* The hull's cells and the black playfield round them (the whole 64x32 BAT: the dialogue's cells and the beam's are wiped too). */
 PCE_SCENERY void space_hull_bat(void) {
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay()&&space_hull_sgx_ok) {
+        overlay_call(0x71,space_hull_sgx_bat_wrapper);
+        if(space_beam_width)space_beam(space_beam_width);
+        return;
+    }
+#endif
     /* The power cut-in restores this BAT while its palette snapshot still
      * occupies buffer[0..1023]. Keep background staging in the scratch half. */
     uint16_t *cells=(uint16_t*)(buffer+1024);
@@ -40,21 +53,36 @@ PCE_SCENERY void space_hull_bat(void) {
 PCE_SCENERY void space_beam(uint8_t width) {
     space_beam_width=width;
     uint16_t palette=pce_sgx_gameplay()?0xa000:0x4000;
-    for(uint8_t row=4;row<8;++row) {
+    uint8_t first=pce_sgx_gameplay()?5:4;
+    for(uint8_t part=0;part<4;++part) {
+        uint8_t row=first+part;
         uint16_t cell=0;   /* blank */
-        if(width==1&&row==5)cell=space_hull_char;
-        else if(width==1&&row==6)cell=space_hull_char+1;
-        else if(width==2)cell=space_hull_char+(row==4?3:row==7?4:2);
+        if(width==1&&(part==1||part==2))cell=space_hull_char+(part==2);
+        else if(width==2)cell=space_hull_char+(part==0?3:part==3?4:2);
         video_vdc(0,(uint16_t)row*64+54);
         for(uint8_t x=0;x<10;++x)video_vdc(2,cell?cell|palette:PCE_BG_WORD>>4);
     }
 }
 PCE_SCENERY void space_hull_load(void) {
+    bool sgx=pce_sgx_gameplay();
+#ifdef PCE_SGX
+    if(sgx) {
+        space_beam_width=0;space_hull_sgx_ok=0;
+        overlay_call(0x71,space_hull_sgx_load_wrapper);
+        if(space_hull_sgx_ok) {
+            space_hull_x=240;space_hull_bat();
+            if(space_hull_sgx_ok) {
+                video_scroll((uint16_t)(-16-space_hull_x),(uint16_t)-48);
+                space_flashing=hull_gone=0;space_hull_ready=1;hull_lit=0;
+                return;
+            }
+        }
+    }
+#endif
     uint32_t a=pce_boss_bg[6];
     uint16_t count;
     arcade_read(2,a,&count,2);
     arcade_read(2,a+4,space_hull_top,24);arcade_read(2,a+28,space_hull_bottom,24);
-    bool sgx=pce_sgx_gameplay();
     space_beam_width=0;
     /* Fade just the nebula. Sprites and music continue; every asset is already
      * in Arcade RAM, so the transition performs no disc reads. */
@@ -79,14 +107,18 @@ PCE_SCENERY void space_hull_load(void) {
     space_hull_bat();
     pce_vce_copy_palette(sgx?11:0,hull_palette,4);
     pce_vce_set_color(255,0x1ff);   /* the ending dialogue still needs white BG glyphs */
-    video_scroll((uint16_t)(-76-space_hull_x),(uint16_t)-60);
+    video_scroll((uint16_t)(-(pce_sgx_gameplay()?16:76)-space_hull_x),(uint16_t)-60);
     space_flashing=hull_gone=0;space_hull_ready=1;hull_lit=0;
     if(!sgx){video_wait();video_display(true);}
 }
 
 PCE_SCENERY void space_hull_draw(int16_t y,uint8_t flash,bool gone) {
     if(!space_hull_ready)return;
-    video_scroll((uint16_t)(-76-space_hull_x),(uint16_t)-y);
+#ifdef PCE_SGX
+    space_hull_draw_y=y;space_hull_draw_flash=flash;space_hull_draw_gone=gone;
+    overlay_call(0x71,space_hull_sgx_draw_wrapper);
+#else
+    video_scroll((uint16_t)(-(pce_sgx_gameplay()?16:76)-space_hull_x),(uint16_t)-y);
     if(gone&&!hull_gone) {
         video_vdc(0,0);
         for(uint16_t i=0;i<2048;++i)video_vdc(2,PCE_BG_WORD>>4);
@@ -101,6 +133,7 @@ PCE_SCENERY void space_hull_draw(int16_t y,uint8_t flash,bool gone) {
         ((uint16_t*)buffer)[i]=c;
     }
     pce_vce_copy_palette(pce_sgx_gameplay()?11:0,buffer,4);
+#endif
 }
 
 PCE_SCENERY void space_screen_flash(uint8_t frames) {
