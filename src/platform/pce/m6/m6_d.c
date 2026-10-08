@@ -65,16 +65,24 @@ static void bolt_draw(uint8_t frame,int16_t x,int16_t y) {
 #ifdef PCE_SGX
 #define SGX_ARENA_SPLIT 420
 static bool arena_far(const Item *item) {
-    return item->d>SGX_ARENA_SPLIT&&((item->id&0xf000)!=BOLT_FLAG);
+    bool plasma=item->id>=PCE_M6_PLASMA&&item->id<PCE_M6_EXPL;
+    return item->d>SGX_ARENA_SPLIT&&((item->id&0xf000)!=BOLT_FLAG)&&!plasma;
 }
 #endif
-static void draw_item(const Item *item) {
+static bool draw_item(const Item *item) {
     int16_t ix=item->sx-shake_x,iy=item->sy-shake_y;
     if(item->id>=BIG_FLAG) {
-        if(!blit(0,item->id&~BIG_FLAG,ix,iy,false))
-            video_sprite_optional(PCE_M6_MECH+(((item->id&~BIG_FLAG)>>2)*PCE_M6_STEPS)+PCE_M6_STEPS-1,ix,iy,false,16);
-    } else if(item->id>=BOLT_FLAG) bolt_draw(item->id&3,ix,iy);
-    else video_sprite_optional(item->id,ix,iy,false,16);
+        if(blit(0,item->id&~BIG_FLAG,ix,iy,false))return true;
+        return video_sprite_optional(PCE_M6_MECH+(((item->id&~BIG_FLAG)>>2)*PCE_M6_STEPS)+PCE_M6_STEPS-1,ix,iy,false,16);
+    }
+    if(item->id>=BOLT_FLAG) {
+        uint8_t before=sat_count;
+        bolt_draw(item->id&3,ix,iy);
+        return sat_count!=before;
+    }
+    if(item->id>=PCE_M6_PLASMA&&item->id<PCE_M6_EXPL)
+        return video_sprite(item->id,ix,iy,false,16);
+    return video_sprite_optional(item->id,ix,iy,false,16);
 }
 void m6_draw(void) {
     /* the sky: 1344 dots to the turn, the planet ahead at the start */
@@ -152,11 +160,20 @@ void m6_draw(void) {
         /* Mode 1 puts VDC0 sprites over VDC1 sprites. Keep the nearer half
            with the HUD and Ramrod's arm; distant objects use a second SAT
            and its independent per-scanline admission budget. */
-        for(uint8_t k=0;k<nitems;++k)if(!arena_far(&items[k]))draw_item(&items[k]);
+        for(uint8_t k=0;k<nitems;++k)if(!arena_far(&items[k]))(void)draw_item(&items[k]);
         uint8_t sat0_count=sat_count;
         memcpy(buffer,sprite_occupancy,224);
         sat_page=1;sat_count=0;sprite_lines_clear();
-        for(uint8_t k=0;k<nitems;++k)if(arena_far(&items[k]))draw_item(&items[k]);
+        for(uint8_t k=0;k<nitems;++k)if(arena_far(&items[k])&&!draw_item(&items[k])) {
+            uint8_t sat1_count=sat_count;
+            memcpy(buffer+256,sprite_occupancy,224);
+            memcpy(sprite_occupancy,buffer,224);
+            sat_page=0;sat_count=sat0_count;
+            if(draw_item(&items[k]))sat0_count=sat_count;
+            memcpy(buffer,sprite_occupancy,224);
+            memcpy(sprite_occupancy,buffer+256,224);
+            sat_page=1;sat_count=sat1_count;
+        }
         for(uint8_t k=sat_count;k<64;++k)sat[1][k].y=0;
         sat_page=0;sat_count=sat0_count;
         memcpy(sprite_occupancy,buffer,224);
@@ -164,7 +181,7 @@ void m6_draw(void) {
     } else
 #endif
     {
-        for(uint8_t k=0;k<nitems;++k)draw_item(&items[k]);
+        for(uint8_t k=0;k<nitems;++k)(void)draw_item(&items[k]);
     }
     uint8_t m0=sat_count;
     overlay_call(M6A_BANK,m6_msgs);
