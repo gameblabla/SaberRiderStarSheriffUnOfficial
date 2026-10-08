@@ -39,35 +39,35 @@ PCE_FLOW static void hud_transfer(void *dst,const void *src,uint16_t n) {
 #ifdef PCE_SGX
 PLATFORM_DRAW static bool split_vdc0_draw(uint16_t id,int16_t x,int16_t y,bool flip,uint8_t scale) {
     uint8_t count=sat_count,last=sprite_last_free;
-    memcpy(buffer+512,sprite_occupancy,240);
-    sat_page=0;sat_count=buffer[768];sprite_last_free=buffer[769];
-    memcpy(sprite_occupancy,buffer+256,240);
+    pce_sgx_copy(buffer+512,sprite_occupancy,240);
+    sat_page=0;sat_count=pce_sgx_split_count;sprite_last_free=pce_sgx_split_last;
+    pce_sgx_copy(sprite_occupancy,buffer+256,240);
     bool admitted=video_sprite_optional(id,x,y,flip,scale);
-    buffer[768]=sat_count;buffer[769]=sprite_last_free;
-    memcpy(buffer+256,sprite_occupancy,240);
+    pce_sgx_split_count=sat_count;pce_sgx_split_last=sprite_last_free;
+    pce_sgx_copy(buffer+256,sprite_occupancy,240);
     sat_page=1;sat_count=count;sprite_last_free=last;
-    memcpy(sprite_occupancy,buffer+512,240);
+    pce_sgx_copy(sprite_occupancy,buffer+512,240);
     return admitted;
 }
 #endif
 PLATFORM_DRAW bool pce_sgx_split_sprite_optional(uint8_t owner,uint16_t id,int16_t x,int16_t y,bool flip,uint8_t scale) {
 #ifdef PCE_SGX
-    if(buffer[770]&&sat_page==1) {
+    if(pce_sgx_split_active&&sat_page==1) {
         bool admitted;
-        if(owner<24&&buffer[772+owner]==0) {
+        if(owner<8&&pce_sgx_actor_plane[owner]==0) {
             admitted=split_vdc0_draw(id,x,y,flip,scale);
             if(admitted)goto split_done;
             --pce_metrics.dropped_cosmetic;
             admitted=video_sprite_optional(id,x,y,flip,scale);
-            if(admitted)buffer[772+owner]=1;
+            if(admitted)pce_sgx_actor_plane[owner]=1;
         } else {
             admitted=video_sprite_optional(id,x,y,flip,scale);
             if(admitted) {
-                if(owner<24)buffer[772+owner]=1;
+                if(owner<8)pce_sgx_actor_plane[owner]=1;
             } else {
                 --pce_metrics.dropped_cosmetic;
                 admitted=split_vdc0_draw(id,x,y,flip,scale);
-                if(admitted&&owner<24)buffer[772+owner]=0;
+                if(admitted&&owner<8)pce_sgx_actor_plane[owner]=0;
             }
         }
 split_done:
@@ -179,7 +179,7 @@ static uint8_t panel_x,panel_y,panel_w,panel_h;
 PANEL static void panel_draw(void) {
     uint8_t x=panel_x,y=panel_y,w=panel_w,h=panel_h;
     extern volatile uint16_t pce_scroll_x;
-    uint16_t scroll_col=(pce_sgx_gameplay()&&(pce_metrics.stage==4||pce_metrics.stage==5))?0:pce_scroll_x>>3;
+    uint16_t scroll_col=pce_scroll_x>>3;
     for(uint8_t row=0;row<h;++row)for(uint8_t col=0;col<w;++col) {
         uint16_t address=pce_raster_enabled?(uint16_t)(48+y+row)*128+x+col:
             (uint16_t)(y+row)*64+((scroll_col+x+col)&63);
@@ -209,13 +209,9 @@ static void panel_prepare_body(void) {
     const PceScene *sc=video_scene_ptr;
     uint8_t y=panel_y;
     uint16_t *words=(uint16_t*)buffer;
-    if(pce_sgx_gameplay()&&(pce_metrics.stage==4||pce_metrics.stage==5)) {
-        for(uint8_t i=0;i<28*6;++i)words[i]=PCE_FONT_WORD>>4;
-        return;
-    }
     uint32_t map=sc->map;
 #ifdef PCE_SGX
-    if(pce_sgx_gameplay()&&(pce_metrics.stage==1||pce_metrics.stage==3))map=sc->sgx_map;
+    if(pce_sgx_gameplay()&&sc->sgx_map)map=sc->sgx_map;
 #endif
     for(uint8_t x=3;x<31;++x) {
         uint16_t world=pce_panel_column+x;

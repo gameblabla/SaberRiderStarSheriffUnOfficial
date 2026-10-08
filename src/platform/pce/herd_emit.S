@@ -4,6 +4,9 @@
 .section .ram_bank111.text,"ax",@progbits
 .global herd_emit
 .extern herd_emit_args, sat, sat_count, sat_page
+#ifdef PCE_SGX
+.extern pce_sgx_metrics
+#endif
 .macro cell count, pattern, row, attribute
     lda herd_emit_args+\count
     beq .Lskip\@
@@ -31,6 +34,12 @@
     sta ($20c0),y
     iny
     lda #$8f
+#ifdef PCE_SGX
+    ldx pce_sgx_metrics+5
+    bpl 2f
+    lda #$8d
+2:
+#endif
     sta ($20c0),y
     iny
     lda #\attribute

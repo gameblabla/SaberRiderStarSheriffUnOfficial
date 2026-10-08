@@ -64,13 +64,18 @@ sprite_fast:
 #ifdef PCE_SGX
     /* VDC1 has its own copy of this gameplay sprite cache. A VDC0 hit is
        still a miss until this slot has been uploaded there. */
-    lda sat_page
-    beq .Lvdc1_cache_ready
     lda pce_sgx_metrics+5
     and #0x80
     beq .Lvdc1_cache_ready
+    lda sat_page
+    beq .Lvdc0_cache_check
     lda sprite_pb_hi,x
     bpl .Lbail
+    bra .Lvdc1_cache_ready
+.Lvdc0_cache_check:
+    lda sprite_pb_hi,x
+    and #0x40
+    beq .Lbail
 .Lvdc1_cache_ready:
 #endif
     lda #1

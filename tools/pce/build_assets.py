@@ -247,21 +247,23 @@ def _background_cells(image, transparent):
     cells = rgba.reshape(30, 8, w // 8, 8, 4).transpose(0, 2, 1, 3, 4).reshape(-1, 8, 8, 4)
     return w,rgba,cells
 
-def fit_background_pair(main, sky, stage, npal=16):
+def fit_background_pair(main, sky, stage, npal=16, near=None):
     _,_,main_cells = _background_cells(main,True)
     _,_,sky_cells = _background_cells(sky,True)
     fixed=(15,) if npal>15 else ()
-    palettes,groups = palfit.fit_palettes(np.concatenate((main_cells,sky_cells)),npal,fixed=fixed)
+    near_cells = _background_cells(near,True)[2] if near is not None else np.empty((0,8,8,4),np.uint8)
+    palettes,groups = palfit.fit_palettes(np.concatenate((main_cells,sky_cells,near_cells)),npal,fixed=fixed)
     palettes = [palettes[k].copy() for k in range(npal)]
     palettes[0][0] = presentation.sky_color(stage)
     split = len(main_cells)
-    return palettes,groups[:split].copy(),groups[split:].copy()
+    return palettes,groups[:split].copy(),groups[split:split+len(sky_cells)].copy(),groups[split+len(sky_cells):].copy()
 
 def native_background(image, archive, previews, name, npal=16, sgx=False, record_prefix='', preview_name=None,
-                      transparent=False, palette_fit=None, write_palette=True, static_bat=False, return_preview=False):
+                      transparent=False, palette_fit=None, write_palette=True, static_bat=False, return_preview=False, cache_tiles=BG_TILES):
     w,rgba,cells = _background_cells(image,transparent)
     dialog_palette=name in ('stage1','stage3','stage4','stage5','stage6')   # palette 15 belongs to the dialogue box and the font
     cap = (BG_TILES - 1) if static_bat else (512 - 4 - COLUMN_SLACK) if name == 'stage6' and not sgx else BG_TILES - 4 - COLUMN_SLACK   # SGX moves the arena background off the VDC0 sprite cache
+    cap=min(cap,cache_tiles-4-COLUMN_SLACK)
     # The 16 palettes and the palette of every cell are optimised together (palfit.py), not by vertical bands of mean colour.
     if palette_fit is None:
         palette, groups = palfit.fit_palettes(cells, npal, fixed=(15,) if dialog_palette else ())
@@ -294,7 +296,7 @@ def native_background(image, archive, previews, name, npal=16, sgx=False, record
             idx[..., None] > 0, vce_rgb(palette[pal])[idx], vce_rgb(backdrop))
         preview[y * 8:y * 8 + 8, x * 8:x * 8 + 8, 3] = (
             np.where(cell[..., 3] >= 128,255,0) if transparent else 255)
-    if len(tiles) > 65535: raise ValueError(f'{name}: too many background characters')
+    if len(tiles) > (16384 if sgx else 65535): raise ValueError(f'{name}: too many background characters')
     n = np.asarray(names, np.uint16).reshape(30, w // 8, 2).transpose(1, 0, 2)
     mapping = b''.join(struct.pack('<HB', int(t), int(p)) for t, p in n.reshape(-1, 2))
     tile_data = b''.join(tiles)
@@ -633,19 +635,20 @@ def platform_background(stage, work, sgx=False):
     continuous = {}
     after = False
     flat_sky = None
-    sgx_sky = None
+    sgx_sky = sgx_near = None
     for ly in level.layers:
         if ly.name == 'PlayerSprites': after = True
         if stage == 4 and ly.name == 'SkyBG': flat_sky = flat_sky_rows(ly, banks[ly.cblock])
         if sgx and stage in (1, 3, 4, 5) and ly.name == 'SkyBG':
-            sky_width = 256 if stage in (1, 3) else 512 if stage == 4 else 1024
+            sky_width = (ly.used_w if ly.extra == 1 else ly.w) * banks[ly.cblock].tw
             sgx_sky = levl.render_layer(ly, banks[ly.cblock], levl.layer_offset(ly, 0), sky_width, 240, None)
-            if stage == 3:
-                tint = np.array(NIGHT_TINT.get('SkyBG', (100, 100, 160)), np.int32)
-                sgx_sky[..., :3] = (sgx_sky[..., :3].astype(np.int32) * tint // 255).astype(np.uint8)
-            sgx_sky = Image.fromarray(sgx_sky)
+            sgx_sky = (Image.open(ROOT/'assets/stage3/native/stage3_night_sky.png').convert('RGBA')
+                       if stage==3 else Image.fromarray(sgx_sky))
             continue
         if stage == 4 and ly.name == 'SkyBG': continue
+        if sgx and stage==4 and ly.name=='FarMountains':
+            sgx_near=Image.fromarray(levl.render_layer(ly,banks[ly.cblock],0,ly.w*banks[ly.cblock].tw,240,None))
+            continue
         if ly.is_tilemap and not after and 0 < ly.parallax < 1 and ly.extra != 1:
             continuous[ly.name] = continuous_layer(ly, banks[ly.cblock], width)
     for x in range(0,width,256):
@@ -657,6 +660,7 @@ def platform_background(stage, work, sgx=False):
             if ly.name=='PlayerSprites':after_player=True
             if not ly.is_tilemap:continue
             if stage in (1,3) and ly.name=='SkyBG':continue
+            if sgx and stage==4 and ly.name=='FarMountains':continue
             if stage==4 and ly.name=='ForegroundStuf2' and not sgx:continue   # PCE uses the sprite fallback; SGX retains the plants as foreground
             bank=banks[ly.cblock]
             if stage==4 and ly.name=='SkyBG': layer=flat_sky
@@ -689,7 +693,7 @@ def platform_background(stage, work, sgx=False):
     if stage == 1:
         out = scenery_background(out, work, stage)
         if sgx_main is not None: sgx_main = scenery_background(sgx_main, work, stage)
-    return out,foreground,foreground_slow,sgx_main,sgx_sky
+    return out,foreground,foreground_slow,sgx_main,sgx_sky,sgx_near
 
 def april_palette_for(images):
     """One shared palette for April's entire animation set, fitted to the original drawing.
@@ -910,7 +914,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
     sgx_main = sgx_sky = None
     if stage in (1, 3, 4, 5):
         meta.update(json.loads((work / f'stage{stage}.json').read_text()))
-        bg,foreground,foreground_slow,sgx_main,sgx_sky = platform_background(stage, work, sgx=sgx)
+        bg,foreground,foreground_slow,sgx_main,sgx_sky,sgx_near = platform_background(stage, work, sgx=sgx)
         # Native collision matrix is column-major for a hot 32-column cache.
         raw = np.frombuffer((work / f'stage{stage}.collision').read_bytes(), np.uint8).reshape(meta['rows'], meta['cols'])
         collision = a.add('collision_columns', raw.T.tobytes())
@@ -1482,7 +1486,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
             if i<hud0 or aim0<=i<meta['presentation']['power']:   # gameplay, aim and motion poses (not the HUD, not the power portraits)
                 sprites[i]=(name,im,(ax,ay-16))
         if sgx:
-            # The SGX edition keeps both complete source layers on VDC1. Its
+            # The SGX edition keeps both complete source foreground layers on VDC0. Its
             # foreground record is separate from the legacy PCE scene record:
             # fallback keeps the same omission/thinning policy as the PCE bake.
             validate_foreground_layers([foreground_slow,foreground],foreground.width)
@@ -1519,22 +1523,43 @@ def make_scene(stage, work, previews, shared, sgx=False):
             if any(p==15 for p in palette_bytes):
                 raise ValueError('stage 6 uses BG palette 15, reserved for the SGX software mech')
         if sgx and stage in (1,3,4,5) and sgx_main is not None and sgx_sky is not None:
-            palette,main_groups,sky_groups=fit_background_pair(sgx_main,sgx_sky,stage)
+            palette,main_groups,sky_groups,near_groups=fit_background_pair(sgx_main,sgx_sky,stage,near=sgx_near)
             main=native_background(sgx_main,a,previews,f'stage{stage}',sgx=True,record_prefix='sgx_',
                                    transparent=True,palette_fit=(palette,main_groups),return_preview=True)
             sky=native_background(sgx_sky,a,previews,f'stage{stage}',sgx=True,record_prefix='sgx_sky_',
                                   preview_name=f'stage{stage}_sgx_sky',transparent=True,
-                                  palette_fit=(palette,sky_groups),write_palette=False,static_bat=True,return_preview=True)
-            if sky['tile_bytes']>0xffff:raise ValueError(f'stage{stage}: SGX sky patterns exceed scene record')
+                                  palette_fit=(palette,sky_groups),write_palette=False,return_preview=True,cache_tiles=512 if stage in (1,3) else BG_TILES)
+            if sky['tile_count']>16384:raise ValueError(f'stage{stage}: SGX sky exceeds its Arcade directory')
             meta['sgx_pal']=main['pal'];meta['sgx_tiles']=main['tiles'];meta['sgx_map']=main['map']
-            meta['sgx_sky_record']=a.add('sgx_sky_record',struct.pack('<IIHBIHIHH',sky['tiles'],sky['map'],sky['tile_bytes'],sky['bat_cols'],meta['sgx_foreground_offset'],meta['sgx_foreground_count'],meta['foreground_slow_offset'],meta['foreground_slow_count'],meta['sgx_foreground_first']))
+            sky_layer=next(ly for ly in levl.load_dump(work / f'stage{stage}.layers')[0].layers if ly.name=='SkyBG')
+            near_map=near_cols=near_first=near_speed=split_row=moon_patterns=moon_palette=0
+            tile_start=sky['tiles'];tile_count=sky['tile_count']
+            if sgx_near is not None:
+                near=native_background(sgx_near,a,previews,f'stage{stage}',sgx=True,record_prefix='sgx_near_',
+                    preview_name=f'stage{stage}_sgx_near',transparent=True,palette_fit=(palette,near_groups),write_palette=False)
+                near_map=near['map'];near_cols=near['cols'];near_first=tile_count;near_speed=26;split_row=8
+                # One ID namespace and contiguous pattern archive for both bands.
+                patterns=bytes(a.data[sky['tiles']:sky['tiles']+sky['tile_bytes']])+bytes(a.data[near['tiles']:near['tiles']+near['tile_bytes']])
+                tile_start=a.add('sgx_sky_band_patterns',patterns);tile_count+=near['tile_count']
+            if stage==3:
+                moon=Image.open(ROOT/'assets/stage3/native/stage3_red_moon.png').convert('RGBA')
+                pal=palette_for([moon]);px=indexed(moon,pal)
+                moon_patterns=a.add('sgx_red_moon_patterns',b''.join(planar_sprite(px[y+dy:y+dy+16,x+dx:x+dx+16])
+                    for y in range(0,96,32) for x in range(0,96,32) for dx,dy in ((0,0),(16,0),(0,16),(16,16))))
+                moon_palette=a.add('sgx_red_moon_palette',pal.tobytes())
+            speed=13 if stage==3 else (max(64,round(sky_layer.parallax*256)) if sky_layer.extra==1 else round(sky_layer.parallax*256))
+            wrap=2 if stage==3 else int(sky_layer.extra==1)
+            if tile_count>16384:raise ValueError('SGX sky bands exceed the shared directory')
+            meta['sgx_sky_record']=a.add('sgx_sky_record',struct.pack('<IIHBIHIHHHHBIHHHBII',tile_start,sky['map'],tile_count,64,
+                meta['sgx_foreground_offset'],meta['sgx_foreground_count'],meta['foreground_slow_offset'],meta['foreground_slow_count'],
+                meta['sgx_foreground_first'],sky['cols'],speed,wrap,near_map,near_cols,near_first,near_speed,split_row,moon_patterns,moon_palette))
             backdrop=np.asarray(vce_rgb(presentation.sky_color(stage)),np.uint8).reshape(3)
             composite=Image.new('RGBA',(256,224),tuple(int(v) for v in backdrop)+(255,))
             composite.alpha_composite(sky['preview'].crop((0,0,256,224)))
             composite.alpha_composite(main['preview'].crop((0,0,256,224)))
             composite.save(previews/f'stage{stage}_sgx_composite.png')
         if sgx and stage==7:
-            palette,far_groups,near_groups=fit_background_pair(bg,near,7,npal=10)
+            palette,far_groups,near_groups,_=fit_background_pair(bg,near,7,npal=10)
             far=native_background(bg,a,previews,'stage7',npal=10,sgx=True,
                                   record_prefix='sgx_',preview_name='stage7_sgx',
                                   palette_fit=(palette,far_groups),return_preview=True)
@@ -1566,6 +1591,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
         near, mid, far = (indexed(im, hud_pal) for im in bolt_images)
         blob = planar_sprite(mid) + planar_sprite(far) + b''.join(planar_sprite(near[by:by + 16, bx:bx + 16]) for by, bx in ((0, 0), (0, 16), (16, 0), (16, 16)))
         meta['m6_bolts'] = a.add('m6_bolts', blob)
+    if len(rows) > (512 if sgx else 480):raise ValueError(f'stage{stage}: sprite lookup table capacity exceeded')
     meta.update(collision=collision, sprite_table=sprite_table, sprite_count=len(rows), sprites=costs,
                 records=a.records, bytes=len(a.finish()), color_palettes=16, sprite_palettes=16)
     return a.finish(), meta

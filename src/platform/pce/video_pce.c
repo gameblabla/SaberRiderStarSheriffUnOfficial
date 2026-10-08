@@ -163,7 +163,7 @@ extern void foreground_reset(void);
 PCE_RENDER void video_scene(const PceScene *s) {
     pce_race_dialog=0;
 #ifdef PCE_SGX
-    buffer[770]=0;buffer[796]=0;
+    pce_sgx_split_active=0;pce_sgx_actor_stage=0;
 #endif
     foreground_reset();vce_hold=0;
     scene = s;video_scene_ptr=s;video_nsprites=s->nsprites;
@@ -335,7 +335,7 @@ PCE_RENDER void video_text(uint8_t x, uint8_t y, const char *text) {
     if(pce_sgx_gameplay()&&pce_metrics.stage==7)scroll_x=pce_sky_near;
 #endif
     uint16_t dest = pce_raster_enabled ? (uint16_t)(48+y)*128+x :
-        (uint16_t)y*64+((((pce_sgx_gameplay()&&(pce_metrics.stage==4||pce_metrics.stage==5))?0:scroll_x>>3)+x)&63);
+        (uint16_t)y*64+(((scroll_x>>3)+x)&63);
     while (*text) {
         uint8_t c = *text++;
         if (c < 32 || c > 127) c = '?';
@@ -388,27 +388,36 @@ PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8
             uint32_t pat = (uint32_t)entry[0] | (uint32_t)entry[1]<<8 | (uint32_t)entry[2]<<16 | (uint32_t)entry[3]<<24;
             uint32_t pal = (uint32_t)entry[8] | (uint32_t)entry[9]<<8 | (uint32_t)entry[10]<<16 | (uint32_t)entry[11]<<24;
             pce_vdc_index = 2; *(volatile uint8_t *)0x20f7 = 2;
-            arcade_vram(pat, sprite_words[slot], count * 128);
+#ifdef PCE_SGX
+            arcade_vram_to(sgx_vdc1?1:0,pat,sprite_words[slot],count*128);
+#else
+            arcade_vram(pat,sprite_words[slot],count*128);
+#endif
             arcade_read(2, pal, colors, 32);
-            pce_vce_copy_palette(16 + (slot<15?slot:15), colors, 1);
+            uint8_t palette=sprite_palette(id,slot);
+            pce_vce_copy_palette(16 + palette, colors, 1);
             sprite_ids[slot] = id;
             pce_metrics.uploads += count * 128;
         }
         sprite_count[slot]=count;sprite_slot_of[id]=slot;
         sprite_p0[slot]=entry[4];sprite_p1[slot]=entry[5];sprite_p2[slot]=entry[6];
         sprite_len[slot]=count*6;
+        #ifdef PCE_SGX
+        sprite_pb_hi[slot]=sgx_vdc1?0x80:0x40;
+#else
         sprite_pb_hi[slot]=0;
-        sprite_attr[slot]=VDC_SPRITE_FG|(slot<15?slot:15);
+#endif
+        sprite_attr[slot]=VDC_SPRITE_FG|sprite_palette(id,slot);
     }
 #ifdef PCE_SGX
-    if(sgx_vdc1&&!(sprite_pb_hi[slot]&0x80)) {
+    if(!(sprite_pb_hi[slot]&(sgx_vdc1?0x80:0x40))) {
         pce_sgx_sprite_id=id;pce_sgx_sprite_slot=slot;
         overlay_call(0x78,pce_sgx_sprite_upload_body);
         if(!pce_sgx_sprite_upload_ok) {
             if(!sprite_optional)++pce_metrics.essential_overflow;
             return false;
         }
-        sprite_pb_hi[slot]|=0x80;
+        sprite_pb_hi[slot]|=sgx_vdc1?0x80:0x40;
     }
 #endif
     if(fast) {
@@ -432,7 +441,12 @@ extern void sat_copy(void);
 extern volatile uint8_t pce_sgx_sat1_pending;
 void pce_sgx_sat1_commit(void);
 #endif
-__attribute__((noinline)) static void sat_transfer(uint16_t word,const void *src,uint16_t bytes) {
+#ifdef PCE_SGX
+PCE_RENDER
+#else
+__attribute__((noinline))
+#endif
+static void sat_transfer(uint16_t word,const void *src,uint16_t bytes) {
     sat_copy_word=word;sat_copy_src=(uint16_t)src;sat_copy_len=bytes;
     sat_copy_vdc=0;
     overlay_call(0x72,sat_copy);
@@ -460,7 +474,7 @@ PCE_RENDER static void sat_publish(uint16_t word,bool drawing) {
     *IO_VDC_INDEX=VDC_REG_SATB_START;
     *IO_VDC_DATA_LO=word;*IO_VDC_DATA_HI=word>>8;
 #ifdef PCE_SGX
-    if(pce_sgx_sat1_pending)pce_sgx_sat1_commit();
+    if(pce_sgx_sat1_ready){pce_sgx_sat1_commit();pce_sgx_sat1_ready=0;pce_sgx_sat1_pending=1;}
     if(drawing && pce_sgx_arena_sprites() &&
        pce_sgx_arena_bg_pending_page != 0xff) {
         if(pce_sgx_arena_bg_pending_page)

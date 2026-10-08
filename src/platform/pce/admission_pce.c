@@ -1,6 +1,9 @@
 #include "video_pce.h"
 /* video_sprite checks a complete object's SAT/scanline/clip budget before
  * committing pieces. Optional actors can therefore be refused atomically. */
+#ifdef PCE_SGX
+__attribute__((noinline,section(".ram_bank107.text")))
+#endif
 bool video_sprite_optional(uint16_t id,int16_t x,int16_t y,bool flip,uint8_t scale) {
     extern uint8_t sprite_optional;
     sprite_optional=1;

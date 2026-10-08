@@ -85,7 +85,7 @@ PCE_MISSION static void platform_box(void) {
     arcade_vram(record[1],0x4000,bytes);
     arcade_vram(record[3],PCE_FONT_WORD,3072);
     arcade_read(2,record[2],buffer+1024,336);   /* the cells go in right after that VBlank (video_cells_apply) */
-    story_column=(pce_sgx_gameplay()&&(pce_metrics.stage==4||pce_metrics.stage==5))?0:pce_scroll_x>>3;
+    story_column=pce_scroll_x>>3;
 }
 PCE_FLOW void story_graphics_restore(void) {   /* bank $6e: $6f is full */
     if(pce_metrics.stage==2||pce_metrics.stage==7)return;
@@ -119,6 +119,7 @@ extern volatile uint16_t pce_scroll_x,pce_scroll_y;
  * sprite corners retain the scenery behind them; other modes keep their own
  * panel renderer. */
 STORY_CODE static void draw(void) {
+    if(pce_metrics.stage!=2&&pce_metrics.stage<6)pce_scroll_hold=1;
     uint32_t a=pointer(story_address+1+(uint16_t)pce_campaign.page*4);
     uint16_t avatar;uint8_t colour;
     arcade_read(2,a,&avatar,2);arcade_read(2,a+2,&colour,1);
@@ -128,8 +129,7 @@ STORY_CODE static void draw(void) {
     /* The cruiser's playfield is scrolled (a multiple of 8 dots down while it greets: space_pce.c): screen row 20 is that many rows on in the BAT. */
     if(pce_metrics.stage==7)y=story_y=(20+(pce_scroll_y>>3))&31;
     /* BG cells sit (scroll & 7) pixels left of their grid on a scrolling playfield. */
-    bool fixed_overlay=pce_sgx_gameplay()&&(pce_metrics.stage==4||pce_metrics.stage==5);
-    int16_t box_x=24-(pce_raster_enabled||fixed_overlay?0:(pce_scroll_x&7)),box_y=(pce_metrics.stage==7?20:y)*8-(pce_metrics.stage!=2&&pce_metrics.stage<6?16:0);   /* platform sprites are baked 16 lines low */
+    int16_t box_x=24-(pce_raster_enabled?0:(pce_scroll_x&7)),box_y=(pce_metrics.stage==7?20:y)*8-(pce_metrics.stage!=2&&pce_metrics.stage<6?16:0);   /* platform sprites are baked 16 lines low */
     /* Blank every BG cell under the box except the four 2x2 corner blocks; the corner pieces stay in front of the
      * scenery so their rounded edges show the scenery, not a hole. */
     bool platform=pce_metrics.stage!=2&&pce_metrics.stage!=7;   /* the platform stages and Ramrod's arena: a scrolling background with the panel in BG characters and four sprite corners */
@@ -146,12 +146,12 @@ STORY_CODE static void draw(void) {
         video_sprite(avatar,pce_metrics.stage==2?(box_x-26)*2:box_x-26,box_y-8,false,16);
         /* Cache slots from 15 up share one hardware palette, which another portrait's upload overwrote since this one was
          * cached: load the speaker's own colours again. */
-        extern const PceScene *video_scene_ptr;extern uint8_t sprite_slot_of[480];
+        extern const PceScene *video_scene_ptr;extern uint8_t sprite_slot_of[];
         uint8_t slot=sprite_slot_of[avatar];
         if(slot<48) {
             uint32_t entry;uint8_t colors[32];
             arcade_read(2,video_scene_ptr->sprites+(uint32_t)avatar*16+8,&entry,4);
-            arcade_read(2,entry,colors,32);pce_vce_copy_palette(16+(slot<15?slot:15),colors,1);
+            arcade_read(2,entry,colors,32);pce_vce_copy_palette(16+sprite_palette(avatar,slot),colors,1);
         }
     }
     uint8_t first=sat_count;
@@ -171,20 +171,22 @@ STORY_CODE static void draw(void) {
     /* The world stands still behind the text: the hero (behind the box, which comes first in the SAT), the actors
      * (the cutscene outrider stays put) and the boss stay on screen. */
     if(pce_metrics.stage==7)overlay_call(0x78,space_dialog_ship);
+    video_front_mark();
     if(platform&&pce_metrics.stage<6) {
 #ifdef PCE_SGX
-        extern uint8_t fg_world_first;
-        fg_world_first=sat_count;   /* scenery must not mirror over the panel or portrait */
+        if(pce_sgx_gameplay())overlay_call(0x80,pce_sgx_story_world_body);
+        else
 #endif
-        video_sprite(hero_sprite,player.x-camera,player.y-16,facing,16);
-        overlay_call(PCE_ACTOR_DRAW_BANK,actors_draw);
-        if(!pce_campaign.diagnostic)overlay_call(0x70,combat_draw);
+        {
+            video_sprite(hero_sprite,player.x-camera,player.y-16,facing,16);
+            overlay_call(PCE_ACTOR_DRAW_BANK,actors_draw);
+            if(!pce_campaign.diagnostic)overlay_call(0x70,combat_draw);
 #ifdef PCE_SGX
-        if(pce_sgx_gameplay())overlay_call(0x74,foreground_prepare);
-        overlay_call(0x75,foreground_draw);
+            overlay_call(0x75,foreground_draw);
 #else
-        foreground_draw();
+            foreground_draw();
 #endif
+        }
     }
     /* The panel's graphics, palette and cells are prepared before the SAT is queued; the cells are written right after the VBlank that brings the sprite corners. */
     if(platform){platform_colour=colour;overlay_call(0x6f,platform_box);}
@@ -223,7 +225,9 @@ STORY_CODE void story_start(void) {
     arcade_read(2,story_address,&page_count,1);
     pce_campaign.page=0;pce_campaign.state=CAM_STORY;pce_campaign.timer=0;
 #ifdef PCE_SGX
-    overlay_call(0x78,pce_sgx_vdc1_hide_body);
+    /* Platform panels publish both SATs together; keep the old world visible
+       until their complete replacement is ready. */
+    if(pce_metrics.stage>=6)overlay_call(0x78,pce_sgx_vdc1_hide_body);
 #endif
     /* The race and the cockpits keep their HUD in sprites: let the last two displayed generations go (their cache slots
      * stay pinned through the SAT DMA) so the box and the avatar find slots in the same frame. */

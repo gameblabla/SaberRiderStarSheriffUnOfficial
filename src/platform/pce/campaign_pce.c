@@ -20,6 +20,9 @@ void campaign_hurt(void) {
     }
 }
 /* A downed enemy plays its death frames (walker / grunt / sniper bodies) and yells; anything else just vanishes. */
+#ifdef PCE_SGX
+__attribute__((noinline,section(".ram_bank107.text")))
+#endif
 void actor_kill(Actor *a) {
     uint8_t id=pce_actor_ids[a->type];
     if(id>=39&&id<=41){a->dead=1;a->b.vx=0;audio_effect(8);}

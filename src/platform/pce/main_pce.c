@@ -156,7 +156,13 @@ PCE_FLOW void flow_main(void) {
     for(;;) {
         /* The race runs as fast as it can (a pass is rarely a whole number of frames, and waiting out the rest wastes the
          * time the floor wants): the wait is only for the first tick after the last pass began. */
-        if(stage==2){while(pce_ticks==simulation_tick){}++pce_metrics.frames;}else video_wait();
+        bool next_tick=stage==2;
+#ifdef PCE_SGX
+        /* A platform draw that just crossed VBlank already has a fresh
+           simulation tick. Waiting for another one halves its cadence. */
+        if(pce_sgx_gameplay()&&(stage==1||stage==3||stage==4||stage==5))next_tick=true;
+#endif
+        if(next_tick){while(pce_ticks==simulation_tick){}++pce_metrics.frames;if(stage!=2)audio_tick();}else video_wait();
         uint8_t elapsed=pce_ticks-simulation_tick;simulation_tick=pce_ticks;
         if(elapsed>12)elapsed=12;
         if(pce_stall){pce_stall=0;elapsed=1;}   /* a CD seek or a big upload held the loop up: its ticks are not caught up */

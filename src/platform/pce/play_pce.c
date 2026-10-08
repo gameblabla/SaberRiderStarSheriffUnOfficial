@@ -9,7 +9,6 @@
 #include "scenery_pce.h"
 #ifdef PCE_SGX
 #include "sgx_pce.h"
-extern uint8_t fg_world_first;
 #endif
 extern uint8_t actors_mode;
 extern uint8_t buffer[2048];
@@ -279,7 +278,7 @@ PCE_BOSS void play_draw(void) {
 #endif
     uint8_t world_first=sat_count;
 #ifdef PCE_SGX
-    if(sgx_foreground_stage)fg_world_first=world_first;
+    if(sgx_foreground_stage)pce_sgx_hero_first=world_first;
 #endif
     uint8_t keys=pce_control.keys,stage=pce_metrics.stage-1;
     bool grounded=player.coll&4,side=keys&(KEY_LEFT|KEY_RIGHT);

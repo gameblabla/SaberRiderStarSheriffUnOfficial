@@ -98,6 +98,8 @@ test-campaign: all
 test-sgx:
 	$(MAKE) -f Makefile.pce SGX=1 OUT=build/sgx all
 	python3 tools/pce/test_campaign.py --out build/sgx --sgx
+	python3 tools/pce/test_sgx_rendering.py --out build/sgx
+	python3 tools/pce/test_herd.py --out build/sgx --sgx
 
 test-presentation: all
 	python3 tools/pce/test_presentation.py --out $(OUT)

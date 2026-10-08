@@ -2,17 +2,32 @@
 #include "video_pce.h"
 #include "arcade_pce.h"
 #include "overlay_pce.h"
+#include "sgx_pce.h"
 uint16_t sprite_ids[48],sprite_words[48];
 uint8_t sprite_stamp[48],sprite_epoch;
 uint8_t sprite_used[48],sprite_pinned[48],pattern_owner[54];
-uint8_t sprite_slot_of[480],sprite_count[48],sprite_len[48],sprite_p0[48],sprite_p1[48],sprite_p2[48];
+uint8_t sprite_slot_of[PCE_SPRITE_IDS],sprite_count[48],sprite_len[48],sprite_p0[48],sprite_p1[48],sprite_p2[48];
+#ifdef PCE_SGX
+uint8_t sprite_pb_hi[48] PCE_WORK,sprite_attr[48] PCE_WORK;
+#else
 uint8_t sprite_pb_hi[48],sprite_attr[48];
+#endif
 /* Resident allocator. A 512-byte page holds four 16x16 patterns. Keep the
  * last two displayed generations pinned through SAT DMA, including palettes.
  * Canonical left/right frames share their cache ID and patterns. */
 static uint16_t cache_id,cache_count,cache_result;
 uint16_t sprite_cache_foreground_first;
 uint8_t sprite_cache_stage;
+__attribute__((noinline,minsize,section(".ram_bank107.text")))
+uint8_t sprite_palette(uint16_t id,uint8_t slot) {
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay()&&pce_metrics.stage<6&&pce_metrics.stage!=2&&id>=sprite_cache_foreground_first)
+        return 12;
+#else
+    (void)id;
+#endif
+    return slot<15?slot:15;
+}
 #define CACHE_CODE __attribute__((noinline,minsize,section(".ram_bank116.text")))
 CACHE_CODE static void allocate(void) {
     uint16_t id=cache_id;uint8_t count=cache_count;
@@ -28,7 +43,15 @@ CACHE_CODE static void allocate(void) {
     }
     /* Ramrod's arena keeps palettes 29 (the arm) and 30 (the big mech) (m6_d.c) and the top 16 pages of the cache for one of the mech's two pattern buffers */
     bool arena=pce_metrics.stage==6;
+    uint16_t hud=pce_present_base[pce_metrics.stage-1][0];
     uint8_t low=id>=sprite_cache_foreground_first?15:0,high=id>=sprite_cache_foreground_first?48:arena?13:15;
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay()&&hud&&id>=hud&&id<hud+26){low=15;high=48;}
+    /* BG/HUD, foreground and herd have different palettes even though the
+       VDCs share one VCE. Reserve palettes 12 (foreground), 13 (herd), 14 (hull). */
+    if(pce_sgx_gameplay()&&pce_metrics.stage<6&&pce_metrics.stage!=2&&low==0)
+        high=12;
+#endif
     cache_result=48;
     uint8_t slot=high;
     for(uint8_t i=low;i<high;++i)
@@ -49,11 +72,13 @@ CACHE_CODE static void allocate(void) {
     /* Platform HUDs need two four-page generations. Keep their blocks
      * contiguous even when a boss reserves pages 16..39; actors and scenery
      * must not fragment the space needed by the next health/lives update. */
-    uint16_t hud=pce_present_base[pce_metrics.stage-1][0];
     bool icon=hud&&id>=hud&&id<hud+16;
     /* Platform play does not use the arena's dedicated $7800-$7dff HUD.
      * Use those six pages too, stopping before the alternate SAT at $7e00. */
     if(hud&&!herd_on)limit=54-pages;
+#ifdef PCE_SGX
+    if(hud&&herd_on&&pce_sgx_gameplay()&&id>=sprite_cache_foreground_first)limit=54-pages;
+#endif
     uint8_t first=hud?14:pce_metrics.stage==2?6:0,step=1;
     if(icon){first=0;limit=4;step=4;}
     else if(hud) {

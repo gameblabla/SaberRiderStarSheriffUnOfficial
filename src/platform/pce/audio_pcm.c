@@ -57,7 +57,12 @@ void audio_pcm_play(uint8_t sample) {
     request=sample;overlay_call(0x75,start);
 }
 void audio_pcm_tick(void) {psg_voice=0;psg_script=6;overlay_call(0x75,psg_start);}   /* the CONTINUE? countdown's tick (sfx 0): pure PSG script 6, no DDA/ADPCM */
-__attribute__((noinline)) void audio_pcm_gallop(bool on) {request=on?PCM_SAMPLE_GALLOP:PCM_SAMPLE_STOP_LOOP;overlay_call(0x75,start);}
+#ifdef PCE_SGX
+__attribute__((noinline,section(".ram_bank107.text")))
+#else
+__attribute__((noinline))
+#endif
+void audio_pcm_gallop(bool on) {request=on?PCM_SAMPLE_GALLOP:PCM_SAMPLE_STOP_LOOP;overlay_call(0x75,start);}
 void audio_pcm_power_intro(void) {request=PCM_SAMPLE_POWER_INTRO;overlay_call(0x75,start);}
 void audio_pcm_turbo_start(void) {request=PCM_SAMPLE_TURBO_START;overlay_call(0x75,start);}
 void audio_pcm_turbo_loop(bool on) {request=on?PCM_SAMPLE_TURBO_LOOP:PCM_SAMPLE_STOP_LOOP;overlay_call(0x75,start);}

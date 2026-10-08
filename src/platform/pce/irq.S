@@ -14,7 +14,7 @@
 #ifdef PCE_SGX
 .extern pce_sgx_metrics
 .extern pce_metrics
-.extern pce_sgx_sky_scroll_x
+.extern pce_sgx_sky_scroll_x,pce_sgx_sky_near_x,pce_sgx_sky_split_line
 .extern pce_sgx_sat1_alt,pce_sgx_sat1_pending,pce_sgx_vdc1_hidden
 .extern pce_display_on
 .extern space_hull_ready
@@ -286,6 +286,21 @@ pce_vblank:
 #endif
 .Larena_vdc1:
 .Larena_vdc0:
+#ifdef PCE_SGX
+    lda pce_sgx_metrics+5
+    and #0xc0
+    cmp #0xc0
+    bne .Lsky_no_split
+    lda pce_sgx_sky_split_line
+    beq .Lsky_no_split
+    clc
+    adc #64
+    st0 #6
+    sta 2
+    stz 3
+    jmp .Ldone
+.Lsky_no_split:
+#endif
     st0 #6
     st1 #255
     st2 #3
@@ -471,6 +486,17 @@ pce_hblank:
     lda pce_sgx_metrics+5
     and #0x40
     beq .Lsgx_scroll_world
+    lda pce_sgx_sky_split_line
+    beq .Lsky_line_done
+    VDC1_INDEX 7
+    lda pce_sgx_sky_near_x
+    sta 0x0012
+    lda pce_sgx_sky_near_x+1
+    sta 0x0013
+    st0 #6
+    st1 #255
+    st2 #3
+.Lsky_line_done:
     jmp .Lhlast
 .Lsgx_scroll_world:
     lda pce_metrics+7

@@ -31,27 +31,76 @@ static uint16_t prefetched;
 uint16_t warm_ids[7];
 uint8_t warm_slots[7],warm_count;
 #define BUFFER_PAGE(b) (28+(b)*10)
-HERD_CODE void herd_reserve(void) {
+#ifdef PCE_SGX
+static uint16_t herd_sgx_code;
+/* The stationary skies use at most 512 characters and end at $2800.
+   Retain three horse poses in the unused area below the sprite cache. */
+__attribute__((noinline,minsize,section(".ram_bank128.text")))
+void pce_sgx_herd_sky_load_body(void) {
+    uint32_t horse=pce_scenes[pce_metrics.stage-1].horse;
+    if(!horse)return;
+    for(uint8_t k=0;k<3;++k)
+        arcade_vram_to(1,horse+32+(uint32_t)k*5120,0x2800+(uint16_t)k*0xa00,5120);
+}
+__attribute__((noinline,section(".ram_bank128.text")))
+#else
+HERD_CODE
+#endif
+void herd_reserve(void) {
     uint8_t colors[32];
     for(uint8_t p=28;p<48;++p) {
         uint8_t owner=pattern_owner[p];
+#ifdef PCE_SGX
+        /* The herd writes VDC1 only. Retain VDC0 foreground/HUD ownership;
+           retire just cached world sprites that occupied these VDC1 pages. */
+        if(pce_sgx_gameplay()) {
+            if(owner&&(sprite_pb_hi[owner-1]&0x80)) {
+                sprite_ids[owner-1]=0xffff;
+                for(uint8_t q=0;q<54;++q)if(pattern_owner[q]==owner)pattern_owner[q]=0;
+            }
+            continue;
+        }
+#endif
         if(owner&&owner!=48) {
             sprite_ids[owner-1]=0xffff;
             for(uint8_t q=0;q<54;++q)if(pattern_owner[q]==owner)pattern_owner[q]=0;
         }
         pattern_owner[p]=48;
     }
-    sprite_pinned[47]=250;herd_on=1;shown=0xff;cur=0;
+    if(!pce_sgx_gameplay())sprite_pinned[47]=250;
+    herd_on=1;shown=0xff;cur=0;
     prefetch=0xff;prefetched=0;warm_count=0;
     arcade_read(2,play_scene->horse,colors,32);
-    pce_vce_copy_palette(16+15,colors,1);
+    pce_vce_copy_palette(pce_sgx_gameplay()?29:31,colors,1);
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay())for(uint8_t k=0;k<2;++k)
+        arcade_vram_to(1,play_scene->horse+32+(uint32_t)(k+3)*5120,
+            PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(k)*256,5120);
+#endif
 }
 /* Starts the convoy: the first horses are created by herd_feed (encounter_pce.c), the rest as the column nears. */
 HERD_CODE void herd_spawn(void) {
+#ifdef PCE_SGX
+    overlay_call(0x80,herd_reserve);
+#else
     herd_reserve();
+#endif
 }
 /* Streaming runs in the flow overlay; the renderer and IRQs remain mapped. */
+#ifdef PCE_SGX
+extern volatile uint8_t pce_sat_pending;
+__attribute__((noinline,minsize,section(".ram_bank128.text")))
+static void herd_stream_sgx(void) {
+    uint8_t pose=(frame>>2)%5;
+    uint16_t word=pose<3?0x2800+(uint16_t)pose*0xa00:
+        PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(pose-3)*256;
+    herd_sgx_code=word>>5;
+}
+#endif
 PCE_FLOW static void herd_stream(void) {
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay()){overlay_call(0x80,herd_stream_sgx);return;}
+#endif
     uint8_t target_vdc=0;
 #ifdef PCE_SGX
     if(pce_sgx_gameplay())target_vdc=1;
@@ -87,13 +136,21 @@ PCE_FLOW static void herd_stream(void) {
  * muzzle frames and projectile. Their nine pattern pages fit beside the HUD
  * and both displayed idle generations, with the herd's buffers reserved. */
 HERD_CODE static void herd_warm(void) {
-    if(warm_count<7) {
-        uint8_t i=warm_count,stage=pce_metrics.stage-1;
+#ifdef PCE_SGX
+    /* The hero needs all three pose buffers for displayed generations.
+       Warming two additional poses would prevent the next idle/run pose
+       from being allocated. Warm only flashes and the projectile on SGX. */
+    uint8_t total=5,offset=2;
+#else
+    uint8_t total=7,offset=0;
+#endif
+    if(warm_count<total) {
+        uint8_t i=warm_count+offset,stage=pce_metrics.stage-1;
         uint16_t id=i<2?pce_motion_base[stage]+hero*3+i:
             i<6?pce_flash_base[stage]+4+i-2:36;
-        if(video_sprite(id,-256,240,false,16)) {
+        if(video_sprite_optional(id,-256,240,false,16)) {
             uint8_t slot=sprite_slot_of[id];
-            if(slot<48&&sprite_ids[slot]==id){warm_ids[i]=id;warm_slots[i]=slot;++warm_count;}
+            if(slot<48&&sprite_ids[slot]==id){warm_ids[warm_count]=id;warm_slots[warm_count]=slot;++warm_count;}
         }
     }
     for(uint8_t i=0;i<warm_count;++i)if(sprite_ids[warm_slots[i]]==warm_ids[i])sprite_pinned[warm_slots[i]]=250;
@@ -102,16 +159,20 @@ HERD_CODE static void herd_warm(void) {
 HERD_CODE void herd_draw(void) {
     overlay_call(0x6e,herd_prepare);
     if(!herd_live&&!herd_pending) {
-        for(uint8_t p=28;p<48;++p)pattern_owner[p]=0;
+        if(!pce_sgx_gameplay())for(uint8_t p=28;p<48;++p)pattern_owner[p]=0;
         for(uint8_t i=0;i<warm_count;++i)if(sprite_ids[warm_slots[i]]==warm_ids[i])
             sprite_pinned[warm_slots[i]]=sprite_used[warm_slots[i]]?2:0;
-        sprite_pinned[47]=0;herd_on=herd_locked=herd_flee=0;audio_pcm_gallop(false);return;
+        if(!pce_sgx_gameplay())sprite_pinned[47]=0;
+        herd_on=herd_locked=herd_flee=0;audio_pcm_gallop(false);return;
     }
     audio_pcm_gallop(true);
-    sprite_pinned[47]=250;
+    if(!pce_sgx_gameplay())sprite_pinned[47]=250;
     overlay_call(0x6e,herd_stream);
     herd_warm();
     uint16_t code=(PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(cur)*256)>>5;
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay())code=herd_sgx_code;
+#endif
     bool shared=herd_horse_count&&herd_same&&sat_count+2*herd_cells<=64&&
         (sprite_exact||!(herd_horses[0].y&7));
     uint8_t remaining[2]={0,0};
@@ -154,7 +215,7 @@ HERD_CODE void herd_draw(void) {
                 sprite_lines_reserve();
                 if(!sprite_line_ok){sprite_lines_release();continue;}
                 sat[sat_page][sat_count++]=(vdc_sprite_t){y+64,x+32,code+(part?32+2*c:8*c)*2,
-                    VDC_SPRITE_FG|15|VDC_SPRITE_WIDTH_32|(part?0:VDC_SPRITE_HEIGHT_64)};
+                    VDC_SPRITE_FG|(pce_sgx_gameplay()?13:15)|VDC_SPRITE_WIDTH_32|(part?0:VDC_SPRITE_HEIGHT_64)};
             }
         }
     }

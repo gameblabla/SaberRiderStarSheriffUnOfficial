@@ -321,9 +321,6 @@ sprite_lines_clear:
  * $c4/c5 screen X word. */
 .global fg_emit
 .extern fg_parts, fg_count, fg_camera, fg_camera_slow, sat, sat_page, sat_count, sprite_used
-#ifdef PCE_SGX
-.extern fg_mirror_only
-#endif
 fg_emit:
     lda fg_count
     bne 1f
@@ -356,16 +353,6 @@ fg_emit:
     sta $20c1
 .Lfbase:
 .Lfpart:
-#ifdef PCE_SGX
-    lda fg_mirror_only
-    beq .Lfall
-    ldy #11
-    lda ($20d8),y
-    and #$80
-    bne .Lmirror
-    jmp .Lfskip
-.Lmirror:
-#endif
 .Lfall:
     ldy #10
     lda ($20d8),y
@@ -375,7 +362,7 @@ fg_emit:
     ldy #11
     lda ($20d8),y
     and #1
-    beq .Lfnormal
+    bne .Lfnormal
     ldy #2
     sec
     lda ($20d8),y
@@ -399,25 +386,43 @@ fg_emit:
 .Lfposition:
     beq .Lflow
     cmp #1
-    bne .Lfskip
+    bne .Lfoffscreen
     lda $20c4
     cmp #32
-    bcs .Lfskip
+    bcs .Lfoffscreen
     bra .Lfvisible
 .Lflow:
     lda $20c4
     cmp #17
-    bcc .Lfskip
+    bcs .Lfvisible
+.Lfoffscreen:
+    jmp .Lfskip
 .Lfvisible:
     lda sat_count
     cmp #64
-    bcs .Lfdone
+    bcc 1f
+    jmp .Lfdone
+1:
     ldy #9
     lda ($20d8),y
     sta $20db
     dey
     lda ($20d8),y
     tax
+#ifdef PCE_SGX
+    /* Use the unrolled sixteen-line admission and repeated-span cache in
+       exact mode; foreground pieces often share the same vertical span. */
+    lda sprite_exact
+    beq .Lfcheck
+    stx sprite_line_lo
+    lda $20db
+    inc
+    sta sprite_line_hi
+    jsr sprite_lines_reserve
+    lda sprite_line_ok
+    beq .Lfskip
+    bra .Lfwrite
+#endif
 .Lfcheck:
     lda sprite_occupancy,x
     cmp #16
@@ -437,6 +442,9 @@ fg_emit:
     inx
     bra .Lfbump
 1:
+#ifdef PCE_SGX
+.Lfwrite:
+#endif
     ldy #0
     lda ($20d8),y
     sta ($20c0),y

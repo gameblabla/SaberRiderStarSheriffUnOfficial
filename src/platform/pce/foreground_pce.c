@@ -42,10 +42,6 @@ FgPart fg_parts[FG_MAX] __attribute__((section(".ram_bank134.bss")));
 static uint32_t sgx_foreground_base PCE_WORK;
 static uint16_t sgx_foreground_count PCE_WORK;
 static uint8_t sgx_fg_vdc0_count PCE_WORK,sgx_fg_vdc0_last PCE_WORK;
-uint8_t sgx_fg_vdc1_count PCE_WORK,sgx_fg_vdc1_last PCE_WORK;
-static uint8_t sgx_fg_vdc0_occupancy[240] PCE_WORK;
-uint8_t sgx_fg_vdc1_occupancy[240] PCE_WORK;
-uint8_t fg_mirror_only PCE_WORK,fg_world_first PCE_WORK;
 static uint16_t enter_sprite_id PCE_WORK;
 static int16_t enter_sprite_y PCE_WORK;
 static bool enter_sprite_admitted PCE_WORK;
@@ -72,6 +68,9 @@ extern void sprite_lines_clear(void);
 extern void fg_emit(void);
 
 void foreground_prepare_body(void);
+#ifdef PCE_SGX
+__attribute__((noinline,section(".ram_bank107.text")))
+#endif
 void foreground_reset(void) {
     memset(window_valid,0,sizeof window_valid);fg_count=fg_slow_count=0;
 #ifdef PCE_SGX
@@ -172,8 +171,7 @@ FG_CODE void foreground_prepare_body(void) {
     uint8_t saved_page=sat_page;
     if(split_foreground) {
         sgx_fg_vdc0_count=sat_count;sgx_fg_vdc0_last=sprite_last_free;
-        memcpy(sgx_fg_vdc0_occupancy,sprite_occupancy,240);
-        sat_page=1;sat_count=0;sprite_lines_clear();
+        sat_count=0;sprite_lines_clear();
     }
 #else
     slow_base=0;slow_count=0;
@@ -208,59 +206,39 @@ FG_CODE void foreground_prepare_body(void) {
     fg_entered=entered;
 #ifdef PCE_SGX
     if(split_foreground) {
-        sat_count=0;sprite_lines_clear();
-        fg_mirror_only=0;
-        fg_emit();
-        sgx_fg_vdc1_count=sat_count;sgx_fg_vdc1_last=sprite_last_free;
-        memcpy(sgx_fg_vdc1_occupancy,sprite_occupancy,240);
+        /* Admit and retain on VDC0, then restore the HUD/hero prefix.
+           All foreground pieces are emitted once, ahead of the actors. */
         sat_page=saved_page;sat_count=sgx_fg_vdc0_count;sprite_last_free=sgx_fg_vdc0_last;
-        memcpy(sprite_occupancy,sgx_fg_vdc0_occupancy,240);
     } else
 #endif
     if(entered) {sat_count=0;memset(sprite_occupancy,0,sprite_exact?240:32);}
 }
 #ifdef PCE_SGX
 FG_MAP_CODE void foreground_prepare(void) {
+    if(pce_sgx_gameplay()&&pce_metrics.stage<6&&pce_metrics.stage!=2&&
+       slow_loaded&&slow_scene==&pce_scenes[pce_metrics.stage-1]&&fg_camera==pce_metrics.camera_x) {
+        fg_entered=0;return;
+    }
+    /* Stage scratch is accessible only while MPR6 holds bank 108. */
+    pce_sgx_copy(buffer+1024,sat[0],(uint16_t)sat_count*8);
+    pce_sgx_copy(buffer+1536,sprite_occupancy,240);
     uint8_t bank=pce_bank6_get();pce_bank6_set(134);
     overlay_call(0x74,foreground_prepare_body);
     pce_bank6_set(bank);
-    /* Dialogue draws its world on VDC0; publish the retained foreground on
-     * VDC1 as well, paired with the panel's forthcoming VDC0 SAT. */
-    if(pce_campaign.state==CAM_STORY&&pce_sgx_gameplay()&&
-       pce_metrics.stage<6&&pce_metrics.stage!=2)
-        overlay_call(0x78,pce_sgx_vdc1_sat_upload_body);
+    if(pce_sgx_gameplay()&&pce_metrics.stage<6&&pce_metrics.stage!=2) {
+        pce_sgx_copy(sat[0],buffer+1024,(uint16_t)sat_count*8);
+        pce_sgx_copy(sprite_occupancy,buffer+1536,240);
+    }
+
 }
 #else
 void foreground_prepare(void) { overlay_call(0x74,foreground_prepare_body); }
 #endif
 #ifdef PCE_SGX
-FG_CODE static void foreground_draw_body(void) {
-    if(pce_sgx_gameplay()&&(pce_metrics.stage==1||pce_metrics.stage==3||pce_metrics.stage==4||pce_metrics.stage==5)) {
-        FgPart *parts=fg_parts;
-        for(uint8_t i=0;i<fg_count;++i)parts[i].spare&=1;
-        for(uint8_t i=0;i<fg_count;++i) {
-            FgPart *p=&parts[i];
-            uint16_t layer_camera=(p->spare&1)?fg_camera:fg_camera_slow;
-            int16_t x=(int16_t)p->x_world-(int16_t)layer_camera-32;
-            int16_t y=(int16_t)p->y_word-64;
-            for(uint8_t k=fg_world_first;k<sat_count;++k) {
-                vdc_sprite_t *a=&sat[0][k];
-                int16_t ax=(int16_t)a->x-32,ay=(int16_t)a->y-64;
-                int16_t aw=(a->attr&VDC_SPRITE_WIDTH_MASK)?32:16;
-                uint16_t hs=a->attr&VDC_SPRITE_HEIGHT_MASK;
-                int16_t ah=hs==VDC_SPRITE_HEIGHT_64?64:hs?32:16;
-                if(x<ax+aw&&x+16>ax&&y<ay+ah&&y+16>ay) {p->spare|=0x80;break;}
-            }
-        }
-        fg_mirror_only=1;fg_emit();fg_mirror_only=0;
-        return;
-    }
-    fg_mirror_only=0;fg_emit();
-}
 FG_DRAW_MAP_CODE void foreground_draw(void) {
     video_front_begin();
     uint8_t bank=pce_bank6_get();pce_bank6_set(134);
-    overlay_call(0x74,foreground_draw_body);
+    overlay_call(0x74,fg_emit);
     pce_bank6_set(bank);
 }
 #else

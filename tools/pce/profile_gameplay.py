@@ -5,12 +5,12 @@ from pathlib import Path
 from emulator import Emulator,boot,symbol
 from test_campaign import Campaign
 
-def profile(out,herd_number=1,require_60=False):
-    c=Campaign(out);elf=out/'app.elf'
+def profile(out,herd_number=1,require_60=False,sgx=False):
+    c=Campaign(out,sgx=sgx);elf=out/'app.elf'
     meta=json.loads((out/'work/stage1.json').read_text())
     trigger=[t for t in meta['triggers'] if t['type']==11][herd_number-1]
     x=trigger['zone'][0]-40
-    with tempfile.TemporaryDirectory(prefix='gameplay-profile-',dir=out) as base,Emulator(out/'saber_rider.cue',base) as e:
+    with tempfile.TemporaryDirectory(prefix='gameplay-profile-',dir=out) as base,Emulator(out/'saber_rider.cue',base,sgx=sgx) as e:
         boot(e,c.address);e.run(120)
         c.press(e,8);e.run(120)
         # Approach the selected herd with no enemies/dialogs; game logic still
@@ -73,4 +73,5 @@ def profile(out,herd_number=1,require_60=False):
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--out',type=Path,default=Path('build/pce'))
     p.add_argument('--herd',type=int,choices=[1,2,3],default=1);p.add_argument('--require-60',action='store_true')
-    args=p.parse_args();profile(args.out.resolve(),args.herd,args.require_60)
+    p.add_argument('--sgx',action='store_true')
+    args=p.parse_args();profile(args.out.resolve(),args.herd,args.require_60,args.sgx)

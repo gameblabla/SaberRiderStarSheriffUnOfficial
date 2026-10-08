@@ -29,7 +29,7 @@ __attribute__((noinline,section(".ram_bank113.text"))) void sprite_generic(void)
         uint16_t vram_pattern=(sprite_words[slot]>>5)+pattern*2;
         sat[sat_page][sat_count++] = (vdc_sprite_t){py + 64, px + 32,
             vram_pattern,
-            VDC_SPRITE_FG | (slot<15?slot:15) | (flip ? VDC_SPRITE_FLIP_X : 0)};
+            sprite_attr[slot] | (flip ? VDC_SPRITE_FLIP_X : 0)};
     }
     generic_ok=1;return;
 refused:

@@ -63,7 +63,7 @@ PCE_HUD static void hull_hide(void) {
 #ifdef PCE_SGX
     /* VDC1 displays the gameplay hull too. Keep its old SAT hidden while
      * either pattern set changes; the next paired publication restores it. */
-    overlay_call(0x78,pce_sgx_vdc1_hide_body);
+    if(pce_sgx_gameplay()){overlay_call(0x80,pce_sgx_hull_retire_body);return;}
 #endif
     const uint16_t lo=PCE_SPR_WORD+16*256,hi=PCE_SPR_WORD+40*256;
     uint16_t target=video_sat_target();
@@ -95,7 +95,7 @@ PCE_MISSION static void hull_load(void) {
     if(record[2]!=hull_patterns) {   /* another pose of the ship on show keeps its patterns: only the piece list changed */
         overlay_call(0x7c,hull_hide);
         pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-        arcade_vram(record[2],PCE_SPR_WORD+16*256,bytes);
+        if(!pce_sgx_gameplay())arcade_vram(record[2],PCE_SPR_WORD+16*256,bytes);
 #ifdef PCE_SGX
         hull_upload_address=record[2];hull_upload_bytes=bytes;
         overlay_call(0x70,hull_mirror_body);

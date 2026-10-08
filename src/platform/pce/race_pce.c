@@ -185,6 +185,7 @@ RACE_CODE static void drive(uint8_t keys) {
     }
 }
 /* ---- the phases ---------------------------------------------------------------------------------------------- */
+static uint8_t boss_music_pending;
 RACE_CODE static void begin_pursuit(void);
 /* One-time setup runs in $7b, leaving $79 for the race's per-frame code.
  * Its callees are resident services or explicit overlays; no direct call
@@ -199,6 +200,7 @@ PCE_BOSS static void race_reset(void) {
     memset(blasts,0,sizeof blasts);
 }
 RACE_CODE void race_start(void) {
+    boss_music_pending=0;
     overlay_call(0x7b,race_reset);
     uint16_t s=63005u;
     int16_t x,y;track_point(s,48,&x,&y);
@@ -209,6 +211,7 @@ RACE_CODE void race_start(void) {
     if(pce_control.phase)begin_pursuit();   /* resuming at the pursuit */
 }
 RACE_CODE static void begin_pursuit(void) {
+    audio_music(14);
     rphase=P_PURSUIT;px=py=4096;pfx=pfy=0;hd=cam_hd=0xc000;speed=200;hurt=0;spin=0;car_hp=car_max;pce_metrics.hp=8;
     overlay_call(0x7a,foes_leader_start);spawn_t=150;phase_t=0;
 }
@@ -248,7 +251,7 @@ RACE_CODE static void race_tick(uint8_t keys) {
         if(phase_t>=192) {
             if(finish_rank<=3) {
                 pce_campaign.story=1;pce_campaign.event=1;
-                save_store(2,pce_control.hero,1);audio_music(14);   /* the pursuit's own track (mode7.c PH_PURSUIT) */
+                save_store(2,pce_control.hero,1);   /* the pursuit's own track (mode7.c PH_PURSUIT) */
             } else {pce_metrics.hp=1;campaign_hurt();}   /* must finish 3rd or better: a life, and the race again */
         }
         break;
@@ -266,7 +269,7 @@ RACE_CODE static void race_tick(uint8_t keys) {
                 pce_campaign.story=2;pce_campaign.event=1;
                 boss.state=1;boss.t=0;boss.t2=90;boss.t3=250;boss.boost=0;boss.since=0;
                 memset(escort,0,sizeof escort);memset(mines,0,sizeof mines);
-                rphase=P_BOSS;pce_campaign.boss_kind=4;audio_music(17);   /* mode7.c PH_BOSS */
+                rphase=P_BOSS;pce_campaign.boss_kind=4;boss_music_pending=1;   /* mode7.c PH_BOSS */
             }
         }
         if(rphase==P_BOSS)pce_campaign.boss_hp=boss.hp;
@@ -278,6 +281,9 @@ RACE_CODE static void race_tick(uint8_t keys) {
     }
 }
 RACE_CODE void race_frame(void) {
+    if(boss_music_pending&&!pce_campaign.event&&pce_campaign.state==CAM_PLAY) {
+        boss_music_pending=0;audio_music(17);
+    }
     /* Keep the finish camera until its dialogue has closed. */
     if(rphase==P_FINISH&&phase_t>=192&&finish_rank<=3&&!pce_campaign.event&&pce_campaign.state==CAM_PLAY)begin_pursuit();
     uint8_t keys=pce_control.keys;
