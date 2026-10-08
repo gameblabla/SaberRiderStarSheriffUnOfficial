@@ -12,22 +12,32 @@ uint8_t enemy_pressure PCE_WORK,shot_pressure PCE_WORK;
 
 /* pce_control.phase: 0 the bosses' lasers (before the enemies; only called while a boss fights), 1 enemy bullets and grenades,
  * then the hero's bullets. Walks the pool by pointer: this runs every frame and the herd scenes have no cycles to spare. */
-static inline bool draw_shot(const Shot *s,uint16_t id,bool flip) {
+static __attribute__((noinline)) PCE_HUD bool draw_shot(const Shot *s,uint16_t id,bool flip) {
+#ifdef PCE_SGX
+    extern uint16_t sprite_emit_id;
+    extern int16_t sprite_emit_x,sprite_emit_y;
+    extern uint8_t sprite_emit_flip;
+    void pce_sgx_projectile_body(void);
+    sprite_emit_id=id;sprite_emit_x=s->x-camera;sprite_emit_y=s->y-16;sprite_emit_flip=flip;
+    overlay_call(0x77,pce_sgx_projectile_body);
+    return pce_control.ok;
+#else
     return video_sprite_optional(id,s->x-camera,s->y-16,flip,16);
+#endif
 }
 PCE_HUD void shots_draw_pass(void) {
-    const Shot *s=shots;
+    Shot *s=shots;
     if(pce_control.phase==0) {
         for(uint8_t n=NSHOTS;n;--n,++s)if(s->active&&s->enemy==3) {
             uint16_t id=45+(s->vy?(s->vx?1:2):0);
-            if(herd_on)draw_shot(s,id,s->vx<0);else video_sprite(id,s->x-camera,s->y-16,s->vx<0,16);
+            if(!draw_shot(s,id,s->vx<0)){s->active=0;shot_pressure=30;}
         }
         return;
     }
     uint16_t grenade=pce_enemy_base[pce_metrics.stage-1]+60;
     for(uint8_t n=NSHOTS;n;--n,++s)if(s->active&&s->enemy&&s->enemy!=3) {
         if(!draw_shot(s,s->enemy==4?grenade+20+(s->t>>3):s->enemy==2?grenade+((s->t>>3)&7):37,false)) {
-            int16_t x=s->x-camera;if(x>-8&&x<264)shot_pressure=30;
+            int16_t x=s->x-camera;if(x>-8&&x<264){shot_pressure=30;s->active=0;}
         }
     }
     s=shots;
@@ -39,7 +49,7 @@ PCE_HUD void shots_draw_pass(void) {
 /* May a trigger bring in another humanoid? pce_control.y: the trigger is a placed one (finite loops), answer in pce_control.x.
  * A placed enemy (the level's own snipers, kneelers, shields) always comes when the hero crosses its zone, as in the source;
  * the endless streams of walkers and grunts fill what room is left: three at most, none while enemies are being refused. */
-PCE_HUD void spawn_room(void) {
+PCE_X1 void spawn_room(void) {
     uint8_t live=0;
     for(uint8_t k=0;k<8;++k)
         if(actors[k].active&&!actors[k].dead&&(actors[k].type<11||actors[k].type>28))++live;

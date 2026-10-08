@@ -22,7 +22,7 @@ PCE_ASSETS += $(foreach stage,1 2 3 4 5 6 7,$(OUT)/s$(stage).bin) $(OUT)/font.bi
 PCE_AUDIO := $(OUT)/audio.json $(OUT)/music.h $(foreach track,00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17,$(OUT)/music$(track).bin)
 PCE_AUDIO += $(OUT)/samples.h $(OUT)/pcm.h $(OUT)/psg.h $(foreach hero,0 1 2 3,$(OUT)/voice$(hero).bin)
 
-.PHONY: all assets test test-campaign test-presentation test-audio test-herd test-dialog test-wip FORCE
+.PHONY: all assets test test-sgx test-campaign test-presentation test-audio test-herd test-dialog test-wip FORCE
 all: $(OUT)/saber_rider.cue
 
 $(OUT):
@@ -92,6 +92,12 @@ test-campaign: all
 	python3 tools/pce/test_boss_presentation.py --out $(OUT)
 	python3 tools/pce/test_boss_passes.py --out $(OUT)
 	python3 tools/pce/test_herd.py --out $(OUT)
+
+# Exercise the actual retail SGX campaign with hardware sprite limits enabled.
+# The generic presentation fixtures below drive a non-retail debug stage menu.
+test-sgx:
+	$(MAKE) -f Makefile.pce SGX=1 OUT=build/sgx all
+	python3 tools/pce/test_campaign.py --out build/sgx --sgx
 
 test-presentation: all
 	python3 tools/pce/test_presentation.py --out $(OUT)

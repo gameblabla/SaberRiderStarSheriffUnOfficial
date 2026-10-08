@@ -55,6 +55,19 @@ static uint32_t archive_sector PCE_WORK;
 static uint32_t archive_remaining PCE_WORK;
 static bool archive_keep_display PCE_WORK;
 static bool archive_result PCE_WORK;
+/* Arena image A replaces bank $76, which also owns frontend_card. Restore
+ * that bank before change_stage calls the card; loader_scene restores the
+ * remaining temporary overlays afterwards. Execute from untouched $71. */
+__attribute__((noinline,minsize,section(".ram_bank113.text"))) void loader_card_restore(void) {
+    uint32_t n=(uint32_t)__cd_app_elf__sector+56;
+    pce_sector_t s={.lo=n,.md=n>>8,.hi=n>>16};
+    pce_cdb_irq_disable(PCE_CDB_MASK_VBLANK_NO_BIOS | PCE_CDB_MASK_HBLANK_NO_BIOS);
+    ++pce_metrics.disc_reads;
+    uint8_t error=pce_cdb_cd_read(s,PCE_CDB_BANK_MPR6,0x76,4);
+    pce_bank6_set(0x6c);
+    pce_cdb_irq_enable(PCE_CDB_MASK_VBLANK_NO_BIOS | PCE_CDB_MASK_HBLANK_NO_BIOS);
+    if(error)pce_metrics.load_error=error;
+}
 __attribute__((noinline,minsize,section(".ram_bank113.text"))) static void loader_archive_body(void) {
     uint32_t sector=archive_sector,remaining=archive_remaining;
     bool keep_display=archive_keep_display;

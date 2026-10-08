@@ -46,10 +46,6 @@ __attribute__((noinline)) static void arena_bg_clear_bank135(void) {
     *IO_VDC_INDEX=VDC_REG_CONTROL;*(volatile uint16_t *)0x20f3=control;
     *IO_VDC_DATA_LO=(uint8_t)control;*IO_VDC_DATA_HI=(uint8_t)(control>>8);
     __attribute__((leaf)) asm volatile("plp" ::: "p","memory");
-    a6.bg_cache_valid[0]=a6.bg_cache_valid[1]=0;
-    a6.bg_map_valid[0]=a6.bg_map_valid[1]=0;
-    a6.bg_actor_drawn=0;
-    a6.bg_palette_valid=0;
     pce_sgx_metrics.paired_screen&=(uint8_t)~PCE_SGX_ARENA_BG_PAGE;
     pce_sgx_arena_bg_pending_page=0xff;
 }
@@ -57,6 +53,13 @@ __attribute__((noinline)) static void arena_bg_clear_bank135(void) {
 /* The reset body shares the compositor's CD-RAM bank. M6 and story teardown
    call this resident overlay wrapper so MPR6 is restored after either path. */
 __attribute__((noinline,section(".ram_bank113.text"))) void video_arena_bg_clear_body(void) {
+    /* Arena state aliases the stage-data bank's trigger cache. Reset it
+       before MPR6 switches to code; the same addresses in bank 135 contain
+       the cruiser's defeat routine. */
+    a6.bg_cache_valid[0]=a6.bg_cache_valid[1]=0;
+    a6.bg_map_valid[0]=a6.bg_map_valid[1]=0;
+    a6.bg_actor_drawn=0;
+    a6.bg_palette_valid=0;
     uint8_t previous=pce_bank6_get();
     pce_bank6_set(135);
     arena_bg_clear_bank135();
@@ -83,16 +86,34 @@ static void arena_map_row(uint8_t page,uint8_t y,uint8_t first,uint8_t end,
     __attribute__((leaf)) asm volatile("plp" ::: "p","memory");
 }
 
+/* Palette publication changes MPR3 for the audio overlay. Use the normal
+   stage-data window while that overlay consumes its source pointer. */
+__attribute__((noinline,section(".ram_bank113.text"))) static void arena_bg_palette(void) {
+    uint8_t previous=pce_bank6_get();
+    pce_bank6_set(108);
+    vce_copy(15,buffer,1);
+    pce_bank6_set(previous);
+}
+
+/* While the compositor executes at $c000 in MPR6, map its stage data at
+   $6000 in MPR3. Resident transfer helpers preserve this mapping; overlay
+   calls restore it before the compositor resumes. */
+#undef a6
+#define a6 (*(Arena6 *)((uint16_t)trigger_cache-0x6000))
+#define arena_buffer ((uint8_t *)((uint16_t)buffer-0x6000))
+
 /* The two 256-character pages alternate in the inactive BAT half. A pose is
  * converted offline to BG-format 8x8 tiles; the live draw only uploads a new
  * pose when a page's cache key changes and rewrites its dirty BAT rows. */
 __attribute__((noinline)) void pce_sgx_arena_bg_draw_body(void) {
+    uint8_t previous=pce_bank3_get();
+    pce_bank3_set(108);
     uint8_t active=(pce_sgx_metrics.paired_screen&PCE_SGX_ARENA_BG_PAGE)!=0;
     uint8_t page=active^1;
     uint16_t key=a6.blit_key,tile_count=0;
     uint32_t pattern_address=0,map_address=0;
-    uint8_t *record=buffer+32,*list=buffer+1024;
-    uint16_t *row=(uint16_t *)(buffer+1792);
+    uint8_t *record=arena_buffer+32,*list=arena_buffer+1024;
+    uint16_t *row=(uint16_t *)(arena_buffer+1792);
     uint8_t min_x=32,max_x=0,min_y=32,max_y=0;
     uint8_t map_valid=0,bg_ok=1;
     int16_t anchor_x=pixel_tile(a6.blit_x),anchor_y=pixel_tile(a6.blit_y);
@@ -137,9 +158,9 @@ __attribute__((noinline)) void pce_sgx_arena_bg_draw_body(void) {
         if(bg_ok) {
             uint8_t variant=key>>5;
             if(!a6.bg_palette_valid||a6.bg_palette_variant!=variant) {
-                if(!arcade_read(2,PCE_M6_BIGPAL+(uint32_t)variant*32,buffer,32))bg_ok=0;
+                if(!arcade_read(2,PCE_M6_BIGPAL+(uint32_t)variant*32,arena_buffer,32))bg_ok=0;
                 else {
-                    vce_copy(15,buffer,1);
+                    overlay_call(0x71,arena_bg_palette);
                     a6.bg_palette_variant=variant;
                     a6.bg_palette_valid=1;
                 }
@@ -199,6 +220,7 @@ __attribute__((noinline)) void pce_sgx_arena_bg_draw_body(void) {
     }
     a6.bg_actor_drawn=(key!=0xffff&&bg_ok&&map_valid);
     pce_sgx_arena_bg_pending_page=page;
+    pce_bank3_set(previous);
 }
 
 #endif

@@ -96,7 +96,7 @@ uint8_t race_world_count;
 PCE_X2 void race_dialog_cars(void) {
     extern vdc_sprite_t sat[2][64];
     extern uint8_t sat_count;
-    extern uint8_t pattern_owner[48],sprite_used[48],sprite_pinned[48];
+    extern uint8_t pattern_owner[54],sprite_used[48],sprite_pinned[48];
     extern uint8_t sprite_occupancy[240];
     for(uint8_t k=0;k<race_world_count;++k) {
         vdc_sprite_t e=sat[1][k];

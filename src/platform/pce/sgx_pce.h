@@ -19,6 +19,7 @@ typedef struct __attribute__((packed)) {
     uint16_t nforeground;
     uint32_t foreground_slow;
     uint16_t nforeground_slow;
+    uint16_t foreground_first;
 } PceSgxSkyRecord;
 
 #define PCE_SGX_ACTIVE       0x01

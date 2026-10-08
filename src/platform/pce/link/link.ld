@@ -28,3 +28,15 @@ ASSERT(__zp_bss_start + __zp_bss_size <= 0xf82080, "Audio state overlaps compile
 /* Shared pursuit RNG must be callable while any stage overlay is mapped. */
 ASSERT((race_random & 0xffff) < 0x6000 || (race_random & 0xffff) >= 0x8000,
        "Race RNG must remain outside the overlay execution window")
+ASSERT((sprite_lines_reserve & 0xffff) >= 0x8000 &&
+       (sprite_lines_reserve & 0xffff) < 0xa000 &&
+       (sprite_lines_release & 0xffff) >= 0x8000 &&
+       (sprite_lines_release & 0xffff) < 0xa000,
+       "Shared sprite admission must remain in the resident renderer bank")
+ASSERT((hud_copy & 0xffff) >= 0x8000 && (hud_copy & 0xffff) < 0xa000 &&
+       (hud_copy_src & 0xffff) >= 0x8000 && (hud_copy_src & 0xffff) < 0xa000 &&
+       (hud_copy_dst & 0xffff) >= 0x8000 && (hud_copy_dst & 0xffff) < 0xa000,
+       "Shared copy loop and patched operands must remain always mapped")
+ASSERT((hud_copy_len & 0xffff) >= 0x8000 && (hud_copy_len & 0xffff) < 0xa000 &&
+       (hud_copy_opcode & 0xffff) >= 0x8000 && (hud_copy_opcode & 0xffff) < 0xa000,
+       "Shared copy length and opcode must remain always mapped")

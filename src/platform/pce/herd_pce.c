@@ -37,7 +37,7 @@ HERD_CODE void herd_reserve(void) {
         uint8_t owner=pattern_owner[p];
         if(owner&&owner!=48) {
             sprite_ids[owner-1]=0xffff;
-            for(uint8_t q=0;q<48;++q)if(pattern_owner[q]==owner)pattern_owner[q]=0;
+            for(uint8_t q=0;q<54;++q)if(pattern_owner[q]==owner)pattern_owner[q]=0;
         }
         pattern_owner[p]=48;
     }

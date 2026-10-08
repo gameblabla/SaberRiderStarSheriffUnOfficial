@@ -9,7 +9,7 @@
 #include "scenery_pce.h"
 #ifdef PCE_SGX
 #include "sgx_pce.h"
-#include <pce/bank.h>
+extern uint8_t fg_world_first;
 #endif
 extern uint8_t actors_mode;
 extern uint8_t buffer[2048];
@@ -263,19 +263,23 @@ PCE_BOSS static void sat_to_end(uint8_t first,uint8_t end) {
 void boss_prepare(void);
 PCE_BOSS void play_draw(void) {
 #ifdef PCE_SGX
-    uint8_t previous_bank6=0;
-    bool foreground_bank6=pce_metrics.stage==1||pce_metrics.stage==3||pce_metrics.stage==4||pce_metrics.stage==5;
-    if(foreground_bank6) {previous_bank6=pce_bank6_get();pce_bank6_set(134);}
+    bool sgx_foreground_stage=pce_sgx_gameplay()&&
+        (pce_metrics.stage==1||pce_metrics.stage==3||pce_metrics.stage==4||pce_metrics.stage==5);
 #endif
     /* The hardware scroll stays put until this frame's SAT is uploaded (see irq.S). */
     pce_scroll_hold=1;
     video_background(camera);video_sat_begin();
     if(!pce_campaign.diagnostic&&pce_campaign.boss_kind&&pce_campaign.boss_kind!=3&&pce_campaign.boss_hp)
         overlay_call(0x7c,boss_prepare);
+#ifdef PCE_SGX
+    if(!sgx_foreground_stage)overlay_call(0x74,foreground_prepare);
+    presentation_draw();
+#else
     foreground_prepare();presentation_draw();
+#endif
     uint8_t world_first=sat_count;
 #ifdef PCE_SGX
-    if(foreground_bank6)buffer[798]=world_first;
+    if(sgx_foreground_stage)fg_world_first=world_first;
 #endif
     uint8_t keys=pce_control.keys,stage=pce_metrics.stage-1;
     bool grounded=player.coll&4,side=keys&(KEY_LEFT|KEY_RIGHT);
@@ -306,6 +310,11 @@ PCE_BOSS void play_draw(void) {
      * Keep the hero hidden throughout the GAME OVER fade instead of showing
      * a living pose for a frame. */
     if(pce_campaign.state!=CAM_OVER&&(!safe_timer||(frame&4)||pce_death))video_sprite(id,player.x-camera,player.y-16,facing,16);
+#ifdef PCE_SGX
+    /* Admit HUD/hero cache pages before new optional scenery can take the
+     * space left by a boss claim. The split pass preserves this VDC0 prefix. */
+    if(sgx_foreground_stage)overlay_call(0x74,foreground_prepare);
+#endif
     /* The galloping herd comes right after the hero, ahead of shots and enemies: where the SAT or a scanline is full it
      * is what the optional sprites give way to, so the horses never flicker. */
 #ifdef PCE_SGX
@@ -321,7 +330,7 @@ PCE_BOSS void play_draw(void) {
 #ifdef PCE_SGX
     if(pce_sgx_gameplay()&&(pce_metrics.stage==1||pce_metrics.stage==3||
                             pce_metrics.stage==4||pce_metrics.stage==5)) {
-        overlay_call(0x81,pce_sgx_platform_actor_pass_body);
+        overlay_call(0x72,pce_sgx_platform_actor_pass_body);
     } else
 #endif
     {
@@ -346,7 +355,7 @@ PCE_BOSS void play_draw(void) {
     bool herd=false;
     for(uint8_t k=0;k<8;++k)if(actors[k].active&&actors[k].type==11)herd=true;
 #ifdef PCE_SGX
-    if(!herd||foreground_bank6)foreground_draw();
+    if(!herd||sgx_foreground_stage)overlay_call(0x75,foreground_draw);
 #else
     if(!herd)foreground_draw();
 #endif
@@ -366,7 +375,4 @@ PCE_BOSS void play_draw(void) {
         video_panel_restore_apply();
         overlay_call(0x6e,story_graphics_restore);pce_panel_restore=0;
     }
-#ifdef PCE_SGX
-    if(foreground_bank6)pce_bank6_set(previous_bank6);
-#endif
 }

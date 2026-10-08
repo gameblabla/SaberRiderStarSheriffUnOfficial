@@ -59,8 +59,10 @@ class Test:
         self.out=out;self.address=symbol(out/'app.elf','pce_metrics');self.results={}
     def metrics(self,e):
         d=dict(zip(FIELDS,struct.unpack('<4s4B8H4B4H',e.memory(self.address,36))))
-        assert d['magic']==b'SRPC' and d['ports']==15 and d['load_error']==0
+        assert d['magic']==b'SRPC' and d['ports']==15 and d['load_error']==0,d
         assert d['max_units']<=16 and d['sat_count']<=64
+        if d['essential_overflow']:
+            d['refused_sprite_id']=int.from_bytes(e.memory(symbol(self.out/'app.elf','pce_sprite_refused_id'),2),'little')
         assert d['essential_overflow']==0 and d['forbidden_reads']==0,d
         d.pop('magic');return d
     def press(self,e,key,n=30):

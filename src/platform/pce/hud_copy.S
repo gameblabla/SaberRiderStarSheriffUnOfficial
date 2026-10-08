@@ -1,7 +1,8 @@
-/* Resident HUD retention copies, in the flow overlay with its caller.
+/* HUD retention and SAT copies. The patched operands are written by callers
+ * in several overlays, so both code and operands must stay always mapped.
  * At most 16 bytes per instruction (113 cycles) so the PCM timer can service every sample and the road's raster interrupt
  * is never held back by more than a fraction of a scanline. */
-.section .ram_bank114.text,"ax",@progbits
+.section .ram_bank106.text,"ax",@progbits
 .global hud_copy, hud_copy_src, hud_copy_dst, hud_copy_len, hud_copy_opcode
 hud_copy:
     lda #16

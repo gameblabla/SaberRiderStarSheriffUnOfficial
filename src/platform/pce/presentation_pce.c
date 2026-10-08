@@ -78,6 +78,17 @@ split_done:
 #endif
     return video_sprite_optional(id,x,y,flip,scale);
 }
+#ifdef PCE_SGX
+/* Projectile callers live in another overlay. Marshal through fixed renderer
+ * arguments before entering the actor bank, including its VDC0 retry path. */
+PLATFORM_DRAW void pce_sgx_projectile_body(void) {
+    extern uint16_t sprite_emit_id;
+    extern int16_t sprite_emit_x,sprite_emit_y;
+    extern uint8_t sprite_emit_flip;
+    pce_control.ok=pce_sgx_split_sprite_optional(255,sprite_emit_id,
+        sprite_emit_x,sprite_emit_y,sprite_emit_flip!=0,16);
+}
+#endif
 PCE_FLOW void presentation_frame(void) {
     const uint16_t *base=pce_present_base[pce_metrics.stage-1];
     if(!base[0])return;
@@ -178,7 +189,7 @@ PANEL static void panel_draw(void) {
 
 /* Blank BG cells (the font's space glyph) where a sprite panel sits behind the text layer. */
 void video_panel(uint8_t x,uint8_t y,uint8_t w,uint8_t h) {
-    panel_x=x;panel_y=y;panel_w=w;panel_h=h;overlay_call(0x74,panel_draw);
+    panel_x=x;panel_y=y;panel_w=w;panel_h=h;overlay_call(0x73,panel_draw);
 }
 
 /* Put back the background cells a dialogue panel blanked and typed over (rows y..y+5, screen columns 3..30) from the
@@ -189,7 +200,12 @@ void video_panel(uint8_t x,uint8_t y,uint8_t w,uint8_t h) {
 extern uint16_t columns[33][30];
 extern const PceScene *video_scene_ptr;
 extern uint8_t buffer[2048];
-PRESENT static void panel_prepare_body(void) {
+#ifdef PCE_SGX
+PRESENT
+#else
+PCE_HUD
+#endif
+static void panel_prepare_body(void) {
     const PceScene *sc=video_scene_ptr;
     uint8_t y=panel_y;
     uint16_t *words=(uint16_t*)buffer;
@@ -209,7 +225,7 @@ PRESENT static void panel_prepare_body(void) {
             words[(x-3)*6+row]=(PCE_BG_WORD>>4)+columns[world%33][y+row]+((uint16_t)raw[row*3+2]<<12);
     }
 }
-PRESENT static void panel_apply_body(void) {
+PCE_CODE static void panel_apply_body(void) {
     uint16_t *words=(uint16_t*)buffer;
     uint8_t y=panel_y;
     uint16_t control=*(volatile uint16_t *)0x20f3;
@@ -222,6 +238,7 @@ PRESENT static void panel_apply_body(void) {
         for(uint8_t row=0;row<6;++row){uint16_t w=words[(x-3)*6+row];*IO_VDC_DATA_LO=w;*IO_VDC_DATA_HI=w>>8;}
     }
     *(volatile uint8_t *)0x20f7 = 5;*IO_VDC_INDEX = 5;*IO_VDC_DATA_LO = control;*IO_VDC_DATA_HI = control>>8;
+    pce_vdc_index=5;
     pce_cpu_irq_enable();
 }
 /* A dialogue's panel cells as platform_box (story_pce.c) leaves them in buffer+1024, row by row; the four 2x2 corner blocks stay with the scenery under the
@@ -241,8 +258,18 @@ __attribute__((noinline,section(".ram_bank115.text"))) static void cells_apply_b
         for(uint8_t row=first;row<last;++row){uint16_t w=cells[(uint16_t)row*28+x];*IO_VDC_DATA_LO=w;*IO_VDC_DATA_HI=w>>8;}
     }
     *(volatile uint8_t *)0x20f7 = 5;*IO_VDC_INDEX = 5;*IO_VDC_DATA_LO = control;*IO_VDC_DATA_HI = control>>8;
+    pce_vdc_index=5;
     pce_cpu_irq_enable();
 }
 void video_cells_apply(uint8_t y,uint16_t column) {panel_y=y;pce_panel_column=column;overlay_call(0x73,cells_apply_body);}
-void video_panel_restore_prepare(uint8_t y) {panel_y=y;overlay_call(0x74,panel_prepare_body);}
-void video_panel_restore_apply(void) {overlay_call(0x74,panel_apply_body);}
+void video_panel_restore_prepare(uint8_t y) {
+    panel_y=y;
+#ifdef PCE_SGX
+    overlay_call(0x74,panel_prepare_body);
+#else
+    overlay_call(0x7c,panel_prepare_body);
+#endif
+}
+void video_panel_restore_apply(void) {
+    overlay_call(0x69,panel_apply_body);
+}

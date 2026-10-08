@@ -1,5 +1,7 @@
 # SuperGrafx implementation status
 
+This is the earlier implementation snapshot. See [the repair report](SUPERGRAFX_REPAIR_20261008.md) for the subsequent runtime fixes, cache layout, foreground policy, and regression entry points.
+
 This records the SGX implementation and gameplay follow-up against `SUPERGRAFX_ARCADE_CDROM2_PLAN.md`.
 
 ## Builds

@@ -22,7 +22,7 @@ VICTORY_CODE void frontend_victory(void) {
         if(t>=300&&!(t&7)&&lift<7){ui_lift_level=++lift;overlay_call(0x72,ui_lift);}
     }
     audio_stop();
-    static const uint8_t stage_offset[7]={0,4,5,9,13,17,18};
+    static const uint8_t stage_offset[7] __attribute__((section(".ram_bank114.rodata")))={0,4,5,9,13,17,18};
     uint8_t stage=pce_metrics.stage;
     uint8_t index=stage_offset[stage-1]+((stage==2||stage>=6)?0:pce_control.hero);
     uint8_t id=PCE_UI_VICTORY_BASE+index;

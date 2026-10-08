@@ -83,7 +83,7 @@ PCE_SCENERY void encounters(void)   /* $78: the mission bank is full */ {
         /* Placed enemies always come when their zone is crossed; the endless streams use the room that is left (priority_pce.c). */
         if(t->type!=28&&(t->type<11||t->type>28)) {
             if(convoy_near)continue;   /* (a convoy is about to start) */
-            pce_control.y=trigger_remaining[k]>0;overlay_call(0x7c,spawn_room);
+            pce_control.y=trigger_remaining[k]>0;overlay_call(0x76,spawn_room);
             if(!pce_control.x)continue;
         }
         /* Humanoid core first; the inventory retains other encounter recipes

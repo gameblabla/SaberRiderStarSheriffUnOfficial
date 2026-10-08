@@ -1472,6 +1472,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
     if stage == 7: a.add('dialog_original_font', font_glyphs(work))   # (the cut-in puts the font back; the other stages' copy comes with their dialogue panels)
     meta['foreground_offset']=0;meta['foreground_count']=0
     meta['foreground_slow_offset']=0;meta['foreground_slow_count']=0
+    meta['sgx_foreground_first']=0xffff
     if stage in (1,3,4,5):
         # Platform playfields now include the source's top 16 lines. Gameplay
         # sprites passed in world-16 coordinates are baked 16 lines lower, so
@@ -1500,6 +1501,9 @@ def make_scene(stage, work, previews, shared, sgx=False):
         slow_entries=presentation.add_foreground(foreground_slow,sprites) if sgx else []
         meta['foreground_slow_offset']=a.add('foreground_slow_sprites',b''.join(struct.pack('<hhH',*v) for v in slow_entries))
         meta['foreground_slow_count']=len(slow_entries)
+        if sgx:
+            first_entries=sgx_entries if sgx_entries else slow_entries
+            if first_entries:meta['sgx_foreground_first']=first_entries[0][2]
         foreground_preview=foreground.copy()
         foreground_preview.alpha_composite(foreground_slow.crop((0,0,foreground.width,240)))
         foreground_preview.crop((0,0,1024,224)).save(previews/f'foreground{stage}.png')
@@ -1523,7 +1527,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
                                   palette_fit=(palette,sky_groups),write_palette=False,static_bat=True,return_preview=True)
             if sky['tile_bytes']>0xffff:raise ValueError(f'stage{stage}: SGX sky patterns exceed scene record')
             meta['sgx_pal']=main['pal'];meta['sgx_tiles']=main['tiles'];meta['sgx_map']=main['map']
-            meta['sgx_sky_record']=a.add('sgx_sky_record',struct.pack('<IIHBIHIH',sky['tiles'],sky['map'],sky['tile_bytes'],sky['bat_cols'],meta['sgx_foreground_offset'],meta['sgx_foreground_count'],meta['foreground_slow_offset'],meta['foreground_slow_count']))
+            meta['sgx_sky_record']=a.add('sgx_sky_record',struct.pack('<IIHBIHIHH',sky['tiles'],sky['map'],sky['tile_bytes'],sky['bat_cols'],meta['sgx_foreground_offset'],meta['sgx_foreground_count'],meta['foreground_slow_offset'],meta['foreground_slow_count'],meta['sgx_foreground_first']))
             backdrop=np.asarray(vce_rgb(presentation.sky_color(stage)),np.uint8).reshape(3)
             composite=Image.new('RGBA',(256,224),tuple(int(v) for v in backdrop)+(255,))
             composite.alpha_composite(sky['preview'].crop((0,0,256,224)))
@@ -1546,6 +1550,16 @@ def make_scene(stage, work, previews, shared, sgx=False):
             composite.alpha_composite(closer['preview'].crop((0,0,256,224)))
             composite.save(previews/'stage7_sgx_composite.png')
     sprite_table, rows, costs = add_sprites(a, list(sprites), previews)
+    if stage in (1,3,4,5):
+        # The cache reserves two four-page HUD blocks and three two-page
+        # hero blocks. Fail the bake if presentation layout or size changes.
+        hud0=meta['presentation']['hud'][0][0]
+        aim0=meta['presentation']['aim'][0][0]
+        motion0=meta['presentation']['motion'][0][0]
+        assert aim0==hud0+26 and motion0+67<=len(costs), 'platform presentation cache layout changed'
+        assert all(c['entries']<=16 for c in costs[hud0:hud0+16]), 'HUD exceeds reserved cache block'
+        hero_costs=costs[:36]+costs[aim0:aim0+64]+costs[motion0:motion0+67]
+        assert all(c['entries']<=8 for c in hero_costs), 'hero exceeds reserved cache block'
     if stage == 6:
         # the bolt's patterns in the HUD's palette (add_sprites gave every 'hudp_' sprite of the stage one: the same call on the same images): middle and far 16x16 (64 words each), then the near 32x32 (TL, TR, BL, BR)
         hud_pal = palette_for([im for name, im, _ in sprites if name.startswith('hudp_')], unique=True)

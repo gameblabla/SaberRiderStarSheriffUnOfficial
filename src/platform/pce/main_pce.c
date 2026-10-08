@@ -35,6 +35,10 @@ PCE_FLOW static bool change_stage(uint8_t n) {
      * only after hiding the old screen, before the card publishes any text. */
     audio_stop();video_display(false);pce_raster_enabled=0;
     if(!loader_font())return false;
+    if(stage==6) {
+        overlay_call(0x71,loader_card_restore);
+        if(pce_metrics.load_error)return false;
+    }
     pce_control.stage=n;overlay_call(0x76,frontend_card);
     pce_metrics.ready=0;stage=n;
 #ifndef RETAIL

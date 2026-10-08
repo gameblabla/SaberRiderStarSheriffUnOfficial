@@ -11,6 +11,7 @@
 
 #define SGX_CODE __attribute__((noinline, minsize, section(".ram_bank120.text")))
 #define SGX_UI_CODE __attribute__((noinline, minsize, section(".ram_bank124.text")))
+#define SGX_UI_MODE_CODE __attribute__((noinline, minsize, section(".ram_bank115.text")))
 #define SGX_GAME_CODE __attribute__((noinline, minsize, section(".ram_bank120.text")))
 #define SGX_MODE_CODE __attribute__((noinline, minsize, section(".ram_bank114.text")))
 #define SGX_AUX_CODE __attribute__((noinline, minsize, section(".ram_bank110.text")))
@@ -42,6 +43,8 @@ extern volatile uint8_t sat_copy_vdc, hud_copy_opcode;
 extern volatile uint16_t sat_copy_word, sat_copy_src, sat_copy_len;
 extern uint16_t sprite_words[48];
 extern uint8_t sprite_count[48];
+static uint8_t vdc2_mode_reg PCE_WORK;
+static uint16_t vdc2_mode_value PCE_WORK;
 extern uint8_t sprite_occupancy[240], sat_count;
 void sat_copy(void);
 void space_near_sgx_load_wrapper(void);
@@ -83,14 +86,21 @@ SGX_CODE void pce_sgx_detect_init(void) {
     *IO_VPC_WINDOW_2 = 0;
 }
 
-static SGX_MODE_CODE void vdc2_write_mode(uint8_t reg, uint16_t value) {
+SGX_UI_MODE_CODE static void vdc2_write_mode_body(void) {
     __attribute__((leaf)) asm volatile("php\nsei" ::: "p", "memory");
-    PCE_SGX_RECORD_VDC2_INDEX(reg);
-    *IO_VDC2_INDEX = reg;
-    *IO_VDC2_DATA_LO = (uint8_t)value;
-    *IO_VDC2_DATA_HI = (uint8_t)(value >> 8);
+    PCE_SGX_RECORD_VDC2_INDEX(vdc2_mode_reg);
+    *IO_VDC2_INDEX = vdc2_mode_reg;
+    *IO_VDC2_DATA_LO = (uint8_t)vdc2_mode_value;
+    *IO_VDC2_DATA_HI = (uint8_t)(vdc2_mode_value >> 8);
     __attribute__((leaf)) asm volatile("plp" ::: "p", "memory");
 }
+SGX_MODE_CODE static void vdc2_write_mode(uint8_t reg, uint16_t value) {
+    vdc2_mode_reg=reg;vdc2_mode_value=value;
+    overlay_call(0x73,vdc2_write_mode_body);
+}
+#define SGX_UI_WRITE_MODE(reg,value) do { \
+    vdc2_mode_reg=(reg);vdc2_mode_value=(value);vdc2_write_mode_body(); \
+} while(0)
 
 SGX_MODE_CODE void pce_sgx_display_on_body(void) {
     if (pce_sgx_active) {
@@ -347,22 +357,23 @@ SGX_AUX_CODE void pce_sgx_column_write_body(void) {
     __attribute__((leaf)) asm volatile("plp" ::: "p", "memory");
 }
 
-SGX_MODE_CODE void pce_sgx_ui_mode_body(void) {
+SGX_UI_MODE_CODE void pce_sgx_ui_mode_body(void) {
     __attribute__((leaf)) asm volatile("php\nsei" ::: "p", "memory");
     pce_sgx_metrics.paired_screen = 0;
     pce_sgx_metrics.flags &= (uint8_t)~PCE_SGX_PAIR_ACTIVE;
     if (pce_sgx_active) {
-        vdc2_write_mode(VDC_REG_CONTROL, 0);
-        vdc2_write_mode(VDC_REG_MEMORY, 0x0010);
-        vdc2_write_mode(VDC_REG_TIMING_HSYNC, 0x0503);
-        vdc2_write_mode(VDC_REG_TIMING_HDISP, 0x0627);
-        vdc2_write_mode(VDC_REG_TIMING_VSYNC, 0x1702);
-        vdc2_write_mode(VDC_REG_TIMING_VDISP, 223);
-        vdc2_write_mode(VDC_REG_TIMING_VDISPEND, 12);
-        vdc2_write_mode(VDC_REG_DMA_CONTROL, 0);
+        SGX_UI_WRITE_MODE(VDC_REG_CONTROL, 0);
+        SGX_UI_WRITE_MODE(VDC_REG_MEMORY, 0x0010);
+        SGX_UI_WRITE_MODE(VDC_REG_TIMING_HSYNC, 0x0503);
+        SGX_UI_WRITE_MODE(VDC_REG_TIMING_HDISP, 0x0627);
+        SGX_UI_WRITE_MODE(VDC_REG_TIMING_VSYNC, 0x1702);
+        SGX_UI_WRITE_MODE(VDC_REG_TIMING_VDISP, 223);
+        SGX_UI_WRITE_MODE(VDC_REG_TIMING_VDISPEND, 12);
+        SGX_UI_WRITE_MODE(VDC_REG_DMA_CONTROL, 0);
     }
     __attribute__((leaf)) asm volatile("plp" ::: "p", "memory");
 }
+#undef SGX_UI_WRITE_MODE
 
 static SGX_UI_CODE void vdc2_write_ui(uint8_t reg, uint16_t value);
 

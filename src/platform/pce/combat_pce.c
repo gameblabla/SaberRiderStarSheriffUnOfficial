@@ -134,6 +134,7 @@ PCE_COMBAT void combat_tick(void) {
             } else {
                 ++pce_campaign.score;pce_campaign.result=1;
                 if(pce_metrics.stage!=1){pce_campaign.story=pce_metrics.stage==5?(hero==2?6:3):2;pce_campaign.event=1;}
+                pce_campaign.boss_kind=0;  /* queue the clear story once; the following frames must not enqueue it again */
             }
         }
         }

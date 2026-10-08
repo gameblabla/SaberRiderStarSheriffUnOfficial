@@ -385,7 +385,11 @@ extern uint8_t sat_page,sat_count,sprite_occupancy[240],sprite_optional;
 extern vdc_sprite_t sat[2][64];
 static uint8_t space_sat0_count PCE_WORK;
 
-SPACE_VDC1_CODE static bool space_vdc1_sprite(uint16_t id,int16_t x,int16_t y) {
+extern uint16_t sprite_emit_id;
+extern int16_t sprite_emit_x,sprite_emit_y;
+__attribute__((noinline,minsize,section(".ram_bank116.text"))) static void space_vdc1_sprite_body(void) {
+    uint8_t previous=pce_bank6_get();pce_bank6_set(108);
+    uint16_t id=sprite_emit_id;int16_t x=sprite_emit_x,y=sprite_emit_y;
     sprite_optional=1;
     bool admitted=video_sprite(id,x,y,false,16);
     sprite_optional=0;
@@ -403,7 +407,13 @@ SPACE_VDC1_CODE static bool space_vdc1_sprite(uint16_t id,int16_t x,int16_t y) {
         memcpy(sprite_occupancy,buffer+512,224);
     }
     if(!admitted)++pce_metrics.dropped_cosmetic;
-    return admitted;
+    pce_control.ok=admitted;
+    pce_bank6_set(previous);
+}
+SPACE_VDC1_CODE static bool space_vdc1_sprite(uint16_t id,int16_t x,int16_t y) {
+    sprite_emit_id=id;sprite_emit_x=x;sprite_emit_y=y;
+    overlay_call(0x74,space_vdc1_sprite_body);
+    return pce_control.ok;
 }
 
 SPACE_VDC1_CODE static void space_vdc1_actor_sprites(void) {
@@ -427,6 +437,11 @@ SPACE_VDC1_CODE static void space_vdc1_actor_sprites(void) {
         (void)space_vdc1_sprite(1,x,y+reach);(void)space_vdc1_sprite(1,x,y-reach);
     }
 }
+__attribute__((noinline,section(".ram_bank119.text"))) static void space_vdc1_actor_pass(void) {
+    uint8_t previous=pce_bank6_get();pce_bank6_set(135);
+    space_vdc1_actor_sprites();
+    pce_bank6_set(previous);
+}
 #endif
 PCE_SCENERY void space_frame(void) {
     if(sb.ph==3&&!pce_campaign.event&&pce_campaign.state==CAM_PLAY){space_hull_bat();sb.ph=4;sb.t=270;}   /* the greeting has closed: the cells it covered come back, the fight begins */
@@ -448,7 +463,7 @@ PCE_SCENERY void space_frame(void) {
         space_sat0_count=sat_count;
         sat_page=1;sat_count=0;
         memset(sprite_occupancy,0,224);
-        overlay_call(0x87,space_vdc1_actor_sprites);
+        overlay_call(0x77,space_vdc1_actor_pass);
         for(uint8_t k=sat_count;k<64;++k)sat[1][k].y=0;
         overlay_call(0x71,pce_sgx_vdc1_stats_body);
         overlay_call(0x78,pce_sgx_vdc1_sat_upload_body);

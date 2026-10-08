@@ -137,7 +137,11 @@ STORY_CODE static void draw(void) {
     else if(!platform){video_panel(5,y,24,2);video_panel(3,y+2,28,2);video_panel(5,y+4,24,2);}
     video_sat_begin();
     if(pce_metrics.stage==2)overlay_call(0x77,race_dialog_cars);
-    if(platform)foreground_prepare();   /* the outpost's walls stay in front of the hero and the actors the scene shows */
+#ifdef PCE_SGX
+    if(platform&&!pce_sgx_gameplay())overlay_call(0x74,foreground_prepare);
+#else
+    if(platform)foreground_prepare();
+#endif
     if(avatar!=65535) {
         video_sprite(avatar,pce_metrics.stage==2?(box_x-26)*2:box_x-26,box_y-8,false,16);
         /* Cache slots from 15 up share one hardware palette, which another portrait's upload overwrote since this one was
@@ -168,10 +172,19 @@ STORY_CODE static void draw(void) {
      * (the cutscene outrider stays put) and the boss stay on screen. */
     if(pce_metrics.stage==7)overlay_call(0x78,space_dialog_ship);
     if(platform&&pce_metrics.stage<6) {
+#ifdef PCE_SGX
+        extern uint8_t fg_world_first;
+        fg_world_first=sat_count;   /* scenery must not mirror over the panel or portrait */
+#endif
         video_sprite(hero_sprite,player.x-camera,player.y-16,facing,16);
         overlay_call(PCE_ACTOR_DRAW_BANK,actors_draw);
         if(!pce_campaign.diagnostic)overlay_call(0x70,combat_draw);
+#ifdef PCE_SGX
+        if(pce_sgx_gameplay())overlay_call(0x74,foreground_prepare);
+        overlay_call(0x75,foreground_draw);
+#else
         foreground_draw();
+#endif
     }
     /* The panel's graphics, palette and cells are prepared before the SAT is queued; the cells are written right after the VBlank that brings the sprite corners. */
     if(platform){platform_colour=colour;overlay_call(0x6f,platform_box);}

@@ -146,7 +146,9 @@ sprite_lines_wide:
     bne .Lwadd_one
 .Lwout:
     rts
-.section .ram_bank116.text,"ax",@progbits
+/* Called directly from several different MPR3 overlays. Keep admission in
+ * the always-mapped renderer bank, just like the exact sixteen-line helper. */
+.section .ram_bank106.text,"ax",@progbits
 sprite_lines_reserve:
     stz sprite_line_ok
     lda sprite_exact
@@ -310,7 +312,7 @@ sprite_lines_clear:
     cpx #255
     bne .Lclear
     rts
-.section .ram_bank106.text,"ax",@progbits
+.section .ram_bank116.text,"ax",@progbits
 
 /* Re-emit the retained foreground parts. Records are FgPart (14 bytes): the
  * first eight are a SAT entry whose X is the world-space X word. Parts that
@@ -318,7 +320,10 @@ sprite_lines_clear:
  * Scratch: $d8/d9 record pointer, $da remaining, $db last band, $c0/c1 SAT out,
  * $c4/c5 screen X word. */
 .global fg_emit
-.extern fg_parts, fg_count, fg_camera, fg_camera_slow, sat, sat_page, sat_count, sprite_used, buffer
+.extern fg_parts, fg_count, fg_camera, fg_camera_slow, sat, sat_page, sat_count, sprite_used
+#ifdef PCE_SGX
+.extern fg_mirror_only
+#endif
 fg_emit:
     lda fg_count
     bne 1f
@@ -351,7 +356,8 @@ fg_emit:
     sta $20c1
 .Lfbase:
 .Lfpart:
-    lda buffer+799
+#ifdef PCE_SGX
+    lda fg_mirror_only
     beq .Lfall
     ldy #11
     lda ($20d8),y
@@ -359,6 +365,7 @@ fg_emit:
     bne .Lmirror
     jmp .Lfskip
 .Lmirror:
+#endif
 .Lfall:
     ldy #10
     lda ($20d8),y

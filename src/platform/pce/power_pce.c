@@ -48,6 +48,7 @@ POWER_CODE static void band_cells(uint8_t x0,uint8_t x1,uint8_t col0,uint8_t row
             uint16_t cell=0xf000|(0x400+kind*8+(c&7));
             *IO_VDC_DATA_LO=cell;*IO_VDC_DATA_HI=cell>>8;
         }
+        pce_vdc_index=2;
         pce_cpu_irq_enable();
     }
 }
@@ -81,6 +82,7 @@ POWER_CODE static void band_restore(uint8_t col0,uint8_t row0) {
         for(uint8_t row=0;row<BAND_ROWS;++row){uint16_t w=words[x*BAND_ROWS+row];*IO_VDC_DATA_LO=w;*IO_VDC_DATA_HI=w>>8;}
     }
     *(volatile uint8_t *)0x20f7 = 5;*IO_VDC_INDEX = 5;*IO_VDC_DATA_LO = control;*IO_VDC_DATA_HI = control>>8;
+    pce_vdc_index=5;
     pce_cpu_irq_enable();
 }
 POWER_CODE void power_frame(void) {

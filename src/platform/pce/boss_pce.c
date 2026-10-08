@@ -4,6 +4,7 @@
 #include "loader_pce.h"
 #include "arcade_pce.h"
 #include "sprite_cache_pce.h"
+#include "sgx_pce.h"
 extern uint8_t buffer[2048];
 /* The two flying bosses of the platform stages, on the source game's timelines (enemies.c update_boss for the level-1
  * gunship, night.c for the Hyperjumper), in whole 1/60 s steps; positions are the sprite's centre in world px.
@@ -46,11 +47,24 @@ extern void sprite_lines_reserve(void),sprite_lines_release(void);
 void foreground_reset(void);
 static uint8_t hull_count,hull_ready,hull_level,hull_seen_full,rider_low;
 static uint32_t hull_patterns;   /* the pattern set in VRAM: poses of one ship share it, so only a change of ship reloads it */   /* hull_level: 0 full size, 1 and 2 the mid and far passes */
+#ifdef PCE_SGX
+static uint32_t hull_upload_address PCE_WORK;
+static uint16_t hull_upload_bytes PCE_WORK;
+PCE_COMBAT static void hull_mirror_body(void) {
+    if(pce_sgx_gameplay())
+        arcade_vram_to(1,hull_upload_address,PCE_SPR_WORD+16*256,hull_upload_bytes);
+}
+#endif
 static int16_t hull_parts[28][3];
 /* hull_load replaces sprite patterns (and palette 14) that sprites of the SAT on show may still draw from: for the rest of that frame, and while a CD seek holds the
  * loop up, they showed the new ship's graphics. The active VRAM SAT is copied into the inactive source, hiding entries that draw from the overwritten patterns or palette, and the
  * VBlank that takes the edited table is waited for before anything is written. (The cache's pins only protect its own uploads.) */
 PCE_HUD static void hull_hide(void) {
+#ifdef PCE_SGX
+    /* VDC1 displays the gameplay hull too. Keep its old SAT hidden while
+     * either pattern set changes; the next paired publication restores it. */
+    overlay_call(0x78,pce_sgx_vdc1_hide_body);
+#endif
     const uint16_t lo=PCE_SPR_WORD+16*256,hi=PCE_SPR_WORD+40*256;
     uint16_t target=video_sat_target();
     bool hid=false;
@@ -82,6 +96,10 @@ PCE_MISSION static void hull_load(void) {
         overlay_call(0x7c,hull_hide);
         pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
         arcade_vram(record[2],PCE_SPR_WORD+16*256,bytes);
+#ifdef PCE_SGX
+        hull_upload_address=record[2];hull_upload_bytes=bytes;
+        overlay_call(0x70,hull_mirror_body);
+#endif
         hull_patterns=record[2];
         /* The hull's patterns replace cache pages that retained foreground chunks may still draw from: their SAT
          * entries would keep showing the new ship's graphics (the tower's middle as boss frames, persisting after
@@ -95,7 +113,12 @@ PCE_MISSION static void hull_load(void) {
  * displaced owner's other pages pinned until a complete replacement SAT has
  * moved those actors to the remaining cache. Only then may hull_load overwrite
  * the old patterns or palette 14. This runs before boss HP enables hull drawing. */
-PCE_MISSION static void hull_claim(void) {
+#ifdef PCE_SGX
+PCE_COMBAT
+#else
+PCE_MISSION
+#endif
+static void hull_claim(void) {
     for(uint8_t p=16;p<40;++p) {
         uint8_t owner=pattern_owner[p];
         if(owner)sprite_ids[owner-1]=0xffff;
@@ -105,7 +128,7 @@ PCE_MISSION static void hull_claim(void) {
     foreground_reset();
     overlay_call(0x7b,play_draw);
     video_wait();
-    for(uint8_t p=0;p<48;++p) {
+    for(uint8_t p=0;p<54;++p) {
         if(p>=16&&p<40)continue;
         uint8_t owner=pattern_owner[p];
         if(owner&&sprite_ids[owner-1]==0xffff)pattern_owner[p]=0;
@@ -119,7 +142,11 @@ PCE_MISSION void boss_start(void) {
     uint8_t kind=pce_campaign.boss_kind;
     hull_level=2;hull_seen_full=0;hull_patterns=0;
     pce_campaign.boss_hp=0;
+#ifdef PCE_SGX
+    overlay_call(0x70,hull_claim);
+#else
     hull_claim();
+#endif
     overlay_call(0x6f,hull_load);
     audio_effect(12);   /* the engine pass (the source's sfx 0x13) opens the fight, and every later pass */
     boss_phase=0;boss_dir=0;rider_low=0;boss_time=boss_hold=boss_clock=0;boss_flash=boss_cd=boss_rcd=boss_fx=boss_cycle=0;boss_vy=0;

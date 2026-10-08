@@ -4,7 +4,11 @@
 #include "sprite_cache_pce.h"
 #include "overlay_pce.h"
 #include "sgx_pce.h"
+#include "campaign_pce.h"
 #include <string.h>
+#ifdef PCE_SGX
+#include <pce/bank.h>
+#endif
 extern uint8_t buffer[2048];
 /* Retained foreground. Occluder chunks are static in world space, so each is
  * admitted once, when it enters the window around the camera: it is rendered
@@ -19,7 +23,10 @@ extern uint8_t buffer[2048];
 #endif
 #define FG_CODE __attribute__((noinline,section(".ram_bank116.text")))
 #ifdef PCE_SGX
-#define FG_ENTER_CODE __attribute__((noinline,section(".ram_bank129.text")))
+#define FG_ENTER_CODE __attribute__((noinline,section(".ram_bank134.text")))
+#define FG_ADMIT_CODE __attribute__((noinline,section(".ram_bank114.text")))
+#define FG_MAP_CODE __attribute__((noinline,section(".ram_bank116.text")))
+#define FG_DRAW_MAP_CODE __attribute__((noinline,section(".ram_bank117.text")))
 #else
 #define FG_ENTER_CODE __attribute__((noinline,section(".ram_bank116.text")))
 #endif
@@ -30,11 +37,18 @@ typedef struct {
 } FgPart;
 #ifdef PCE_SGX
 /* The full SGX foreground window needs up to 59 retained sprite pieces. The
- * PCE work bank is full, so keep its persistent list in CD-RAM bank 134; the
- * platform draw maps that bank into MPR6 for the whole frame. */
+ * PCE work bank is full, so keep its persistent list in CD-RAM bank 134. */
 FgPart fg_parts[FG_MAX] __attribute__((section(".ram_bank134.bss")));
-static uint32_t sgx_foreground_base __attribute__((section(".ram_bank134.bss")));
-static uint16_t sgx_foreground_count __attribute__((section(".ram_bank134.bss")));
+static uint32_t sgx_foreground_base PCE_WORK;
+static uint16_t sgx_foreground_count PCE_WORK;
+static uint8_t sgx_fg_vdc0_count PCE_WORK,sgx_fg_vdc0_last PCE_WORK;
+uint8_t sgx_fg_vdc1_count PCE_WORK,sgx_fg_vdc1_last PCE_WORK;
+static uint8_t sgx_fg_vdc0_occupancy[240] PCE_WORK;
+uint8_t sgx_fg_vdc1_occupancy[240] PCE_WORK;
+uint8_t fg_mirror_only PCE_WORK,fg_world_first PCE_WORK;
+static uint16_t enter_sprite_id PCE_WORK;
+static int16_t enter_sprite_y PCE_WORK;
+static bool enter_sprite_admitted PCE_WORK;
 #else
 FgPart fg_parts[FG_MAX] PCE_WORK;
 #endif
@@ -64,14 +78,14 @@ void foreground_reset(void) {
     slow_scene=0;slow_loaded=false;sgx_foreground_base=0;sgx_foreground_count=0;
 #endif
 }
-FG_CODE static void fg_read(uint32_t base,uint16_t index,void *out,uint16_t bytes) {
+FG_ENTER_CODE static void fg_read(uint32_t base,uint16_t index,void *out,uint16_t bytes) {
     uint16_t offset=(index<<2)+(index<<1);
     arcade_read(2,base+offset,out,bytes);
 }
-FG_CODE static int16_t chunk_x(uint32_t base,uint16_t index) {
+FG_ENTER_CODE static int16_t chunk_x(uint32_t base,uint16_t index) {
     int16_t x;fg_read(base,index,&x,2);return x;
 }
-FG_CODE static uint16_t locate(uint32_t base,uint16_t n,uint16_t from,int16_t key,bool far) {
+FG_ENTER_CODE static uint16_t locate(uint32_t base,uint16_t n,uint16_t from,int16_t key,bool far) {
     if(far) {
         uint16_t lo=0,hi=n;
         while(lo<hi) {
@@ -85,12 +99,27 @@ FG_CODE static uint16_t locate(uint32_t base,uint16_t n,uint16_t from,int16_t ke
     return from;
 }
 /* Admit one chunk, then move its SAT entries into the retained list. */
+#ifdef PCE_SGX
+FG_ADMIT_CODE static void enter_admit_body(void) {
+    uint8_t bank=pce_bank6_get();
+    pce_bank6_set(108);  /* video_sprite's descriptor and upload scratch live in PCE_STAGE */
+    enter_sprite_admitted=video_sprite_optional(enter_sprite_id,96,enter_sprite_y,false,16);
+    pce_bank6_set(bank);
+}
+#endif
 FG_ENTER_CODE static void enter_body(void) {
     int16_t entry[3];
     uint16_t offset=(enter_index<<2)+(enter_index<<1);
     arcade_read(2,enter_base+offset,entry,6);
     uint8_t before=sat_count;
-    if(!video_sprite_optional(entry[2],96,entry[1],false,16))return;
+#ifdef PCE_SGX
+    enter_sprite_id=entry[2];enter_sprite_y=entry[1];
+    overlay_call(0x72,enter_admit_body);
+    bool admitted=enter_sprite_admitted;
+#else
+    bool admitted=video_sprite_optional(entry[2],96,entry[1],false,16);
+#endif
+    if(!admitted)return;
     uint8_t slot=sprite_slot_of[entry[2]];
     vdc_sprite_t *source=sat[sat_page];
     for(uint8_t k=before;k<sat_count&&fg_count<FG_MAX;++k) {
@@ -108,11 +137,7 @@ FG_ENTER_CODE static void enter_body(void) {
 }
 FG_CODE static void enter(uint32_t base,uint16_t index,uint8_t group) {
     enter_base=base;enter_index=index;enter_group=group;
-#ifdef PCE_SGX
-    overlay_call(0x81,enter_body);
-#else
     enter_body();
-#endif
 }
 FG_CODE static void drop(uint8_t group,uint16_t lo,uint16_t hi) {
     uint8_t k=0;
@@ -137,13 +162,17 @@ FG_CODE void foreground_prepare_body(void) {
         if(arcade_read(2,s->occlusion,&record,sizeof record)) {
             sgx_foreground_base=record.foreground;sgx_foreground_count=record.nforeground;
             slow_base=record.foreground_slow;slow_count=record.nforeground_slow;
+            if(record.nforeground||record.nforeground_slow) {
+                sprite_cache_foreground_first=record.foreground_first;
+                sprite_cache_stage=pce_metrics.stage;
+            }
         }
         slow_loaded=true;
     }
     uint8_t saved_page=sat_page;
     if(split_foreground) {
-        buffer[768]=sat_count;buffer[769]=sprite_last_free;
-        memcpy(buffer+256,sprite_occupancy,240);
+        sgx_fg_vdc0_count=sat_count;sgx_fg_vdc0_last=sprite_last_free;
+        memcpy(sgx_fg_vdc0_occupancy,sprite_occupancy,240);
         sat_page=1;sat_count=0;sprite_lines_clear();
     }
 #else
@@ -180,29 +209,41 @@ FG_CODE void foreground_prepare_body(void) {
 #ifdef PCE_SGX
     if(split_foreground) {
         sat_count=0;sprite_lines_clear();
-        buffer[799]=0;
+        fg_mirror_only=0;
         fg_emit();
-        buffer[771]=sat_count;buffer[797]=sprite_last_free;
-        memcpy(buffer+512,sprite_occupancy,240);
-        sat_page=saved_page;sat_count=buffer[768];sprite_last_free=buffer[769];
-        memcpy(sprite_occupancy,buffer+256,240);
+        sgx_fg_vdc1_count=sat_count;sgx_fg_vdc1_last=sprite_last_free;
+        memcpy(sgx_fg_vdc1_occupancy,sprite_occupancy,240);
+        sat_page=saved_page;sat_count=sgx_fg_vdc0_count;sprite_last_free=sgx_fg_vdc0_last;
+        memcpy(sprite_occupancy,sgx_fg_vdc0_occupancy,240);
     } else
 #endif
     if(entered) {sat_count=0;memset(sprite_occupancy,0,sprite_exact?240:32);}
 }
-void foreground_prepare(void) { overlay_call(0x74,foreground_prepare_body); }
-void foreground_draw(void) {
 #ifdef PCE_SGX
+FG_MAP_CODE void foreground_prepare(void) {
+    uint8_t bank=pce_bank6_get();pce_bank6_set(134);
+    overlay_call(0x74,foreground_prepare_body);
+    pce_bank6_set(bank);
+    /* Dialogue draws its world on VDC0; publish the retained foreground on
+     * VDC1 as well, paired with the panel's forthcoming VDC0 SAT. */
+    if(pce_campaign.state==CAM_STORY&&pce_sgx_gameplay()&&
+       pce_metrics.stage<6&&pce_metrics.stage!=2)
+        overlay_call(0x78,pce_sgx_vdc1_sat_upload_body);
+}
+#else
+void foreground_prepare(void) { overlay_call(0x74,foreground_prepare_body); }
+#endif
+#ifdef PCE_SGX
+FG_CODE static void foreground_draw_body(void) {
     if(pce_sgx_gameplay()&&(pce_metrics.stage==1||pce_metrics.stage==3||pce_metrics.stage==4||pce_metrics.stage==5)) {
         FgPart *parts=fg_parts;
         for(uint8_t i=0;i<fg_count;++i)parts[i].spare&=1;
-        uint8_t first=buffer[798];
         for(uint8_t i=0;i<fg_count;++i) {
             FgPart *p=&parts[i];
             uint16_t layer_camera=(p->spare&1)?fg_camera:fg_camera_slow;
             int16_t x=(int16_t)p->x_world-(int16_t)layer_camera-32;
             int16_t y=(int16_t)p->y_word-64;
-            for(uint8_t k=first;k<sat_count;++k) {
+            for(uint8_t k=fg_world_first;k<sat_count;++k) {
                 vdc_sprite_t *a=&sat[0][k];
                 int16_t ax=(int16_t)a->x-32,ay=(int16_t)a->y-64;
                 int16_t aw=(a->attr&VDC_SPRITE_WIDTH_MASK)?32:16;
@@ -211,9 +252,19 @@ void foreground_draw(void) {
                 if(x<ax+aw&&x+16>ax&&y<ay+ah&&y+16>ay) {p->spare|=0x80;break;}
             }
         }
-        video_front_begin();buffer[799]=1;overlay_call(0x74,fg_emit);buffer[799]=0;
+        fg_mirror_only=1;fg_emit();fg_mirror_only=0;
         return;
     }
-#endif
+    fg_mirror_only=0;fg_emit();
+}
+FG_DRAW_MAP_CODE void foreground_draw(void) {
+    video_front_begin();
+    uint8_t bank=pce_bank6_get();pce_bank6_set(134);
+    overlay_call(0x74,foreground_draw_body);
+    pce_bank6_set(bank);
+}
+#else
+void foreground_draw(void) {
     video_front_begin();buffer[799]=0;overlay_call(0x74,fg_emit);
 }
+#endif
