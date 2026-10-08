@@ -26,14 +26,14 @@ void space_near_sgx_bat_wrapper(void);
 /* The hull's cells and the black playfield round them (the whole 64x32 BAT: the dialogue's cells and the beam's are wiped too). */
 PCE_SCENERY void space_hull_bat(void) {
 #ifdef PCE_SGX
-    if(pce_sgx_gameplay()&&!space_hull_ready&&
-       (pce_sgx_metrics.paired_screen&PCE_SGX_SPACE_NEAR)) {
-        overlay_call(0x71,space_near_sgx_bat_wrapper);
-        return;
-    }
     if(pce_sgx_gameplay()&&space_hull_sgx_ok) {
         overlay_call(0x71,space_hull_sgx_bat_wrapper);
         if(space_beam_width)space_beam(space_beam_width);
+        return;
+    }
+    if(pce_sgx_gameplay()&&!space_hull_ready&&
+       (pce_sgx_metrics.paired_screen&PCE_SGX_SPACE_NEAR)) {
+        overlay_call(0x71,space_near_sgx_bat_wrapper);
         return;
     }
 #endif

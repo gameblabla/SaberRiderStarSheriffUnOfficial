@@ -30,6 +30,7 @@ static __attribute__((always_inline)) void hull_write(uint8_t reg,uint16_t value
 
 __attribute__((noinline,section(".ram_bank113.text"))) void space_near_sgx_load_body(void) {
     const PceScene *scene=&pce_scenes[6];
+    space_hull_sgx_ok=0;
     pce_sgx_metrics.paired_screen&=(uint8_t)~PCE_SGX_SPACE_NEAR;
     if(!scene->occlusion||!arcade_read(2,scene->occlusion,&space_near_record,sizeof space_near_record)||
        !space_near_record.tiles||!space_near_record.map||!space_near_record.bytes||
