@@ -169,7 +169,7 @@ STORY_CODE static void draw(void) {
     if(pce_metrics.stage==7)overlay_call(0x78,space_dialog_ship);
     if(platform&&pce_metrics.stage<6) {
         video_sprite(hero_sprite,player.x-camera,player.y-16,facing,16);
-        overlay_call(0x74,actors_draw);
+        overlay_call(PCE_ACTOR_DRAW_BANK,actors_draw);
         if(!pce_campaign.diagnostic)overlay_call(0x70,combat_draw);
         foreground_draw();
     }

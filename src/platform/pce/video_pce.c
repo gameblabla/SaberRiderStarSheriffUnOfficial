@@ -161,6 +161,9 @@ PCE_RENDER void video_scroll(uint16_t x, uint16_t y) {
 extern void foreground_reset(void);
 PCE_RENDER void video_scene(const PceScene *s) {
     pce_race_dialog=0;
+#ifdef PCE_SGX
+    buffer[770]=0;buffer[796]=0;
+#endif
     foreground_reset();vce_hold=0;
     scene = s;video_scene_ptr=s;video_nsprites=s->nsprites;
     memset(sprite_slot_of,0xff,sizeof sprite_slot_of);

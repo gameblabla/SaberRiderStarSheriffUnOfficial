@@ -317,13 +317,13 @@ PCE_BOSS void play_draw(void) {
 #endif
     {
     uint8_t props_first=sat_count;
-    actors_mode=1;overlay_call(0x74,actors_draw);
+    actors_mode=1;overlay_call(PCE_ACTOR_DRAW_BANK,actors_draw);
     uint8_t props_end=sat_count;
     uint8_t hull_first=sat_count;
     if(!pce_campaign.diagnostic)overlay_call(0x70,combat_draw);
     uint8_t hull_end=sat_count;
     if(pce_campaign.boss_kind){pce_control.phase=0;overlay_call(0x7c,shots_draw_pass);}   /* the bosses' lasers */
-    actors_mode=2;overlay_call(0x74,actors_draw);actors_mode=0;
+    actors_mode=2;overlay_call(PCE_ACTOR_DRAW_BANK,actors_draw);actors_mode=0;
     pce_control.phase=1;overlay_call(0x7c,shots_draw_pass);
     /* The Hyperjumper (stages 3 and 4) goes behind every bullet: its sprites move to the end of the SAT (lower slots are in front). */
     if(pce_campaign.boss_kind==2)sat_to_end(hull_first,hull_end);

@@ -28,6 +28,7 @@ void video_number(uint8_t x, uint8_t y, uint16_t value);
 void video_sat_begin(void);
 bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8_t scale);
 bool video_sprite_optional(uint16_t id,int16_t x,int16_t y,bool flip,uint8_t scale);
+bool pce_sgx_split_sprite_optional(uint8_t owner,uint16_t id,int16_t x,int16_t y,bool flip,uint8_t scale);
 void video_front_mark(void);
 void video_front_begin(void);
 void video_sat_end(void);

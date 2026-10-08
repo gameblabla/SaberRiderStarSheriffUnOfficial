@@ -24,6 +24,11 @@
 #define PCE_RENDER __attribute__((noinline, section(".ram_bank106.text")))
 #define PCE_WORK __attribute__((section(".ram_bank107.work")))
 #define PCE_STAGE __attribute__((section(".ram_bank108.stage")))
+#ifdef PCE_SGX
+#define PCE_ACTOR_DRAW_BANK 0x77
+#else
+#define PCE_ACTOR_DRAW_BANK 0x74
+#endif
 /* $68 resident, $69 platform/$6d floor overlays share MPR3, $6a renderer.
  * $6b work, $6c staging. BIOS remains in MPR7; MPR0 is hardware, MPR1 RAM.
  * Audio code is $75; CD scratch is $76-$7c. No stack, return address or IRQ lives there. */

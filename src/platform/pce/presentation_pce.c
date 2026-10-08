@@ -7,7 +7,13 @@
 #include "play_internal.h"
 #include "sprite_cache_pce.h"
 #include "sgx_pce.h"
+#include <string.h>
 #define PRESENT __attribute__((noinline,section(".ram_bank116.text")))
+#ifdef PCE_SGX
+#define PLATFORM_DRAW __attribute__((noinline,section(".ram_bank119.text")))
+#else
+#define PLATFORM_DRAW PRESENT
+#endif
 #define PANEL __attribute__((noinline,section(".ram_bank115.text")))
 /* Retain the HUD while its graphics, palettes and counters are unchanged.
  * Only replay onto an empty SAT/scanline prefix, so admission is identical. */
@@ -15,6 +21,7 @@ extern uint16_t warm_ids[7];extern uint8_t warm_slots[7],warm_count;
 extern vdc_sprite_t sat[2][64];
 extern uint8_t sat_count,sat_page,sprite_exact,sprite_occupancy[240];
 extern uint8_t sprite_last_free,fg_entered;
+extern uint8_t buffer[2048];
 static vdc_sprite_t hud_sat[32];
 static uint8_t hud_lines[64],hud_slots[3],hud_count,hud_exact,hud_ready;
 static uint16_t hud_ids[3];
@@ -26,6 +33,50 @@ PCE_FLOW static void hud_transfer(void *dst,const void *src,uint16_t n) {
     hud_copy_opcode=0x73;
     hud_copy_src=(uint16_t)src;hud_copy_dst=(uint16_t)dst;hud_copy_len=n;
     overlay_call(0x72,hud_copy);
+}
+/* Keep platform actors visible when one VDC's independent sprite budget fills.
+ * Actor slots retain their last successful VDC for the current stage. */
+#ifdef PCE_SGX
+PLATFORM_DRAW static bool split_vdc0_draw(uint16_t id,int16_t x,int16_t y,bool flip,uint8_t scale) {
+    uint8_t count=sat_count,last=sprite_last_free;
+    memcpy(buffer+512,sprite_occupancy,240);
+    sat_page=0;sat_count=buffer[768];sprite_last_free=buffer[769];
+    memcpy(sprite_occupancy,buffer+256,240);
+    bool admitted=video_sprite_optional(id,x,y,flip,scale);
+    buffer[768]=sat_count;buffer[769]=sprite_last_free;
+    memcpy(buffer+256,sprite_occupancy,240);
+    sat_page=1;sat_count=count;sprite_last_free=last;
+    memcpy(sprite_occupancy,buffer+512,240);
+    return admitted;
+}
+#endif
+PLATFORM_DRAW bool pce_sgx_split_sprite_optional(uint8_t owner,uint16_t id,int16_t x,int16_t y,bool flip,uint8_t scale) {
+#ifdef PCE_SGX
+    if(buffer[770]&&sat_page==1) {
+        bool admitted;
+        if(owner<24&&buffer[772+owner]==0) {
+            admitted=split_vdc0_draw(id,x,y,flip,scale);
+            if(admitted)goto split_done;
+            --pce_metrics.dropped_cosmetic;
+            admitted=video_sprite_optional(id,x,y,flip,scale);
+            if(admitted)buffer[772+owner]=1;
+        } else {
+            admitted=video_sprite_optional(id,x,y,flip,scale);
+            if(admitted) {
+                if(owner<24)buffer[772+owner]=1;
+            } else {
+                --pce_metrics.dropped_cosmetic;
+                admitted=split_vdc0_draw(id,x,y,flip,scale);
+                if(admitted&&owner<24)buffer[772+owner]=0;
+            }
+        }
+split_done:
+        return admitted;
+    }
+#else
+    (void)owner;
+#endif
+    return video_sprite_optional(id,x,y,flip,scale);
 }
 PCE_FLOW void presentation_frame(void) {
     const uint16_t *base=pce_present_base[pce_metrics.stage-1];
@@ -64,12 +115,13 @@ PCE_FLOW void presentation_frame(void) {
 }
 /* Every live actor, optional ones last (a herd or a distant enemy that does not fit the SAT is simply not drawn). */
 uint8_t actors_mode;   /* 0 every actor (the dialogue's redraw), 1 only the scenery props, 2 only the fighters (play_pce.c draws the props first, see there) */
-PRESENT void actors_draw(void) {
+PLATFORM_DRAW void actors_draw(void) {
     uint8_t stage=pce_metrics.stage-1;
     /* Scenery props (types 12-27: the saloon doors...) come after the fighters in the SAT, so they
      * stay behind every fighter; where the SAT or a scanline is full they are what gives way. */
     for(uint8_t pass=actors_mode==1;pass<(actors_mode==2?1:2);++pass)
-    for(Actor *a=actors;a<actors+8;++a) {   /* by pointer: indexing a 21-byte record costs a multiplication each time */
+    for(uint8_t actor_index=0;actor_index<8;++actor_index) {
+        Actor *a=&actors[actor_index];
         if(!a->active||(a->type>=12&&a->type<=27)!=pass)continue;
         uint16_t id=pce_actor_ids[a->type];
         if(id==255)continue;
@@ -106,7 +158,7 @@ PRESENT void actors_draw(void) {
         /* the boss arena's tower sniper (type 31, the brown watchtower) is drawn 5 px higher (Y - 5) */
         int16_t sy=a->b.y-16-(a->type==31?5:0);
         /* a refused draw is skipped for the frame, never a removal; a fighter refused on screen holds the filler spawns back */
-        if(!video_sprite_optional(id,sx,sy,a->flip,16)&&fighter&&sx>-24&&sx<272)enemy_pressure=40;
+        if(!pce_sgx_split_sprite_optional(actor_index,id,sx,sy,a->flip,16)&&fighter&&sx>-24&&sx<272)enemy_pressure=40;
     }
 }
 void presentation_draw(void) {overlay_call(0x6e,presentation_frame);video_front_mark();}

@@ -33,7 +33,11 @@ static SGX_SPLIT_CODE void split_sat_to_end(uint8_t first,uint8_t end) {
    actors on VDC1, whose sprite budget and cache residency are independent. */
 SGX_SPLIT_CODE void pce_sgx_platform_actor_pass_body(void) {
     if(sat_page!=0)return;
-    uint8_t vdc0_count=sat_count,vdc0_last_free=sprite_last_free;
+    if(buffer[796]!=pce_metrics.stage) {
+        memset(buffer+772,0xff,24);
+        buffer[796]=pce_metrics.stage;
+    }
+    buffer[768]=sat_count;buffer[769]=sprite_last_free;buffer[770]=1;
     memcpy(buffer+256,sprite_occupancy,240);
     sat_page=1;sat_count=0;sprite_lines_clear();
 
@@ -43,7 +47,7 @@ SGX_SPLIT_CODE void pce_sgx_platform_actor_pass_body(void) {
         overlay_call(0x6f,herd_draw);
 
     actors_mode=1;
-    overlay_call(0x74,actors_draw);
+    overlay_call(0x77,actors_draw);
     uint8_t props_end=sat_count;
     uint8_t hull_first=sat_count;
     if(!pce_campaign.diagnostic)overlay_call(0x70,combat_draw);
@@ -53,7 +57,7 @@ SGX_SPLIT_CODE void pce_sgx_platform_actor_pass_body(void) {
         overlay_call(0x7c,shots_draw_pass);
     }
     actors_mode=2;
-    overlay_call(0x74,actors_draw);
+    overlay_call(0x77,actors_draw);
     pce_control.phase=1;
     overlay_call(0x7c,shots_draw_pass);
     actors_mode=0;
@@ -66,8 +70,8 @@ SGX_SPLIT_CODE void pce_sgx_platform_actor_pass_body(void) {
     overlay_call(0x71,pce_sgx_vdc1_stats_body);
     overlay_call(0x78,pce_sgx_vdc1_sat_upload_body);
 
-    sat_page=0;sat_count=vdc0_count;
+    buffer[770]=0;
+    sat_page=0;sat_count=buffer[768];sprite_last_free=buffer[769];
     memcpy(sprite_occupancy,buffer+256,240);
-    sprite_last_free=vdc0_last_free;
 }
 #endif
