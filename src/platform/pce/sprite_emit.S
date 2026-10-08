@@ -18,9 +18,12 @@
 .extern descriptor, sprite_emit_x, sprite_emit_y, sprite_emit_id, sprite_emit_flip
 .extern sprite_emit_ok, sprite_fast_miss, video_nsprites
 .extern sprite_line_lo, sprite_line_hi, sprite_line_ok
-.extern sprite_lines_reserve, sprite_lines_release, sat_count, sat, pce_raster_enabled, sprite_screen_height
+.extern sprite_lines_reserve, sprite_lines_release, sat_count, sat_page, sat, pce_raster_enabled, sprite_screen_height
 .extern sprite_slot_of, sprite_ids, sprite_used, sprite_len, sprite_p0, sprite_p1, sprite_p2
-.extern sprite_pb_lo, sprite_pb_hi, sprite_attr
+.extern sprite_pb_hi, sprite_attr, sprite_words
+#ifdef PCE_SGX
+.extern pce_sgx_metrics
+#endif
 .extern arcade_tai, arcade_tai_src, arcade_tai_dst, arcade_tai_len
 sprite_fast:
     bra .Lstart
@@ -58,6 +61,18 @@ sprite_fast:
     cmp sprite_emit_id+1
     bne .Lbail
     ldx $20cc
+#ifdef PCE_SGX
+    /* VDC1 has its own copy of the stage-6 sprite cache. A cache hit for
+       VDC0 is still a miss until this slot has been uploaded there. */
+    lda sat_page
+    beq .Lvdc1_cache_ready
+    lda pce_sgx_metrics+5
+    and #0x20
+    beq .Lvdc1_cache_ready
+    lda sprite_pb_hi,x
+    bpl .Lbail
+.Lvdc1_cache_ready:
+#endif
     lda #1
     sta sprite_used,x
     stz sprite_fast_miss
@@ -82,10 +97,35 @@ sprite_fast:
     stz arcade_tai_len+1
     jsr arcade_tai
     ldx $20cc
-    lda sprite_pb_lo,x
+    txa
+    asl
+    tax
+    lda sprite_words,x
+    sta $20d4
+    lda sprite_words+1,x
+    sta $20d5
+    lda $20d4
+    lsr
+    lsr
+    lsr
+    lsr
+    lsr
     sta $20c8
-    lda sprite_pb_hi,x
+    lda $20d5
+    and #$1f
+    asl
+    asl
+    asl
+    ora $20c8
+    sta $20c8
+    lda $20d5
+    lsr
+    lsr
+    lsr
+    lsr
+    lsr
     sta $20c9
+    ldx $20cc
     lda sprite_attr,x
     sta $20ce
     lda sprite_emit_flip
@@ -106,6 +146,13 @@ sprite_fast:
     lda $20c1
     adc #>sat
     sta $20c1
+    lda sat_page
+    beq .Lsat_page_ready
+    clc
+    lda $20c1
+    adc #2
+    sta $20c1
+.Lsat_page_ready:
     lda sprite_emit_x
     sta $20d2
     sta $20c2

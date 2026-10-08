@@ -17,7 +17,11 @@
 .comm sat_copy_word,2
 .comm sat_copy_src,2
 .comm sat_copy_len,2
-.comm sat_copy_vdc,1
+.pushsection .ram_bank107.work,"aw",@nobits
+.global sat_copy_vdc
+sat_copy_vdc:
+.space 1
+.popsection
 sat_copy:
     lda sat_copy_src
     sta hud_copy_src

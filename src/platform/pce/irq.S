@@ -15,7 +15,7 @@
 .extern pce_sgx_metrics
 .extern pce_metrics
 .extern pce_sgx_sky_scroll_x
-.extern pce_sgx_sat1_word,pce_sgx_sat1_pending,pce_sgx_arena_hidden
+.extern pce_sgx_sat1_alt,pce_sgx_sat1_pending,pce_sgx_arena_hidden
 .extern pce_display_on
 .extern space_hull_ready
 #endif
@@ -69,9 +69,14 @@
 .global pce_sgx_sat1_commit
 pce_sgx_sat1_commit:
     VDC1_INDEX 19
-    lda pce_sgx_sat1_word
-    sta 0x0012
-    lda pce_sgx_sat1_word+1
+    stz 0x0012
+    lda pce_sgx_sat1_alt
+    beq .Lsgx_sat1_main
+    lda #0x7e
+    bra .Lsgx_sat1_address
+.Lsgx_sat1_main:
+    lda #0x7f
+.Lsgx_sat1_address:
     sta 0x0013
     rts
 .section .text.irq,"ax",@progbits

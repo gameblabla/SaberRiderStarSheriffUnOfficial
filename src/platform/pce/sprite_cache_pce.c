@@ -6,7 +6,7 @@ uint16_t sprite_ids[48],sprite_words[48];
 uint8_t sprite_stamp[48],sprite_epoch;
 uint8_t sprite_used[48],sprite_pinned[48],pattern_owner[48];
 uint8_t sprite_slot_of[480],sprite_count[48],sprite_len[48],sprite_p0[48],sprite_p1[48],sprite_p2[48];
-uint8_t sprite_pb_lo[48],sprite_pb_hi[48],sprite_attr[48];
+uint8_t sprite_pb_hi[48],sprite_attr[48];
 /* Resident allocator. A 512-byte page holds four 16x16 patterns. Keep the
  * last two displayed generations pinned through SAT DMA, including palettes.
  * Canonical left/right frames share their cache ID and patterns. */

@@ -62,10 +62,12 @@ static void bolt_draw(uint8_t frame,int16_t x,int16_t y) {
     if(big){sprite_lines_reserve();if(!sprite_line_ok){sprite_lines_release();return;}}
     sat[sat_page][sat_count++]=(vdc_sprite_t){y+64,x+32,(BOLT_WORD>>5)+(frame==1?0:frame==2?2:4),VDC_SPRITE_FG|15|(big?VDC_SPRITE_WIDTH_32|VDC_SPRITE_HEIGHT_32:0)};
 }
+#ifdef PCE_SGX
 #define SGX_ARENA_SPLIT 420
 static bool arena_far(const Item *item) {
     return item->d>SGX_ARENA_SPLIT&&((item->id&0xf000)!=BOLT_FLAG);
 }
+#endif
 static void draw_item(const Item *item) {
     int16_t ix=item->sx-shake_x,iy=item->sy-shake_y;
     if(item->id>=BIG_FLAG) {
@@ -155,7 +157,7 @@ void m6_draw(void) {
         memcpy(buffer,sprite_occupancy,224);
         sat_page=1;sat_count=0;sprite_lines_clear();
         for(uint8_t k=0;k<nitems;++k)if(arena_far(&items[k]))draw_item(&items[k]);
-        pce_sgx_sat1_count=sat_count;
+        for(uint8_t k=sat_count;k<64;++k)sat[1][k].y=0;
         sat_page=0;sat_count=sat0_count;
         memcpy(sprite_occupancy,buffer,224);
         overlay_call(0x78,pce_sgx_arena_sat_upload_body);

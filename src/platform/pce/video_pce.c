@@ -44,7 +44,17 @@ uint8_t clipped_pattern[128];
 uint8_t clipped_count;
 uint8_t sprite_screen_height=224;
 vdc_sprite_t sat[2][64];
+#ifdef PCE_SGX
+uint8_t sat_page PCE_WORK;
+uint8_t sat_count PCE_WORK;
+uint8_t sprite_line_lo PCE_WORK;
+uint8_t sprite_line_hi PCE_WORK;
+uint8_t sprite_line_ok PCE_WORK;
+uint8_t sprite_exact PCE_WORK;
+#else
 uint8_t sat_page, sat_count;
+uint8_t sprite_line_lo, sprite_line_hi, sprite_line_ok, sprite_exact;
+#endif
 uint16_t generic_id;int16_t generic_x,generic_y;uint8_t generic_flip,generic_scale,generic_count,generic_slot,generic_ok;
 static uint8_t front_start,front_keep;
 int16_t sprite_emit_x,sprite_emit_y;
@@ -334,7 +344,10 @@ PCE_FLOW static void sat_begin_body(void) {
 }
 PCE_RENDER void video_sat_begin(void) {overlay_call(0x6e,sat_begin_body);}
 PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8_t scale) {
-    bool fast=scale==16&&sat_page==0;
+    bool fast=scale==16;
+#ifdef PCE_SGX
+    bool sgx_vdc1=sat_page==1&&pce_sgx_arena_sprites();
+#endif
     if(fast) {
         sprite_emit_id=id;sprite_emit_x=x;sprite_emit_y=y;sprite_emit_flip=flip?8:0;
         overlay_call(0x74,sprite_fast);
@@ -345,12 +358,13 @@ PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8
     }
     if (id >= scene->nsprites) return false;
     uint8_t slot=sprite_slot_of[id];
-    uint8_t count;
-    if(slot<48&&sprite_ids[slot]==id)count=sprite_count[slot];
-    else {
-        uint8_t entry[16],colors[32];
+    bool cached=slot<48&&sprite_ids[slot]==id;
+    uint8_t entry[16],colors[32];
+    if(!cached) {
         arcade_read(2, scene->sprites + (uint32_t)id * 16, entry, 16);
-        count = entry[12];
+    }
+    uint8_t count=cached?sprite_count[slot]:entry[12];
+    if(!cached) {
         if (!count || count > 32 || entry[13]) return false;
         slot=sprite_slot(id,count);
         if(slot==48){if(!sprite_optional)++pce_metrics.essential_overflow;return false;}
@@ -367,9 +381,20 @@ PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8
         sprite_count[slot]=count;sprite_slot_of[id]=slot;
         sprite_p0[slot]=entry[4];sprite_p1[slot]=entry[5];sprite_p2[slot]=entry[6];
         sprite_len[slot]=count*6;
-        sprite_pb_lo[slot]=(sprite_words[slot]>>5);sprite_pb_hi[slot]=(sprite_words[slot]>>13);
+        sprite_pb_hi[slot]=0;
         sprite_attr[slot]=VDC_SPRITE_FG|(slot<15?slot:15);
     }
+#ifdef PCE_SGX
+    if(sgx_vdc1&&!(sprite_pb_hi[slot]&0x80)) {
+        pce_sgx_sprite_id=id;pce_sgx_sprite_slot=slot;
+        overlay_call(0x78,pce_sgx_sprite_upload_body);
+        if(!pce_sgx_sprite_upload_ok) {
+            if(!sprite_optional)++pce_metrics.essential_overflow;
+            return false;
+        }
+        sprite_pb_hi[slot]|=0x80;
+    }
+#endif
     if(fast) {
         overlay_call(0x74,sprite_fast);
         if(sprite_fast_miss)return false;

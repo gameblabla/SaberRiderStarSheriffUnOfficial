@@ -29,12 +29,12 @@ typedef struct __attribute__((packed)) {
 } SgxSkyRecord;
 
 volatile PceSgxTelemetry pce_sgx_metrics;
-/* The IRQ publishes VDC1's SAT at the same boundary as VDC0's. Keep this
-   small handoff in resident RAM rather than an overlay work bank. */
-volatile uint16_t pce_sgx_sat1_word;
-volatile uint8_t pce_sgx_sat1_pending;
-volatile uint8_t pce_sgx_sat1_count;
-volatile uint8_t pce_sgx_arena_hidden;
+/* The IRQ publishes VDC1's SAT at the same boundary as VDC0's. */
+volatile uint8_t pce_sgx_sat1_alt PCE_WORK;
+volatile uint8_t pce_sgx_sat1_pending PCE_WORK;
+volatile uint8_t pce_sgx_arena_hidden PCE_WORK;
+volatile uint16_t pce_sgx_sprite_id PCE_WORK;
+volatile uint8_t pce_sgx_sprite_slot PCE_WORK, pce_sgx_sprite_upload_ok PCE_WORK;
 extern uint8_t buffer[2048];
 extern vdc_sprite_t sat[2][64];
 extern uint16_t pce_panel_column;
@@ -44,6 +44,8 @@ extern volatile uint16_t pce_sgx_sky_scroll_x;
 extern volatile uint16_t pce_scroll_x;
 extern volatile uint8_t sat_copy_vdc, hud_copy_opcode;
 extern volatile uint16_t sat_copy_word, sat_copy_src, sat_copy_len;
+extern uint16_t sprite_words[48];
+extern uint8_t sprite_count[48];
 void sat_copy(void);
 
 static SGX_CODE void vdc2_write(uint8_t reg, uint16_t value) {
@@ -193,9 +195,8 @@ SGX_GAME_CODE void pce_sgx_gameplay_begin_body(void) {
         /* VDC0 keeps the arena panorama and floor. VDC1 contributes only its
            separate sprite budget and stays dark until the first SAT is ready. */
         pce_sgx_arena_hidden = 1;
-        pce_sgx_sat1_word = 0;
+        pce_sgx_sat1_alt = 0;
         pce_sgx_sat1_pending = 0;
-        pce_sgx_sat1_count = 0;
         vdc1_write(VDC_REG_SATB_START, PCE_SAT_WORD);
         __attribute__((leaf)) asm volatile("plp" ::: "p", "memory");
         return;
@@ -260,17 +261,31 @@ SGX_GAME_CODE void pce_sgx_sky_scroll_body(void) {
 
 SGX_GAME_CODE void pce_sgx_arena_sat_upload_body(void) {
     while (pce_sat_pending) {}
-    uint16_t word = pce_sgx_sat1_word == PCE_SAT_WORD ?
-        PCE_SAT_ALT_WORD : PCE_SAT_WORD;
-    for (uint8_t i = pce_sgx_sat1_count; i < 64; ++i) sat[1][i].y = 0;
+    uint16_t word = pce_sgx_sat1_alt ? PCE_SAT_WORD : PCE_SAT_ALT_WORD;
     sat_copy_word = word;
     sat_copy_src = (uint16_t)sat[1];
     sat_copy_len = sizeof sat[1];
     sat_copy_vdc = 1;
     hud_copy_opcode = 0xe3;
     overlay_call(0x72, sat_copy);
-    pce_sgx_sat1_word = word;
+    pce_sgx_sat1_alt ^= 1;
     pce_sgx_sat1_pending = 1;
+}
+
+SGX_GAME_CODE void pce_sgx_sprite_upload_body(void) {
+    uint8_t slot=pce_sgx_sprite_slot, entry[16];
+    const PceScene *scene=&pce_scenes[pce_metrics.stage-1];
+    uint32_t record=scene->sprites+(uint32_t)pce_sgx_sprite_id*16;
+    pce_sgx_sprite_upload_ok=0;
+    if(!arcade_read(2,record,entry,sizeof entry)) {
+        ++pce_sgx_metrics.failures;
+        return;
+    }
+    uint32_t patterns=(uint32_t)entry[0]|(uint32_t)entry[1]<<8|
+                      (uint32_t)entry[2]<<16|(uint32_t)entry[3]<<24;
+    pce_sgx_sprite_upload_ok=arcade_vram_to(
+        1,patterns,sprite_words[slot],(uint16_t)sprite_count[slot]*128);
+    if(!pce_sgx_sprite_upload_ok)++pce_sgx_metrics.failures;
 }
 
 SGX_GAME_CODE void pce_sgx_arena_hide_body(void) {
