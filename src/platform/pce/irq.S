@@ -190,7 +190,7 @@ pce_vblank:
 .Lsgx_stage7:
     lda space_hull_ready
     bne .Lsgx_hull_ready
-    jmp .Lsgx_vdc0_zero
+    jmp .Lsgx_vdc1_scroll
 .Lsgx_hull_ready:
     lda pce_sat_pending
     beq .Lsgx_hull_live
@@ -486,7 +486,12 @@ pce_hblank:
     stz 0x0013
     lda space_hull_ready
     bne 7f
-    jmp .Lsgx_zero_vdc0
+    st0 #7
+    lda pce_sky_near
+    sta 2
+    lda pce_sky_near+1
+    sta 3
+    jmp .Lhlast
 7:
     st0 #7
     lda pce_scroll_x

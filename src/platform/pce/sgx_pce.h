@@ -12,6 +12,7 @@ typedef struct {
 #define PCE_SGX_ACTIVE       0x01
 #define PCE_SGX_PRIORITY     0x02
 #define PCE_SGX_PAIR_ACTIVE  0x04
+#define PCE_SGX_SPACE_NEAR   0x08
 #define PCE_SGX_GAMEPLAY     0x80
 #define PCE_SGX_STATIC_SKY   0x40
 #define PCE_SGX_ARENA_SPRITES 0x20

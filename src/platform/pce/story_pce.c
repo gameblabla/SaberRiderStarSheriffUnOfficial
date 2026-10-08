@@ -228,7 +228,14 @@ STORY_CODE void story_step(void) {
     if(pce_campaign.timer<12||!(pce_control.pressed&(KEY_1|KEY_2)))return;
     pce_campaign.timer=0;
     audio_pcm_tick();   /* the PC dialogue's page close: sfx 0 */
-    if(++pce_campaign.page<page_count)draw();
+    if(++pce_campaign.page<page_count) {
+#ifdef PCE_SGX
+        if(pce_sgx_gameplay()&&pce_metrics.stage==7) {
+            overlay_call(0x78,space_hull_bat);
+        }
+#endif
+        draw();
+    }
     else {
         /* Retained scenery must re-admit its chunks. Platform panels now need
          * only four corner patterns: keep the displayed generation pinned until
@@ -247,7 +254,7 @@ STORY_CODE void story_step(void) {
         else {
             video_restore();
 #ifdef PCE_SGX
-            if(pce_sgx_gameplay()&&pce_metrics.stage==7&&space_hull_ready)
+            if(pce_sgx_gameplay()&&pce_metrics.stage==7)
                 overlay_call(0x78,space_hull_bat);
 #endif
         }

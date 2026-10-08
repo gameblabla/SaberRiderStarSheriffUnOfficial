@@ -16,6 +16,7 @@ volatile uint8_t pce_scroll_hold;
 #ifdef PCE_SGX
 volatile uint16_t pce_sgx_sky_scroll_x PCE_WORK;
 #endif
+extern volatile uint16_t pce_sky_near;
 /* VRAM SAT sources alternate independently of the RAM drawing/scratch pages. */
 uint16_t pce_sat_word=PCE_SAT_WORD;
 volatile uint8_t pce_sat_pending;
@@ -325,8 +326,12 @@ PCE_RENDER bool video_background(uint16_t camera) {
 }
 PCE_RENDER void video_text(uint8_t x, uint8_t y, const char *text) {
     if(pce_raster_enabled)x*=2;
+    uint16_t scroll_x=pce_scroll_x;
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay()&&pce_metrics.stage==7)scroll_x=pce_sky_near;
+#endif
     uint16_t dest = pce_raster_enabled ? (uint16_t)(48+y)*128+x :
-        (uint16_t)y*64+((((pce_sgx_gameplay()&&(pce_metrics.stage==4||pce_metrics.stage==5))?0:pce_scroll_x>>3)+x)&63);
+        (uint16_t)y*64+((((pce_sgx_gameplay()&&(pce_metrics.stage==4||pce_metrics.stage==5))?0:scroll_x>>3)+x)&63);
     while (*text) {
         uint8_t c = *text++;
         if (c < 32 || c > 127) c = '?';

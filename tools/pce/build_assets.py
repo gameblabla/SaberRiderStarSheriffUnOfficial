@@ -226,11 +226,12 @@ def _background_cells(image, transparent):
     cells = rgba.reshape(30, 8, w // 8, 8, 4).transpose(0, 2, 1, 3, 4).reshape(-1, 8, 8, 4)
     return w,rgba,cells
 
-def fit_background_pair(main, sky, stage):
+def fit_background_pair(main, sky, stage, npal=16):
     _,_,main_cells = _background_cells(main,True)
     _,_,sky_cells = _background_cells(sky,True)
-    palettes,groups = palfit.fit_palettes(np.concatenate((main_cells,sky_cells)),16,fixed=(15,))
-    palettes = [palettes[k].copy() for k in range(16)]
+    fixed=(15,) if npal>15 else ()
+    palettes,groups = palfit.fit_palettes(np.concatenate((main_cells,sky_cells)),npal,fixed=fixed)
+    palettes = [palettes[k].copy() for k in range(npal)]
     palettes[0][0] = presentation.sky_color(stage)
     split = len(main_cells)
     return palettes,groups[:split].copy(),groups[split:].copy()
@@ -1276,6 +1277,9 @@ def make_scene(stage, work, previews, shared, sgx=False):
         collision = 0
     elif stage == 7:
         bg = Image.open(ROOT / 'assets/space/nebula.png').convert('RGBA').resize((512, 224), Image.Resampling.NEAREST)
+        planet = Image.open(ROOT / 'assets/space/planet.png').convert('RGBA')
+        near = Image.new('RGBA',(512,224),(0,0,0,0))
+        near.alpha_composite(planet.crop((40,36,300,260)),(0,0))
         sprites = shared[36:39] + atlas(ROOT / 'assets/space/atlas.png', 'player') + atlas(ROOT / 'assets/space/atlas.png', 'fighter') + atlas(ROOT / 'assets/space/atlas.png', 'gunship')
         # Keep the fixed ID; the complete cruiser is background art, never a sprite.
         sprites.append(('battle_cruiser',Image.new('RGBA',(1,1)),(0,0)))
@@ -1467,9 +1471,21 @@ def make_scene(stage, work, previews, shared, sgx=False):
             composite.alpha_composite(main['preview'].crop((0,0,256,224)))
             composite.save(previews/f'stage{stage}_sgx_composite.png')
         if sgx and stage==7:
-            paired=native_background(bg,a,previews,'stage7',npal=10,sgx=True,
-                                     record_prefix='sgx_',preview_name='stage7_sgx')
-            meta['sgx_pal']=paired['pal'];meta['sgx_tiles']=paired['tiles'];meta['sgx_map']=paired['map']
+            palette,far_groups,near_groups=fit_background_pair(bg,near,7,npal=10)
+            far=native_background(bg,a,previews,'stage7',npal=10,sgx=True,
+                                  record_prefix='sgx_',preview_name='stage7_sgx',
+                                  palette_fit=(palette,far_groups),return_preview=True)
+            closer=native_background(near,a,previews,'stage7',npal=10,sgx=True,
+                                     record_prefix='sgx_near_',preview_name='stage7_sgx_near',
+                                     transparent=True,palette_fit=(palette,near_groups),
+                                     write_palette=False,static_bat=True,return_preview=True)
+            if closer['tile_bytes']>0xffff:raise ValueError('stage7: SGX near-plane patterns exceed scene record')
+            meta['sgx_pal']=far['pal'];meta['sgx_tiles']=far['tiles'];meta['sgx_map']=far['map']
+            meta['sgx_near_record']=a.add('sgx_near_record',struct.pack('<IIHB',closer['tiles'],closer['map'],closer['tile_bytes'],closer['bat_cols']))
+            meta['sgx_sky_record']=meta['sgx_near_record']
+            composite=far['preview'].crop((0,0,256,224))
+            composite.alpha_composite(closer['preview'].crop((0,0,256,224)))
+            composite.save(previews/'stage7_sgx_composite.png')
     sprite_table, rows, costs = add_sprites(a, list(sprites), previews)
     if stage == 6:
         # the bolt's patterns in the HUD's palette (add_sprites gave every 'hudp_' sprite of the stage one: the same call on the same images): middle and far 16x16 (64 words each), then the near 32x32 (TL, TR, BL, BR)

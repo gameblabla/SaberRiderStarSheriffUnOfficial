@@ -14,6 +14,7 @@
 #define HULL_ROWS 16
 #define HULL_MAP_BYTES (HULL_COLS * HULL_ROWS * 2)
 #define HULL_TILES_OFFSET (192 + ((HULL_MAP_BYTES + 63) & ~63))
+#define SPACE_NEAR_MAP_BYTES 4096
 
 extern uint8_t buffer[2048];
 extern uint16_t hull_palette[64];
@@ -23,6 +24,38 @@ extern uint8_t space_hull_draw_flash,space_hull_draw_gone,hull_lit,hull_gone;
 extern int16_t space_hull_draw_y;
 extern volatile uint8_t pce_vdc_index;
 volatile uint8_t space_hull_sgx_ok PCE_WORK;
+typedef struct __attribute__((packed)) {uint32_t tiles,map;uint16_t bytes;uint8_t bat_cols;} SpaceNearRecord;
+static SpaceNearRecord space_near_record __attribute__((section(".ram_bank113.data")));
+static __attribute__((always_inline)) void hull_write(uint8_t reg,uint16_t value);
+
+__attribute__((noinline,section(".ram_bank113.text"))) void space_near_sgx_load_body(void) {
+    const PceScene *scene=&pce_scenes[6];
+    pce_sgx_metrics.paired_screen&=(uint8_t)~PCE_SGX_SPACE_NEAR;
+    if(!scene->occlusion||!arcade_read(2,scene->occlusion,&space_near_record,sizeof space_near_record)||
+       !space_near_record.tiles||!space_near_record.map||!space_near_record.bytes||
+       space_near_record.bytes>0x7000||space_near_record.bat_cols!=64) {
+        ++pce_sgx_metrics.failures;
+        return;
+    }
+    if(!arcade_vram_to(0,space_near_record.tiles,PCE_BG_WORD,space_near_record.bytes)||
+       !arcade_vram_to(0,space_near_record.map,PCE_BAT_WORD,SPACE_NEAR_MAP_BYTES)) {
+        ++pce_sgx_metrics.failures;
+        return;
+    }
+    __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
+    hull_write(VDC_REG_BG_SCROLL_X,0);
+    hull_write(VDC_REG_BG_SCROLL_Y,0);
+    __attribute__((leaf)) asm volatile("plp" ::: "p","memory");
+    pce_sgx_metrics.paired_screen|=PCE_SGX_SPACE_NEAR;
+}
+
+__attribute__((noinline,section(".ram_bank113.text"))) void space_near_sgx_bat_body(void) {
+    if((pce_sgx_metrics.paired_screen&PCE_SGX_SPACE_NEAR)&&
+       !arcade_vram_to(0,space_near_record.map,PCE_BAT_WORD,SPACE_NEAR_MAP_BYTES)) {
+        ++pce_sgx_metrics.failures;
+        pce_sgx_metrics.paired_screen&=(uint8_t)~PCE_SGX_SPACE_NEAR;
+    }
+}
 
 static __attribute__((always_inline)) void hull_index(uint8_t reg) {
     pce_vdc_index=reg;
@@ -149,5 +182,13 @@ __attribute__((noinline,section(".ram_bank113.text"))) void space_hull_sgx_bat_w
 
 __attribute__((noinline,section(".ram_bank113.text"))) void space_hull_sgx_draw_wrapper(void) {
     space_hull_sgx_draw_body();
+}
+
+__attribute__((noinline,section(".ram_bank113.text"))) void space_near_sgx_load_wrapper(void) {
+    space_near_sgx_load_body();
+}
+
+__attribute__((noinline,section(".ram_bank113.text"))) void space_near_sgx_bat_wrapper(void) {
+    space_near_sgx_bat_body();
 }
 #endif

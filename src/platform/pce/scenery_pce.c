@@ -21,10 +21,16 @@ int16_t space_hull_x PCE_WORK;uint16_t space_hull_char PCE_WORK;
 extern volatile uint8_t space_hull_sgx_ok;
 void space_hull_sgx_load_wrapper(void),space_hull_sgx_bat_wrapper(void);
 void space_hull_sgx_draw_wrapper(void);
+void space_near_sgx_bat_wrapper(void);
 #endif
 /* The hull's cells and the black playfield round them (the whole 64x32 BAT: the dialogue's cells and the beam's are wiped too). */
 PCE_SCENERY void space_hull_bat(void) {
 #ifdef PCE_SGX
+    if(pce_sgx_gameplay()&&!space_hull_ready&&
+       (pce_sgx_metrics.paired_screen&PCE_SGX_SPACE_NEAR)) {
+        overlay_call(0x71,space_near_sgx_bat_wrapper);
+        return;
+    }
     if(pce_sgx_gameplay()&&space_hull_sgx_ok) {
         overlay_call(0x71,space_hull_sgx_bat_wrapper);
         if(space_beam_width)space_beam(space_beam_width);

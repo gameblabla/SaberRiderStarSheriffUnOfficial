@@ -48,6 +48,7 @@ extern volatile uint16_t sat_copy_word, sat_copy_src, sat_copy_len;
 extern uint16_t sprite_words[48];
 extern uint8_t sprite_count[48];
 void sat_copy(void);
+void space_near_sgx_load_wrapper(void);
 
 static SGX_CODE void vdc2_write(uint8_t reg, uint16_t value) {
     __attribute__((leaf)) asm volatile("php\nsei" ::: "p", "memory");
@@ -248,6 +249,7 @@ SGX_GAME_CODE void pce_sgx_gameplay_begin_body(void) {
     *IO_VDC_DATA_HI = (uint8_t)(control >> 8);
     vdc1_write(VDC_REG_CONTROL, pce_display_on ? VDC_CONTROL_ENABLE_BG : 0);
     __attribute__((leaf)) asm volatile("plp" ::: "p", "memory");
+    if(pce_metrics.stage==7)overlay_call(0x71,space_near_sgx_load_wrapper);
 }
 
 SGX_GAME_CODE void pce_sgx_gameplay_end_body(void) {
