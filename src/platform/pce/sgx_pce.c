@@ -14,6 +14,7 @@
 #define SGX_GAME_CODE __attribute__((noinline, minsize, section(".ram_bank120.text")))
 #define SGX_MODE_CODE __attribute__((noinline, minsize, section(".ram_bank114.text")))
 #define SGX_AUX_CODE __attribute__((noinline, minsize, section(".ram_bank110.text")))
+#define SGX_STATS_CODE __attribute__((noinline, minsize, section(".ram_bank113.text")))
 #define SGX_VDC2_INDEX 0x0010
 #define SGX_VDC2_DATA_LO 0x0012
 #define SGX_VDC2_DATA_HI 0x0013
@@ -32,7 +33,7 @@ volatile PceSgxTelemetry pce_sgx_metrics;
 /* The IRQ publishes VDC1's SAT at the same boundary as VDC0's. */
 volatile uint8_t pce_sgx_sat1_alt PCE_WORK;
 volatile uint8_t pce_sgx_sat1_pending PCE_WORK;
-volatile uint8_t pce_sgx_arena_hidden PCE_WORK;
+volatile uint8_t pce_sgx_vdc1_hidden PCE_WORK;
 volatile uint8_t pce_sgx_arena_bg_pending_page PCE_WORK;
 volatile uint16_t pce_sgx_sprite_id PCE_WORK;
 volatile uint8_t pce_sgx_sprite_slot PCE_WORK, pce_sgx_sprite_upload_ok PCE_WORK;
@@ -47,6 +48,7 @@ extern volatile uint8_t sat_copy_vdc, hud_copy_opcode;
 extern volatile uint16_t sat_copy_word, sat_copy_src, sat_copy_len;
 extern uint16_t sprite_words[48];
 extern uint8_t sprite_count[48];
+extern uint8_t sprite_occupancy[240], sat_count;
 void sat_copy(void);
 void space_near_sgx_load_wrapper(void);
 
@@ -103,13 +105,19 @@ SGX_MODE_CODE void pce_sgx_display_on_body(void) {
             if (pce_sgx_arena_sprites()) {
                 if (pce_sgx_metrics.paired_screen & PCE_SGX_ARENA_BG_READY)
                     control |= VDC_CONTROL_ENABLE_BG;
-                if (!pce_sgx_arena_hidden)
+                if (!pce_sgx_vdc1_hidden)
                     control |= VDC_CONTROL_ENABLE_SPRITE;
             }
-            else if ((pce_sgx_metrics.flags & PCE_SGX_PAIR_ACTIVE) || pce_sgx_gameplay())
+            else if ((pce_sgx_metrics.flags & PCE_SGX_PAIR_ACTIVE) || pce_sgx_gameplay()) {
                 control = VDC_CONTROL_ENABLE_BG;
+                if (pce_sgx_vdc1_sprites() && !pce_sgx_vdc1_hidden)
+                    control |= VDC_CONTROL_ENABLE_SPRITE;
+            }
         } else if (pce_sgx_arena_sprites()) {
-            pce_sgx_arena_hidden = 1;
+            pce_sgx_vdc1_hidden = 1;
+            pce_sgx_sat1_pending = 0;
+        } else if (pce_sgx_vdc1_sprites()) {
+            pce_sgx_vdc1_hidden = 1;
             pce_sgx_sat1_pending = 0;
         }
         vdc2_write_mode(VDC_REG_CONTROL, control);
@@ -176,7 +184,7 @@ SGX_GAME_CODE void pce_sgx_gameplay_begin_body(void) {
     pce_sgx_sky_scroll_x = 0;
     if (!pce_sgx_active || pce_metrics.stage == 2) {
         pce_sgx_metrics.paired_screen = 0;
-        pce_sgx_arena_hidden = 1;
+        pce_sgx_vdc1_hidden = 1;
         pce_sgx_sat1_pending = 0;
         pce_sgx_arena_bg_pending_page = 0xff;
         if (pce_sgx_active) vdc1_write(VDC_REG_CONTROL, 0);
@@ -184,9 +192,11 @@ SGX_GAME_CODE void pce_sgx_gameplay_begin_body(void) {
         return;
     }
 
-    pce_sgx_metrics.paired_screen =
-        (pce_metrics.stage == 6 ? PCE_SGX_GAMEPLAY | PCE_SGX_ARENA_SPRITES :
-                                  PCE_SGX_GAMEPLAY) | pce_metrics.stage;
+    pce_sgx_metrics.paired_screen = PCE_SGX_GAMEPLAY | pce_metrics.stage;
+    if (pce_metrics.stage == 6)
+        pce_sgx_metrics.paired_screen |= PCE_SGX_ARENA_SPRITES;
+    else if (pce_metrics.stage == 7)
+        pce_sgx_metrics.paired_screen |= PCE_SGX_SPACE_SPRITES;
     vdc1_write(VDC_REG_CONTROL, 0);
     vdc1_write(VDC_REG_MEMORY, 0x0010);
     vdc1_write(VDC_REG_TIMING_HSYNC, 0x0202);
@@ -198,15 +208,19 @@ SGX_GAME_CODE void pce_sgx_gameplay_begin_body(void) {
     vdc1_write(VDC_REG_BG_SCROLL_X, 0);
     vdc1_write(VDC_REG_BG_SCROLL_Y, 0);
 
+    if (pce_metrics.stage == 6 || pce_metrics.stage == 7) {
+        pce_sgx_vdc1_hidden = 1;
+        pce_sgx_sat1_alt = 0;
+        pce_sgx_sat1_pending = 0;
+        pce_sgx_arena_bg_pending_page = 0xff;
+        vdc1_write(VDC_REG_SATB_START, PCE_SAT_WORD);
+    }
+
     if (pce_metrics.stage == 6) {
         /* VDC1 owns the arena panorama/floor. VDC0's zero tile and BAT let
            transparent BG0 pixels fall through while its hardware sprites run. */
         overlay_call(0x71,video_arena_bg_clear_body);
-        pce_sgx_arena_hidden = 1;
         pce_sgx_arena_bg_pending_page = 0xff;
-        pce_sgx_sat1_alt = 0;
-        pce_sgx_sat1_pending = 0;
-        vdc1_write(VDC_REG_SATB_START, PCE_SAT_WORD);
         __attribute__((leaf)) asm volatile("plp" ::: "p", "memory");
         return;
     }
@@ -256,7 +270,7 @@ SGX_GAME_CODE void pce_sgx_gameplay_end_body(void) {
     __attribute__((leaf)) asm volatile("php\nsei" ::: "p", "memory");
     pce_sgx_metrics.paired_screen = 0;
     pce_sgx_metrics.flags &= (uint8_t)~PCE_SGX_PAIR_ACTIVE;
-    pce_sgx_arena_hidden = 1;
+    pce_sgx_vdc1_hidden = 1;
     pce_sgx_sat1_pending = 0;
     if (pce_sgx_active) vdc1_write(VDC_REG_CONTROL, 0);
     __attribute__((leaf)) asm volatile("plp" ::: "p", "memory");
@@ -270,7 +284,7 @@ SGX_GAME_CODE void pce_sgx_sky_scroll_body(void) {
     else pce_sgx_sky_scroll_x=0;
 }
 
-SGX_GAME_CODE void pce_sgx_arena_sat_upload_body(void) {
+SGX_GAME_CODE void pce_sgx_vdc1_sat_upload_body(void) {
     while (pce_sat_pending) {}
     uint16_t word = pce_sgx_sat1_alt ? PCE_SAT_WORD : PCE_SAT_ALT_WORD;
     sat_copy_word = word;
@@ -281,6 +295,15 @@ SGX_GAME_CODE void pce_sgx_arena_sat_upload_body(void) {
     overlay_call(0x72, sat_copy);
     pce_sgx_sat1_alt ^= 1;
     pce_sgx_sat1_pending = 1;
+}
+
+SGX_STATS_CODE void pce_sgx_vdc1_stats_body(void) {
+    uint8_t peak=0;
+    for(uint8_t line=0;line<224;++line)
+        if(sprite_occupancy[line]>peak)peak=sprite_occupancy[line];
+    if(peak>pce_sgx_metrics.vdc1_max_units)
+        pce_sgx_metrics.vdc1_max_units=peak;
+    pce_sgx_metrics.vdc1_sat_count=sat_count;
 }
 
 SGX_GAME_CODE void pce_sgx_sprite_upload_body(void) {
@@ -299,13 +322,15 @@ SGX_GAME_CODE void pce_sgx_sprite_upload_body(void) {
     if(!pce_sgx_sprite_upload_ok)++pce_sgx_metrics.failures;
 }
 
-SGX_GAME_CODE void pce_sgx_arena_hide_body(void) {
-    pce_sgx_arena_hidden = 1;
+SGX_GAME_CODE void pce_sgx_vdc1_hide_body(void) {
+    if(!pce_sgx_vdc1_sprites())return;
+    pce_sgx_vdc1_hidden = 1;
     pce_sgx_sat1_pending = 0;
+    bool show_bg = pce_sgx_arena_sprites() ?
+        (pce_sgx_metrics.paired_screen & PCE_SGX_ARENA_BG_READY) != 0 :
+        pce_sgx_vdc1_sprites();
     vdc1_write(VDC_REG_CONTROL,
-        pce_display_on &&
-        (pce_sgx_metrics.paired_screen & PCE_SGX_ARENA_BG_READY) ?
-        VDC_CONTROL_ENABLE_BG : 0);
+        pce_display_on && show_bg ? VDC_CONTROL_ENABLE_BG : 0);
 }
 
 /* The renderer prepares a transformed BAT column in buffer[1920..2010]. */

@@ -197,10 +197,11 @@ void m6_draw(void) {
             memcpy(sprite_occupancy,buffer+256,224);
             sat_page=1;sat_count=sat1_count;
         }
+        overlay_call(0x71,pce_sgx_vdc1_stats_body);
         for(uint8_t k=sat_count;k<64;++k)sat[1][k].y=0;
         sat_page=0;sat_count=sat0_count;
         memcpy(sprite_occupancy,buffer,224);
-        overlay_call(0x78,pce_sgx_arena_sat_upload_body);
+        overlay_call(0x78,pce_sgx_vdc1_sat_upload_body);
     } else
 #endif
     {

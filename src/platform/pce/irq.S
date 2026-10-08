@@ -15,7 +15,7 @@
 .extern pce_sgx_metrics
 .extern pce_metrics
 .extern pce_sgx_sky_scroll_x
-.extern pce_sgx_sat1_alt,pce_sgx_sat1_pending,pce_sgx_arena_hidden
+.extern pce_sgx_sat1_alt,pce_sgx_sat1_pending,pce_sgx_vdc1_hidden
 .extern pce_display_on
 .extern space_hull_ready
 #endif
@@ -359,9 +359,9 @@ pce_vblank:
     lda pce_sgx_sat1_pending
     beq .Lsgx_sat1_done
     stz pce_sgx_sat1_pending
-    lda pce_sgx_arena_hidden
+    lda pce_sgx_vdc1_hidden
     beq .Lsgx_sat1_done
-    stz pce_sgx_arena_hidden
+    stz pce_sgx_vdc1_hidden
     lda pce_display_on
     beq .Lsgx_sat1_done
     VDC1_INDEX 5

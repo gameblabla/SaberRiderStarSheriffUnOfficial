@@ -161,8 +161,8 @@ PCE_FLOW void flow_main(void) {
         if((pressed&KEY_RUN)&&(paused||pce_campaign.state==CAM_PLAY)) {
             paused^=1;
 #ifdef PCE_SGX
-            if(paused&&pce_sgx_arena_sprites())
-                overlay_call(0x78,pce_sgx_arena_hide_body);
+            if(paused)
+                overlay_call(0x78,pce_sgx_vdc1_hide_body);
 #endif
             if(paused)pause_show();else pause_hide();
             simulation_tick=pce_ticks;

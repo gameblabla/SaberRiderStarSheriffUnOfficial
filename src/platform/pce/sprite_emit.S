@@ -62,12 +62,12 @@ sprite_fast:
     bne .Lbail
     ldx $20cc
 #ifdef PCE_SGX
-    /* VDC1 has its own copy of the stage-6 sprite cache. A cache hit for
-       VDC0 is still a miss until this slot has been uploaded there. */
+    /* VDC1 has its own copy of this gameplay sprite cache. A VDC0 hit is
+       still a miss until this slot has been uploaded there. */
     lda sat_page
     beq .Lvdc1_cache_ready
     lda pce_sgx_metrics+5
-    and #0x20
+    and #0x30
     beq .Lvdc1_cache_ready
     lda sprite_pb_hi,x
     bpl .Lbail

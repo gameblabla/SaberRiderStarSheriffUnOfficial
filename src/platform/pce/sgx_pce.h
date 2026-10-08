@@ -7,6 +7,8 @@ typedef struct {
        and paired, while bits 3-7 shadow the current VDC1 register index. */
     uint8_t magic[4], flags, paired_screen, colors, uploads, failures;
     uint16_t bytes_uploaded;
+    /* Appended so existing SGX1 offsets remain stable. */
+    uint8_t vdc1_max_units, vdc1_sat_count;
 } PceSgxTelemetry;
 
 #define PCE_SGX_ACTIVE       0x01
@@ -16,6 +18,7 @@ typedef struct {
 #define PCE_SGX_GAMEPLAY     0x80
 #define PCE_SGX_STATIC_SKY   0x40
 #define PCE_SGX_ARENA_SPRITES 0x20
+#define PCE_SGX_SPACE_SPRITES 0x10
 #define PCE_SGX_ARENA_BG_PAGE 0x08
 #define PCE_SGX_ARENA_BG_READY 0x10
 
@@ -29,13 +32,18 @@ extern volatile PceSgxTelemetry pce_sgx_metrics;
 static inline bool pce_sgx_gameplay(void) {
     return pce_sgx_active && (pce_sgx_metrics.paired_screen & PCE_SGX_GAMEPLAY) != 0;
 }
-static inline bool pce_sgx_arena_sprites(void) {
+static inline __attribute__((always_inline)) bool pce_sgx_vdc1_sprites(void) {
+    return pce_sgx_active &&
+        (pce_sgx_metrics.paired_screen &
+         (PCE_SGX_ARENA_SPRITES | PCE_SGX_SPACE_SPRITES)) != 0;
+}
+static inline __attribute__((always_inline)) bool pce_sgx_arena_sprites(void) {
     return pce_sgx_active &&
         (pce_sgx_metrics.paired_screen & PCE_SGX_ARENA_SPRITES) != 0;
 }
 
 extern volatile uint8_t pce_sgx_sat1_alt, pce_sgx_sat1_pending;
-extern volatile uint8_t pce_sgx_arena_hidden;
+extern volatile uint8_t pce_sgx_vdc1_hidden;
 extern volatile uint8_t pce_sgx_arena_bg_pending_page;
 extern volatile uint16_t pce_sgx_sprite_id;
 extern volatile uint8_t pce_sgx_sprite_slot, pce_sgx_sprite_upload_ok;
@@ -50,10 +58,12 @@ void pce_sgx_sky_load_body(void);
 void pce_sgx_column_write_body(void);
 void pce_sgx_sky_scroll_body(void);
 void pce_sgx_ui_mode_body(void);
-void pce_sgx_arena_sat_upload_body(void);
+void pce_sgx_vdc1_sat_upload_body(void);
+void pce_sgx_vdc1_stats_body(void);
 void pce_sgx_sprite_upload_body(void);
-void pce_sgx_arena_hide_body(void);
+void pce_sgx_vdc1_hide_body(void);
 #else
 static inline bool pce_sgx_gameplay(void) { return false; }
+static inline bool pce_sgx_vdc1_sprites(void) { return false; }
 static inline bool pce_sgx_arena_sprites(void) { return false; }
 #endif

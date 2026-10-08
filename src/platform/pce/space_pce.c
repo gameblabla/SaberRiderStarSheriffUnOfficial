@@ -71,6 +71,7 @@ __attribute__((noinline,section(".ram_bank113.text"))) static void space_externa
 __attribute__((noinline)) static int16_t dist(int16_t a,int16_t b) {int16_t n=a-b;return n<0?-n:n;}
 #ifdef PCE_SGX
 #define SPACE_EVENT_CODE __attribute__((noinline,minsize,section(".ram_bank135.text")))
+#define SPACE_VDC1_CODE __attribute__((noinline,minsize,section(".ram_bank135.text")))
 #else
 #define SPACE_EVENT_CODE SPACE_CODE
 #endif
@@ -379,6 +380,54 @@ __attribute__((noinline,section(".ram_bank113.text"))) static void boss_step_wra
 PCE_SCENERY void space_dialog_ship(void) {   /* the dialogues (story_pce.c draw) keep Ramrod's ship on view where it flies */
     if(!pce_death)video_sprite(3,ship_x,ship_y,false,16);
 }
+#ifdef PCE_SGX
+extern uint8_t sat_page,sat_count,sprite_occupancy[240],sprite_optional;
+extern vdc_sprite_t sat[2][64];
+static uint8_t space_sat0_count PCE_WORK;
+
+SPACE_VDC1_CODE static bool space_vdc1_sprite(uint16_t id,int16_t x,int16_t y) {
+    sprite_optional=1;
+    bool admitted=video_sprite(id,x,y,false,16);
+    sprite_optional=0;
+    if(!admitted&&sat_page==1) {
+        uint8_t sat1_count=sat_count;
+        memcpy(buffer+512,sprite_occupancy,224);
+        memcpy(sprite_occupancy,buffer+256,224);
+        sat_page=0;sat_count=space_sat0_count;
+        sprite_optional=1;
+        admitted=video_sprite(id,x,y,false,16);
+        sprite_optional=0;
+        space_sat0_count=sat_count;
+        memcpy(buffer+256,sprite_occupancy,224);
+        sat_page=1;sat_count=sat1_count;
+        memcpy(sprite_occupancy,buffer+512,224);
+    }
+    if(!admitted)++pce_metrics.dropped_cosmetic;
+    return admitted;
+}
+
+SPACE_VDC1_CODE static void space_vdc1_actor_sprites(void) {
+    for(uint8_t k=0;k<12;++k)if(bolts[k].on)
+        if(!space_vdc1_sprite(bolts[k].enemy?1:0,bolts[k].x,bolts[k].y))bolts[k].on=0;
+    for(uint8_t k=0;k<8;++k)if(foes[k].kind) {
+        Foe *f=&foes[k];
+        if(!space_vdc1_sprite(f->kind<=3?8:f->kind==5?5:4,f->x,f->y)) {
+            f->kind=0;continue;
+        }
+        if(f->charge>20&&(flight_clock&4))
+            (void)space_vdc1_sprite(1,f->x-20,f->y);
+    }
+    if(pickup)(void)space_vdc1_sprite(8+pickup,pickup_x,pickup_y);
+    for(uint8_t k=0;k<10;++k)if(expl[k].t)
+        (void)space_vdc1_sprite(12+(expl[k].small?5:0)+(expl[k].t-1)/6,expl[k].x,expl[k].y);
+    if(sb.laser==1) {
+        int16_t reach=(78-sb.gather)>>2,x=space_hull_cannon_x()+space_hull_x,
+                y=space_boss_y+space_hull_cannon_y();
+        (void)space_vdc1_sprite(1,x+reach,y);(void)space_vdc1_sprite(1,x-reach,y);
+        (void)space_vdc1_sprite(1,x,y+reach);(void)space_vdc1_sprite(1,x,y-reach);
+    }
+}
+#endif
 PCE_SCENERY void space_frame(void) {
     if(sb.ph==3&&!pce_campaign.event&&pce_campaign.state==CAM_PLAY){space_hull_bat();sb.ph=4;sb.t=270;}   /* the greeting has closed: the cells it covered come back, the fight begins */
     for(uint8_t i=0;i<pce_control.elapsed&&!pce_campaign.event&&!pce_campaign.result&&pce_campaign.state==CAM_PLAY;++i) {
@@ -393,12 +442,38 @@ PCE_SCENERY void space_frame(void) {
     hud7=(Hud7){pce_metrics.hp,pce_campaign.lives,power,bombs,pce_campaign.powers,pce_campaign.boss_kind!=0,(uint8_t)flight_clock,pce_campaign.boss_hp};
     overlay_call(0x7c,hud7_draw);
     if(!pce_death&&(!hurt||(flight_clock&4)))video_sprite(3,ship_x,ship_y,false,16);
-    for(uint8_t k=0;k<12;++k)if(bolts[k].on)
-        if(!video_sprite_optional(bolts[k].enemy?1:0,bolts[k].x,bolts[k].y,false,16))bolts[k].on=0;
-    for(uint8_t k=0;k<8;++k)if(foes[k].kind) {
-        Foe *f=&foes[k];
-        if(!video_sprite_optional(f->kind<=3?8:f->kind==5?5:4,f->x,f->y,false,16)){f->kind=0;continue;}   /* the art faces left, the way they fly */
-        if(f->charge>20&&(flight_clock&4))video_sprite_optional(1,f->x-20,f->y,false,16);
+#ifdef PCE_SGX
+    if(pce_sgx_vdc1_sprites()) {
+        memcpy(buffer+256,sprite_occupancy,224);
+        space_sat0_count=sat_count;
+        sat_page=1;sat_count=0;
+        memset(sprite_occupancy,0,224);
+        overlay_call(0x87,space_vdc1_actor_sprites);
+        for(uint8_t k=sat_count;k<64;++k)sat[1][k].y=0;
+        overlay_call(0x71,pce_sgx_vdc1_stats_body);
+        overlay_call(0x78,pce_sgx_vdc1_sat_upload_body);
+        sat_page=0;sat_count=space_sat0_count;
+        memcpy(sprite_occupancy,buffer+256,224);
+    } else
+#endif
+    {
+        for(uint8_t k=0;k<12;++k)if(bolts[k].on)
+            if(!video_sprite_optional(bolts[k].enemy?1:0,bolts[k].x,bolts[k].y,false,16))bolts[k].on=0;
+        for(uint8_t k=0;k<8;++k)if(foes[k].kind) {
+            Foe *f=&foes[k];
+            if(!video_sprite_optional(f->kind<=3?8:f->kind==5?5:4,f->x,f->y,false,16)){f->kind=0;continue;}
+            if(f->charge>20&&(flight_clock&4))video_sprite_optional(1,f->x-20,f->y,false,16);
+        }
+        if(pickup)video_sprite_optional(8+pickup,pickup_x,pickup_y,false,16);
+        for(uint8_t k=0;k<10;++k)if(expl[k].t)
+            video_sprite_optional(12+(expl[k].small?5:0)+(expl[k].t-1)/6,expl[k].x,expl[k].y,false,16);
+        /* the nose cannon sparks; the beam itself is cells of the playfield */
+        if(sb.laser==1) {
+            int16_t reach=(78-sb.gather)>>2,x=space_hull_cannon_x()+space_hull_x,
+                    y=space_boss_y+space_hull_cannon_y();
+            video_sprite_optional(1,x+reach,y,false,16);video_sprite_optional(1,x-reach,y,false,16);
+            video_sprite_optional(1,x,y+reach,false,16);video_sprite_optional(1,x,y-reach,false,16);
+        }
     }
     for(uint8_t k=0;k<2;++k) {   /* a struck mine or gunship is a white blank: its own palette (the cache's slot of its picture) is overwritten with white while it blinks, and loaded again after */
         bool on=foe_flash[k]!=0;
@@ -410,19 +485,10 @@ PCE_SCENERY void space_frame(void) {
         }
         if(on)foe_white|=1<<k;else foe_white&=~(1<<k);
     }
-    if(pickup)video_sprite_optional(8+pickup,pickup_x,pickup_y,false,16);
-    for(uint8_t k=0;k<10;++k)if(expl[k].t)video_sprite_optional(12+(expl[k].small?5:0)+(expl[k].t-1)/6,expl[k].x,expl[k].y,false,16);
-    /* the nose cannon: sparks drawn into its mouth while it gathers; the beam itself is cells of the playfield (space_beam), set when the state changes */
-    if(sb.laser==1) {
-        int16_t reach=(78-sb.gather)>>2,x=space_hull_cannon_x()+space_hull_x,
-                y=space_boss_y+space_hull_cannon_y();
-        video_sprite_optional(1,x+reach,y,false,16);video_sprite_optional(1,x-reach,y,false,16);
-        video_sprite_optional(1,x,y+reach,false,16);video_sprite_optional(1,x,y-reach,false,16);
-    }
     {
         uint8_t beam=sb.laser==2?(pce_campaign.boss_round>=2?2:1):0;
         if(boss_die||boss_gone)beam=0;
-        if(beam!=sb.beam&&space_hull_ready){space_beam(beam);sb.beam=beam;}
+        if(beam!=sb.beam&&space_hull_ready){space_beam_call(beam);sb.beam=beam;}
     }
     video_sat_end();
     space_screen_flash(space_flash);

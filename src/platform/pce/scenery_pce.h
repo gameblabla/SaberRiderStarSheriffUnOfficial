@@ -4,7 +4,7 @@
 #define PCE_SCENERY __attribute__((noinline,minsize,section(".ram_bank120.text")))
 extern uint8_t space_flashing,space_hull_ready,space_hull_top[28],space_hull_bottom[28];
 void space_hull_load(void),space_hull_bat(void);
-void space_beam(uint8_t width);
+void space_beam_call(uint8_t width);
 extern int16_t space_hull_x;   /* the hull's offset to the right of its place (the cruiser flying in) */
 void space_hull_draw(int16_t y,uint8_t flash,bool gone);
 void space_screen_flash(uint8_t frames);

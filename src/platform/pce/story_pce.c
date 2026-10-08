@@ -210,7 +210,7 @@ STORY_CODE void story_start(void) {
     arcade_read(2,story_address,&page_count,1);
     pce_campaign.page=0;pce_campaign.state=CAM_STORY;pce_campaign.timer=0;
 #ifdef PCE_SGX
-    if(pce_sgx_arena_sprites())overlay_call(0x78,pce_sgx_arena_hide_body);
+    overlay_call(0x78,pce_sgx_vdc1_hide_body);
 #endif
     /* The race and the cockpits keep their HUD in sprites: let the last two displayed generations go (their cache slots
      * stay pinned through the SAT DMA) so the box and the avatar find slots in the same frame. */

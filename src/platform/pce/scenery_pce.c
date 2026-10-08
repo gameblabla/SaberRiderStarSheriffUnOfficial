@@ -6,6 +6,12 @@
 #include "sgx_pce.h"
 #include "overlay_pce.h"
 
+#ifdef PCE_SGX
+#define SPACE_BEAM_CODE __attribute__((noinline,minsize,section(".ram_bank113.text")))
+#else
+#define SPACE_BEAM_CODE PCE_SCENERY
+#endif
+
 extern uint8_t buffer[2048];
 uint8_t space_hull_ready,space_hull_top[28],space_hull_bottom[28];
 int16_t space_hull_draw_y PCE_WORK;
@@ -28,7 +34,7 @@ PCE_SCENERY void space_hull_bat(void) {
 #ifdef PCE_SGX
     if(pce_sgx_gameplay()&&space_hull_sgx_ok) {
         overlay_call(0x71,space_hull_sgx_bat_wrapper);
-        if(space_beam_width)space_beam(space_beam_width);
+        if(space_beam_width)space_beam_call(space_beam_width);
         return;
     }
     if(pce_sgx_gameplay()&&!space_hull_ready&&
@@ -52,12 +58,12 @@ PCE_SCENERY void space_hull_bat(void) {
             video_vdc(2,cell);
         }
     }
-    if(space_beam_width)space_beam(space_beam_width);
+    if(space_beam_width)space_beam_call(space_beam_width);
 }
 /* The nose cannon's beam, a stripe of cells left of the hull (BAT columns 54-63) at the nose's rows, drawn in the BG so that it moves with the
  * hull: 0 off, 1 the thin beam (rows 5-6), 2 the wide one (rows 4-7). The tiles are the last five of the hull's set (palette 4). */
-PCE_SCENERY void space_beam(uint8_t width) {
-    space_beam_width=width;
+SPACE_BEAM_CODE static void space_beam_body(void) {
+    uint8_t width=space_beam_width;
     uint16_t palette=pce_sgx_gameplay()?0xa000:0x4000;
     uint8_t first=pce_sgx_gameplay()?5:4;
     for(uint8_t part=0;part<4;++part) {
@@ -68,6 +74,15 @@ PCE_SCENERY void space_beam(uint8_t width) {
         video_vdc(0,(uint16_t)row*64+54);
         for(uint8_t x=0;x<10;++x)video_vdc(2,cell?cell|palette:PCE_BG_WORD>>4);
     }
+}
+
+PCE_SCENERY void space_beam_call(uint8_t width) {
+    space_beam_width=width;
+#ifdef PCE_SGX
+    overlay_call(0x71,space_beam_body);
+#else
+    space_beam_body();
+#endif
 }
 PCE_SCENERY void space_hull_load(void) {
     bool sgx=pce_sgx_gameplay();

@@ -358,7 +358,7 @@ PCE_RENDER void video_sat_begin(void) {overlay_call(0x6e,sat_begin_body);}
 PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8_t scale) {
     bool fast=scale==16;
 #ifdef PCE_SGX
-    bool sgx_vdc1=sat_page==1&&pce_sgx_arena_sprites();
+    bool sgx_vdc1=sat_page==1&&pce_sgx_vdc1_sprites();
 #endif
     if(fast) {
         sprite_emit_id=id;sprite_emit_x=x;sprite_emit_y=y;sprite_emit_flip=flip?8:0;
