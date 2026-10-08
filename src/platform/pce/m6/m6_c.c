@@ -28,7 +28,7 @@ static bool arm_draw(uint8_t fr,int16_t x,int16_t y,bool flip) {
     uint8_t buf=arm_key[arm_shown]==fr?arm_shown:arm_shown^1;
     if(arm_key[buf]!=fr) {
         pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-        arcade_vram(patterns,ARM_WORD[buf],(uint16_t)e[9]*128);
+        m6_vram(patterns,ARM_WORD[buf],(uint16_t)e[9]*128);
         arm_key[buf]=fr;
     }
     arm_shown=buf;
@@ -71,7 +71,7 @@ static bool big_draw(uint16_t key,int16_t sx,int16_t sy) {
     uint8_t buf=big_key[big_shown]==key?big_shown:big_shown^1;
     if(big_key[buf]!=key) {
         pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-        arcade_vram(patterns,BIG_WORD[buf],(uint16_t)n*512);
+        m6_vram(patterns,BIG_WORD[buf],(uint16_t)n*512);
         big_key[buf]=key;
     }
     big_shown=buf;
@@ -209,7 +209,7 @@ void m6_start(void) {
     for(uint16_t k=0;k<sizeof A;++k)p[k]=0;
     A.rng=0x5AB3;A.lock=255;A.punch_t=-1;A.floor_x=385;A.floor_y=0;m6_floor();pce_arena_raster=1;
     pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-    arcade_vram(PCE_M6_BOLTS,0x7c80,768);   /* the bolt's three frames: $7c80 middle, $7cc0 far, $7d00 very near (32x32) */
+    m6_vram(PCE_M6_BOLTS,0x7c80,768);   /* the bolt's three frames: $7c80 middle, $7cc0 far, $7d00 very near (32x32) */
     {   /* palette 31, the HUD's (the cache would load it with the first banner; the fixed HUD does not go through the cache) */
         uint32_t entry;uint8_t pal[32];
         arcade_read(2,video_scene_ptr->sprites+(uint32_t)pce_hud_base[5]*16+8,&entry,4);arcade_read(2,entry,pal,32);vce_copy(31,pal,1);

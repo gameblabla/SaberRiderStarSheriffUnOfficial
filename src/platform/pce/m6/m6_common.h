@@ -6,12 +6,26 @@
 #include "audio_pcm.h"
 #include "assets.h"
 #include "m6_state.h"
+#include "arcade_pce.h"
+#include "sgx_pce.h"
 #define A a6
 #define M6U __attribute__((unused))
 /* Helpers each image carries its own copy of (static: the ones an image does not use take no room). */
 /* (each in its own image's rodata section, like m6_rcp: left alone the link merges the copies of equal tables into one, in whichever image came first, and the others
  * would read their own bank at that address instead. M6_SECTION is defined by the includer before this header.) */
 #define M6T M6U __attribute__((section(M6_SECTION)))
+M6U __attribute__((minsize)) static void m6_vram(uint32_t address,uint16_t word,uint16_t size) {
+#ifdef PCE_SGX
+    /* This helper only exists in the stage 6 images, so SGX detection alone
+       is enough; the stage setup has already selected the arena SAT path. */
+    if(pce_sgx_active) {
+        A.vram_address=address;A.vram_word=word;A.vram_size=size;
+        overlay_call(M6D_BANK,m6_vram_body);
+        return;
+    }
+#endif
+    (void)arcade_vram(address,word,size);
+}
 static const M6T uint8_t HP[3]={16,34,90},SPEED[3]={5,6,5},VOLLEY[3]={1,3,4},SHOT_DMG[3]={8,6,8},PUNCH_DMG[3]={14,16,22};
 static const M6T uint8_t SCALE16[3]={16,17,21};
 static inline int16_t abs16(int16_t v) {return v<0?-v:v;}

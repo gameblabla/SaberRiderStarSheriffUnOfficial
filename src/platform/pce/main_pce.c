@@ -35,7 +35,7 @@ PCE_FLOW static bool change_stage(uint8_t n) {
      * only after hiding the old screen, before the card publishes any text. */
     audio_stop();video_display(false);pce_raster_enabled=0;
     if(!loader_font())return false;
-    pce_control.stage=n;overlay_call(0x71,frontend_card);
+    pce_control.stage=n;overlay_call(0x76,frontend_card);
     pce_metrics.ready=0;stage=n;
 #ifndef RETAIL
     phase=heading=0;race_x=4696;race_y=4096;
@@ -160,6 +160,10 @@ PCE_FLOW void flow_main(void) {
 #ifdef RETAIL
         if((pressed&KEY_RUN)&&(paused||pce_campaign.state==CAM_PLAY)) {
             paused^=1;
+#ifdef PCE_SGX
+            if(paused&&pce_sgx_arena_sprites())
+                overlay_call(0x78,pce_sgx_arena_hide_body);
+#endif
             if(paused)pause_show();else pause_hide();
             simulation_tick=pce_ticks;
             continue;
@@ -204,7 +208,7 @@ PCE_FLOW void flow_main(void) {
                 if(pce_campaign.state==CAM_OVER) {
                     ui_fade_out();   /* a life lost for good: to black, then the continue screen */
                     pce_control.ok=0;
-                    if(pce_continues)overlay_call(0x71,frontend_continue);
+                    if(pce_continues)overlay_call(0x70,frontend_continue);
                     if(pce_control.ok) {
                         /* A continue restarts the current stage (or race phase) with fresh lives. */
                         pce_campaign.state=CAM_PLAY;pce_campaign.result=2;pce_metrics.hp=campaign_hearts();

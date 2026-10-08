@@ -116,7 +116,7 @@ static void hud_slot(uint8_t slot,uint16_t offset,int16_t x,int16_t y) {
         arcade_read(2,video_scene_ptr->sprites+(uint32_t)id*16,e,16);
         arcade_read(2,e[4]|(uint32_t)e[5]<<8|(uint32_t)e[6]<<16|(uint32_t)e[7]<<24,pc,6);
         pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-        arcade_vram(e[0]|(uint32_t)e[1]<<8|(uint32_t)e[2]<<16|(uint32_t)e[3]<<24,HUD_WORD+slot*64,128);
+        m6_vram(e[0]|(uint32_t)e[1]<<8|(uint32_t)e[2]<<16|(uint32_t)e[3]<<24,HUD_WORD+slot*64,128);
         hud_dx[slot]=(int16_t)(pc[0]|(uint16_t)pc[1]<<8);hud_dy[slot]=(int16_t)(pc[2]|(uint16_t)pc[3]<<8);hud_key[slot]=id;
     }
     int16_t px=x+hud_dx[slot],py=y+hud_dy[slot];

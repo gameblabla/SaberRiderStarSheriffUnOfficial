@@ -14,6 +14,7 @@ typedef struct {
 #define PCE_SGX_PAIR_ACTIVE  0x04
 #define PCE_SGX_GAMEPLAY     0x80
 #define PCE_SGX_STATIC_SKY   0x40
+#define PCE_SGX_ARENA_SPRITES 0x20
 
 #ifdef PCE_SGX
 extern volatile PceSgxTelemetry pce_sgx_metrics;
@@ -25,6 +26,14 @@ extern volatile PceSgxTelemetry pce_sgx_metrics;
 static inline bool pce_sgx_gameplay(void) {
     return pce_sgx_active && (pce_sgx_metrics.paired_screen & PCE_SGX_GAMEPLAY) != 0;
 }
+static inline bool pce_sgx_arena_sprites(void) {
+    return pce_sgx_active &&
+        (pce_sgx_metrics.paired_screen & PCE_SGX_ARENA_SPRITES) != 0;
+}
+
+extern volatile uint16_t pce_sgx_sat1_word;
+extern volatile uint8_t pce_sgx_sat1_pending, pce_sgx_sat1_count;
+extern volatile uint8_t pce_sgx_arena_hidden;
 
 void pce_sgx_detect_init(void);
 void pce_sgx_display_on_body(void);
@@ -36,6 +45,9 @@ void pce_sgx_sky_load_body(void);
 void pce_sgx_column_write_body(void);
 void pce_sgx_sky_scroll_body(void);
 void pce_sgx_ui_mode_body(void);
+void pce_sgx_arena_sat_upload_body(void);
+void pce_sgx_arena_hide_body(void);
 #else
 static inline bool pce_sgx_gameplay(void) { return false; }
+static inline bool pce_sgx_arena_sprites(void) { return false; }
 #endif

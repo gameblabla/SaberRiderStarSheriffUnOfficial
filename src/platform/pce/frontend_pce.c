@@ -80,7 +80,9 @@ static uint8_t portrait_count,portrait_slot;
 static uint16_t portrait_pieces[PORTRAIT_MAX][4];
 UI_CODE static void portrait_patterns(uint8_t hero,uint8_t slot) {
     const PceUiPortrait *p=&pce_ui_portrait[hero];
-    ui_vram(p->patterns,slot?UI_SPRITE_WORD-PORTRAIT_MAX*64:UI_SPRITE_WORD+ui_screen->nsprpat*64,(uint32_t)p->count*128);
+    ui_vram_load(p->patterns,
+        slot?UI_SPRITE_WORD-PORTRAIT_MAX*64:UI_SPRITE_WORD+ui_screen->nsprpat*64,
+        (uint32_t)p->count*128);
 }
 UI_CODE static void portrait_pieces_use(uint8_t hero,uint8_t slot) {
     const PceUiPortrait *p=&pce_ui_portrait[hero];

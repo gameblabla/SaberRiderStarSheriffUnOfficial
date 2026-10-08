@@ -13,7 +13,13 @@ extern uint8_t ui_held,ui_pressed;
 void ui_read_keys(void);
 void ui_blip(void);
 void ui_sprite(int16_t x,int16_t y,uint16_t pattern,uint8_t palette,bool wide);
-void ui_vram(uint32_t address,uint16_t word,uint32_t bytes);
+void ui_vram(void);
+extern uint8_t buffer[2048];
+static inline void ui_vram_load(uint32_t address,uint16_t word,uint32_t bytes) {
+    uint32_t *args=(uint32_t *)buffer;
+    args[0]=address;((uint16_t *)buffer)[2]=word;args[2]=bytes;
+    overlay_call(0x6f,ui_vram);
+}
 void ui_show(uint8_t id);
 void ui_put(uint8_t col,uint8_t row,const char *text,uint8_t slot);
 void ui_end(void);
@@ -35,12 +41,4 @@ static inline void ui_clear_rows(uint8_t first,uint8_t last) {
     for(uint8_t r=first;r<=last;++r)ui_put(4,r,"                                ",12);
 }
 /* Rotate the tunnel colours: one step every few frames. */
-static inline void ui_cycle(void) {
-    if(++ui_cycle_clock<4)return;
-    ui_cycle_clock=0;if(++ui_cycle_step==12)ui_cycle_step=0;
-    for(uint8_t k=0;k<4;++k)for(uint8_t i=0;i<12;++i) {
-        uint8_t j=i+ui_cycle_step;if(j>=12)j-=12;
-        ui_ring[k][1+i]=ui_ramp[k][j];
-    }
-    pce_vce_copy_palette(0,ui_ring,4);
-}
+void ui_cycle(void);

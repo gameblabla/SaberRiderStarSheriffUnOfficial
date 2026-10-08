@@ -2,9 +2,12 @@
 #define M6_SECTION ".ram_bank131.rodata"
 #include "m6_common.h"
 #include <string.h>
+#include "sgx_pce.h"
 extern uint8_t buffer[2048];
 extern vdc_sprite_t sat[2][64];
 extern uint8_t sat_page,sat_count;
+extern uint8_t sprite_occupancy[240];
+void sprite_lines_clear(void);
 #include "m6.h"
 #define M6_HORIZON 128
 #define BIG_FLAG 0xf000
@@ -22,6 +25,12 @@ void sprite_lines_reserve(void),sprite_lines_release(void);
 typedef struct {int16_t sx,sy;uint16_t d,id;} Item;
 static Item items[36];static uint8_t nitems;
 static int16_t shake_x,shake_y;
+void m6_vram_body(void) {
+    uint32_t address=a6.vram_address;
+    uint16_t word=a6.vram_word,size=a6.vram_size;
+    (void)arcade_vram(address,word,size);
+    (void)arcade_vram_to(1,address,word,size);
+}
 /* a thing at distance d (units), bearing rel (1/16 dot from the aim), `height` px above the ground (sprite anchors are at the foot) */
 static void put_at(uint16_t d,uint16_t late,int16_t rel,int16_t height,uint16_t id) {
     if(nitems>=36||d>1600)return;
@@ -52,6 +61,18 @@ static void bolt_draw(uint8_t frame,int16_t x,int16_t y) {
     sprite_lines_reserve();if(!sprite_line_ok)return;
     if(big){sprite_lines_reserve();if(!sprite_line_ok){sprite_lines_release();return;}}
     sat[sat_page][sat_count++]=(vdc_sprite_t){y+64,x+32,(BOLT_WORD>>5)+(frame==1?0:frame==2?2:4),VDC_SPRITE_FG|15|(big?VDC_SPRITE_WIDTH_32|VDC_SPRITE_HEIGHT_32:0)};
+}
+#define SGX_ARENA_SPLIT 420
+static bool arena_far(const Item *item) {
+    return item->d>SGX_ARENA_SPLIT&&((item->id&0xf000)!=BOLT_FLAG);
+}
+static void draw_item(const Item *item) {
+    int16_t ix=item->sx-shake_x,iy=item->sy-shake_y;
+    if(item->id>=BIG_FLAG) {
+        if(!blit(0,item->id&~BIG_FLAG,ix,iy,false))
+            video_sprite_optional(PCE_M6_MECH+(((item->id&~BIG_FLAG)>>2)*PCE_M6_STEPS)+PCE_M6_STEPS-1,ix,iy,false,16);
+    } else if(item->id>=BOLT_FLAG) bolt_draw(item->id&3,ix,iy);
+    else video_sprite_optional(item->id,ix,iy,false,16);
 }
 void m6_draw(void) {
     /* the sky: 1344 dots to the turn, the planet ahead at the start */
@@ -124,13 +145,24 @@ void m6_draw(void) {
         blit(1,fr,a6.punch_side?256:0,y,a6.punch_side);
     }
     /* the world, nearest first */
-    for(uint8_t k=0;k<nitems;++k) {
-        int16_t ix=items[k].sx-shake_x,iy=items[k].sy-shake_y;
-        if(items[k].id>=BIG_FLAG){
-            if(!blit(0,items[k].id&~BIG_FLAG,ix,iy,false))   /* refused: the biggest of the ladder in its place */
-                video_sprite_optional(PCE_M6_MECH+(((items[k].id&~BIG_FLAG)>>2)*PCE_M6_STEPS)+PCE_M6_STEPS-1,ix,iy,false,16);
-        } else if(items[k].id>=BOLT_FLAG)bolt_draw(items[k].id&3,ix,iy);
-        else video_sprite_optional(items[k].id,ix,iy,false,16);
+#ifdef PCE_SGX
+    if(pce_sgx_arena_sprites()) {
+        /* Mode 1 puts VDC0 sprites over VDC1 sprites. Keep the nearer half
+           with the HUD and Ramrod's arm; distant objects use a second SAT
+           and its independent per-scanline admission budget. */
+        for(uint8_t k=0;k<nitems;++k)if(!arena_far(&items[k]))draw_item(&items[k]);
+        uint8_t sat0_count=sat_count;
+        memcpy(buffer,sprite_occupancy,224);
+        sat_page=1;sat_count=0;sprite_lines_clear();
+        for(uint8_t k=0;k<nitems;++k)if(arena_far(&items[k]))draw_item(&items[k]);
+        pce_sgx_sat1_count=sat_count;
+        sat_page=0;sat_count=sat0_count;
+        memcpy(sprite_occupancy,buffer,224);
+        overlay_call(0x78,pce_sgx_arena_sat_upload_body);
+    } else
+#endif
+    {
+        for(uint8_t k=0;k<nitems;++k)draw_item(&items[k]);
     }
     uint8_t m0=sat_count;
     overlay_call(M6A_BANK,m6_msgs);

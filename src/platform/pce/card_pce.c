@@ -4,8 +4,8 @@
 #include "loader_pce.h"
 #include "campaign_pce.h"
 #include "audio_pcm.h"
-#define CARD_CODE __attribute__((noinline,section(".ram_bank113.text")))
-#define CARD_DATA __attribute__((section(".ram_bank113.rodata")))
+#define CARD_CODE __attribute__((noinline,section(".ram_bank118.text")))
+#define CARD_DATA __attribute__((section(".ram_bank118.rodata")))
 extern volatile uint16_t pce_scroll_x;
 
 /* The stage's title card (game.c title_draw), shown from the moment a stage is asked for through its disc read: black, an

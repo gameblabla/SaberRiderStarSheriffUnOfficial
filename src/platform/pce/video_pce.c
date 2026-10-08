@@ -334,7 +334,7 @@ PCE_FLOW static void sat_begin_body(void) {
 }
 PCE_RENDER void video_sat_begin(void) {overlay_call(0x6e,sat_begin_body);}
 PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8_t scale) {
-    bool fast=scale==16;
+    bool fast=scale==16&&sat_page==0;
     if(fast) {
         sprite_emit_id=id;sprite_emit_x=x;sprite_emit_y=y;sprite_emit_flip=flip?8:0;
         overlay_call(0x74,sprite_fast);
@@ -385,10 +385,16 @@ PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8
 void video_front_mark(void) {front_keep=sat_count;}
 void video_front_begin(void) {front_start=sat_count;}
 extern volatile uint16_t sat_copy_word,sat_copy_src,sat_copy_len;
+extern volatile uint8_t sat_copy_vdc;
 extern void sat_copy(void);
+#ifdef PCE_SGX
+extern volatile uint8_t pce_sgx_sat1_pending;
+void pce_sgx_sat1_commit(void);
+#endif
 __attribute__((noinline)) static void sat_transfer(uint16_t word,const void *src,uint16_t bytes) {
     sat_copy_word=word;sat_copy_src=(uint16_t)src;sat_copy_len=bytes;
-    overlay_call(0x6e,sat_copy);
+    sat_copy_vdc=0;
+    overlay_call(0x72,sat_copy);
 }
 /* Wait before recycling the previous source. The other page can be written
  * while the VDC finishes DMA from the submitted page during this VBlank. */
@@ -412,6 +418,9 @@ PCE_RENDER static void sat_publish(uint16_t word,bool drawing) {
     *(volatile uint8_t*)0x20f7=VDC_REG_SATB_START;
     *IO_VDC_INDEX=VDC_REG_SATB_START;
     *IO_VDC_DATA_LO=word;*IO_VDC_DATA_HI=word>>8;
+#ifdef PCE_SGX
+    if(pce_sgx_sat1_pending)pce_sgx_sat1_commit();
+#endif
     pce_sat_pending=1;
     ++pce_draws;
     pce_cpu_irq_enable();

@@ -24,7 +24,8 @@ extern void hud_copy(void);
 extern volatile uint8_t hud_copy_opcode;
 PCE_FLOW static void hud_transfer(void *dst,const void *src,uint16_t n) {
     hud_copy_opcode=0x73;
-    hud_copy_src=(uint16_t)src;hud_copy_dst=(uint16_t)dst;hud_copy_len=n;hud_copy();
+    hud_copy_src=(uint16_t)src;hud_copy_dst=(uint16_t)dst;hud_copy_len=n;
+    overlay_call(0x72,hud_copy);
 }
 PCE_FLOW void presentation_frame(void) {
     const uint16_t *base=pce_present_base[pce_metrics.stage-1];

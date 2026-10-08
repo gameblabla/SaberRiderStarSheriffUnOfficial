@@ -6,16 +6,18 @@ extern uint8_t buffer[2048];
 #include "arcade_pce.h"
 #include "campaign_pce.h"
 #include "audio_pcm.h"
+#include "overlay_pce.h"
 
 /* Continue, game over and credits share the options panel. */
 #define CREDITS_CODE __attribute__((noinline,section(".ram_bank113.text")))
+#define CONTINUE_CODE __attribute__((noinline,minsize,section(".ram_bank112.text")))
 extern uint8_t previous;
 extern volatile uint16_t pce_scroll_x;
 
-CREDITS_CODE static void panel(void) {
+CONTINUE_CODE static void panel(void) {
     ui_show(SCREEN_PANEL);pce_ui_state=4;ui_clear_rows(7,24);
 }
-CREDITS_CODE void frontend_continue(void) {
+CONTINUE_CODE void frontend_continue(void) {
     previous=0;audio_stop();
     if(!loader_ui()){pce_control.ok=0;return;}
     ui_dark=1;panel();ui_dark=0;
@@ -63,7 +65,7 @@ CREDITS_CODE void frontend_game_over(void) {
 CREDITS_CODE void frontend_credits(void) {
     previous=0;audio_stop();
     if(!loader_ui())return;
-    panel();audio_music(9);
+    overlay_call(0x70,panel);audio_music(9);
     uint16_t offsets[PCE_UI_CREDIT_PAGES];
     arcade_read(2,PCE_UI_CREDITS+2,offsets,PCE_UI_CREDIT_PAGES*2);
     for(uint8_t page=0;page<PCE_UI_CREDIT_PAGES;++page) {

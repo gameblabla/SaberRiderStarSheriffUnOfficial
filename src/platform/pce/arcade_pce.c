@@ -44,7 +44,7 @@ bool arcade_fill(uint32_t address,uint8_t value,uint16_t size) {
     while(size--) *(volatile uint8_t*)0x1a30=value;
     return true;
 }
-bool arcade_vram_to(uint8_t vdc, uint32_t address, uint16_t word, uint16_t size) {
+__attribute__((noinline)) bool arcade_vram_to(uint8_t vdc, uint32_t address, uint16_t word, uint16_t size) {
     if (vdc > 1 || (size & 1) || !range(address, size) ||
         word > 0x8000U - (size >> 1) || !arcade_seek(0, address)) return false;
 #ifdef PCE_SGX

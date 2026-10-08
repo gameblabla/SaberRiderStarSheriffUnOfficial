@@ -5,6 +5,8 @@
 #include "audio_pcm.h"
 #include "sgx_pce.h"
 #define UI_BASE __attribute__((noinline,section(".ram_bank106.text")))
+#define UI_VRAM_CODE __attribute__((noinline,minsize,section(".ram_bank111.text")))
+#define UI_CYCLE_CODE __attribute__((noinline,minsize,section(".ram_bank111.text")))
 #define UI_SPRITE_CODE (UI_SPRITE_WORD>>5)
 extern uint8_t buffer[2048];
 extern vdc_sprite_t sat[2][64];
@@ -18,6 +20,17 @@ uint16_t ui_ring[4][16];
 uint8_t ui_held,ui_pressed;
 uint8_t ui_cycle_step,ui_cycle_clock,ui_dark;
 
+UI_CYCLE_CODE static void ui_cycle_body(void) {
+    if(++ui_cycle_clock<4)return;
+    ui_cycle_clock=0;if(++ui_cycle_step==12)ui_cycle_step=0;
+    for(uint8_t k=0;k<4;++k)for(uint8_t i=0;i<12;++i) {
+        uint8_t j=i+ui_cycle_step;if(j>=12)j-=12;
+        ui_ring[k][1+i]=ui_ramp[k][j];
+    }
+    pce_vce_copy_palette(0,ui_ring,4);
+}
+void ui_cycle(void) { overlay_call(0x6f,ui_cycle_body); }
+
 UI_BASE void ui_read_keys(void) {
     ui_held=~pce_joypad_read();ui_pressed=ui_held&~previous;previous=ui_held;
 }
@@ -27,7 +40,10 @@ UI_BASE void ui_sprite(int16_t x,int16_t y,uint16_t pattern,uint8_t palette,bool
     sat[0][sat_count++]=(vdc_sprite_t){y+64,x+32,UI_SPRITE_CODE+pattern*2,
         VDC_SPRITE_FG|palette|(wide?VDC_SPRITE_WIDTH_32:0)};
 }
-UI_BASE void ui_vram(uint32_t address,uint16_t word,uint32_t bytes) {
+UI_VRAM_CODE void ui_vram(void) {
+    uint32_t *args=(uint32_t *)buffer;
+    uint32_t address=args[0],bytes=args[2];
+    uint16_t word=((uint16_t *)buffer)[2];
     pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
     while(bytes) {
         uint16_t n=bytes>32768?32768:bytes;
@@ -45,9 +61,9 @@ UI_BASE void ui_show(uint8_t id) {
 #else
     arcade_read(2,s->pal,buffer,512);pce_vce_copy_palette(0,buffer,16);
     arcade_read(2,s->sprpal,buffer,512);pce_vce_copy_palette(16,buffer,16);
-    ui_vram(s->tiles,UI_TILE_WORD,(uint32_t)s->ntiles*32);
-    for(uint8_t row=0;row<28;++row)ui_vram(s->map+(uint32_t)row*80,(uint16_t)row*64,80);
-    if(s->nsprpat)ui_vram(s->sprpat,UI_SPRITE_WORD,(uint32_t)s->nsprpat*128);
+    ui_vram_load(s->tiles,UI_TILE_WORD,(uint32_t)s->ntiles*32);
+    for(uint8_t row=0;row<28;++row)ui_vram_load(s->map+(uint32_t)row*80,(uint16_t)row*64,80);
+    if(s->nsprpat)ui_vram_load(s->sprpat,UI_SPRITE_WORD,(uint32_t)s->nsprpat*128);
 #endif
     if(id!=SCREEN_TITLE) {
         arcade_read(2,s->extra,ui_ramp,PCE_UI_RAMP_BYTES);

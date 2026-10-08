@@ -26,6 +26,7 @@ typedef struct {
     int16_t lock_x,lock_y,lock_hp;       /* the locked mech's armour bar (the picture's m6_d.c, drawn by m6_hud) */
     int16_t blit_x,blit_y;uint16_t blit_key;uint8_t blit_kind,blit_flip,blit_ok;   /* the picture's call to the world's image (m6_d.c blit) */
     uint8_t threat[3];                   /* set by the picture (m6_d.c) for the HUD (m6_a.c): a mech out of view (1 left, 2 right) and bit 4 when it is about to fire or swing */
+    uint32_t vram_address;uint16_t vram_word,vram_size; /* pattern upload handoff from the world/player image to the picture image */
 } Arena6;
 extern uint8_t trigger_cache[];
 #define a6 (*(Arena6*)trigger_cache)
@@ -35,6 +36,7 @@ extern uint8_t trigger_cache[];
  * with the application into virtual banks 128-131 at $6000 (link.ld; m6_image.py cuts them out). They share the state above and call each other with
  * overlay_call. */
 void m6_floor(void),m6_player(void),m6_step(void),m6_spawn(void),m6_start(void),m6_frame(void),m6_draw(void),m6_hud(void),m6_msgs(void),m6_blit(void);
+void m6_vram_body(void);
 #define M6A_BANK 0x76   /* the player: walking, turning, guns and fists */
 #define M6B_BANK 0x77   /* the Renegades: their steps and plasma, their spawning */
 #define M6C_BANK 0x79   /* the world: the clock, waves, shots, the lock, bursts */

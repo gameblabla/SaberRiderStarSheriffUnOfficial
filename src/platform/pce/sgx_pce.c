@@ -29,11 +29,22 @@ typedef struct __attribute__((packed)) {
 } SgxSkyRecord;
 
 volatile PceSgxTelemetry pce_sgx_metrics;
+/* The IRQ publishes VDC1's SAT at the same boundary as VDC0's. Keep this
+   small handoff in resident RAM rather than an overlay work bank. */
+volatile uint16_t pce_sgx_sat1_word;
+volatile uint8_t pce_sgx_sat1_pending;
+volatile uint8_t pce_sgx_sat1_count;
+volatile uint8_t pce_sgx_arena_hidden;
 extern uint8_t buffer[2048];
+extern vdc_sprite_t sat[2][64];
 extern uint16_t pce_panel_column;
 extern volatile uint8_t pce_display_on;
+extern volatile uint8_t pce_sat_pending;
 extern volatile uint16_t pce_sgx_sky_scroll_x;
 extern volatile uint16_t pce_scroll_x;
+extern volatile uint8_t sat_copy_vdc, hud_copy_opcode;
+extern volatile uint16_t sat_copy_word, sat_copy_src, sat_copy_len;
+void sat_copy(void);
 
 static SGX_CODE void vdc2_write(uint8_t reg, uint16_t value) {
     __attribute__((leaf)) asm volatile("php\nsei" ::: "p", "memory");
@@ -83,10 +94,17 @@ static SGX_MODE_CODE void vdc2_write_mode(uint8_t reg, uint16_t value) {
 
 SGX_MODE_CODE void pce_sgx_display_on_body(void) {
     if (pce_sgx_active) {
-        vdc2_write_mode(VDC_REG_CONTROL,
-            pce_display_on &&
-            ((pce_sgx_metrics.flags & PCE_SGX_PAIR_ACTIVE) || pce_sgx_gameplay()) ?
-                VDC_CONTROL_ENABLE_BG : 0);
+        uint16_t control = 0;
+        if (pce_display_on) {
+            if (pce_sgx_arena_sprites())
+                control = pce_sgx_arena_hidden ? 0 : VDC_CONTROL_ENABLE_SPRITE;
+            else if ((pce_sgx_metrics.flags & PCE_SGX_PAIR_ACTIVE) || pce_sgx_gameplay())
+                control = VDC_CONTROL_ENABLE_BG;
+        } else if (pce_sgx_arena_sprites()) {
+            pce_sgx_arena_hidden = 1;
+            pce_sgx_sat1_pending = 0;
+        }
+        vdc2_write_mode(VDC_REG_CONTROL, control);
     }
 }
 
@@ -96,9 +114,13 @@ static SGX_GAME_CODE void vdc1_set_index(uint8_t reg) {
 }
 
 static SGX_GAME_CODE void vdc1_write(uint8_t reg, uint16_t value) {
+    /* HBlank and VBlank both select VDC1 registers. Keep the index and its
+       two data bytes together so an IRQ cannot split a register write. */
+    __attribute__((leaf)) asm volatile("php\nsei" ::: "p", "memory");
     vdc1_set_index(reg);
     *IO_VDC2_DATA_LO = (uint8_t)value;
     *IO_VDC2_DATA_HI = (uint8_t)(value >> 8);
+    __attribute__((leaf)) asm volatile("plp" ::: "p", "memory");
 }
 
 static SGX_AUX_CODE void vdc1_set_index_aux(uint8_t reg) {
@@ -107,9 +129,13 @@ static SGX_AUX_CODE void vdc1_set_index_aux(uint8_t reg) {
 }
 
 static SGX_AUX_CODE void vdc1_write_aux(uint8_t reg, uint16_t value) {
+    /* The raster handlers also touch VDC1's scroll registers. Preserve the
+       caller's interrupt state around the index/data register transaction. */
+    __attribute__((leaf)) asm volatile("php\nsei" ::: "p", "memory");
     vdc1_set_index_aux(reg);
     *IO_VDC2_DATA_LO = (uint8_t)value;
     *IO_VDC2_DATA_HI = (uint8_t)(value >> 8);
+    __attribute__((leaf)) asm volatile("plp" ::: "p", "memory");
 }
 
 SGX_AUX_CODE void pce_sgx_sky_load_body(void) {
@@ -140,14 +166,18 @@ SGX_GAME_CODE void pce_sgx_gameplay_begin_body(void) {
     __attribute__((leaf)) asm volatile("php\nsei" ::: "p", "memory");
     pce_sgx_metrics.flags &= (uint8_t)~PCE_SGX_PAIR_ACTIVE;
     pce_sgx_sky_scroll_x = 0;
-    if (!pce_sgx_active || pce_metrics.stage == 2 || pce_metrics.stage == 6) {
+    if (!pce_sgx_active || pce_metrics.stage == 2) {
         pce_sgx_metrics.paired_screen = 0;
+        pce_sgx_arena_hidden = 1;
+        pce_sgx_sat1_pending = 0;
         if (pce_sgx_active) vdc1_write(VDC_REG_CONTROL, 0);
         __attribute__((leaf)) asm volatile("plp" ::: "p", "memory");
         return;
     }
 
-    pce_sgx_metrics.paired_screen = PCE_SGX_GAMEPLAY | pce_metrics.stage;
+    pce_sgx_metrics.paired_screen =
+        (pce_metrics.stage == 6 ? PCE_SGX_ARENA_SPRITES : PCE_SGX_GAMEPLAY) |
+        pce_metrics.stage;
     vdc1_write(VDC_REG_CONTROL, 0);
     vdc1_write(VDC_REG_MEMORY, 0x0010);
     vdc1_write(VDC_REG_TIMING_HSYNC, 0x0202);
@@ -158,6 +188,18 @@ SGX_GAME_CODE void pce_sgx_gameplay_begin_body(void) {
     vdc1_write(VDC_REG_DMA_CONTROL, 0);
     vdc1_write(VDC_REG_BG_SCROLL_X, 0);
     vdc1_write(VDC_REG_BG_SCROLL_Y, 0);
+
+    if (pce_metrics.stage == 6) {
+        /* VDC0 keeps the arena panorama and floor. VDC1 contributes only its
+           separate sprite budget and stays dark until the first SAT is ready. */
+        pce_sgx_arena_hidden = 1;
+        pce_sgx_sat1_word = 0;
+        pce_sgx_sat1_pending = 0;
+        pce_sgx_sat1_count = 0;
+        vdc1_write(VDC_REG_SATB_START, PCE_SAT_WORD);
+        __attribute__((leaf)) asm volatile("plp" ::: "p", "memory");
+        return;
+    }
 
     if (pce_metrics.stage == 1 || pce_metrics.stage == 3 ||
         pce_metrics.stage == 4 || pce_metrics.stage == 5) {
@@ -203,6 +245,8 @@ SGX_GAME_CODE void pce_sgx_gameplay_end_body(void) {
     __attribute__((leaf)) asm volatile("php\nsei" ::: "p", "memory");
     pce_sgx_metrics.paired_screen = 0;
     pce_sgx_metrics.flags &= (uint8_t)~PCE_SGX_PAIR_ACTIVE;
+    pce_sgx_arena_hidden = 1;
+    pce_sgx_sat1_pending = 0;
     if (pce_sgx_active) vdc1_write(VDC_REG_CONTROL, 0);
     __attribute__((leaf)) asm volatile("plp" ::: "p", "memory");
 }
@@ -212,6 +256,27 @@ SGX_GAME_CODE void pce_sgx_sky_scroll_body(void) {
     if(pce_metrics.stage==4)pce_sgx_sky_scroll_x=(uint16_t)((camera*3)/100);
     else if(pce_metrics.stage==5)pce_sgx_sky_scroll_x=camera/5;
     else pce_sgx_sky_scroll_x=0;
+}
+
+SGX_GAME_CODE void pce_sgx_arena_sat_upload_body(void) {
+    while (pce_sat_pending) {}
+    uint16_t word = pce_sgx_sat1_word == PCE_SAT_WORD ?
+        PCE_SAT_ALT_WORD : PCE_SAT_WORD;
+    for (uint8_t i = pce_sgx_sat1_count; i < 64; ++i) sat[1][i].y = 0;
+    sat_copy_word = word;
+    sat_copy_src = (uint16_t)sat[1];
+    sat_copy_len = sizeof sat[1];
+    sat_copy_vdc = 1;
+    hud_copy_opcode = 0xe3;
+    overlay_call(0x72, sat_copy);
+    pce_sgx_sat1_word = word;
+    pce_sgx_sat1_pending = 1;
+}
+
+SGX_GAME_CODE void pce_sgx_arena_hide_body(void) {
+    pce_sgx_arena_hidden = 1;
+    pce_sgx_sat1_pending = 0;
+    vdc1_write(VDC_REG_CONTROL, 0);
 }
 
 /* The renderer prepares a transformed BAT column in buffer[1920..2010]. */

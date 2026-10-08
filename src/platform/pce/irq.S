@@ -15,6 +15,8 @@
 .extern pce_sgx_metrics
 .extern pce_metrics
 .extern pce_sgx_sky_scroll_x
+.extern pce_sgx_sat1_word,pce_sgx_sat1_pending,pce_sgx_arena_hidden
+.extern pce_display_on
 .extern space_hull_ready
 #endif
 .comm pce_visible_draw,1
@@ -60,6 +62,19 @@
     lda \y+1
     sta 0x0013
 .endm
+
+/* Called with IRQs already masked from sat_publish. Program VDC1's SATB
+   pointer inside the same publication window as VDC0's pointer. */
+.section .ram_bank106.text,"ax",@progbits
+.global pce_sgx_sat1_commit
+pce_sgx_sat1_commit:
+    VDC1_INDEX 19
+    lda pce_sgx_sat1_word
+    sta 0x0012
+    lda pce_sgx_sat1_word+1
+    sta 0x0013
+    rts
+.section .text.irq,"ax",@progbits
 #endif
 pce_vblank:
     pha
@@ -321,6 +336,19 @@ pce_vblank:
 .Lvq_out:
     plx
 #ifdef PCE_SGX
+    lda pce_sgx_sat1_pending
+    beq .Lsgx_sat1_done
+    stz pce_sgx_sat1_pending
+    lda pce_sgx_arena_hidden
+    beq .Lsgx_sat1_done
+    stz pce_sgx_arena_hidden
+    lda pce_display_on
+    beq .Lsgx_sat1_done
+    VDC1_INDEX 5
+    lda #0x40
+    sta 0x0012
+    stz 0x0013
+.Lsgx_sat1_done:
     pla
     sta pce_sgx_metrics+4
     lsr
