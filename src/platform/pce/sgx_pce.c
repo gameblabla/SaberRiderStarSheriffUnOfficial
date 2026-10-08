@@ -262,7 +262,8 @@ SGX_GAME_CODE void pce_sgx_gameplay_end_body(void) {
 
 SGX_GAME_CODE void pce_sgx_sky_scroll_body(void) {
     uint16_t camera=pce_scroll_x;
-    if(pce_metrics.stage==4)pce_sgx_sky_scroll_x=(uint16_t)((camera*3)/100);
+    if(pce_metrics.stage==1||pce_metrics.stage==3||pce_metrics.stage==4)
+        pce_sgx_sky_scroll_x=(uint16_t)((camera*3)/100);
     else if(pce_metrics.stage==5)pce_sgx_sky_scroll_x=camera/5;
     else pce_sgx_sky_scroll_x=0;
 }
