@@ -146,7 +146,7 @@ sprite_lines_wide:
     bne .Lwadd_one
 .Lwout:
     rts
-.section .ram_bank106.text,"ax",@progbits
+.section .ram_bank116.text,"ax",@progbits
 sprite_lines_reserve:
     stz sprite_line_ok
     lda sprite_exact
@@ -318,7 +318,7 @@ sprite_lines_clear:
  * Scratch: $d8/d9 record pointer, $da remaining, $db last band, $c0/c1 SAT out,
  * $c4/c5 screen X word. */
 .global fg_emit
-.extern fg_parts, fg_count, fg_camera, fg_camera_slow, sat, sat_count, sprite_used
+.extern fg_parts, fg_count, fg_camera, fg_camera_slow, sat, sat_page, sat_count, sprite_used, buffer
 fg_emit:
     lda fg_count
     bne 1f
@@ -343,7 +343,23 @@ fg_emit:
     lda $20c1
     adc #>sat
     sta $20c1
+    lda sat_page
+    beq .Lfbase
+    clc
+    lda $20c1
+    adc #2
+    sta $20c1
+.Lfbase:
 .Lfpart:
+    lda buffer+799
+    beq .Lfall
+    ldy #11
+    lda ($20d8),y
+    and #$80
+    bne .Lmirror
+    jmp .Lfskip
+.Lmirror:
+.Lfall:
     ldy #10
     lda ($20d8),y
     tax
@@ -351,6 +367,7 @@ fg_emit:
     sta sprite_used,x
     ldy #11
     lda ($20d8),y
+    and #1
     beq .Lfnormal
     ldy #2
     sec

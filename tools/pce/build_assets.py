@@ -213,55 +213,26 @@ def thin_foreground(fg,max_pieces=FG_MAX_PIECES,max_units=FG_MAX_UNITS):
     print(f'  foreground thinned: {removed} chunks removed', flush=True)
     return Image.fromarray(a)
 
-def thin_foreground_layers(images,camera_width,max_pieces=37,max_units=12):
-    """Thin independently scrolling foreground maps at the 16x16 sprite-piece granularity.
-
-    Remove the least-covered piece in an overloaded row first. Cropping one piece
-    at a time preserves substantially more of the source art than dropping a
-    whole 32x32 sprite object whenever a camera window exceeds its budget.
-    """
-    arrays=[np.asarray(im).copy() for im in images]
-    blocks=[]
-    coverage=[]
-    for a in arrays:
-        h,w=a.shape[:2];b=np.zeros((h//16,w//16),bool)
-        weight=np.zeros((h//16,w//16),np.uint16)
-        for y in range(b.shape[0]):
-            for x in range(b.shape[1]):
-                alpha=a[y*16:y*16+16,x*16:x*16+16,3]
-                weight[y,x]=np.count_nonzero(alpha)
-                b[y,x]=weight[y,x]>0
-        blocks.append(b);coverage.append(weight)
-    removed=[0]*len(blocks)
+def validate_foreground_layers(images,camera_width,max_pieces=64,max_units=16):
+    """Keep all source foreground and prove it fits one VDC's SAT hardware limits."""
+    grids=[]
+    for im in images:
+        alpha=np.asarray(im)[...,3]>0
+        grids.append(alpha.reshape(15,16,im.width//16,16).any((1,3)))
     rates=(1.2,1.0)
-    again=True
-    while again:
-        again=False
-        for cam in range(0,max(1,camera_width-255),16):
-            windows=[];total=0;rows=np.zeros(blocks[0].shape[0],np.int32)
-            for i,b in enumerate(blocks):
-                layer_cam=(cam*6)//5 if rates[i]==1.2 else cam
-                c0=max(0,(layer_cam-31)//16);c1=min(b.shape[1],(layer_cam+256)//16+1)
-                sub=b[:,c0:c1];windows.append((c0,c1,sub))
-                total+=int(sub.sum());rows+=sub.sum(1)
-            if total<=max_pieces and int(rows.max())<=max_units:continue
-            best=None
-            crowded=np.flatnonzero(rows>max_units)
-            for i,(c0,c1,_) in enumerate(windows):
-                b=blocks[i]
-                for cy in range(b.shape[0]):
-                    if len(crowded) and rows[cy]<=max_units:continue
-                    for cx in range(c0,c1):
-                        if b[cy,cx]:
-                            candidate=(int(coverage[i][cy,cx]),i,cy,cx)
-                            if best is None or candidate<best:best=candidate
-            if best is None:continue
-            _,i,cy,cx=best
-            blocks[i][cy,cx]=False
-            arrays[i][cy*16:cy*16+16,cx*16:cx*16+16]=0
-            removed[i]+=1;again=True;break
-    print(f'  foreground thinned: 1.2x={removed[0]} and 1.0x={removed[1]} pieces removed',flush=True)
-    return [Image.fromarray(a) for a in arrays]
+    peak=peak_row=0
+    for cam in range(0,max(1,camera_width-255),16):
+        total=0;rows=np.zeros(15,np.int32)
+        for rate,grid in zip(rates,grids):
+            layer_cam=(cam*6)//5 if rate==1.2 else cam
+            c0=max(0,(layer_cam-31)//16);c1=min(grid.shape[1],(layer_cam+256)//16+1)
+            visible=grid[:,c0:c1]
+            total+=int(visible.sum());rows+=visible.sum(1)
+        peak=max(peak,total);peak_row=max(peak_row,int(rows.max()))
+    if peak>max_pieces or peak_row>max_units:
+        raise ValueError(f'full foreground needs {peak}/{max_pieces} pieces and {peak_row}/{max_units} units per row')
+    print(f'  foreground retained whole: {peak}/{max_pieces} pieces, {peak_row}/{max_units} row units',flush=True)
+    return images
 
 # A scrolling column releases the tiles only it used (up to 30) but they stay unavailable until the next frame, because the
 # old picture is still being displayed from them (video_pce.c, held slots); the column scrolling in needs its own new tiles
@@ -1509,15 +1480,21 @@ def make_scene(stage, work, previews, shared, sgx=False):
         for i,(name,im,(ax,ay)) in enumerate(sprites):
             if i<hud0 or aim0<=i<meta['presentation']['power']:   # gameplay, aim and motion poses (not the HUD, not the power portraits)
                 sprites[i]=(name,im,(ax,ay-16))
-        if stage in (1,3) and not sgx:   # on PCE the remaining props flicker; SGX keeps the source layer with its separate actor pass
-            foreground=Image.new('RGBA',foreground.size);print(f'  stage {stage}: foreground removed', flush=True)
-        elif sgx:
-            # VDC1 carries movable actors, leaving VDC0's 37-part foreground
-            # table four scanline units free for the hero. Model both camera
-            # rates together so neither layer overloads a shifted window.
-            foreground_slow,foreground=thin_foreground_layers([foreground_slow,foreground],foreground.width)
-        else: foreground=thin_foreground(foreground)
-        entries=presentation.add_foreground(foreground,sprites)
+        if sgx:
+            # The SGX edition keeps both complete source layers on VDC1. Its
+            # foreground record is separate from the legacy PCE scene record:
+            # fallback keeps the same omission/thinning policy as the PCE bake.
+            validate_foreground_layers([foreground_slow,foreground],foreground.width)
+            sgx_entries=presentation.add_foreground(foreground,sprites)
+            meta['sgx_foreground_offset']=a.add('sgx_foreground_sprites',b''.join(struct.pack('<hhH',*v) for v in sgx_entries))
+            meta['sgx_foreground_count']=len(sgx_entries)
+            legacy_foreground=Image.new('RGBA',foreground.size) if stage in (1,3) else thin_foreground(foreground.copy())
+            entries=presentation.add_foreground(legacy_foreground,sprites)
+        else:
+            if stage in (1,3):
+                foreground=Image.new('RGBA',foreground.size);print(f'  stage {stage}: foreground removed', flush=True)
+            else: foreground=thin_foreground(foreground)
+            entries=presentation.add_foreground(foreground,sprites)
         meta['foreground_offset']=a.add('foreground_sprites',b''.join(struct.pack('<hhH',*v) for v in entries))
         meta['foreground_count']=len(entries)
         slow_entries=presentation.add_foreground(foreground_slow,sprites) if sgx else []
@@ -1546,7 +1523,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
                                   palette_fit=(palette,sky_groups),write_palette=False,static_bat=True,return_preview=True)
             if sky['tile_bytes']>0xffff:raise ValueError(f'stage{stage}: SGX sky patterns exceed scene record')
             meta['sgx_pal']=main['pal'];meta['sgx_tiles']=main['tiles'];meta['sgx_map']=main['map']
-            meta['sgx_sky_record']=a.add('sgx_sky_record',struct.pack('<IIHBIH',sky['tiles'],sky['map'],sky['tile_bytes'],sky['bat_cols'],meta['foreground_slow_offset'],meta['foreground_slow_count']))
+            meta['sgx_sky_record']=a.add('sgx_sky_record',struct.pack('<IIHBIHIH',sky['tiles'],sky['map'],sky['tile_bytes'],sky['bat_cols'],meta['sgx_foreground_offset'],meta['sgx_foreground_count'],meta['foreground_slow_offset'],meta['foreground_slow_count']))
             backdrop=np.asarray(vce_rgb(presentation.sky_color(stage)),np.uint8).reshape(3)
             composite=Image.new('RGBA',(256,224),tuple(int(v) for v in backdrop)+(255,))
             composite.alpha_composite(sky['preview'].crop((0,0,256,224)))

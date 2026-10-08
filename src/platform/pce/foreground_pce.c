@@ -5,13 +5,18 @@
 #include "overlay_pce.h"
 #include "sgx_pce.h"
 #include <string.h>
+extern uint8_t buffer[2048];
 /* Retained foreground. Occluder chunks are static in world space, so each is
  * admitted once, when it enters the window around the camera: it is rendered
  * through the normal sprite cache at a canonical screen position and its SAT
  * entries are kept as world-space parts. Every frame, fg_emit turns the kept
  * parts into SAT entries with one subtraction apiece. Chunk entries are sorted
  * by X, so the window is the index range [lo,hi) found with a cursor. */
+#ifdef PCE_SGX
+#define FG_MAX 64
+#else
 #define FG_MAX 37
+#endif
 #define FG_CODE __attribute__((noinline,section(".ram_bank116.text")))
 #ifdef PCE_SGX
 #define FG_ENTER_CODE __attribute__((noinline,section(".ram_bank129.text")))
@@ -23,7 +28,16 @@ typedef struct {
     uint8_t band_first, band_last, slot, spare;
     uint16_t index;
 } FgPart;
+#ifdef PCE_SGX
+/* The full SGX foreground window needs up to 59 retained sprite pieces. The
+ * PCE work bank is full, so keep its persistent list in CD-RAM bank 134; the
+ * platform draw maps that bank into MPR6 for the whole frame. */
+FgPart fg_parts[FG_MAX] __attribute__((section(".ram_bank134.bss")));
+static uint32_t sgx_foreground_base __attribute__((section(".ram_bank134.bss")));
+static uint16_t sgx_foreground_count __attribute__((section(".ram_bank134.bss")));
+#else
 FgPart fg_parts[FG_MAX] PCE_WORK;
+#endif
 uint8_t fg_count PCE_WORK,fg_slow_count PCE_WORK,fg_entered;
 uint16_t fg_camera PCE_WORK,fg_camera_slow PCE_WORK;
 static uint16_t window_lo[2] PCE_WORK,window_hi[2] PCE_WORK,last_camera[2] PCE_WORK;
@@ -37,16 +51,17 @@ static bool slow_loaded PCE_WORK;
 static uint32_t enter_base PCE_WORK;
 static uint16_t enter_index PCE_WORK;
 static uint8_t enter_group PCE_WORK;
-extern uint8_t sat_count,sprite_screen_height,sprite_exact;
+extern uint8_t sat_count,sat_page,sprite_screen_height,sprite_exact,sprite_last_free;
 extern vdc_sprite_t sat[2][64];
 extern uint8_t sprite_occupancy[240];
+extern void sprite_lines_clear(void);
 extern void fg_emit(void);
 
 void foreground_prepare_body(void);
 void foreground_reset(void) {
     memset(window_valid,0,sizeof window_valid);fg_count=fg_slow_count=0;
 #ifdef PCE_SGX
-    slow_scene=0;slow_loaded=false;
+    slow_scene=0;slow_loaded=false;sgx_foreground_base=0;sgx_foreground_count=0;
 #endif
 }
 FG_CODE static void fg_read(uint32_t base,uint16_t index,void *out,uint16_t bytes) {
@@ -77,15 +92,16 @@ FG_ENTER_CODE static void enter_body(void) {
     uint8_t before=sat_count;
     if(!video_sprite_optional(entry[2],96,entry[1],false,16))return;
     uint8_t slot=sprite_slot_of[entry[2]];
+    vdc_sprite_t *source=sat[sat_page];
     for(uint8_t k=before;k<sat_count&&fg_count<FG_MAX;++k) {
         uint8_t at=enter_group?fg_count:fg_slow_count;
         if(at<fg_count)fg_parts[fg_count]=fg_parts[at];
         FgPart *p=&fg_parts[at];
-        int16_t sy=(int16_t)sat[0][k].y-64;
+        int16_t sy=(int16_t)source[k].y-64;
         uint8_t lo=sy<0?0:sy,hi=sy+16>sprite_screen_height?sprite_screen_height:sy+16;
-        p->y_word=sat[0][k].y;
-        p->x_world=sat[0][k].x+(entry[0]-96);
-        p->pattern=sat[0][k].pattern;p->attribute=sat[0][k].attr;
+        p->y_word=source[k].y;
+        p->x_world=source[k].x+(entry[0]-96);
+        p->pattern=source[k].pattern;p->attribute=source[k].attr;
         p->band_first=sprite_exact?lo:lo>>3;p->band_last=sprite_exact?hi-1:(hi-1)>>3;p->slot=slot;p->spare=enter_group;p->index=enter_index;
         ++fg_count;if(!enter_group)++fg_slow_count;
     }
@@ -102,7 +118,7 @@ FG_CODE static void drop(uint8_t group,uint16_t lo,uint16_t hi) {
     uint8_t k=0;
     while(k<fg_count) {
         FgPart *p=&fg_parts[k];
-        if(p->spare==group&&p->index>=lo&&p->index<hi) {
+        if((p->spare&1)==group&&p->index>=lo&&p->index<hi) {
             if(!group)--fg_slow_count;
             memmove(p,p+1,(uint16_t)(fg_count-k-1)*sizeof(FgPart));--fg_count;
         } else ++k;
@@ -113,13 +129,22 @@ FG_CODE void foreground_prepare_body(void) {
     const PceScene *s=&pce_scenes[pce_metrics.stage-1];
     uint16_t camera=pce_metrics.camera_x;
 #ifdef PCE_SGX
-    if(slow_scene!=s) {slow_scene=s;slow_base=0;slow_count=0;slow_loaded=false;}
+    bool split_foreground=pce_sgx_gameplay()&&
+        (pce_metrics.stage==1||pce_metrics.stage==3||pce_metrics.stage==4||pce_metrics.stage==5);
+    if(slow_scene!=s) {slow_scene=s;slow_base=0;slow_count=0;slow_loaded=false;sgx_foreground_base=0;sgx_foreground_count=0;}
     if(!slow_loaded&&pce_sgx_gameplay()&&pce_metrics.stage<=5&&pce_metrics.stage!=2&&s->occlusion) {
         PceSgxSkyRecord record={0};
         if(arcade_read(2,s->occlusion,&record,sizeof record)) {
+            sgx_foreground_base=record.foreground;sgx_foreground_count=record.nforeground;
             slow_base=record.foreground_slow;slow_count=record.nforeground_slow;
         }
         slow_loaded=true;
+    }
+    uint8_t saved_page=sat_page;
+    if(split_foreground) {
+        buffer[768]=sat_count;buffer[769]=sprite_last_free;
+        memcpy(buffer+256,sprite_occupancy,240);
+        sat_page=1;sat_count=0;sprite_lines_clear();
     }
 #else
     slow_base=0;slow_count=0;
@@ -128,10 +153,14 @@ FG_CODE void foreground_prepare_body(void) {
     uint16_t normal_count=s->nforeground;
 #ifdef PCE_SGX
     if(!pce_sgx_gameplay()&&(pce_metrics.stage==1||pce_metrics.stage==3))normal_count=0;
+    uint32_t normal_base=s->foreground;
+    if(split_foreground) {normal_base=sgx_foreground_base;normal_count=sgx_foreground_count;}
+#else
+    uint32_t normal_base=s->foreground;
 #endif
     uint8_t entered=0;
     for(uint8_t group=0;group<2;++group) {
-        uint32_t base=group?s->foreground:slow_base;
+        uint32_t base=group?normal_base:slow_base;
         uint16_t n=group?normal_count:slow_count;
         if(!n)continue;
         uint16_t layer_camera=group?camera:fg_camera_slow;
@@ -148,7 +177,43 @@ FG_CODE void foreground_prepare_body(void) {
         if(window_hi[group]>need_hi) {drop(group,need_hi,window_hi[group]);window_hi[group]=need_hi;}
     }
     fg_entered=entered;
+#ifdef PCE_SGX
+    if(split_foreground) {
+        sat_count=0;sprite_lines_clear();
+        buffer[799]=0;
+        fg_emit();
+        buffer[771]=sat_count;buffer[797]=sprite_last_free;
+        memcpy(buffer+512,sprite_occupancy,240);
+        sat_page=saved_page;sat_count=buffer[768];sprite_last_free=buffer[769];
+        memcpy(sprite_occupancy,buffer+256,240);
+    } else
+#endif
     if(entered) {sat_count=0;memset(sprite_occupancy,0,sprite_exact?240:32);}
 }
 void foreground_prepare(void) { overlay_call(0x74,foreground_prepare_body); }
-void foreground_draw(void) { video_front_begin();fg_emit(); }
+void foreground_draw(void) {
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay()&&(pce_metrics.stage==1||pce_metrics.stage==3||pce_metrics.stage==4||pce_metrics.stage==5)) {
+        FgPart *parts=fg_parts;
+        for(uint8_t i=0;i<fg_count;++i)parts[i].spare&=1;
+        uint8_t first=buffer[798];
+        for(uint8_t i=0;i<fg_count;++i) {
+            FgPart *p=&parts[i];
+            uint16_t layer_camera=(p->spare&1)?fg_camera:fg_camera_slow;
+            int16_t x=(int16_t)p->x_world-(int16_t)layer_camera-32;
+            int16_t y=(int16_t)p->y_word-64;
+            for(uint8_t k=first;k<sat_count;++k) {
+                vdc_sprite_t *a=&sat[0][k];
+                int16_t ax=(int16_t)a->x-32,ay=(int16_t)a->y-64;
+                int16_t aw=(a->attr&VDC_SPRITE_WIDTH_MASK)?32:16;
+                uint16_t hs=a->attr&VDC_SPRITE_HEIGHT_MASK;
+                int16_t ah=hs==VDC_SPRITE_HEIGHT_64?64:hs?32:16;
+                if(x<ax+aw&&x+16>ax&&y<ay+ah&&y+16>ay) {p->spare|=0x80;break;}
+            }
+        }
+        video_front_begin();buffer[799]=1;overlay_call(0x74,fg_emit);buffer[799]=0;
+        return;
+    }
+#endif
+    video_front_begin();buffer[799]=0;overlay_call(0x74,fg_emit);
+}

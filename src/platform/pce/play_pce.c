@@ -9,6 +9,7 @@
 #include "scenery_pce.h"
 #ifdef PCE_SGX
 #include "sgx_pce.h"
+#include <pce/bank.h>
 #endif
 extern uint8_t actors_mode;
 extern uint8_t buffer[2048];
@@ -261,6 +262,11 @@ PCE_BOSS static void sat_to_end(uint8_t first,uint8_t end) {
 }
 void boss_prepare(void);
 PCE_BOSS void play_draw(void) {
+#ifdef PCE_SGX
+    uint8_t previous_bank6=0;
+    bool foreground_bank6=pce_metrics.stage==1||pce_metrics.stage==3||pce_metrics.stage==4||pce_metrics.stage==5;
+    if(foreground_bank6) {previous_bank6=pce_bank6_get();pce_bank6_set(134);}
+#endif
     /* The hardware scroll stays put until this frame's SAT is uploaded (see irq.S). */
     pce_scroll_hold=1;
     video_background(camera);video_sat_begin();
@@ -268,6 +274,9 @@ PCE_BOSS void play_draw(void) {
         overlay_call(0x7c,boss_prepare);
     foreground_prepare();presentation_draw();
     uint8_t world_first=sat_count;
+#ifdef PCE_SGX
+    if(foreground_bank6)buffer[798]=world_first;
+#endif
     uint8_t keys=pce_control.keys,stage=pce_metrics.stage-1;
     bool grounded=player.coll&4,side=keys&(KEY_LEFT|KEY_RIGHT);
     uint8_t pose=crouch?8:!grounded?7:player.vx?1+(frame/6)%6:0;
@@ -337,7 +346,7 @@ PCE_BOSS void play_draw(void) {
     bool herd=false;
     for(uint8_t k=0;k<8;++k)if(actors[k].active&&actors[k].type==11)herd=true;
 #ifdef PCE_SGX
-    if(!herd||(pce_sgx_gameplay()&&(pce_metrics.stage==1||pce_metrics.stage==3)))foreground_draw();
+    if(!herd||foreground_bank6)foreground_draw();
 #else
     if(!herd)foreground_draw();
 #endif
@@ -357,4 +366,7 @@ PCE_BOSS void play_draw(void) {
         video_panel_restore_apply();
         overlay_call(0x6e,story_graphics_restore);pce_panel_restore=0;
     }
+#ifdef PCE_SGX
+    if(foreground_bank6)pce_bank6_set(previous_bank6);
+#endif
 }

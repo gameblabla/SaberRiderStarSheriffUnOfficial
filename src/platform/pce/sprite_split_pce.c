@@ -39,7 +39,11 @@ SGX_SPLIT_CODE void pce_sgx_platform_actor_pass_body(void) {
     }
     buffer[768]=sat_count;buffer[769]=sprite_last_free;buffer[770]=1;
     memcpy(buffer+256,sprite_occupancy,240);
-    sat_page=1;sat_count=0;sprite_lines_clear();
+    /* foreground_prepare already built VDC1's foreground prefix and its
+       occupancy map. Keep it ahead of the movable actors in this SAT. */
+    sat_page=1;sat_count=buffer[771];sprite_last_free=buffer[797];
+    memcpy(sprite_occupancy,buffer+512,240);
+    uint8_t fg_first=sat_count;
 
     /* The stampede used to monopolize VDC0's scanlines and made its source
        foreground disappear. Give the horses VDC1's independent SAT/budget. */
@@ -63,7 +67,7 @@ SGX_SPLIT_CODE void pce_sgx_platform_actor_pass_body(void) {
     actors_mode=0;
 
     if(pce_campaign.boss_kind==2)split_sat_to_end(hull_first,hull_end);
-    split_sat_to_end(0,props_end);
+    split_sat_to_end(fg_first,props_end);
     uint8_t shake=(herd_on?((frame*13^(frame>>2))&3):0);
     if(shake)for(uint8_t k=0;k<sat_count;++k)sat[1][k].y-=shake;
     for(uint8_t k=sat_count;k<64;++k)sat[1][k].y=0;

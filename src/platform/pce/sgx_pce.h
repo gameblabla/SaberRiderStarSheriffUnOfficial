@@ -15,6 +15,8 @@ typedef struct __attribute__((packed)) {
     uint32_t tiles,map;
     uint16_t bytes;
     uint8_t bat_cols;
+    uint32_t foreground;
+    uint16_t nforeground;
     uint32_t foreground_slow;
     uint16_t nforeground_slow;
 } PceSgxSkyRecord;
