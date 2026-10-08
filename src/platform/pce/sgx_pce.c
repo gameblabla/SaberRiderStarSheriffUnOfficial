@@ -33,6 +33,7 @@ volatile PceSgxTelemetry pce_sgx_metrics;
 volatile uint8_t pce_sgx_sat1_alt PCE_WORK;
 volatile uint8_t pce_sgx_sat1_pending PCE_WORK;
 volatile uint8_t pce_sgx_arena_hidden PCE_WORK;
+volatile uint8_t pce_sgx_arena_bg_pending_page PCE_WORK;
 volatile uint16_t pce_sgx_sprite_id PCE_WORK;
 volatile uint8_t pce_sgx_sprite_slot PCE_WORK, pce_sgx_sprite_upload_ok PCE_WORK;
 extern uint8_t buffer[2048];
@@ -98,8 +99,12 @@ SGX_MODE_CODE void pce_sgx_display_on_body(void) {
     if (pce_sgx_active) {
         uint16_t control = 0;
         if (pce_display_on) {
-            if (pce_sgx_arena_sprites())
-                control = pce_sgx_arena_hidden ? 0 : VDC_CONTROL_ENABLE_SPRITE;
+            if (pce_sgx_arena_sprites()) {
+                if (pce_sgx_metrics.paired_screen & PCE_SGX_ARENA_BG_READY)
+                    control |= VDC_CONTROL_ENABLE_BG;
+                if (!pce_sgx_arena_hidden)
+                    control |= VDC_CONTROL_ENABLE_SPRITE;
+            }
             else if ((pce_sgx_metrics.flags & PCE_SGX_PAIR_ACTIVE) || pce_sgx_gameplay())
                 control = VDC_CONTROL_ENABLE_BG;
         } else if (pce_sgx_arena_sprites()) {
@@ -172,14 +177,15 @@ SGX_GAME_CODE void pce_sgx_gameplay_begin_body(void) {
         pce_sgx_metrics.paired_screen = 0;
         pce_sgx_arena_hidden = 1;
         pce_sgx_sat1_pending = 0;
+        pce_sgx_arena_bg_pending_page = 0xff;
         if (pce_sgx_active) vdc1_write(VDC_REG_CONTROL, 0);
         __attribute__((leaf)) asm volatile("plp" ::: "p", "memory");
         return;
     }
 
     pce_sgx_metrics.paired_screen =
-        (pce_metrics.stage == 6 ? PCE_SGX_ARENA_SPRITES : PCE_SGX_GAMEPLAY) |
-        pce_metrics.stage;
+        (pce_metrics.stage == 6 ? PCE_SGX_GAMEPLAY | PCE_SGX_ARENA_SPRITES :
+                                  PCE_SGX_GAMEPLAY) | pce_metrics.stage;
     vdc1_write(VDC_REG_CONTROL, 0);
     vdc1_write(VDC_REG_MEMORY, 0x0010);
     vdc1_write(VDC_REG_TIMING_HSYNC, 0x0202);
@@ -192,9 +198,11 @@ SGX_GAME_CODE void pce_sgx_gameplay_begin_body(void) {
     vdc1_write(VDC_REG_BG_SCROLL_Y, 0);
 
     if (pce_metrics.stage == 6) {
-        /* VDC0 keeps the arena panorama and floor. VDC1 contributes only its
-           separate sprite budget and stays dark until the first SAT is ready. */
+        /* VDC1 owns the arena panorama/floor. VDC0's zero tile and BAT let
+           transparent BG0 pixels fall through while its hardware sprites run. */
+        overlay_call(0x74,video_arena_bg_clear_body);
         pce_sgx_arena_hidden = 1;
+        pce_sgx_arena_bg_pending_page = 0xff;
         pce_sgx_sat1_alt = 0;
         pce_sgx_sat1_pending = 0;
         vdc1_write(VDC_REG_SATB_START, PCE_SAT_WORD);
@@ -291,13 +299,19 @@ SGX_GAME_CODE void pce_sgx_sprite_upload_body(void) {
 SGX_GAME_CODE void pce_sgx_arena_hide_body(void) {
     pce_sgx_arena_hidden = 1;
     pce_sgx_sat1_pending = 0;
-    vdc1_write(VDC_REG_CONTROL, 0);
+    vdc1_write(VDC_REG_CONTROL,
+        pce_display_on &&
+        (pce_sgx_metrics.paired_screen & PCE_SGX_ARENA_BG_READY) ?
+        VDC_CONTROL_ENABLE_BG : 0);
 }
 
 /* The renderer prepares a transformed BAT column in buffer[1920..2010]. */
 SGX_AUX_CODE void pce_sgx_column_write_body(void) {
     uint8_t *cells = buffer + 1920;
-    uint16_t control = VDC_CONTROL_ENABLE_BG;
+    uint16_t control = pce_display_on &&
+        (!pce_sgx_arena_sprites() ||
+         (pce_sgx_metrics.paired_screen & PCE_SGX_ARENA_BG_READY)) ?
+        VDC_CONTROL_ENABLE_BG : 0;
     __attribute__((leaf)) asm volatile("php\nsei" ::: "p", "memory");
     vdc1_write_aux(VDC_REG_CONTROL, control | 0x1000);
     vdc1_write_aux(VDC_REG_VRAM_WRITE_ADDR, pce_panel_column & 63);

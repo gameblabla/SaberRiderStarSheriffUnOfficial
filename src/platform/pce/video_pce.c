@@ -312,6 +312,13 @@ PCE_RENDER bool video_background(uint16_t camera) {
             if (!column_load(last_column)) return false;
         }
     }
+#ifdef PCE_SGX
+    if(pce_sgx_arena_sprites() &&
+       !(pce_sgx_metrics.paired_screen & PCE_SGX_ARENA_BG_READY)) {
+        pce_sgx_metrics.paired_screen |= PCE_SGX_ARENA_BG_READY;
+        overlay_call(0x72,pce_sgx_display_on_body);
+    }
+#endif
     /* Keep the displayed shake until the matching SAT has been submitted. */
     video_scroll(camera, pce_scroll_y);
     return true;
@@ -445,6 +452,14 @@ PCE_RENDER static void sat_publish(uint16_t word,bool drawing) {
     *IO_VDC_DATA_LO=word;*IO_VDC_DATA_HI=word>>8;
 #ifdef PCE_SGX
     if(pce_sgx_sat1_pending)pce_sgx_sat1_commit();
+    if(drawing && pce_sgx_arena_sprites() &&
+       pce_sgx_arena_bg_pending_page != 0xff) {
+        if(pce_sgx_arena_bg_pending_page)
+            pce_sgx_metrics.paired_screen |= PCE_SGX_ARENA_BG_PAGE;
+        else
+            pce_sgx_metrics.paired_screen &= (uint8_t)~PCE_SGX_ARENA_BG_PAGE;
+        pce_sgx_arena_bg_pending_page=0xff;
+    }
 #endif
     pce_sat_pending=1;
     ++pce_draws;

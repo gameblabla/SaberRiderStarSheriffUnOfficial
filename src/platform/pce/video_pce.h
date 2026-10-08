@@ -21,6 +21,7 @@ extern volatile uint16_t pce_scroll_x;
 extern volatile uint8_t pce_scroll_hold;
 void video_scene(const PceScene *scene);
 bool video_background(uint16_t camera);
+void video_arena_bg_clear_body(void);
 void video_restore(void);
 void video_text(uint8_t x, uint8_t y, const char *text);
 void video_number(uint8_t x, uint8_t y, uint16_t value);

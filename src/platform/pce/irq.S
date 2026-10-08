@@ -245,6 +245,21 @@ pce_vblank:
     st0 #8
     stz 2
     stz 3
+    lda pce_sgx_metrics+5
+    and #0x20
+    beq .Lsgx_vdc1_scroll
+    lda pce_sgx_metrics+5
+    and #0x08
+    beq .Lsgx_arena_bg_page0
+    st0 #7
+    stz 2
+    lda #1
+    sta 3
+    bra .Lsgx_vdc1_scroll
+.Lsgx_arena_bg_page0:
+    st0 #7
+    stz 2
+    stz 3
 .Lsgx_vdc1_scroll:
     lda pce_metrics+7
     cmp #7
@@ -350,7 +365,14 @@ pce_vblank:
     lda pce_display_on
     beq .Lsgx_sat1_done
     VDC1_INDEX 5
+    lda pce_sgx_metrics+5
+    and #0x10
+    beq .Lsgx_sat1_sprite_only
+    lda #0xc0
+    bra .Lsgx_sat1_control
+.Lsgx_sat1_sprite_only:
     lda #0x40
+.Lsgx_sat1_control:
     sta 0x0012
     stz 0x0013
 .Lsgx_sat1_done:

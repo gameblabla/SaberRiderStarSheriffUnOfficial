@@ -27,6 +27,9 @@ typedef struct {
     int16_t blit_x,blit_y;uint16_t blit_key;uint8_t blit_kind,blit_flip,blit_ok;   /* the picture's call to the world's image (m6_d.c blit) */
     uint8_t threat[3];                   /* set by the picture (m6_d.c) for the HUD (m6_a.c): a mech out of view (1 left, 2 right) and bit 4 when it is about to fire or swing */
     uint32_t vram_address;uint16_t vram_word,vram_size; /* pattern upload handoff from the world/player image to the picture image */
+    uint16_t bg_key[2];uint8_t bg_cache_valid[2],bg_map_valid[2];
+    uint8_t bg_min_x[2],bg_max_x[2],bg_min_y[2],bg_max_y[2];
+    uint8_t bg_actor_drawn,bg_palette_variant,bg_palette_valid;
 } Arena6;
 extern uint8_t trigger_cache[];
 #define a6 (*(Arena6*)trigger_cache)
@@ -37,6 +40,7 @@ extern uint8_t trigger_cache[];
  * overlay_call. */
 void m6_floor(void),m6_player(void),m6_step(void),m6_spawn(void),m6_start(void),m6_frame(void),m6_draw(void),m6_hud(void),m6_msgs(void),m6_blit(void);
 void m6_vram_body(void);
+void pce_sgx_arena_bg_draw_body(void);
 #define M6A_BANK 0x76   /* the player: walking, turning, guns and fists */
 #define M6B_BANK 0x77   /* the Renegades: their steps and plasma, their spawning */
 #define M6C_BANK 0x79   /* the world: the clock, waves, shots, the lock, bursts */

@@ -1154,6 +1154,9 @@ def make_scene(stage, work, previews, shared, sgx=False):
         big_pal = []
         big_rows = []
         big_frames = {}
+        big_bg_pattern_data = bytearray()
+        big_bg_map_data = bytearray()
+        big_bg_rows = []
         for kind in ('mech', 'mech_red', 'mech_gold'):
             frames = atlas(atl, kind)
             big_frames[kind] = [[scaled(frames[fr][1], frames[fr][2], k) for k in M6_BIG_SCALES] for fr in range(8)]
@@ -1182,8 +1185,40 @@ def make_scene(stage, work, previews, shared, sgx=False):
                         pieces += struct.pack('<hh', cx * 32 - ox, cy * 32 - oy)
                         for (bx, by) in ((0, 0), (16, 0), (0, 16), (16, 16)): pat += planar_sprite(blk[by:by + 16, bx:bx + 16])
                     big_rows.append((a.add('big_pieces', pieces), a.add('big_patterns', pat), len(cells)))
+                    if sgx:
+                        # VDC BG characters are 8x8 and use a different planar
+                        # layout from 16x16 sprite patterns. Keep the anchor on
+                        # an 8-pixel grid so the runtime only moves BAT entries.
+                        map_start=len(big_bg_map_data)
+                        pattern_start=len(big_bg_pattern_data)
+                        tile_count=0
+                        cx0=(-ax)//8;cx1=(w_-1-ax)//8
+                        cy0=(-ay)//8;cy1=(h_-1-ay)//8
+                        for ty in range(cy0,cy1+1):
+                            for tx in range(cx0,cx1+1):
+                                x0=ax+tx*8;y0=ay+ty*8
+                                tile=np.zeros((8,8),np.uint8)
+                                sx0=max(0,x0);sx1=min(w_,x0+8)
+                                sy0=max(0,y0);sy1=min(h_,y0+8)
+                                if sx0<sx1 and sy0<sy1:
+                                    tile[sy0-y0:sy1-y0,sx0-x0:sx1-x0]=idx[sy0:sy1,sx0:sx1]
+                                if not tile.any():continue
+                                if not -128<=tx<=127 or not -128<=ty<=127:
+                                    raise ValueError(f'big mech BG tile offset outside signed byte: {kind} {fr} {st}')
+                                if tile_count>=256:
+                                    raise ValueError(f'big mech BG pose exceeds its 256-character page: {kind} {fr} {st}')
+                                big_bg_pattern_data.extend(planar_tile(tile))
+                                big_bg_map_data.extend(struct.pack('<bbB',tx,ty,tile_count))
+                                tile_count+=1
+                        big_bg_rows.append((pattern_start,map_start,tile_count))
         meta['m6_big'] = a.add('m6_big_table', b''.join(struct.pack('<IIBB', po, pa, n, 0) for po, pa, n in big_rows))
         meta['m6_bigpal'] = a.add('m6_big_palettes', b''.join(p.tobytes() for p in big_pal))
+        if sgx:
+            bg_patterns=a.add('big_bg_patterns',big_bg_pattern_data)
+            bg_maps=a.add('big_bg_map',big_bg_map_data)
+            meta['m6_big_bg']=a.add('m6_big_bg_table',b''.join(
+                struct.pack('<IIHBB',bg_patterns+po,bg_maps+mo,n,0,0)
+                for po,mo,n in big_bg_rows))
         # the portraits and dialogue pieces first (their ids come before the HUD's, so they get slots of their own palette, as on the platform stages)
         meta['presentation'] = presentation.add_art(ROOT, work, stage, sprites, cblock_frame)
         hud = hudart.Hud(sprites)
@@ -1408,6 +1443,10 @@ def make_scene(stage, work, previews, shared, sgx=False):
         meta.update(race_sky(a,previews,race_sand))
     else:
         meta.update(native_background(bg,a,previews,f'stage{stage}',sgx=sgx))
+        if sgx and stage==6:
+            palette_bytes=a.data[meta['map']+2:meta['map']+meta['cols']*90:3]
+            if any(p==15 for p in palette_bytes):
+                raise ValueError('stage 6 uses BG palette 15, reserved for the SGX software mech')
         if sgx and stage in (1,3,4,5) and sgx_main is not None and sgx_sky is not None:
             palette,main_groups,sky_groups=fit_background_pair(sgx_main,sgx_sky,stage)
             main=native_background(sgx_main,a,previews,f'stage{stage}',sgx=True,record_prefix='sgx_',
@@ -1496,6 +1535,8 @@ def main():
     h += [f'#define PCE_M6_STEPS {len(M6_SCALES)}', f'#define PCE_M6_BIG_STEPS {len(M6_BIG_SCALES)}', f"#define PCE_M6_IMAGE {next(m['m6_image'] for m in scenes if 'm6_image' in m)}UL",
           f"#define PCE_M6_BIG {next(m['m6_big'] for m in scenes if 'm6_big' in m)}UL", f"#define PCE_M6_BIGPAL {next(m['m6_bigpal'] for m in scenes if 'm6_bigpal' in m)}UL",
           f"#define PCE_M6_BOLTS {next(m['m6_bolts'] for m in scenes if 'm6_bolts' in m)}UL", f"#define PCE_M6_ARMT {next(m['m6_arm'] for m in scenes if 'm6_arm' in m)}UL", f"#define PCE_M6_ARMPAL {next(m['m6_armpal'] for m in scenes if 'm6_armpal' in m)}UL"]
+    if args.sgx:
+        h.append(f"#define PCE_M6_BIG_BG {next(m['m6_big_bg'] for m in scenes if 'm6_big_bg' in m)}UL")
     c.append('const uint8_t pce_car_widths[PCE_CAR_STEPS]={'+','.join(map(str,CAR_WIDTHS))+'};')
     d_table,z_table=road_tables()
     h.append('extern const uint8_t pce_road_d[384];extern const uint8_t pce_road_z[113];')

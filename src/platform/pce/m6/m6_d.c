@@ -72,6 +72,9 @@ static bool arena_far(const Item *item) {
 static bool draw_item(const Item *item) {
     int16_t ix=item->sx-shake_x,iy=item->sy-shake_y;
     if(item->id>=BIG_FLAG) {
+#ifdef PCE_SGX
+        if(pce_sgx_arena_sprites()&&a6.bg_actor_drawn)return true;
+#endif
         if(blit(0,item->id&~BIG_FLAG,ix,iy,false))return true;
         return video_sprite_optional(PCE_M6_MECH+(((item->id&~BIG_FLAG)>>2)*PCE_M6_STEPS)+PCE_M6_STEPS-1,ix,iy,false,16);
     }
@@ -141,6 +144,17 @@ void m6_draw(void) {
         uint8_t frame=e->t/6;
         put(d>1?d-2:0,rel,lift(d,e->z),PCE_M6_EXPL+size*5+(frame>4?4:frame));
     }
+#ifdef PCE_SGX
+    if(pce_sgx_arena_sprites()) {
+        uint8_t big=0xff;
+        for(uint8_t k=0;k<nitems;++k)if(items[k].id>=BIG_FLAG){big=k;break;}
+        if(big!=0xff) {
+            a6.blit_key=items[big].id&~BIG_FLAG;
+            a6.blit_x=items[big].sx-shake_x;a6.blit_y=items[big].sy-shake_y;
+        } else a6.blit_key=0xffff;
+        overlay_call(0x71,pce_sgx_arena_bg_draw_body);
+    }
+#endif
     video_sat_begin();
     a6.lock_x=lock_sx-8-shake_x;a6.lock_y=lock_sy-shake_y;a6.lock_hp=lock_d?lock_hp:0;
     overlay_call(M6A_BANK,m6_hud);
