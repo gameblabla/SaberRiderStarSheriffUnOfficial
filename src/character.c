@@ -3,6 +3,7 @@
 #include "heroes.h"
 #include "platform/render.h"
 #include "platform/plat.h"
+#include "shadow.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -369,10 +370,6 @@ static void draw_shadow(const Body *b, const Level *L, real cam_x, real cam_y, i
         /* Fully opaque VDP1 polygons: neither half transparency nor mesh mode. */
         r_set_draw_blend(ren, R_BLEND_NONE);
         r_set_draw_color(ren, 16, 16, 24, 255);
-#else
-        r_set_draw_blend(ren, R_BLEND_BLEND);
-        r_set_draw_color(ren, 0, 0, 0, (uint8_t)(96 - r_trunc(altitude / 4)));
-#endif
         for (int band = 0; band < 3; band++) {
             real hw = band == 1 ? half : r_mul(half, R(0.7f));
             real x0 = r_max(screen_cx - hw, r_int(left * L->cellw) - cam_x - R(3));
@@ -381,6 +378,14 @@ static void draw_shadow(const Body *b, const Level *L, real cam_x, real cam_y, i
                          r_floorr(x1) - r_floorr(x0), R(2) };
             if (q.w > 0) r_fill_rect(ren, &q);
         }
+#else
+        r_set_draw_blend(ren, R_BLEND_BLEND);
+        uint8_t alpha = (uint8_t)(96 - r_trunc(altitude / 4));
+        RFColor color = { R(0), R(0), R(0), r_div(r_int(alpha), R(255)) };
+        real clip_left = r_int(left * L->cellw) - cam_x - R(3);
+        real clip_right = r_int((right + 1) * L->cellw) - cam_x + R(3);
+        shadow_draw_ellipse(ren, screen_cx, y + R(1), half, R(3), color, clip_left, clip_right);
+#endif
         r_set_draw_blend(ren, R_BLEND_BLEND);
         r_set_draw_color(ren, 255, 255, 255, 255);
         return;

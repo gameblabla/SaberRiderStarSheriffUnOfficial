@@ -8,6 +8,7 @@
 #include "hud.h"
 #include "namehash.h"
 #include "pack.h"
+#include "shadow.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -302,13 +303,10 @@ static void draw_car_shadow(Mode7 *m, real sx, real sy, real rx, real d, uint8_t
     real ry = r_mul(rx, sq);
     if (ry < R(1)) ry = R(1);
     if (sx + rx < 0 || sx - rx > r_int(m->sw) || sy + ry < r_int(HORIZON) || sy - ry > r_int(m->sh)) return;
+#ifdef PLAT_SATURN
     enum { N = 16 };
     RVertex v[N + 1]; int idx[N * 3];
-#ifdef PLAT_SATURN
     RFColor c = { 0, 0, 0, R(1) };
-#else
-    RFColor c = { R(0.0f), R(0.0f), R(0.0f), r_mul(R(0.35f), r_div(r_int(alpha), R(255))) };
-#endif
     v[0].position = (RFPoint){ sx, sy }; v[0].color = c;
     for (int i = 0; i < N; i++) {
         real a = r_mul(r_div(r_int(i), r_int(N)), TWO_PI);
@@ -316,12 +314,13 @@ static void draw_car_shadow(Mode7 *m, real sx, real sy, real rx, real d, uint8_t
         v[i + 1].color = c;
     }
     for (int i = 0; i < N; i++) { idx[i * 3] = 0; idx[i * 3 + 1] = 1 + i; idx[i * 3 + 2] = 1 + (i + 1) % N; }
-#ifdef PLAT_SATURN
     r_set_draw_blend(m->ren, R_BLEND_NONE);
-#else
-    r_set_draw_blend(m->ren, R_BLEND_BLEND);
-#endif
     r_geometry(m->ren, NULL, v, N + 1, idx, N * 3);
+#else
+    RFColor c = { R(0), R(0), R(0), r_mul(R(0.35f), r_div(r_int(alpha), R(255))) };
+    r_set_draw_blend(m->ren, R_BLEND_BLEND);
+    shadow_draw_ellipse(m->ren, sx, sy, rx, ry, c, R(0), r_int(m->sw));
+#endif
 }
 
 /* the player's shadow is fixed-size and unscaled: the car sits at one screen
@@ -333,13 +332,10 @@ static void draw_player_shadow(Mode7 *m, real sx, real sy)
     real rx = r_mul(r_int(m->spr[S_BUGGY].w), R(0.45f));
     real ry = r_mul(rx, R(0.5f));
     if (sx + rx < 0 || sx - rx > r_int(m->sw) || sy + ry < r_int(HORIZON) || sy - ry > r_int(m->sh)) return;
+#ifdef PLAT_SATURN
     enum { N = 16 };
     RVertex v[N + 1]; int idx[N * 3];
-#ifdef PLAT_SATURN
     RFColor c = { 0, 0, 0, R(1) };
-#else
-    RFColor c = { R(0.0f), R(0.0f), R(0.0f), R(0.35f) };
-#endif
     v[0].position = (RFPoint){ sx, sy }; v[0].color = c;
     for (int i = 0; i < N; i++) {
         real a = r_mul(r_div(r_int(i), r_int(N)), TWO_PI);
@@ -347,12 +343,13 @@ static void draw_player_shadow(Mode7 *m, real sx, real sy)
         v[i + 1].color = c;
     }
     for (int i = 0; i < N; i++) { idx[i * 3] = 0; idx[i * 3 + 1] = 1 + i; idx[i * 3 + 2] = 1 + (i + 1) % N; }
-#ifdef PLAT_SATURN
     r_set_draw_blend(m->ren, R_BLEND_NONE);
-#else
-    r_set_draw_blend(m->ren, R_BLEND_BLEND);
-#endif
     r_geometry(m->ren, NULL, v, N + 1, idx, N * 3);
+#else
+    RFColor c = { R(0), R(0), R(0), R(0.35f) };
+    r_set_draw_blend(m->ren, R_BLEND_BLEND);
+    shadow_draw_ellipse(m->ren, sx, sy, rx, ry, c, R(0), r_int(m->sw));
+#endif
 }
 
 /* ---------------------------------------------------------------- worlds */

@@ -6,6 +6,7 @@
 #include "dialog.h"
 #include "heroes.h"
 #include "hud.h"
+#include "shadow.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -874,11 +875,15 @@ static void draw_frame(Ramrod *r, int a, int fr, real x, real y, real scale, boo
 
 static void fill_ellipse(Ren *ren, real cx, real cy, real rx, real ry, RFColor c)
 {
+#ifdef PLAT_SATURN
     enum { N = 20 }; RVertex v[N + 1]; int idx[N * 3];
     v[0].position = (RFPoint){ cx, cy }; v[0].color = c;
     for (int i = 0; i < N; i++) { real a = i * TWO_PI / N; v[i + 1].position = (RFPoint){ cx + r_mul(r_cos(a), rx), cy + r_mul(r_sin(a), ry) }; v[i + 1].color = c; }
     for (int i = 0; i < N; i++) { idx[i * 3] = 0; idx[i * 3 + 1] = 1 + i; idx[i * 3 + 2] = 1 + (i + 1) % N; }
     r_geometry(ren, NULL, v, N + 1, idx, N * 3);
+#else
+    shadow_draw_ellipse(ren, cx, cy, rx, ry, c, -R(32767), R(32767));
+#endif
 }
 
 static void render_sky(Ramrod *r)
