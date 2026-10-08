@@ -304,7 +304,7 @@ static void draw_car_shadow(Mode7 *m, real sx, real sy, real rx, real d, uint8_t
     if (ry < R(1)) ry = R(1);
     if (sx + rx < 0 || sx - rx > r_int(m->sw) || sy + ry < r_int(HORIZON) || sy - ry > r_int(m->sh)) return;
 #ifdef PLAT_SATURN
-    enum { N = 16 };
+    enum { N = 24 };
     RVertex v[N + 1]; int idx[N * 3];
     RFColor c = { 0, 0, 0, R(1) };
     v[0].position = (RFPoint){ sx, sy }; v[0].color = c;
@@ -333,7 +333,7 @@ static void draw_player_shadow(Mode7 *m, real sx, real sy)
     real ry = r_mul(rx, R(0.5f));
     if (sx + rx < 0 || sx - rx > r_int(m->sw) || sy + ry < r_int(HORIZON) || sy - ry > r_int(m->sh)) return;
 #ifdef PLAT_SATURN
-    enum { N = 16 };
+    enum { N = 24 };
     RVertex v[N + 1]; int idx[N * 3];
     RFColor c = { 0, 0, 0, R(1) };
     v[0].position = (RFPoint){ sx, sy }; v[0].color = c;

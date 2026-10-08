@@ -367,15 +367,20 @@ static void draw_shadow(const Body *b, const Level *L, real cam_x, real cam_y, i
                !(level_cell(L, right + 1, row - 1) & 4)) right++;
         Ren *ren = gfx_renderer();
 #ifdef PLAT_SATURN
-        /* Fully opaque VDP1 polygons: neither half transparency nor mesh mode. */
+        /* Fully opaque VDP1 fills; one-pixel scanlines give the oval a smoother outline. */
         r_set_draw_blend(ren, R_BLEND_NONE);
         r_set_draw_color(ren, 16, 16, 24, 255);
-        for (int band = 0; band < 3; band++) {
-            real hw = band == 1 ? half : r_mul(half, R(0.7f));
+        real center_y = r_floorr(y) + R(1);
+        real top = center_y - R(3);
+        for (int row = 0; row < 6; row++) {
+            real sample_y = top + r_int(row) + R(0.5f);
+            real dy = sample_y - center_y;
+            real inside = R(1) - r_div(r_mul(dy, dy), R(9));
+            if (inside <= 0) continue;
+            real hw = r_mul(half, r_sqrt(inside));
             real x0 = r_max(screen_cx - hw, r_int(left * L->cellw) - cam_x - R(3));
             real x1 = r_min(screen_cx + hw, r_int((right + 1) * L->cellw) - cam_x + R(3));
-            RFRect q = { r_floorr(x0), r_floorr(y) - R(2) + r_int(band * 2),
-                         r_floorr(x1) - r_floorr(x0), R(2) };
+            RFRect q = { r_floorr(x0), top + r_int(row), r_floorr(x1) - r_floorr(x0), R(1) };
             if (q.w > 0) r_fill_rect(ren, &q);
         }
 #else
