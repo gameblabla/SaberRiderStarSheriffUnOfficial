@@ -214,14 +214,24 @@ def thin_foreground(fg,max_pieces=FG_MAX_PIECES,max_units=FG_MAX_UNITS):
     return Image.fromarray(a)
 
 def thin_foreground_layers(images,camera_width,max_pieces=37,max_units=12):
-    """Thin independently scrolling 1.2x and 1.0x foreground maps against their combined visible window."""
+    """Thin independently scrolling foreground maps at the 16x16 sprite-piece granularity.
+
+    Remove the least-covered piece in an overloaded row first. Cropping one piece
+    at a time preserves substantially more of the source art than dropping a
+    whole 32x32 sprite object whenever a camera window exceeds its budget.
+    """
     arrays=[np.asarray(im).copy() for im in images]
     blocks=[]
+    coverage=[]
     for a in arrays:
         h,w=a.shape[:2];b=np.zeros((h//16,w//16),bool)
+        weight=np.zeros((h//16,w//16),np.uint16)
         for y in range(b.shape[0]):
-            for x in range(b.shape[1]):b[y,x]=(a[y*16:y*16+16,x*16:x*16+16,3]>0).any()
-        blocks.append(b)
+            for x in range(b.shape[1]):
+                alpha=a[y*16:y*16+16,x*16:x*16+16,3]
+                weight[y,x]=np.count_nonzero(alpha)
+                b[y,x]=weight[y,x]>0
+        blocks.append(b);coverage.append(weight)
     removed=[0]*len(blocks)
     rates=(1.2,1.0)
     again=True
@@ -236,18 +246,21 @@ def thin_foreground_layers(images,camera_width,max_pieces=37,max_units=12):
                 total+=int(sub.sum());rows+=sub.sum(1)
             if total<=max_pieces and int(rows.max())<=max_units:continue
             best=None
+            crowded=np.flatnonzero(rows>max_units)
             for i,(c0,c1,_) in enumerate(windows):
                 b=blocks[i]
-                for cy in range(0,b.shape[0],2):
-                    for cx in range((c0//2)*2,c1,2):
-                        n=int(b[cy:cy+2,cx:cx+2].sum())
-                        if n and (best is None or n>best[0]):best=(n,i,cy,cx)
+                for cy in range(b.shape[0]):
+                    if len(crowded) and rows[cy]<=max_units:continue
+                    for cx in range(c0,c1):
+                        if b[cy,cx]:
+                            candidate=(int(coverage[i][cy,cx]),i,cy,cx)
+                            if best is None or candidate<best:best=candidate
             if best is None:continue
             _,i,cy,cx=best
-            blocks[i][cy:cy+2,cx:cx+2]=False
-            arrays[i][cy*16:cy*16+32,cx*16:cx*16+32]=0
+            blocks[i][cy,cx]=False
+            arrays[i][cy*16:cy*16+16,cx*16:cx*16+16]=0
             removed[i]+=1;again=True;break
-    print(f'  foreground thinned: 1.2x={removed[0]} and 1.0x={removed[1]} chunks removed',flush=True)
+    print(f'  foreground thinned: 1.2x={removed[0]} and 1.0x={removed[1]} pieces removed',flush=True)
     return [Image.fromarray(a) for a in arrays]
 
 # A scrolling column releases the tiles only it used (up to 30) but they stay unavailable until the next frame, because the
