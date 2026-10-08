@@ -5,6 +5,7 @@
 #include "overlay_pce.h"
 #include "sgx_pce.h"
 #include "video_pce.h"
+#include <pce/bank.h>
 #include <pce/hardware.h>
 #include <pce/vdc.h>
 
@@ -28,8 +29,7 @@ static void arena_vdc_write(uint8_t reg,uint16_t value) {
 /* VDC0 becomes the transparent BG0 object plane; its panorama/floor map is
  * streamed on VDC1. Tile zero is transparent in mode 1, so clear its BAT and
  * the 16-word character along with it before stage 6 begins. */
-#define SGX_ARENA_CLEAR __attribute__((noinline,section(".ram_bank116.text")))
-SGX_ARENA_CLEAR void video_arena_bg_clear_body(void) {
+__attribute__((noinline)) static void arena_bg_clear_bank135(void) {
     __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
     uint16_t control=*(volatile uint16_t *)0x20f3;
     uint16_t quiet=(control&~0x3000)&~VDC_CONTROL_ENABLE_BG;
@@ -46,6 +46,21 @@ SGX_ARENA_CLEAR void video_arena_bg_clear_body(void) {
     *IO_VDC_INDEX=VDC_REG_CONTROL;*(volatile uint16_t *)0x20f3=control;
     *IO_VDC_DATA_LO=(uint8_t)control;*IO_VDC_DATA_HI=(uint8_t)(control>>8);
     __attribute__((leaf)) asm volatile("plp" ::: "p","memory");
+    a6.bg_cache_valid[0]=a6.bg_cache_valid[1]=0;
+    a6.bg_map_valid[0]=a6.bg_map_valid[1]=0;
+    a6.bg_actor_drawn=0;
+    a6.bg_palette_valid=0;
+    pce_sgx_metrics.paired_screen&=(uint8_t)~PCE_SGX_ARENA_BG_PAGE;
+    pce_sgx_arena_bg_pending_page=0xff;
+}
+
+/* The reset body shares the compositor's CD-RAM bank. M6 and story teardown
+   call this resident overlay wrapper so MPR6 is restored after either path. */
+__attribute__((noinline,section(".ram_bank113.text"))) void video_arena_bg_clear_body(void) {
+    uint8_t previous=pce_bank6_get();
+    pce_bank6_set(135);
+    arena_bg_clear_bank135();
+    pce_bank6_set(previous);
 }
 
 static int16_t pixel_tile(int16_t p) {

@@ -100,6 +100,10 @@ PCE_FLOW void story_graphics_restore(void) {   /* bank $6e: $6f is full */
     pce_vce_set_color(255,0x1ff);
     pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
     arcade_vram(pce_dialog_original_font[pce_metrics.stage-1],PCE_FONT_WORD,3072);
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay()&&pce_metrics.stage==6)
+        overlay_call(0x71,video_arena_bg_clear_body);
+#endif
 }
 /* Typewriter: the lines are kept NUL-terminated in story_text and revealed a character at a time. */
 static char *line_text[4];static uint8_t line_row[4],line_count,type_line,type_col,type_clock;
