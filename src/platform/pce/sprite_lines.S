@@ -15,6 +15,23 @@
 .comm sprite_wide_span,1
 .comm sprite_last_lo,1
 .comm sprite_last_free,1
+
+#ifdef PCE_SGX
+/* IRQs never use admission state. Select a separate budget by changing
+ * absolute operand pages; both arrays have the same low address. */
+.comm sprite_lines_hi,1
+.macro occupancy op, offset=0
+.Loccupancy\@:
+    \op sprite_occupancy+\offset,x
+    .pushsection .ram_bank110.rodata,"a",@progbits
+    .word .Loccupancy\@+2
+    .popsection
+.endm
+.pushsection .ram_bank110.rodata,"a",@progbits
+.Loccupancy_patches:
+.popsection
+#endif
+
 /* Admit up to sprite_line_cells 32-wide cells with an identical Y span.
  * Computing the maximum once gives exactly the same admissions as repeated
  * reserve/reserve/release, including partially occupied edge scanlines. */
@@ -58,9 +75,17 @@ sprite_lines_wide:
     tax
     pla
     .rept 4
+#ifdef PCE_SGX
+    occupancy cmp, 0
+#else
         cmp sprite_occupancy,x
+#endif
         bcs 1f
+#ifdef PCE_SGX
+    occupancy lda, 0
+#else
         lda sprite_occupancy,x
+#endif
 1:
         inx
     .endr
@@ -81,9 +106,17 @@ sprite_lines_wide:
     tax
     pla
 .Lwmax_one:
+#ifdef PCE_SGX
+    occupancy cmp, 0
+#else
     cmp sprite_occupancy,x
+#endif
     bcs 1f
+#ifdef PCE_SGX
+    occupancy lda, 0
+#else
     lda sprite_occupancy,x
+#endif
 1:
     inx
     dec sprite_wide_left
@@ -118,10 +151,18 @@ sprite_lines_wide:
     bcc .Lwadd_tail
     .set line, 0
     .rept 4
+#ifdef PCE_SGX
+    occupancy lda, line
+#else
         lda sprite_occupancy+line,x
+#endif
         clc
         adc sprite_line_add
+#ifdef PCE_SGX
+    occupancy sta, line
+#else
         sta sprite_occupancy+line,x
+#endif
         .set line, line+1
     .endr
     inx
@@ -137,10 +178,18 @@ sprite_lines_wide:
     lda sprite_wide_left
     beq .Lwout
 .Lwadd_one:
+#ifdef PCE_SGX
+    occupancy lda, 0
+#else
     lda sprite_occupancy,x
+#endif
     clc
     adc sprite_line_add
+#ifdef PCE_SGX
+    occupancy sta, 0
+#else
     sta sprite_occupancy,x
+#endif
     inx
     dec sprite_wide_left
     bne .Lwadd_one
@@ -168,7 +217,11 @@ sprite_lines_reserve:
     tax
     tay
 .Lcheck:
+#ifdef PCE_SGX
+    occupancy lda, 0
+#else
     lda sprite_occupancy,x
+#endif
     cmp #16
     bcs .Ldone
     cpx sprite_band_last
@@ -179,7 +232,11 @@ sprite_lines_reserve:
     tya
     tax
 .Lbump:
+#ifdef PCE_SGX
+    occupancy inc, 0
+#else
     inc sprite_occupancy,x
+#endif
     cpx sprite_band_last
     beq .Lok
     inx
@@ -206,7 +263,11 @@ sprite_lines_release:
     lsr
     tax
 .Lsub:
+#ifdef PCE_SGX
+    occupancy dec, 0
+#else
     dec sprite_occupancy,x
+#endif
     cpx sprite_band_last
     beq .Lout
     inx
@@ -224,7 +285,11 @@ sprite_lines_release:
     stz sprite_last_free
     ldx sprite_line_lo
 .Lxcheck:
+#ifdef PCE_SGX
+    occupancy lda, 0
+#else
     lda sprite_occupancy,x
+#endif
     cmp #16
     bcs .Lxdone
     inx
@@ -232,7 +297,11 @@ sprite_lines_release:
     bcc .Lxcheck
     ldx sprite_line_lo
 .Lxadd:
+#ifdef PCE_SGX
+    occupancy inc, 0
+#else
     inc sprite_occupancy,x
+#endif
     inx
     cpx sprite_line_hi
     bcc .Lxadd
@@ -242,7 +311,11 @@ sprite_lines_release:
 .Lexact_release:
     ldx sprite_line_lo
 .Lxsub:
+#ifdef PCE_SGX
+    occupancy dec, 0
+#else
     dec sprite_occupancy,x
+#endif
     inx
     cpx sprite_line_hi
     bcc .Lxsub
@@ -266,9 +339,17 @@ sprite_lines_sixteen:
     cla
     .set line, 0
     .rept 16
+#ifdef PCE_SGX
+    occupancy cmp, line
+#else
         cmp sprite_occupancy+line,x
+#endif
         bcs 1f
+#ifdef PCE_SGX
+    occupancy lda, line
+#else
         lda sprite_occupancy+line,x
+#endif
 1:
         .set line, line+1
     .endr
@@ -286,7 +367,11 @@ sprite_lines_sixteen:
 .Lsixteen_add:
     .set line, 0
     .rept 16
+#ifdef PCE_SGX
+    occupancy inc, line
+#else
         inc sprite_occupancy+line,x
+#endif
         .set line, line+1
     .endr
     inc sprite_line_ok
@@ -301,17 +386,56 @@ sprite_lines_clear:
     ldx #239
 1:
 .Lclear:
+#ifdef PCE_SGX
+    occupancy stz, 0
+#else
     stz sprite_occupancy,x
+#endif
     dex
+#ifdef PCE_SGX
+    occupancy stz, 0
+#else
     stz sprite_occupancy,x
+#endif
     dex
+#ifdef PCE_SGX
+    occupancy stz, 0
+#else
     stz sprite_occupancy,x
+#endif
     dex
+#ifdef PCE_SGX
+    occupancy stz, 0
+#else
     stz sprite_occupancy,x
+#endif
     dex
     cpx #255
     bne .Lclear
     rts
+
+#ifdef PCE_SGX
+.pushsection .ram_bank110.rodata,"a",@progbits
+.Loccupancy_patches_end:
+.popsection
+.section .ram_bank110.text,"ax",@progbits
+.global sprite_lines_select
+sprite_lines_select:
+    ldx #0
+1:
+    lda .Loccupancy_patches,x
+    sta $20d0
+    lda .Loccupancy_patches+1,x
+    sta $20d1
+    lda sprite_lines_hi
+    ldy #0
+    sta ($20d0),y
+    inx
+    inx
+    cpx #(.Loccupancy_patches_end-.Loccupancy_patches)
+    bne 1b
+    rts
+#endif
 .section .ram_bank116.text,"ax",@progbits
 
 /* Re-emit the retained foreground parts. Records are FgPart (14 bytes): the

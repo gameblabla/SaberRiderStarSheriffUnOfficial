@@ -8,6 +8,7 @@
 #include <pce/hardware.h>
 #include <pce/vdc.h>
 #include "video_pce.h"
+#include "sprite_cache_pce.h"
 
 #define SGX_CODE __attribute__((noinline, minsize, section(".ram_bank120.text")))
 #define SGX_UI_CODE __attribute__((noinline, minsize, section(".ram_bank124.text")))
@@ -117,7 +118,9 @@ SGX_MODE_CODE void pce_sgx_display_on_body(void) {
                     control |= VDC_CONTROL_ENABLE_SPRITE;
             }
             else if ((pce_sgx_metrics.flags & PCE_SGX_PAIR_ACTIVE) || pce_sgx_gameplay()) {
-                control = VDC_CONTROL_ENABLE_BG;
+                if (!(pce_sgx_metrics.paired_screen & PCE_SGX_STATIC_SKY) ||
+                    pce_sgx_sky_first != 0xffff)
+                    control = VDC_CONTROL_ENABLE_BG;
                 if (pce_sgx_vdc1_sprites() && !pce_sgx_vdc1_hidden)
                     control |= VDC_CONTROL_ENABLE_SPRITE;
             }
@@ -290,13 +293,15 @@ SGX_STATS_CODE void pce_sgx_vdc1_stats_body(void) {
     pce_sgx_metrics.vdc1_sat_count=sat_count;
     if(pce_metrics.frames&31)return;
     uint8_t peak=0;
+    const uint8_t *lines=pce_sgx_split_active?(const uint8_t *)(((uint16_t)(buffer+512)&0xff00)|((uint16_t)sprite_occupancy&255)):sprite_occupancy;
     for(uint8_t line=0;line<224;++line)
-        if(sprite_occupancy[line]>peak)peak=sprite_occupancy[line];
+        if(lines[line]>peak)peak=lines[line];
     if(peak>pce_sgx_metrics.vdc1_max_units)
         pce_sgx_metrics.vdc1_max_units=peak;
 }
 
-SGX_GAME_CODE void pce_sgx_sprite_upload_body(void) {
+__attribute__((noinline,minsize,section(".ram_bank128.text")))
+void pce_sgx_sprite_upload_body(void) {
     uint8_t slot=pce_sgx_sprite_slot, entry[16];
     const PceScene *scene=&pce_scenes[pce_metrics.stage-1];
     uint32_t record=scene->sprites+(uint32_t)pce_sgx_sprite_id*16;
@@ -308,7 +313,9 @@ SGX_GAME_CODE void pce_sgx_sprite_upload_body(void) {
     uint32_t patterns=(uint32_t)entry[0]|(uint32_t)entry[1]<<8|
                       (uint32_t)entry[2]<<16|(uint32_t)entry[3]<<24;
     pce_sgx_sprite_upload_ok=arcade_vram_to(
-        sat_page==1?1:0,patterns,sprite_words[slot],(uint16_t)sprite_count[slot]*128);
+        sat_page==1?1:0,patterns,
+        sat_page==1&&pce_metrics.stage<6&&pce_metrics.stage!=2?sprite_words1[slot]:sprite_words[slot],
+        (uint16_t)sprite_count[slot]*128);
     if(!pce_sgx_sprite_upload_ok)++pce_sgx_metrics.failures;
 }
 
@@ -384,12 +391,27 @@ SGX_UI_CODE static void vdc2_write_ui(uint8_t reg, uint16_t value) {
     __attribute__((leaf)) asm volatile("plp" ::: "p", "memory");
 }
 
-static SGX_UI_CODE bool upload_map(uint8_t vdc, uint32_t offset) {
-    for (uint8_t row = 0; row < 28; ++row) {
-        if (!arcade_vram_to(vdc, offset + (uint32_t)row * 80,
-                            (uint16_t)row * 64, 80)) return false;
+/* Map transfers share bank $6e with the SGX column writer. The caller's
+   bank $7c remains available again when overlay_call returns. */
+static uint32_t ui_map_offset PCE_WORK, select_maps[4] PCE_WORK;
+static uint16_t ui_map_base PCE_WORK;
+static uint8_t ui_map_vdc PCE_WORK, ui_map_ok PCE_WORK;
+
+static SGX_AUX_CODE void upload_map_body(void) {
+    uint32_t offset=ui_map_offset;
+    uint16_t base=ui_map_base;
+    ui_map_ok=0;
+    for (uint8_t row=0; row<28; ++row) {
+        if (!arcade_vram_to(ui_map_vdc,offset,base,80)) return;
+        offset+=80;base+=64;
     }
-    return true;
+    ui_map_ok=1;
+}
+
+static SGX_UI_CODE bool upload_map_at(uint8_t vdc, uint32_t offset, uint16_t base) {
+    ui_map_vdc=vdc;ui_map_offset=offset;ui_map_base=base;
+    overlay_call(0x6e,upload_map_body);
+    return ui_map_ok;
 }
 
 static SGX_UI_CODE bool load_pair(const PceSgxUiPair *r) {
@@ -409,7 +431,7 @@ static SGX_UI_CODE bool load_pair(const PceSgxUiPair *r) {
                         (uint16_t)((uint32_t)r->ntiles0 * 32UL)) ||
         !arcade_vram_to(1, r->tiles1, SGX_UI_TILE_WORD,
                         (uint16_t)((uint32_t)r->ntiles1 * 32UL)) ||
-        !upload_map(0, r->map0) || !upload_map(1, r->map1)) goto failed;
+        !upload_map_at(0, r->map0, 0) || !upload_map_at(1, r->map1, 0)) goto failed;
 
     vdc2_write_ui(VDC_REG_BG_SCROLL_X, 0);
     vdc2_write_ui(VDC_REG_BG_SCROLL_Y, 0);
@@ -423,13 +445,55 @@ failed:
     return false;
 }
 
+uint8_t pce_sgx_select_hero PCE_WORK, pce_sgx_select_page PCE_WORK, pce_sgx_select_phase PCE_WORK;
+extern volatile uint16_t pce_scroll_y;
+
+/* All patterns/palettes are resident before music. Build an invisible BAT,
+   then let the normal VBlank scroll publication expose the complete state. */
+SGX_AUX_CODE void pce_sgx_select_body(void) {
+    if (!pce_sgx_active || !(pce_sgx_metrics.flags & PCE_SGX_PAIR_ACTIVE)) return;
+    uint8_t page=pce_sgx_select_page^1;
+    ui_map_vdc=0;ui_map_offset=select_maps[pce_sgx_select_hero&3];
+    ui_map_base=page?0x800:0;upload_map_body();
+    if (!ui_map_ok) {
+        ++pce_sgx_metrics.failures;return;
+    }
+    pce_sgx_select_page=page;
+    pce_scroll_y=page?256:0;
+}
+
+SGX_UI_CODE static bool load_select(void) {
+    const PceSgxSelect *r=&pce_sgx_select;
+    vdc2_write_ui(VDC_REG_CONTROL,0);
+    if (!arcade_read(2,r->palette,buffer,512)) return false;
+    pce_vce_copy_palette(0,buffer,16);
+    if (!arcade_vram_to(0,r->tiles0,0x1000,r->ntiles0*32) ||
+        !arcade_vram_to(1,r->tiles1,0x1000,r->ntiles1*32) ||
+        !upload_map_at(0,r->maps[0],0) || !upload_map_at(1,r->map1,0)) return false;
+    vdc2_write_ui(VDC_REG_BG_SCROLL_X,0);vdc2_write_ui(VDC_REG_BG_SCROLL_Y,0);
+    /* 64x64 BAT permits the inactive portrait page at row 32. */
+    __attribute__((leaf)) asm volatile("php\nsei" ::: "p", "memory");
+    pce_vdc_index=VDC_REG_MEMORY;*(volatile uint8_t*)0x20f7=VDC_REG_MEMORY;
+    *IO_VDC_INDEX=VDC_REG_MEMORY;*IO_VDC_DATA_LO=0x50;*IO_VDC_DATA_HI=0;
+    __attribute__((leaf)) asm volatile("plp" ::: "p", "memory");
+    for(uint8_t hero=0;hero<4;++hero)select_maps[hero]=r->maps[hero];
+    pce_sgx_select_page=0;pce_sgx_select_phase=0;
+    pce_sgx_select_animation_reset=1;
+    vdc2_write_ui(VDC_REG_MEMORY,0x50);
+    pce_sgx_metrics.paired_screen=1;
+    pce_sgx_metrics.flags|=PCE_SGX_PAIR_ACTIVE;
+    return true;
+}
+
 SGX_UI_CODE void pce_sgx_ui_load_body(void) {
     uint8_t id = pce_sgx_metrics.paired_screen;
     if (id >= 24) id = 0;
     const PceUiScreen *s = &pce_ui[id];
     pce_sgx_metrics.flags &= (uint8_t)~PCE_SGX_PAIR_ACTIVE;
-    if (id == 0 || (id >= SGX_UI_SCREEN_FIRST && id <= SGX_UI_SCREEN_LAST)) {
-        const PceSgxUiPair *pair = id == 0 ? &pce_sgx_ui_pair[19] :
+    if (id == 1 && pce_sgx_active) {
+        if (!load_select()) { ++pce_sgx_metrics.failures;pair_clear(); }
+    } else if (id == 0 || id == 4 || (id >= SGX_UI_SCREEN_FIRST && id <= SGX_UI_SCREEN_LAST)) {
+        const PceSgxUiPair *pair = id == 0 ? &pce_sgx_ui_pair[19] : id == 4 ? &pce_sgx_ui_pair[20] :
             &pce_sgx_ui_pair[id - SGX_UI_SCREEN_FIRST];
         if (!load_pair(pair)) {
             pce_sgx_metrics.paired_screen = 0;

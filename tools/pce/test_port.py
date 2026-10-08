@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import struct
 import tempfile
@@ -45,8 +46,17 @@ def assets(out):
             assert s['facing_variants']==1 and s['units_per_line']<=16
         if scene['stage'] in (1,3,4,5):assert scene['ntr']<=60 and scene['rows']<=32
     audio=json.loads((out/'audio.json').read_text())
-    music=[t for t in audio['tracks'] if t['id']!='END']
-    assert len(music)==54 and sorted(t['track'] for t in music)==list(range(2,20))+list(range(21,39))+list(range(40,58))
+    # The current master has one physical track per source song. Volume is
+    # handled by the driver; the former three banks and dummy END are gone.
+    source=(Path(__file__).resolve().parents[2]/'src/audio.c').read_text()
+    table=re.search(r'MUSIC_TABLE\[(\d+)\]\s*=\s*\{(.*?)\};',source,re.S)
+    assert table, 'Missing source music table'
+    ids=re.findall(r'0x([0-9A-F]{8})',table[2])
+    assert len(ids)==int(table[1]), 'Incomplete source music table'
+    music=audio['tracks']
+    assert [t['id'] for t in music]==ids, 'Mastered songs differ from the source table'
+    assert [t['logical'] for t in music]==list(range(len(ids)))
+    assert [t['track'] for t in music]==list(range(2,2+len(ids)))
     for track in music:
         data=(out/track['file']).read_bytes()
         assert len(data)%2352==0
@@ -117,13 +127,15 @@ class Test:
                 entries=np.frombuffer(sat,'<u2').reshape(64,4)
                 assert any((a[3]&0x800) for a in entries if a[0]),'Left-facing actor uses the hardware flip bit'
                 self.results['platform']=self.metrics(e)
-                self.press(e,8);self.press(e,4);self.capture(e,'test-planar')
-                # Only high planes change in the four prepared working characters.
-                before=bytes.fromhex(e.call('asread','vram0',(0x4200+92*16)*2,128)['hex'])
-                self.press(e,0,17)
-                after=bytes.fromhex(e.call('asread','vram0',(0x4200+92*16)*2,128)['hex'])
-                assert all(before[t*32:t*32+16]==after[t*32:t*32+16] for t in range(4))
-                assert before!=after
+                self.press(e,8);self.capture(e,'test-stage-menu')
+                # SELECT no longer opens the removed planar-animation demo.
+                # Verify the actual debug stage menu's native BAT glyphs.
+                scroll=int.from_bytes(e.memory(symbol(self.out/'app.elf','pce_scroll_x'),2),'little')
+                bat=bytes.fromhex(e.call('asread','vram0',0,4096)['hex'])
+                for row,text in ((6,'LEFT/RIGHT STAGE'),(12,'II MODE: DIAGNOSTICS')):
+                    for x,c in enumerate(text,1):
+                        cell=struct.unpack_from('<H',bat,(row*64+((scroll//8+x)&63))*2)[0]
+                        assert cell==0xf420+ord(c)-32,('debug menu glyph',row,x,cell,c)
                 self.press(e,8);e.run(120)
                 race=self.stage(e,2);self.capture(e,'test-race');e.run(600);r2=self.metrics(e)
                 commits=(r2['floor_commits']-race['floor_commits'])&65535

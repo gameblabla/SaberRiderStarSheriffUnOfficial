@@ -5,6 +5,7 @@
 #include "arcade_pce.h"
 #include "campaign_pce.h"
 #include "audio_pcm.h"
+#include "sgx_pce.h"
 
 /* Title, options and hero select. All run at 320x224 with baked art
  * (tools/pce/frontend.py). The tunnel backdrop animates by cycling four
@@ -66,6 +67,9 @@ UI_CODE static uint8_t title(void) {
 
 /* ---------------------------------------------------------------- hero select */
 UI_CODE static void select_palettes(uint8_t chosen,bool glow) {
+#ifdef PCE_SGX
+    if(pce_sgx_active)return; /* SGX foreground owns immutable BG palettes 6..15. */
+#endif
     for(uint8_t h=0;h<4;++h) {
         uint8_t state=h==chosen?(glow?2:1):0;
         arcade_read(2,ui_screen->extra+PCE_UI_RAMP_BYTES+(uint32_t)state*128+h*32,buffer,32);
@@ -79,17 +83,28 @@ UI_CODE static void select_palettes(uint8_t chosen,bool glow) {
 static uint8_t portrait_count,portrait_slot;
 static uint16_t portrait_pieces[PORTRAIT_MAX][4];
 UI_CODE static void portrait_patterns(uint8_t hero,uint8_t slot) {
+#ifdef PCE_SGX
+    if(pce_sgx_active) {
+        pce_sgx_select_hero=hero;overlay_call(0x6e,pce_sgx_select_body);return;
+    }
+#endif
     const PceUiPortrait *p=&pce_ui_portrait[hero];
     ui_vram_load(p->patterns,
         slot?UI_SPRITE_WORD-PORTRAIT_MAX*64:UI_SPRITE_WORD+ui_screen->nsprpat*64,
         (uint32_t)p->count*128);
 }
 UI_CODE static void portrait_pieces_use(uint8_t hero,uint8_t slot) {
+#ifdef PCE_SGX
+    if(pce_sgx_active){portrait_count=0;return;}
+#endif
     const PceUiPortrait *p=&pce_ui_portrait[hero];
     portrait_count=p->count;portrait_slot=slot;
     arcade_read(2,p->pieces,portrait_pieces,(uint16_t)p->count*8);
 }
 UI_CODE static void portrait_palette(uint8_t hero) {
+#ifdef PCE_SGX
+    if(pce_sgx_active)return;
+#endif
     arcade_read(2,pce_ui_portrait[hero].palette,buffer,512);
     pce_vce_copy_palette(16+3,buffer+3*32,13);
 }
@@ -114,8 +129,8 @@ UI_CODE static void select_draw(uint8_t shown,bool due,uint8_t chosen,uint16_t t
 }
 UI_CODE static uint8_t select_hero(uint8_t chosen) {
     ui_dark=1;ui_show(SCREEN_SELECT);ui_dark=0;pce_ui_state=2;
-    audio_music(1);
     portrait_patterns(chosen,0);portrait_pieces_use(chosen,0);portrait_palette(chosen);select_palettes(chosen,false);
+    audio_music(1);
     uint8_t confirmed=0,shown=chosen;bool palettes_due=false;ticks=0;
     select_draw(shown,false,chosen,0);ui_black();ui_fade_in();   /* up from black */
     for(;;) {

@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "capture": {
+    "app_sha256": "1d6bd935b232fbb9e40214eba850c7097cdb5f3ca9dd9735d122d70370e43ef9",
+    "iso_sha256": "88aa07e4caa7f0d933fe1fd5e35fdfd91c63bc776b93f92871f63ed097cc691a",
+    "campaign_frame": 26116,
+    "stage": 7,
+    "sprite_id": 32,
+    "sprite_patterns": 21,
+    "initial_refused_id": 32,
+    "initial_cache_result": 48,
+    "initial_sat_count": 31,
+    "initial_line": [
+      26,
+      42
+    ],
+    "pce_metrics_raw_hex": "5352504301010f0704669d02a096090001003902000000000e1f00001000140000000400",
+    "pce_sgx_metrics_raw_hex": "534758312b9f00240080b21015"
+  },
+  "seed": {
+    "stage": 7,
+    "pce_sgx_metrics_raw_hex": "534758312b9f00240080b21015",
+    "sprite_cache_stage": 7,
+    "sprite_cache_foreground_first": 65535,
+    "herd_on": 0,
+    "sat_page": 0,
+    "sprite_last_free": 13,
+    "sprite_epoch": 0,
+    "sprite_stamp_hex": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "cache_id": 32,
+    "cache_count": 21,
+    "arrays": {
+      "sprite_ids": "03001f001000170014001c0019001d00ffff16001b001e000c000d000e006200ffffffffffffffffffff6100ffffffffffff36005000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "sprite_words": "004e0066005a005100520048005e005f006a00650053006d00760077007300590049004a004b004c004d0075005700580048005c005d0053006b006a006b006c006d006e006f004c007000710072006f007000730074007a0000000000000000",
+      "sprite_count": "06150804041504150104151501010401010101010101010101010101010101020202020e020401010101020100000000",
+      "sprite_used": "010100000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "sprite_pinned": "020000020002010100000201000000000000000000000000000000000000000000000000000000000000000000000000",
+      "sprite_slot_of": "0b03ff0002ffffff0108ffff0c0d0e0a02090103040509030a06070a05070b01ffffff050604ffffffffffffffffff07ffffff16ff151917ff1810ffff11ffffffffffffffff12ffffffffff13ffffff1a141cffffffffffffffffffff1bffffff150fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "pattern_owner": "06060606060601010004050b0b0b0b0b0b1003031a1b070808080808080a020202020202000c0c0c0c0c0c0f00160d0e000000000000",
+      "sprite_pb_hi": "404080408040404080404040808080404040404040404040404040404040404040404000404040404000004000000000"
+    }
+  },
+  "expected": {
+    "refused": {
+      "cache_result": 48,
+      "pattern_owner_unchanged": true
+    },
+    "success": {
+      "cache_result": 8,
+      "sprite_words_slot8": 30720,
+      "pattern_owner_pages_48_to_53": [
+        9,
+        9,
+        9,
+        9,
+        9,
+        9
+      ],
+      "pattern_owner_pages_0_to_47_unchanged": true
+    }
+  },
+  "notes": [
+    "The captured stage-7 dialogue sprite needs 21 patterns, or six 512-byte cache pages.",
+    "The failing image had no contiguous reclaimable six-page block within the original pages 0..47. The six free pages 48..53 became allocatable for this stage-7 dialog sprite in the candidate allocator.",
+    "sprite_epoch and sprite_stamp were not present in the earlier runtime dump and are seeded to zero; page availability is independent of age in the failing case and the success case takes the empty six-page run."
+  ]
+}

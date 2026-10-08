@@ -259,7 +259,7 @@ def fit_background_pair(main, sky, stage, npal=16, near=None):
     return palettes,groups[:split].copy(),groups[split:split+len(sky_cells)].copy(),groups[split+len(sky_cells):].copy()
 
 def native_background(image, archive, previews, name, npal=16, sgx=False, record_prefix='', preview_name=None,
-                      transparent=False, palette_fit=None, write_palette=True, static_bat=False, return_preview=False, cache_tiles=BG_TILES):
+                      transparent=False, palette_fit=None, write_palette=True, static_bat=False, return_preview=False, cache_tiles=BG_TILES, wrap=False):
     w,rgba,cells = _background_cells(image,transparent)
     dialog_palette=name in ('stage1','stage3','stage4','stage5','stage6')   # palette 15 belongs to the dialogue box and the font
     cap = (BG_TILES - 1) if static_bat else (512 - 4 - COLUMN_SLACK) if name == 'stage6' and not sgx else BG_TILES - 4 - COLUMN_SLACK   # SGX moves the arena background off the VDC0 sprite cache
@@ -282,7 +282,7 @@ def native_background(image, archive, previews, name, npal=16, sgx=False, record
     preview = np.zeros_like(rgba)
     cell_idx = palfit.index_cells(cells, np.asarray(palette), groups)
     cell_idx, groups, merged = tile_budget.limit_tiles(cells, cell_idx, groups, palette, w // 8, cap,
-                                                        reserved=(15,) if dialog_palette else (), full_map=static_bat)
+                                                        reserved=(15,) if dialog_palette else (), full_map=static_bat, wrap=wrap)
     if merged: print(f'{name}: redrew {merged} cells with neighbouring characters to fit the {BG_TILES}-tile cache', flush=True)
     palette[0][0] = backdrop
     for i, cell in enumerate(cells):
@@ -614,6 +614,26 @@ def flat_sky_rows(ly, bank):
             rows[y, :] = colours[counts.argmax()]
     return rows
 
+def repeating_sky(image, stage):
+    """Keep the source origin/horizon; trim only reviewed repeating panoramas."""
+    a = np.asarray(image.convert('RGBA'))
+    coverage = (a[..., 3] >= 128).any(axis=0)
+    right = int(np.flatnonzero(coverage)[-1]) + 1 if coverage.any() else image.width
+    retained = (right + 7) // 8 * 8 if stage == 1 else image.width
+    result = image.crop((0, 0, min(right, retained) if stage == 1 else retained, image.height))
+    if result.width < retained:
+        padded = Image.new('RGBA', (retained, image.height))
+        padded.paste(result)
+        padded.paste(image.crop((0, 0, retained-result.width, image.height)), (result.width, 0))
+        result = padded
+    result.info['repeat_audit'] = dict(source_width=image.width, opaque_right=right,
+        retained_bounds=[0, retained], repeat_width=retained,
+        opaque_pixels=int((a[..., 3] >= 128).sum()),
+        band_opaque_right=[int(np.flatnonzero((a[y:y+64, :, 3]>=128).any(axis=0))[-1])+1
+                          if (a[y:y+64, :, 3]>=128).any() else 0 for y in range(0,image.height,64)],
+        reason='reviewed level-1 repeat: trailing alpha padding' if stage==1 else 'independent source extent; no crop')
+    return result
+
 def platform_background(stage, work, sgx=False):
     level, files = levl.load_dump(work / f'stage{stage}.layers')
     banks = {i: levl.png_bank(path, i) if path else levl.load_bank(work / 'srgb' / f'{i:08X}.srgb')
@@ -644,6 +664,7 @@ def platform_background(stage, work, sgx=False):
             sgx_sky = levl.render_layer(ly, banks[ly.cblock], levl.layer_offset(ly, 0), sky_width, 240, None)
             sgx_sky = (Image.open(ROOT/'assets/stage3/native/stage3_night_sky.png').convert('RGBA')
                        if stage==3 else Image.fromarray(sgx_sky))
+            sgx_sky = repeating_sky(sgx_sky, stage)
             continue
         if stage == 4 and ly.name == 'SkyBG': continue
         if sgx and stage==4 and ly.name=='FarMountains':
@@ -1523,12 +1544,13 @@ def make_scene(stage, work, previews, shared, sgx=False):
             if any(p==15 for p in palette_bytes):
                 raise ValueError('stage 6 uses BG palette 15, reserved for the SGX software mech')
         if sgx and stage in (1,3,4,5) and sgx_main is not None and sgx_sky is not None:
+            meta['sgx_sky_audit'] = sgx_sky.info['repeat_audit']
             palette,main_groups,sky_groups,near_groups=fit_background_pair(sgx_main,sgx_sky,stage,near=sgx_near)
             main=native_background(sgx_main,a,previews,f'stage{stage}',sgx=True,record_prefix='sgx_',
                                    transparent=True,palette_fit=(palette,main_groups),return_preview=True)
             sky=native_background(sgx_sky,a,previews,f'stage{stage}',sgx=True,record_prefix='sgx_sky_',
                                   preview_name=f'stage{stage}_sgx_sky',transparent=True,
-                                  palette_fit=(palette,sky_groups),write_palette=False,return_preview=True,cache_tiles=512 if stage in (1,3) else BG_TILES)
+                                  palette_fit=(palette,sky_groups),write_palette=False,return_preview=True,cache_tiles=512 if stage in (1,3) else BG_TILES,wrap=True)
             if sky['tile_count']>16384:raise ValueError(f'stage{stage}: SGX sky exceeds its Arcade directory')
             meta['sgx_pal']=main['pal'];meta['sgx_tiles']=main['tiles'];meta['sgx_map']=main['map']
             sky_layer=next(ly for ly in levl.load_dump(work / f'stage{stage}.layers')[0].layers if ly.name=='SkyBG')
@@ -1536,7 +1558,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
             tile_start=sky['tiles'];tile_count=sky['tile_count']
             if sgx_near is not None:
                 near=native_background(sgx_near,a,previews,f'stage{stage}',sgx=True,record_prefix='sgx_near_',
-                    preview_name=f'stage{stage}_sgx_near',transparent=True,palette_fit=(palette,near_groups),write_palette=False)
+                    preview_name=f'stage{stage}_sgx_near',transparent=True,palette_fit=(palette,near_groups),write_palette=False,wrap=True)
                 near_map=near['map'];near_cols=near['cols'];near_first=tile_count;near_speed=26;split_row=8
                 # One ID namespace and contiguous pattern archive for both bands.
                 patterns=bytes(a.data[sky['tiles']:sky['tiles']+sky['tile_bytes']])+bytes(a.data[near['tiles']:near['tiles']+near['tile_bytes']])
@@ -1548,7 +1570,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
                     for y in range(0,96,32) for x in range(0,96,32) for dx,dy in ((0,0),(16,0),(0,16),(16,16))))
                 moon_palette=a.add('sgx_red_moon_palette',pal.tobytes())
             speed=13 if stage==3 else (max(64,round(sky_layer.parallax*256)) if sky_layer.extra==1 else round(sky_layer.parallax*256))
-            wrap=2 if stage==3 else int(sky_layer.extra==1)
+            wrap=1 if stage==1 else 2
             if tile_count>16384:raise ValueError('SGX sky bands exceed the shared directory')
             meta['sgx_sky_record']=a.add('sgx_sky_record',struct.pack('<IIHBIHIHHHHBIHHHBII',tile_start,sky['map'],tile_count,64,
                 meta['sgx_foreground_offset'],meta['sgx_foreground_count'],meta['foreground_slow_offset'],meta['foreground_slow_count'],

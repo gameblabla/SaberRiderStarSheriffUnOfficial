@@ -21,8 +21,8 @@ typedef struct __attribute__((packed)) {
     uint16_t nforeground_slow;
     uint16_t foreground_first;
     uint16_t cols;
-    uint16_t speed; /* Q8 pixels per source frame (wrapped) or camera pixel. */
-    uint8_t wrap;
+    uint16_t speed; /* Q8 pixels per foreground camera pixel. */
+    uint8_t wrap; /* Nonzero: repeat source columns, keeping a continuous BAT. */
     uint32_t near_map;
     uint16_t near_cols,near_first_tile,near_speed;
     uint8_t split_row;
@@ -66,13 +66,19 @@ extern volatile uint8_t pce_sgx_arena_bg_pending_page;
 extern volatile uint16_t pce_sgx_sprite_id;
 extern volatile uint8_t pce_sgx_sprite_slot, pce_sgx_sprite_upload_ok;
 extern uint8_t pce_sgx_hero_first;
-extern uint8_t pce_sgx_split_active,pce_sgx_split_count,pce_sgx_split_last;
+extern uint8_t pce_sgx_split_active,pce_sgx_split_count,pce_sgx_split_last,pce_sgx_split_last_lo;
 extern uint8_t pce_sgx_actor_plane[8],pce_sgx_actor_stage;
 
 void pce_sgx_detect_init(void);
 void pce_sgx_display_on_body(void);
 void pce_sgx_ui_load_body(void);
 void pce_sgx_ui_end_body(void);
+void pce_sgx_select_body(void);
+void pce_sgx_select_animate_body(void);
+void pce_sgx_budget_body(void);
+extern volatile uint8_t pce_sgx_select_animation_phase;
+extern uint8_t pce_sgx_select_animation_reset;
+extern uint8_t pce_sgx_select_hero, pce_sgx_select_page, pce_sgx_select_phase;
 void pce_sgx_gameplay_begin_body(void);
 void pce_sgx_gameplay_end_body(void);
 void pce_sgx_sky_load_body(void);

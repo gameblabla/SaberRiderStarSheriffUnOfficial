@@ -63,10 +63,12 @@ class Campaign(Test):
         scene=manifest['scenes'][stage-1]
         blob=(self.out/f's{stage}.bin').read_bytes()
         _,_,address,size,_=struct.unpack_from('<IIIHB',blob,scene['boss_big_offset']+15*level)
-        for vdc in ('vram0','vram1'):
-            actual=bytes.fromhex(e.call('asread',vdc,(0x4800+16*256)*2,size)['hex'])
-            assert actual==blob[address:address+size],(stage,level,vdc,'boss hull patterns differ')
-        self.results[f'stage{stage}_hull_patterns']='Both VDCs match the stage archive'
+        # The platform hull lives on VDC1; VDC0 owns independent foreground
+        # patterns at the same addresses. Requiring a mirrored hull there
+        # would erase the very foreground this campaign must retain.
+        actual=bytes.fromhex(e.call('asread','vram1',(0x4800+16*256)*2,size)['hex'])
+        assert actual==blob[address:address+size],(stage,level,'vram1','boss hull patterns differ')
+        self.results[f'stage{stage}_hull_patterns']='VDC1 matches the stage archive'
     def press(self,e,key,n=30):
         ui=symbol(self.out/'app.elf','pce_ui_state')
         # Between selection and stage readiness, the loader does not poll

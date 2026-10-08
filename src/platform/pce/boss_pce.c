@@ -50,7 +50,8 @@ static uint32_t hull_patterns;   /* the pattern set in VRAM: poses of one ship s
 #ifdef PCE_SGX
 static uint32_t hull_upload_address PCE_WORK;
 static uint16_t hull_upload_bytes PCE_WORK;
-PCE_COMBAT static void hull_mirror_body(void) {
+__attribute__((noinline,minsize,section(".ram_bank120.text")))
+static void hull_mirror_body(void) {
     if(pce_sgx_gameplay())
         arcade_vram_to(1,hull_upload_address,PCE_SPR_WORD+16*256,hull_upload_bytes);
 }
@@ -98,13 +99,13 @@ PCE_MISSION static void hull_load(void) {
         if(!pce_sgx_gameplay())arcade_vram(record[2],PCE_SPR_WORD+16*256,bytes);
 #ifdef PCE_SGX
         hull_upload_address=record[2];hull_upload_bytes=bytes;
-        overlay_call(0x70,hull_mirror_body);
+        overlay_call(0x78,hull_mirror_body);
 #endif
         hull_patterns=record[2];
         /* The hull's patterns replace cache pages that retained foreground chunks may still draw from: their SAT
          * entries would keep showing the new ship's graphics (the tower's middle as boss frames, persisting after
          * the sniper is gone). Drop the retained list so the same frame re-admits them beside the hull. */
-        foreground_reset();
+        if(!pce_sgx_gameplay())foreground_reset();
     }
     pce_vce_copy_palette(30,colors,1);
     hull_ready=1;
@@ -114,28 +115,72 @@ PCE_MISSION static void hull_load(void) {
  * moved those actors to the remaining cache. Only then may hull_load overwrite
  * the old patterns or palette 14. This runs before boss HP enables hull drawing. */
 #ifdef PCE_SGX
+static uint8_t hull_hold_tail PCE_WORK;
+__attribute__((noinline,minsize,section(".ram_bank128.text")))
+static void hull_claim_tail_body(void) {
+    for(uint8_t p=0;p<54;++p) {
+        if(p>=16&&p<40)continue;
+        uint8_t owner=pattern_owner1[p];
+        if(!owner)continue;
+        if(hull_hold_tail) {
+            /* A displaced object's old SAT can still read the pages outside
+               the hull range. Hold them too while its new copy is uploaded;
+               clearing its VDC1-valid bit must not free displayed patterns. */
+            if(!(sprite_pb_hi[owner-1]&0x80))pattern_owner1[p]=48;
+        } else if(owner==48||sprite_ids[owner-1]==0xffff)pattern_owner1[p]=0;
+    }
+}
+#endif
+#ifdef PCE_SGX
 PCE_COMBAT
 #else
 PCE_MISSION
 #endif
 static void hull_claim(void) {
+    uint8_t *owners=pattern_owner;
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay())owners=pattern_owner1;
+#endif
     for(uint8_t p=16;p<40;++p) {
-        uint8_t owner=pattern_owner[p];
-        if(owner)sprite_ids[owner-1]=0xffff;
-        pattern_owner[p]=48;
+        uint8_t owner=owners[p];
+        if(owner) {
+#ifdef PCE_SGX
+            if(pce_sgx_gameplay()) {
+                sprite_pb_hi[owner-1]&=~0x80;
+                if(!(sprite_pb_hi[owner-1]&0x40))sprite_ids[owner-1]=0xffff;
+            } else
+#endif
+            sprite_ids[owner-1]=0xffff;
+        }
+        owners[p]=48;
     }
     sprite_ids[14]=0xffff;sprite_pinned[14]=250;sprite_pinned[47]=250;
-    foreground_reset();
+    if(!pce_sgx_gameplay())foreground_reset();
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay()) {
+        hull_hold_tail=1;overlay_call(0x80,hull_claim_tail_body);
+    }
+#endif
     overlay_call(0x7b,play_draw);
     video_wait();
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay()) {
+        hull_hold_tail=0;overlay_call(0x80,hull_claim_tail_body);
+        return;
+    }
+#endif
     for(uint8_t p=0;p<54;++p) {
         if(p>=16&&p<40)continue;
-        uint8_t owner=pattern_owner[p];
-        if(owner&&sprite_ids[owner-1]==0xffff)pattern_owner[p]=0;
+        uint8_t owner=owners[p];
+        if(owner&&sprite_ids[owner-1]==0xffff)owners[p]=0;
     }
 }
 PCE_MISSION void boss_release(void) {
-    for(uint8_t p=16;p<40;++p)pattern_owner[p]=0;
+    uint8_t *owners=pattern_owner;
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay())owners=pattern_owner1;
+#endif
+    for(uint8_t p=16;p<40;++p)owners[p]=0;
     sprite_pinned[14]=sprite_pinned[47]=0;hull_ready=0;hull_patterns=0;
 }
 PCE_MISSION void boss_start(void) {
@@ -302,7 +347,12 @@ __attribute__((minsize)) BOSS_CODE void boss_tick(void) {
 }
 static bool hull_flip,hull_white;
 /* The hull's 32x32 pieces: the sprite-allocation bank ($74) has the room, the race core's bank is full. */
-__attribute__((noinline,section(".ram_bank116.text"))) static void hull_body(void) {
+#ifdef PCE_SGX
+__attribute__((noinline,section(".ram_bank128.text")))
+#else
+__attribute__((noinline,section(".ram_bank116.text")))
+#endif
+static void hull_body(void) {
     bool flip=hull_flip;
     if(!hull_ready)overlay_call(0x6f,hull_load);
     sprite_pinned[14]=sprite_pinned[47]=250;
@@ -321,7 +371,14 @@ __attribute__((noinline,section(".ram_bank116.text"))) static void hull_body(voi
             VDC_SPRITE_FG|14|VDC_SPRITE_WIDTH_32|VDC_SPRITE_HEIGHT_32|(piece_flip?VDC_SPRITE_FLIP_X:0)};
     }
 }
-BOSS_DRAW static void hull(bool flip) {hull_flip=flip;overlay_call(0x74,hull_body);}
+BOSS_DRAW static void hull(bool flip) {
+    hull_flip=flip;
+#ifdef PCE_SGX
+    overlay_call(0x80,hull_body);
+#else
+    overlay_call(0x74,hull_body);
+#endif
+}
 /* Claim/reload the hull before any actors or retained foreground are admitted.
  * A draw-time reload could otherwise invalidate patterns already in this SAT. */
 PCE_HUD void boss_prepare(void) {

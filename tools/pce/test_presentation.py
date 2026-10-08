@@ -21,7 +21,11 @@ def verify(out):
     with tempfile.TemporaryDirectory(prefix='presentation-',dir=out) as base,Emulator(out/'saber_rider.cue',base) as e:
         e.run(120);e.input(8);e.run(5);e.input(0)
         options=symbol(out/'app.elf','pce_options.0');conts=symbol(out/'app.elf','pce_continues')
-        t.until(e,lambda:e.memory(ui,1)==b'\1',limit=20000);e.run(360);picture(e,'title')
+        # BIOS/work RAM can contain 1 at the future UI address before the
+        # application starts. Require its initialized metrics before capturing.
+        t.until(e,lambda:e.memory(t.address,4)==b'SRPC' and
+                e.memory(t.address+6,1)==b'\x0f' and e.memory(ui,1)==b'\1',
+                limit=20000);e.run(360);picture(e,'title')
         # Options: difficulty to HARD caps lives/continues at 3; music volume cycles.
         t.press(e,64);t.press(e,1);t.until(e,lambda:e.memory(ui,1)==b'\3');e.run(200);picture(e,'options')
         t.press(e,32)                                                # difficulty NORMAL -> HARD

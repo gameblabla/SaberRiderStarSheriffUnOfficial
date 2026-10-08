@@ -4,6 +4,9 @@ extern uint16_t sprite_ids[48],sprite_words[48];
 extern uint8_t sprite_used[48],sprite_pinned[48],pattern_owner[54];
 #ifdef PCE_SGX
 #define PCE_SPRITE_IDS 512
+extern uint16_t sprite_words1[48];
+extern uint8_t pattern_owner1[54];
+void pce_sgx_cache_upload_body(void);
 #else
 #define PCE_SPRITE_IDS 480
 #endif

@@ -389,7 +389,9 @@ PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8
             uint32_t pal = (uint32_t)entry[8] | (uint32_t)entry[9]<<8 | (uint32_t)entry[10]<<16 | (uint32_t)entry[11]<<24;
             pce_vdc_index = 2; *(volatile uint8_t *)0x20f7 = 2;
 #ifdef PCE_SGX
-            arcade_vram_to(sgx_vdc1?1:0,pat,sprite_words[slot],count*128);
+            uint16_t word=sprite_words[slot];
+            if(sgx_vdc1&&pce_metrics.stage<6&&pce_metrics.stage!=2)word=sprite_words1[slot];
+            arcade_vram_to(sgx_vdc1?1:0,pat,word,count*128);
 #else
             arcade_vram(pat,sprite_words[slot],count*128);
 #endif
@@ -412,7 +414,7 @@ PCE_RENDER bool video_sprite(uint16_t id, int16_t x, int16_t y, bool flip, uint8
 #ifdef PCE_SGX
     if(!(sprite_pb_hi[slot]&(sgx_vdc1?0x80:0x40))) {
         pce_sgx_sprite_id=id;pce_sgx_sprite_slot=slot;
-        overlay_call(0x78,pce_sgx_sprite_upload_body);
+        overlay_call(0x80,pce_sgx_cache_upload_body);
         if(!pce_sgx_sprite_upload_ok) {
             if(!sprite_optional)++pce_metrics.essential_overflow;
             return false;
@@ -491,11 +493,20 @@ PCE_RENDER static void sat_publish(uint16_t word,bool drawing) {
 PCE_RENDER void video_sat_commit(uint16_t word) {sat_publish(word,true);}
 /* Retirement and pause retain the displayed coordinates, including while a
  * new draw is held. They must not move old entries to that draw's camera. */
-PCE_RENDER void video_sat_replace(uint16_t word) {sat_publish(word,false);}
+#ifdef PCE_SGX
+static uint8_t sat_previous_count[2]={64,64};
+#endif
+PCE_RENDER void video_sat_replace(uint16_t word) {
+#ifdef PCE_SGX
+    /* Retirement/pause write a whole table outside the normal draw path. */
+    sat_previous_count[word==PCE_SAT_ALT_WORD]=64;
+#endif
+    sat_publish(word,false);
+}
 /* HUD, foreground occluders, then actors: lower SAT slots win. Each inactive
  * source receives a complete table, including a hidden tail. Its previous
  * entry count may differ from both the displayed table and the RAM page. */
-PCE_RENDER void video_sat_end(void) {
+PCE_RENDER __attribute__((minsize)) void video_sat_end(void) {
     uint16_t word=video_sat_target();
     vdc_sprite_t *s = sat[sat_page];
     if(!(pce_metrics.frames&31)){uint8_t peak=0;for(uint8_t l=0,n=sprite_exact?224:30;l<n;++l)if(sprite_occupancy[l]>peak)peak=sprite_occupancy[l];
@@ -510,8 +521,17 @@ PCE_RENDER void video_sat_end(void) {
         if(front_start>front_keep)
             sat_transfer(word+(uint16_t)(front_keep+fg)*4,s+front_keep,(uint16_t)(front_start-front_keep)*8);
     } else if(sat_count)sat_transfer(word,s,(uint16_t)sat_count*8);
+#ifdef PCE_SGX
+    /* Clear every formerly live entry in this source, then leave its already
+     * hidden tail alone. Each alternating VRAM source has its own history. */
+    uint8_t page=word==PCE_SAT_ALT_WORD,previous=sat_previous_count[page];
+    if(sat_count<previous)
+        sat_transfer(word+(uint16_t)sat_count*4,s+sat_count,(uint16_t)(previous-sat_count)*8);
+    sat_previous_count[page]=sat_count;
+#else
     if(sat_count<64)
         sat_transfer(word+(uint16_t)sat_count*4,s+sat_count,(uint16_t)(64-sat_count)*8);
+#endif
     video_sat_commit(word);
     pce_metrics.sat_count = sat_count;
 }

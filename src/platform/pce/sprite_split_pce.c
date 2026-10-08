@@ -12,7 +12,14 @@
 
 extern uint8_t buffer[2048];
 extern uint8_t actors_mode;
-extern uint8_t sat_count,sat_page,sprite_occupancy[240],sprite_last_free;
+extern uint8_t sprite_exact,sprite_lines_hi,sat_page,sprite_occupancy[240];
+extern void sprite_lines_select(void);
+__attribute__((noinline,minsize,section(".ram_bank110.text")))
+void pce_sgx_budget_body(void) {
+    sprite_lines_hi=(uint16_t)(sat_page?buffer+512:sprite_occupancy)>>8;
+    sprite_lines_select();
+}
+extern uint8_t sat_count,sat_page,sprite_occupancy[240],sprite_last_free,sprite_last_lo;
 
 extern vdc_sprite_t sat[2][64];
 extern void sprite_lines_clear(void);
@@ -21,7 +28,7 @@ extern uint8_t hud_copy_opcode;
 extern void hud_copy(void);
 /* Short hardware block transfers leave the PCM IRQ serviceable. This also
    supports forward overlapping moves when dst precedes src. */
-__attribute__((noinline,minsize,section(".ram_bank107.text")))
+__attribute__((noinline,minsize,section(".ram_bank106.text")))
 void pce_sgx_copy(void *dst,const void *src,uint16_t bytes) {
     if(!bytes)return;
     hud_copy_src=(uint16_t)src;hud_copy_dst=(uint16_t)dst;
@@ -30,7 +37,7 @@ void pce_sgx_copy(void *dst,const void *src,uint16_t bytes) {
 extern void sprite_lines_release(void),sprite_lines_reserve(void);
 extern uint8_t sprite_line_lo,sprite_line_hi;
 uint8_t pce_sgx_hero_first PCE_WORK;
-uint8_t pce_sgx_split_active PCE_WORK,pce_sgx_split_count PCE_WORK,pce_sgx_split_last PCE_WORK;
+uint8_t pce_sgx_split_active PCE_WORK,pce_sgx_split_count PCE_WORK,pce_sgx_split_last PCE_WORK,pce_sgx_split_last_lo PCE_WORK;
 uint8_t pce_sgx_actor_plane[8] PCE_WORK,pce_sgx_actor_stage PCE_WORK;
 
 /* The front plane's entire scanline budget belongs to the foreground. Move
@@ -45,17 +52,24 @@ static void platform_begin_body(void) {
         sprite_line_lo=y<0?0:y;sprite_line_hi=y+16>224?224:y+16;
         sprite_lines_release();
     }
-    pce_sgx_split_count=sat_count;pce_sgx_split_last=sprite_last_free;pce_sgx_split_active=1;
-    pce_sgx_copy(buffer+256,sprite_occupancy,240);
-    sat_page=1;sat_count=count;sprite_lines_clear();
+    /* Reserve the foreground's VDC0 SAT and scanlines before actors/shots
+       retry there. Otherwise firing steals those slots and makes retained
+       scenery blink. This prefix is restored after the VDC1 pass. */
+    overlay_call(0x75,foreground_draw);
+    pce_sgx_split_count=sat_count;pce_sgx_split_last=sprite_last_free;pce_sgx_split_last_lo=sprite_last_lo;pce_sgx_split_active=1;
+    sat_page=1;sat_count=count;
+    overlay_call(0x6e,pce_sgx_budget_body);sprite_lines_clear();
     if(count) {
         uint8_t slot=sprite_slot_of[hero_sprite];
         if(!(sprite_pb_hi[slot]&0x80)) {
             pce_sgx_sprite_id=hero_sprite;pce_sgx_sprite_slot=slot;
-            overlay_call(0x78,pce_sgx_sprite_upload_body);
+            overlay_call(0x80,pce_sgx_cache_upload_body);
             if(pce_sgx_sprite_upload_ok)sprite_pb_hi[slot]|=0x80;
         }
+        if(!(sprite_pb_hi[slot]&0x80))sat_count=count=0;
+        int16_t shift=(int16_t)(sprite_words1[slot]-sprite_words[slot])/32;
         for(uint8_t k=0;k<count;++k) {
+            sat[1][k].pattern+=shift;
             int16_t y=(int16_t)sat[1][k].y-64;
             sprite_line_lo=y<0?0:y;sprite_line_hi=y+16>224?224:y+16;
             sprite_lines_reserve();
@@ -84,7 +98,6 @@ void pce_sgx_story_world_body(void) {
     video_sprite(hero_sprite,player.x-camera,player.y-16,facing,16);
     overlay_call(0x74,foreground_prepare);
     overlay_call(0x72,pce_sgx_platform_actor_pass_body);
-    overlay_call(0x75,foreground_draw);
 }
 
 /* Keep HUD and foreground on VDC0, and draw the platform actors on VDC1. */
@@ -128,7 +141,7 @@ SGX_SPLIT_CODE void pce_sgx_platform_actor_pass_body(void) {
     overlay_call(0x78,pce_sgx_vdc1_sat_upload_body);
 
     pce_sgx_split_active=0;
-    sat_page=0;sat_count=pce_sgx_split_count;sprite_last_free=pce_sgx_split_last;
-    pce_sgx_copy(sprite_occupancy,buffer+256,240);
+    sat_page=0;sat_count=pce_sgx_split_count;sprite_last_free=pce_sgx_split_last;sprite_last_lo=pce_sgx_split_last_lo;
+    overlay_call(0x6e,pce_sgx_budget_body);
 }
 #endif

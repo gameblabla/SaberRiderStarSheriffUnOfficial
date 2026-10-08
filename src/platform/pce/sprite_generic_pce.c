@@ -2,6 +2,7 @@
 #include "arcade_pce.h"
 #include "sprite_cache_pce.h"
 #include "assets.h"
+#include "sgx_pce.h"
 /* Sprite pieces placed one by one (the generic path of video_sprite: a sprite the assembly emitter cannot take). This slow path lives in the $71
  * overlay so the renderer bank keeps room for its hot paths. */
 extern vdc_sprite_t sat[2][64];
@@ -26,7 +27,11 @@ __attribute__((noinline,section(".ram_bank113.text"))) void sprite_generic(void)
         sprite_line_lo=lo;sprite_line_hi=hi;sprite_lines_reserve();
         if(!sprite_line_ok)goto refused;
         uint16_t pattern = d[4] | (uint16_t)d[5]<<8;
-        uint16_t vram_pattern=(sprite_words[slot]>>5)+pattern*2;
+        uint16_t word=sprite_words[slot];
+#ifdef PCE_SGX
+        if(sat_page==1&&pce_sgx_gameplay()&&pce_metrics.stage<6&&pce_metrics.stage!=2)word=sprite_words1[slot];
+#endif
+        uint16_t vram_pattern=(word>>5)+pattern*2;
         sat[sat_page][sat_count++] = (vdc_sprite_t){py + 64, px + 32,
             vram_pattern,
             sprite_attr[slot] | (flip ? VDC_SPRITE_FLIP_X : 0)};

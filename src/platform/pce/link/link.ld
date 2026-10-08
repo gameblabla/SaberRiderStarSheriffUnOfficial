@@ -47,3 +47,6 @@ ASSERT((hud_copy & 0xffff) >= 0x8000 && (hud_copy & 0xffff) < 0xa000 &&
 ASSERT((hud_copy_len & 0xffff) >= 0x8000 && (hud_copy_len & 0xffff) < 0xa000 &&
        (hud_copy_opcode & 0xffff) >= 0x8000 && (hud_copy_opcode & 0xffff) < 0xa000,
        "Shared copy length and opcode must remain always mapped")
+
+/* SGX switches patch high bytes; offsets +0..15 stay on one page. */
+ASSERT((sprite_occupancy & 255) <= 240, "Sprite budget operand offsets cross a page")

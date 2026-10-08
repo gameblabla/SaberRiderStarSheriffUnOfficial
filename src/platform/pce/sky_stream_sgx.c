@@ -18,8 +18,6 @@ extern uint8_t sat1_previous_count[2];
 static uint16_t sky_cursor PCE_WORK;
 static uint8_t sky_held_count PCE_WORK;
 static uint16_t sky_near_first PCE_WORK;
-static uint32_t sky_phase PCE_WORK;
-static uint8_t sky_tick PCE_WORK;
 volatile uint16_t pce_sgx_sky_near_x PCE_WORK;
 volatile uint8_t pce_sgx_sky_split_line PCE_WORK;
 #define SKY_DIR 0x0000
@@ -67,7 +65,9 @@ static inline void sky_write(uint8_t reg,uint16_t word) {
 SKY_CODE void pce_sgx_sky_load_body(void) {
     const PceScene *scene=&pce_scenes[pce_metrics.stage-1];
     pce_sgx_sky_first=sky_near_first=0xffff;sky_cursor=0;sky_held_count=0;
-    sky_phase=0;sky_tick=pce_ticks;pce_sgx_sky_split_line=0;
+    pce_sgx_sky_split_line=0;
+    for(uint8_t p=0;p<54;++p)pattern_owner1[p]=0;
+    pce_sgx_sky.cols=0;
     pce_sgx_metrics.paired_screen|=PCE_SGX_STATIC_SKY;
     __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
     sky_write(VDC_REG_CONTROL,0);
@@ -103,14 +103,10 @@ SKY_CODE static uint16_t camera_offset(uint16_t speed) {
 SKY_CODE void pce_sgx_sky_stream_body(void) {
     const PceSgxSkyRecord *s=&pce_sgx_sky;
     if(!s->cols)return;
-    uint8_t elapsed=pce_ticks-sky_tick;sky_tick=pce_ticks;
-    uint16_t offset;
-    if(s->wrap==1) {
-        sky_phase+=(uint16_t)elapsed*s->speed;
-        uint32_t period=(uint32_t)s->cols<<11;
-        while(sky_phase>=period)sky_phase-=period;
-        offset=sky_phase>>8;
-    } else offset=camera_offset(s->speed);
+    /* Both planes follow the same draw's camera. Moving within a locked
+       foreground view cannot move the sky; source repetition is independent
+       of the monotonic BAT column coordinate. */
+    uint16_t offset=camera_offset(s->speed);
     uint16_t offsets[2]={offset,camera_offset(s->near_speed)};
     uint16_t firsts[2]={offsets[0]>>3,offsets[1]>>3};
     uint16_t olds[2]={pce_sgx_sky_first,sky_near_first};
@@ -119,6 +115,15 @@ SKY_CODE void pce_sgx_sky_stream_body(void) {
     for(uint8_t b=0;b<bands;++b)
         if(olds[b]!=0xffff&&firsts[b]!=olds[b]&&firsts[b]!=olds[b]+1&&firsts[b]+1!=olds[b])jump=true;
     cache_setup();
+    /* A refill reuses the whole cache. Hide the old BAT until every new
+       column exists; in particular never expose the menu BAT at startup. */
+    bool refill=jump||olds[0]==0xffff;
+    if(refill) {
+        __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
+        sky_write(VDC_REG_CONTROL,0);
+        pce_sgx_vdc1_hidden=1;
+        __attribute__((leaf)) asm volatile("plp" ::: "p","memory");
+    }
     if(jump) {
         cache_fill(SKY_REFS,0,1792);cache_fill(SKY_COLUMNS,0xff,3960);
         olds[0]=olds[1]=0xffff;sky_held_count=0;
@@ -183,18 +188,20 @@ SKY_CODE void pce_sgx_sky_stream_body(void) {
                 cells[y*3]=word;cells[y*3+1]=word>>8;
             }
             __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
-            sky_write(VDC_REG_CONTROL,control|0x1000);
+            sky_write(VDC_REG_CONTROL,(refill?0:control)|0x1000);
             sky_write(VDC_REG_VRAM_WRITE_ADDR,(uint16_t)y0*64+(col&63));
             sky_index(VDC_REG_VRAM_DATA);
             for(uint8_t y=y0;y<y1;++y) {
                 *IO_VDC2_DATA_LO=cells[y*3];*IO_VDC2_DATA_HI=cells[y*3+1];
             }
-            (void)*IO_VDC2_DATA_LO;sky_write(VDC_REG_CONTROL,control);
+            (void)*IO_VDC2_DATA_LO;sky_write(VDC_REG_CONTROL,refill?0:control);
             __attribute__((leaf)) asm volatile("plp" ::: "p","memory");
         }
     }
     pce_sgx_sky_first=firsts[0];sky_near_first=firsts[1];
     pce_sgx_sky_scroll_x=offsets[0];pce_sgx_sky_near_x=offsets[1];
+    /* The shared SAT VBlank enables VDC1 after installing this window's
+       scroll and actor table. Re-enabling here would expose the old scroll. */
 }
 
 extern vdc_sprite_t sat[2][64];

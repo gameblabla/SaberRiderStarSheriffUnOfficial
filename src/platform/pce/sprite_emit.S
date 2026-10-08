@@ -23,6 +23,7 @@
 .extern sprite_pb_hi, sprite_attr, sprite_words
 #ifdef PCE_SGX
 .extern pce_sgx_metrics
+.extern sprite_words1
 #endif
 .extern arcade_tai, arcade_tai_src, arcade_tai_dst, arcade_tai_len
 sprite_fast:
@@ -105,9 +106,24 @@ sprite_fast:
     txa
     asl
     tax
+#ifdef PCE_SGX
+    lda pce_sgx_metrics+5
+    and #0x40
+    beq .Lpattern_vdc0
+    lda sat_page
+    beq .Lpattern_vdc0
+    lda sprite_words1,x
+    sta $20d4
+    lda sprite_words1+1,x
+    bra .Lpattern_word
+.Lpattern_vdc0:
+#endif
     lda sprite_words,x
     sta $20d4
     lda sprite_words+1,x
+#ifdef PCE_SGX
+.Lpattern_word:
+#endif
     sta $20d5
     lda $20d4
     lsr

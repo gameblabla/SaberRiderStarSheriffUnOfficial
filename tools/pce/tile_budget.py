@@ -12,9 +12,13 @@ from formats import vce_rgb
 WINDOW = 33
 REACH = 8                  # candidate replacements come from this many columns either side
 
-def presence(grid, window=WINDOW):
+def presence(grid, window=WINDOW, wrap=False):
     """(tiles, windows) bool: which 33-column windows contain each tile."""
     rows, cols = grid.shape
+    if wrap:
+        # Include every seam-crossing window, even for panoramas narrower
+        # than one display. The runtime repeats source columns modulo cols.
+        return presence(grid[:, np.arange(cols + window - 1) % cols], window)
     n_windows = max(cols - window + 1, 1)
     p = np.zeros((int(grid.max()) + 1, n_windows), bool)
     for x in range(cols):
@@ -22,7 +26,7 @@ def presence(grid, window=WINDOW):
         p[np.unique(grid[:, x]), lo:hi + 1] = True
     return p
 
-def limit_tiles(cells, indices, groups, palettes, cols, cap, reserved=(), full_map=False):
+def limit_tiles(cells, indices, groups, palettes, cols, cap, reserved=(), full_map=False, wrap=False):
     """cells: (n, 8, 8, 4) source RGBA; indices: (n, 8, 8) palette indices; groups: (n,) palette numbers
     (band * 4 + k); all row-major. Returns (indices, groups, merged cells), copies."""
     indices = np.array(indices, np.uint8); groups = np.array(groups, np.uint8)
@@ -31,7 +35,7 @@ def limit_tiles(cells, indices, groups, palettes, cols, cap, reserved=(), full_m
     uniq, inverse = np.unique(flat, axis=0, return_inverse=True)
     inverse = inverse.reshape(-1).astype(np.int64)
     window = cols if full_map else WINDOW
-    if presence(inverse.reshape(rows, cols),window).sum(0).max() <= cap: return indices, groups, 0
+    if presence(inverse.reshape(rows, cols),window,wrap).sum(0).max() <= cap: return indices, groups, 0
     colours = [vce_rgb(p).astype(np.int32) for p in palettes]
     candidates = [p for p in range(len(palettes)) if p not in reserved]   # any palette: the cells are no longer grouped in bands
     colours[15][15] = 4096        # BG colour 255 is the text font's white at runtime: never a candidate for a baked cell
@@ -40,7 +44,7 @@ def limit_tiles(cells, indices, groups, palettes, cols, cap, reserved=(), full_m
     merged = 0
     for _ in range(40):
         grid = inverse.reshape(rows, cols)
-        p = presence(grid,window)
+        p = presence(grid,window,wrap)
         excess = p.sum(0) - cap
         if excess.max() <= 0: break
         weight = np.bincount(inverse, minlength=len(uniq))
@@ -50,7 +54,8 @@ def limit_tiles(cells, indices, groups, palettes, cols, cap, reserved=(), full_m
         moves = []
         for a in np.nonzero(crowded)[0]:
             i = cell_of[a]; x = i % cols
-            near = np.unique(grid[:, max(x - REACH, 0):x + REACH + 1]); near = near[near != a]
+            near = np.unique(grid[:, np.arange(x-REACH,x+REACH+1)%cols] if wrap else
+                             grid[:, max(x - REACH, 0):x + REACH + 1]); near = near[near != a]
             if not len(near): continue
             best = None
             for pal in candidates:

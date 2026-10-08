@@ -69,7 +69,15 @@ PCE_CODE static void advance(int16_t *p,uint8_t *fraction,int16_t velocity) {
     int16_t sum=(int16_t)*fraction+velocity;
     *p+=sum>>8;*fraction=sum;
 }
-PCE_CODE static void physics(Body *b) {
+PCE_CODE __attribute__((minsize)) static void physics(Body *b) {
+#ifdef PCE_SGX
+    /* Platform collision data is immutable. A stationary grounded enemy
+     * cannot leave its floor until its AI gives it a velocity. Preserve the
+     * gravity fraction, but avoid probing the same floor every catch-up step. */
+    if(b!=&player && !b->vx && !b->vy && (b->coll&4)) {
+        b->fy+=34;b->coll=4;return;
+    }
+#endif
     uint8_t prior=b->coll,ground=b->ground;
     b->vy+=34;if(b->vy>2560) b->vy=2560;
     advance(&b->x,&b->fx,b->vx);advance(&b->y,&b->fy,b->vy);
@@ -354,7 +362,7 @@ PCE_BOSS void play_draw(void) {
     bool herd=false;
     for(uint8_t k=0;k<8;++k)if(actors[k].active&&actors[k].type==11)herd=true;
 #ifdef PCE_SGX
-    if(!herd||sgx_foreground_stage)overlay_call(0x75,foreground_draw);
+    if(!sgx_foreground_stage&&!herd)overlay_call(0x75,foreground_draw);
 #else
     if(!herd)foreground_draw();
 #endif
@@ -364,6 +372,10 @@ PCE_BOSS void play_draw(void) {
     /* Move the world together; HUD entries precede video_front_mark and stay fixed.
      * Apply after admission so a changing shake never splits horse columns. */
     uint8_t shake_y=herd_on?((frame*13^(frame>>2))&3):0;
+    #ifdef PCE_SGX
+    /* VDC0 foreground stays grounded; actors shake independently on VDC1. */
+    if(sgx_foreground_stage)shake_y=0;
+#endif
     if(shake_y)for(uint8_t i=world_first;i<sat_count;++i)sat[sat_page][i].y-=shake_y;
     pce_scroll_y=shake_y;
     video_sat_end();

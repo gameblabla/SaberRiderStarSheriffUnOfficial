@@ -7,6 +7,7 @@ extern uint8_t buffer[2048];
 #include "campaign_pce.h"
 #include "audio_pcm.h"
 #include "overlay_pce.h"
+#include "sgx_pce.h"
 
 /* Continue, game over and credits share the options panel. */
 #define CREDITS_CODE __attribute__((noinline,section(".ram_bank113.text")))
@@ -52,7 +53,11 @@ CREDITS_CODE void frontend_game_over(void) {
     uint8_t shown=0;
     for(uint16_t t=0;;++t) {
         video_wait();ui_read_keys();
-        if(!(t&7)&&pulse[(t>>3)&7]!=shown) {
+        if(
+#ifdef PCE_SGX
+           !pce_sgx_active &&
+#endif
+           !(t&7)&&pulse[(t>>3)&7]!=shown) {
             shown=pulse[(t>>3)&7];
             arcade_read(2,PCE_UI_GAMEOVER_GLOW+(uint32_t)shown*PCE_UI_GAMEOVER_SLOTS*32,buffer,PCE_UI_GAMEOVER_SLOTS*32);
             pce_vce_copy_palette(PCE_UI_GAMEOVER_SLOT,buffer,PCE_UI_GAMEOVER_SLOTS);

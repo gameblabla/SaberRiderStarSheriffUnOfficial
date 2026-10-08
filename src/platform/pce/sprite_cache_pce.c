@@ -3,11 +3,18 @@
 #include "arcade_pce.h"
 #include "overlay_pce.h"
 #include "sgx_pce.h"
+#include "campaign_pce.h"
+extern uint8_t sat_page;
 uint16_t sprite_ids[48],sprite_words[48];
 uint8_t sprite_stamp[48],sprite_epoch;
 uint8_t sprite_used[48],sprite_pinned[48],pattern_owner[54];
 uint8_t sprite_slot_of[PCE_SPRITE_IDS],sprite_count[48],sprite_len[48],sprite_p0[48],sprite_p1[48],sprite_p2[48];
 #ifdef PCE_SGX
+/* Bank $68 stays mapped at $4000 throughout every overlay and stage load.
+ * Only platform scenes use the independent VDC1 pattern directory. Palette
+ * slots, descriptors and generation pins remain shared through the VCE. */
+uint16_t sprite_words1[48] __attribute__((section(".ram_bank104.cache")));
+uint8_t pattern_owner1[54];
 uint8_t sprite_pb_hi[48] PCE_WORK,sprite_attr[48] PCE_WORK;
 #else
 uint8_t sprite_pb_hi[48],sprite_attr[48];
@@ -34,7 +41,19 @@ CACHE_CODE static void allocate(void) {
     const PceScene *s=&pce_scenes[pce_metrics.stage-1];
     cache_result=48;
     uint8_t known=sprite_slot_of[id];
+#ifdef PCE_SGX
+    bool split=pce_sgx_gameplay()&&pce_metrics.stage<6&&pce_metrics.stage!=2;
+    bool second=split&&sat_page==1;
+    uint8_t bit=second?0x80:0x40;
+    uint8_t *owners=second?pattern_owner1:pattern_owner;
+    uint16_t *words=second?sprite_words1:sprite_words;
+    bool cached=known<48&&sprite_ids[known]==id;
+    if(cached&&(!split||(sprite_pb_hi[known]&bit))){cache_result=known;return;}
+#else
+    uint8_t *owners=pattern_owner;
+    uint16_t *words=sprite_words;
     if(known<48&&sprite_ids[known]==id){cache_result=known;return;}
+#endif
     if(sprite_cache_stage!=pce_metrics.stage) {
         sprite_cache_foreground_first=65535;
         if(s->nforeground)arcade_read(2,s->foreground+4,&sprite_cache_foreground_first,2);
@@ -54,6 +73,11 @@ CACHE_CODE static void allocate(void) {
 #endif
     cache_result=48;
     uint8_t slot=high;
+#ifdef PCE_SGX
+    if(cached)slot=known;
+    else
+#endif
+    {
     for(uint8_t i=low;i<high;++i)
         if(!sprite_used[i]&&!sprite_pinned[i]&&sprite_ids[i]==0xffff){slot=i;break;}
     if(slot==high) {
@@ -64,6 +88,7 @@ CACHE_CODE static void allocate(void) {
         }
     }
     if(slot==high)return;
+    }
     /* Prefer empty pages, then the block whose youngest owner is oldest.
      * Live and pinned owners are protected in either case. */
     uint8_t pages=(count+3)>>2,chosen=255;
@@ -77,7 +102,18 @@ CACHE_CODE static void allocate(void) {
      * Use those six pages too, stopping before the alternate SAT at $7e00. */
     if(hud&&!herd_on)limit=54-pages;
 #ifdef PCE_SGX
+    /* Space panels need six contiguous pages. The last six cache pages are
+       free in space (the arena's fixed HUD is absent), even when both world
+       SAT generations still pin fragmented blocks below $7800. */
+    uint16_t dialog=pce_dialog_base[6];
+    if(pce_sgx_gameplay()&&pce_metrics.stage==7&&id>=dialog&&id<dialog+8)
+        limit=54-pages;
     if(hud&&herd_on&&pce_sgx_gameplay()&&id>=sprite_cache_foreground_first)limit=54-pages;
+    /* Protect VDC1's resident horses through all convoys. The subsequent
+       boss owns overlapping storage, so release the horse restriction then.
+       VDC0 foreground/HUD may use these addresses throughout the scene. */
+    if(second&&s->horse&&!pce_campaign.boss_kind&&limit>28-pages)
+        limit=28-pages;
 #endif
     uint8_t first=hud?14:pce_metrics.stage==2?6:0,step=1;
     if(icon){first=0;limit=4;step=4;}
@@ -95,7 +131,7 @@ CACHE_CODE static void allocate(void) {
         if(hud&&first==14&&base<=50&&base+pages>48)continue;
         bool available=true;uint8_t age=255;
         for(uint8_t p=base;p<base+pages;++p) {
-            uint8_t owner=pattern_owner[p];
+            uint8_t owner=owners[p];
             if(!owner||owner==slot+1)continue;
             if(sprite_used[owner-1]||sprite_pinned[owner-1]){available=false;break;}
             uint8_t elapsed=sprite_epoch-sprite_stamp[owner-1];
@@ -105,19 +141,47 @@ CACHE_CODE static void allocate(void) {
     }
     if(chosen==255)return;
     uint8_t base=chosen;
+#ifdef PCE_SGX
+    if(split&&!cached) {
+        /* Reusing a palette/descriptor slot retires its allocations on both
+           VDCs. The shared pins above protect either displayed generation. */
+        for(uint8_t q=0;q<54;++q) {
+            if(pattern_owner[q]==slot+1)pattern_owner[q]=0;
+            if(pattern_owner1[q]==slot+1)pattern_owner1[q]=0;
+        }
+        sprite_pb_hi[slot]=0;
+    }
+#endif
     for(uint8_t p=base;p<base+pages;++p) {
-        uint8_t owner=pattern_owner[p];
+        uint8_t owner=owners[p];
         if(owner) {
+#ifdef PCE_SGX
+            if(split) {
+                sprite_pb_hi[owner-1]&=~bit;
+                if(!sprite_pb_hi[owner-1])sprite_ids[owner-1]=0xffff;
+            } else
+#endif
             sprite_ids[owner-1]=0xffff;
-            for(uint8_t q=0;q<54;++q)if(pattern_owner[q]==owner)pattern_owner[q]=0;
+            for(uint8_t q=0;q<54;++q)if(owners[q]==owner)owners[q]=0;
         }
     }
-    for(uint8_t q=0;q<54;++q)if(pattern_owner[q]==slot+1)pattern_owner[q]=0;
-    for(uint8_t p=base;p<base+pages;++p)pattern_owner[p]=slot+1;
-    sprite_words[slot]=PCE_SPR_WORD+(uint16_t)base*256;
+    for(uint8_t q=0;q<54;++q)if(owners[q]==slot+1)owners[q]=0;
+    for(uint8_t p=base;p<base+pages;++p)owners[p]=slot+1;
+    words[slot]=PCE_SPR_WORD+(uint16_t)base*256;
     cache_result=slot;return;
 }
 
 uint8_t sprite_slot(uint16_t id,uint8_t count) {
     cache_id=id;cache_count=count;overlay_call(0x74,allocate);return cache_result;
 }
+
+#ifdef PCE_SGX
+__attribute__((noinline,minsize,section(".ram_bank128.text")))
+void pce_sgx_cache_upload_body(void) {
+    uint8_t slot=pce_sgx_sprite_slot;
+    pce_sgx_sprite_upload_ok=0;
+    if(pce_sgx_gameplay()&&pce_metrics.stage<6&&pce_metrics.stage!=2&&
+       sprite_slot(pce_sgx_sprite_id,sprite_count[slot])==48)return;
+    overlay_call(0x80,pce_sgx_sprite_upload_body);
+}
+#endif

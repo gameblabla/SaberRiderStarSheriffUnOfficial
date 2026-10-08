@@ -20,7 +20,7 @@
 extern uint16_t warm_ids[7];extern uint8_t warm_slots[7],warm_count;
 extern vdc_sprite_t sat[2][64];
 extern uint8_t sat_count,sat_page,sprite_exact,sprite_occupancy[240];
-extern uint8_t sprite_last_free,fg_entered;
+extern uint8_t sprite_last_free,sprite_last_lo,fg_entered,actors_mode;
 extern uint8_t buffer[2048];
 static vdc_sprite_t hud_sat[32];
 static uint8_t hud_lines[64],hud_slots[3],hud_count,hud_exact,hud_ready;
@@ -38,21 +38,21 @@ PCE_FLOW static void hud_transfer(void *dst,const void *src,uint16_t n) {
  * Actor slots retain their last successful VDC for the current stage. */
 #ifdef PCE_SGX
 PLATFORM_DRAW static bool split_vdc0_draw(uint16_t id,int16_t x,int16_t y,bool flip,uint8_t scale) {
-    uint8_t count=sat_count,last=sprite_last_free;
-    pce_sgx_copy(buffer+512,sprite_occupancy,240);
-    sat_page=0;sat_count=pce_sgx_split_count;sprite_last_free=pce_sgx_split_last;
-    pce_sgx_copy(sprite_occupancy,buffer+256,240);
+    uint8_t count=sat_count,last=sprite_last_free,lo=sprite_last_lo;
+    sat_page=0;sat_count=pce_sgx_split_count;sprite_last_free=pce_sgx_split_last;sprite_last_lo=pce_sgx_split_last_lo;
+    overlay_call(0x6e,pce_sgx_budget_body);
     bool admitted=video_sprite_optional(id,x,y,flip,scale);
-    pce_sgx_split_count=sat_count;pce_sgx_split_last=sprite_last_free;
-    pce_sgx_copy(buffer+256,sprite_occupancy,240);
-    sat_page=1;sat_count=count;sprite_last_free=last;
-    pce_sgx_copy(sprite_occupancy,buffer+512,240);
+    pce_sgx_split_count=sat_count;pce_sgx_split_last=sprite_last_free;pce_sgx_split_last_lo=sprite_last_lo;
+    sat_page=1;sat_count=count;sprite_last_free=last;sprite_last_lo=lo;
+    overlay_call(0x6e,pce_sgx_budget_body);
     return admitted;
 }
 #endif
 PLATFORM_DRAW bool pce_sgx_split_sprite_optional(uint8_t owner,uint16_t id,int16_t x,int16_t y,bool flip,uint8_t scale) {
 #ifdef PCE_SGX
     if(pce_sgx_split_active&&sat_page==1) {
+        /* Rear scenery must never retry on the foreground VDC. */
+        if(actors_mode==1 && owner<8)return video_sprite_optional(id,x,y,flip,scale);
         bool admitted;
         if(owner<8&&pce_sgx_actor_plane[owner]==0) {
             admitted=split_vdc0_draw(id,x,y,flip,scale);

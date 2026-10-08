@@ -57,6 +57,7 @@ static uint16_t slow_count PCE_WORK;
 #ifdef PCE_SGX
 static const PceScene *slow_scene PCE_WORK;
 static bool slow_loaded PCE_WORK;
+static uint16_t next_window_camera[2] PCE_WORK;
 #endif
 static uint32_t enter_base PCE_WORK;
 static uint16_t enter_index PCE_WORK;
@@ -189,7 +190,12 @@ FG_CODE void foreground_prepare_body(void) {
     for(uint8_t group=0;group<2;++group) {
         uint32_t base=group?normal_base:slow_base;
         uint16_t n=group?normal_count:slow_count;
-        if(!n)continue;
+        if(!n) {
+#ifdef PCE_SGX
+            next_window_camera[group]=65535;
+#endif
+            continue;
+        }
         uint16_t layer_camera=group?camera:fg_camera_slow;
         int16_t start=(int16_t)layer_camera-31,end=(int16_t)layer_camera+256;
         int16_t moved=(int16_t)(layer_camera-last_camera[group]);
@@ -202,6 +208,15 @@ FG_CODE void foreground_prepare_body(void) {
         while(window_hi[group]<need_hi) {enter(base,window_hi[group],group);++window_hi[group];entered=1;}
         if(window_lo[group]<need_lo) {drop(group,window_lo[group],need_lo);window_lo[group]=need_lo;}
         if(window_hi[group]>need_hi) {drop(group,need_hi,window_hi[group]);window_hi[group]=need_hi;}
+#ifdef PCE_SGX
+        uint16_t next=65535;
+        if(need_lo<need_hi)next=(uint16_t)(chunk_x(base,need_lo)+32);
+        if(need_hi<n) {
+            uint16_t enter_at=(uint16_t)(chunk_x(base,need_hi)-255);
+            if(enter_at<next)next=enter_at;
+        }
+        next_window_camera[group]=next;
+#endif
     }
     fg_entered=entered;
 #ifdef PCE_SGX
@@ -215,9 +230,14 @@ FG_CODE void foreground_prepare_body(void) {
 }
 #ifdef PCE_SGX
 FG_MAP_CODE void foreground_prepare(void) {
+    uint16_t camera=pce_metrics.camera_x;
+    uint16_t slow=camera+camera/5;
     if(pce_sgx_gameplay()&&pce_metrics.stage<6&&pce_metrics.stage!=2&&
-       slow_loaded&&slow_scene==&pce_scenes[pce_metrics.stage-1]&&fg_camera==pce_metrics.camera_x) {
-        fg_entered=0;return;
+       slow_loaded&&slow_scene==&pce_scenes[pce_metrics.stage-1]&&camera>=fg_camera&&
+       (camera==fg_camera || (camera<next_window_camera[1]&&slow<next_window_camera[0]))) {
+        /* The retained window is unchanged between chunk boundaries. Move
+         * its coordinates without clearing or copying either SAT budget. */
+        fg_camera=camera;fg_camera_slow=slow;fg_entered=0;return;
     }
     /* Stage scratch is accessible only while MPR6 holds bank 108. */
     pce_sgx_copy(buffer+1024,sat[0],(uint16_t)sat_count*8);

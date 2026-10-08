@@ -12,6 +12,8 @@ if bad:raise SystemExit('Unresolved application symbols:\n'+'\n'.join(bad))
 symbols=subprocess.check_output([str(nm),str(elf)],text=True)
 addresses={p[2]:int(p[0],16) for line in symbols.splitlines()
            if len(p:=line.split())==3 and p[1].lower()=='t'}
+all_addresses={p[2]:int(p[0],16) for line in symbols.splitlines()
+               if len(p:=line.split())==3}
 # These functions are entered through fixed overlay calls. Moving their
 # bodies without their callers otherwise links successfully and jumps into
 # a different bank's code. Resident copy/admission also has linker guards.
@@ -24,7 +26,19 @@ if 'pce_sgx_sky_stream_body' in addresses:
         pce_sgx_herd_sky_load_body=128,pce_sgx_hull_retire_body=128,
         pce_sgx_moon_draw_body=128,pce_sgx_story_world_body=128,
         pce_sgx_platform_actor_pass_body=114,pce_sgx_projectile_body=119,
-        pce_sgx_vdc1_sat_upload_body=120,pce_sgx_sprite_upload_body=120)
+        pce_sgx_vdc1_sat_upload_body=120,pce_sgx_sprite_upload_body=128,
+        pce_sgx_cache_upload_body=128,hull_body=128,platform_begin_body=128,
+        pce_sgx_select_body=110,pce_sgx_budget_body=110,pce_sgx_ui_load_body=124,pce_sgx_ui_end_body=124,
+        hull_mirror_body=120,hull_claim_tail_body=128,ui_fade_body=128)
+    animation=addresses.get('pce_sgx_select_animate_body',0)
+    if (animation>>16)&255!=135 or not 0xc000<=animation&65535<0xe000:
+        raise SystemExit('Selection animation must execute through MPR6 in bank 135')
+    words=all_addresses.get('sprite_words1',0)
+    if words>>16!=0x168 or not 0x4000<=words&65535<0x6000:
+        raise SystemExit('VDC1 sprite addresses must remain in always-mapped bank $68')
+    owners=all_addresses.get('pattern_owner1',0)&65535
+    if not 0x2000<=owners<0x3bf0:
+        raise SystemExit('VDC1 pattern owners must remain in console RAM')
     admission=addresses.get('video_sprite_optional',0)
     if (admission>>16)&255!=107 or not 0xa000<=admission&65535<0xc000:
         raise SystemExit('SGX optional sprite admission must remain in the always-mapped work bank')

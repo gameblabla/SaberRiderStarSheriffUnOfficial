@@ -4,6 +4,9 @@
 #include "arcade_pce.h"
 #include "audio_pcm.h"
 #include "sgx_pce.h"
+#ifdef PCE_SGX
+#include <pce/bank.h>
+#endif
 #define UI_BASE __attribute__((noinline,section(".ram_bank106.text")))
 #define UI_VRAM_CODE __attribute__((noinline,minsize,section(".ram_bank111.text")))
 #define UI_CYCLE_CODE __attribute__((noinline,minsize,section(".ram_bank111.text")))
@@ -21,8 +24,26 @@ uint8_t ui_held,ui_pressed;
 uint8_t ui_cycle_step,ui_cycle_clock,ui_dark;
 
 UI_CYCLE_CODE static void ui_cycle_body(void) {
+#ifdef PCE_SGX
+    if(pce_sgx_active && pce_ui_state==2) {
+        uint8_t bank=pce_bank6_get();pce_bank6_set(135);
+        pce_sgx_select_animate_body();pce_bank6_set(bank);
+    }
+#endif
     if(++ui_cycle_clock<4)return;
-    ui_cycle_clock=0;if(++ui_cycle_step==12)ui_cycle_step=0;
+    ui_cycle_clock=0;
+#ifdef PCE_SGX
+    if(pce_sgx_active && pce_ui_state==2) {
+        /* Only the six backdrop palettes pulse; portraits never change. */
+        if(++ui_cycle_step<8)return;
+        ui_cycle_step=0;
+        pce_sgx_select_phase=(pce_sgx_select_phase+1)&3;
+        /* Record lives in bank 124; the generated offset is a macro. */
+        arcade_read(2,PCE_SGX_SELECT_CYCLE+(uint32_t)pce_sgx_select_phase*192,buffer,192);
+        pce_vce_copy_palette(0,buffer,6);return;
+    }
+#endif
+    if(++ui_cycle_step==12)ui_cycle_step=0;
     for(uint8_t k=0;k<4;++k)for(uint8_t i=0;i<12;++i) {
         uint8_t j=i+ui_cycle_step;if(j>=12)j-=12;
         ui_ring[k][1+i]=ui_ramp[k][j];
@@ -93,7 +114,14 @@ UI_BASE void ui_end(void) {
     overlay_call(0x7c,pce_sgx_ui_end_body);
 #endif
 }
+#ifdef PCE_SGX
+static uint8_t fade_level PCE_WORK;
+__attribute__((noinline,minsize,section(".ram_bank128.text")))
+static void ui_fade_body(void) {
+    uint8_t level=fade_level;
+#else
 UI_BASE void ui_fade(uint8_t level) {
+#endif
     uint16_t *src=(uint16_t*)buffer,*dst=src+512;
     if(level==8){pce_vce_copy_palette_to_ram(buffer,0,32);return;}
     for(uint16_t i=0;i<512;++i) {
@@ -103,6 +131,11 @@ UI_BASE void ui_fade(uint8_t level) {
     }
     pce_vce_copy_palette(0,dst,32);
 }
+#ifdef PCE_SGX
+UI_BASE void ui_fade(uint8_t level) {
+    fade_level=level;overlay_call(0x80,ui_fade_body);
+}
+#endif
 /* The common screen transitions (title -> hero select, hero select -> the stage card, every stage's start): fade out takes what is on
  * screen to black through the palette snapshot; a screen is shown from black by ui_black (the snapshot of the palettes it was built
  * with, then black) once it is set up, and ui_fade_in brings it up. The snapshot lives in `buffer`: nothing else may use it between.

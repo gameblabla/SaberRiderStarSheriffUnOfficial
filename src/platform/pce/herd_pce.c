@@ -33,14 +33,17 @@ uint8_t warm_slots[7],warm_count;
 #define BUFFER_PAGE(b) (28+(b)*10)
 #ifdef PCE_SGX
 static uint16_t herd_sgx_code;
-/* The stationary skies use at most 512 characters and end at $2800.
-   Retain three horse poses in the unused area below the sprite cache. */
+/* Reserve all five poses for the entire scene, before any actor SAT can
+   reference their pages. Starting a herd never overwrites displayed actors. */
 __attribute__((noinline,minsize,section(".ram_bank128.text")))
 void pce_sgx_herd_sky_load_body(void) {
     uint32_t horse=pce_scenes[pce_metrics.stage-1].horse;
     if(!horse)return;
-    for(uint8_t k=0;k<3;++k)
-        arcade_vram_to(1,horse+32+(uint32_t)k*5120,0x2800+(uint16_t)k*0xa00,5120);
+    for(uint8_t k=0;k<5;++k) {
+        uint16_t word=k<3?0x2800+(uint16_t)k*0xa00:
+            PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(k-3)*256;
+        arcade_vram_to(1,horse+32+(uint32_t)k*5120,word,5120);
+    }
 }
 __attribute__((noinline,section(".ram_bank128.text")))
 #else
@@ -49,18 +52,10 @@ HERD_CODE
 void herd_reserve(void) {
     uint8_t colors[32];
     for(uint8_t p=28;p<48;++p) {
-        uint8_t owner=pattern_owner[p];
 #ifdef PCE_SGX
-        /* The herd writes VDC1 only. Retain VDC0 foreground/HUD ownership;
-           retire just cached world sprites that occupied these VDC1 pages. */
-        if(pce_sgx_gameplay()) {
-            if(owner&&(sprite_pb_hi[owner-1]&0x80)) {
-                sprite_ids[owner-1]=0xffff;
-                for(uint8_t q=0;q<54;++q)if(pattern_owner[q]==owner)pattern_owner[q]=0;
-            }
-            continue;
-        }
+        if(pce_sgx_gameplay())continue;
 #endif
+        uint8_t owner=pattern_owner[p];
         if(owner&&owner!=48) {
             sprite_ids[owner-1]=0xffff;
             for(uint8_t q=0;q<54;++q)if(pattern_owner[q]==owner)pattern_owner[q]=0;
@@ -72,11 +67,6 @@ void herd_reserve(void) {
     prefetch=0xff;prefetched=0;warm_count=0;
     arcade_read(2,play_scene->horse,colors,32);
     pce_vce_copy_palette(pce_sgx_gameplay()?29:31,colors,1);
-#ifdef PCE_SGX
-    if(pce_sgx_gameplay())for(uint8_t k=0;k<2;++k)
-        arcade_vram_to(1,play_scene->horse+32+(uint32_t)(k+3)*5120,
-            PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(k)*256,5120);
-#endif
 }
 /* Starts the convoy: the first horses are created by herd_feed (encounter_pce.c), the rest as the column nears. */
 HERD_CODE void herd_spawn(void) {
