@@ -16,7 +16,7 @@ sections=subprocess.check_output([str(nm.parent/'llvm-readelf'),'-S',str(elf)],t
 rows=[];banks={}
 for name,kind,address,size in re.findall(r'\[\s*\d+\]\s+(\S+)\s+(PROGBITS|NOBITS)\s+([0-9a-f]+)\s+[0-9a-f]+\s+([0-9a-f]+)',sections):
     address,size=int(address,16),int(size,16)
-    if address>>16 in range(0x168,0x184):
+    if address>>16 in range(0x168,0x188):
         bank=(address>>16)&255;window={104:0x4000,105:0x6000,106:0x8000,107:0xa000,108:0xc000,109:0x6000,110:0x6000,111:0x6000,112:0x6000,113:0x6000,114:0x6000,115:0x6000,116:0x6000,117:0x6000,118:0x6000,119:0x6000,120:0x6000,121:0x6000,122:0x6000,123:0x6000,124:0x6000,128:0x6000,129:0x6000,130:0x6000,131:0x6000}.get(bank,0xc000)
         used=(address&65535)+size-window
         if not 0<=used<=8192:raise SystemExit(f'{name} exceeds bank ${bank:02x}')

@@ -6,7 +6,9 @@
 #include "campaign_pce.h"
 #include "play_internal.h"
 #include "sprite_cache_pce.h"
+#include "sgx_pce.h"
 #define PRESENT __attribute__((noinline,section(".ram_bank116.text")))
+#define PANEL __attribute__((noinline,section(".ram_bank115.text")))
 /* Retain the HUD while its graphics, palettes and counters are unchanged.
  * Only replay onto an empty SAT/scanline prefix, so admission is identical. */
 extern uint16_t warm_ids[7];extern uint8_t warm_slots[7],warm_count;
@@ -110,12 +112,13 @@ void presentation_draw(void) {overlay_call(0x6e,presentation_frame);video_front_
 
 uint16_t pce_panel_column;
 static uint8_t panel_x,panel_y,panel_w,panel_h;
-PRESENT static void panel_draw(void) {
+PANEL static void panel_draw(void) {
     uint8_t x=panel_x,y=panel_y,w=panel_w,h=panel_h;
     extern volatile uint16_t pce_scroll_x;
+    uint16_t scroll_col=(pce_sgx_gameplay()&&(pce_metrics.stage==4||pce_metrics.stage==5))?0:pce_scroll_x>>3;
     for(uint8_t row=0;row<h;++row)for(uint8_t col=0;col<w;++col) {
         uint16_t address=pce_raster_enabled?(uint16_t)(48+y+row)*128+x+col:
-            (uint16_t)(y+row)*64+(((pce_scroll_x>>3)+x+col)&63);
+            (uint16_t)(y+row)*64+((scroll_col+x+col)&63);
         video_vdc(0,address);video_vdc(2,0xf000+(PCE_FONT_WORD>>4));
     }
 }
@@ -137,10 +140,18 @@ PRESENT static void panel_prepare_body(void) {
     const PceScene *sc=video_scene_ptr;
     uint8_t y=panel_y;
     uint16_t *words=(uint16_t*)buffer;
+    if(pce_sgx_gameplay()&&(pce_metrics.stage==4||pce_metrics.stage==5)) {
+        for(uint8_t i=0;i<28*6;++i)words[i]=PCE_FONT_WORD>>4;
+        return;
+    }
+    uint32_t map=sc->map;
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay()&&(pce_metrics.stage==1||pce_metrics.stage==3))map=sc->sgx_map;
+#endif
     for(uint8_t x=3;x<31;++x) {
         uint16_t world=pce_panel_column+x;
         uint8_t raw[18];
-        arcade_read(1,sc->map+(uint32_t)(world%sc->cols)*90+(uint16_t)y*3,raw,18);
+        arcade_read(1,map+(uint32_t)(world%sc->cols)*90+(uint16_t)y*3,raw,18);
         for(uint8_t row=0;row<6;++row)
             words[(x-3)*6+row]=(PCE_BG_WORD>>4)+columns[world%33][y+row]+((uint16_t)raw[row*3+2]<<12);
     }

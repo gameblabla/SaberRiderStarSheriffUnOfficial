@@ -1,4 +1,5 @@
 #include "arcade_pce.h"
+#include "sgx_pce.h"
 
 /* Do not use the SDK's page macros: port blocks have a $10 stride and the
  * offset is 16 bits. Port 0 uploads, 1 maps, 2 metadata, 3 cache directory. */
@@ -20,6 +21,7 @@ static bool range(uint32_t a, uint16_t n) {
 }
 extern volatile uint16_t arcade_tai_src, arcade_tai_dst, arcade_tai_len;
 extern volatile uint16_t arcade_vdc_len;
+extern volatile uint16_t arcade_vdc_dest;
 void arcade_tai(void), arcade_vdc_copy(void);
 bool arcade_read(uint8_t port, uint32_t address, void *out, uint16_t size) {
     if (!range(address, size) || !arcade_seek(port, address)) return false;
@@ -42,19 +44,48 @@ bool arcade_fill(uint32_t address,uint8_t value,uint16_t size) {
     while(size--) *(volatile uint8_t*)0x1a30=value;
     return true;
 }
-bool arcade_vram(uint32_t address, uint16_t word, uint16_t size) {
-    if ((size & 1) || !range(address, size) ||
+bool arcade_vram_to(uint8_t vdc, uint32_t address, uint16_t word, uint16_t size) {
+    if (vdc > 1 || (size & 1) || !range(address, size) ||
         word > 0x8000U - (size >> 1) || !arcade_seek(0, address)) return false;
-    __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
-    pce_vdc_poke(VDC_REG_VRAM_WRITE_ADDR, word);
-    extern volatile uint8_t pce_vdc_index;
-    pce_vdc_index=VDC_REG_VRAM_DATA;
-    *(volatile uint8_t*)0x20f7=VDC_REG_VRAM_DATA;
-    *IO_VDC_INDEX = VDC_REG_VRAM_DATA;
-    __attribute__((leaf)) asm volatile("plp" ::: "p","memory");
+#ifdef PCE_SGX
+    if (vdc == 1) {
+        if (!pce_sgx_active) return false;
+        __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
+        PCE_SGX_RECORD_VDC2_INDEX(VDC_REG_VRAM_WRITE_ADDR);
+        *IO_VDC2_INDEX=VDC_REG_VRAM_WRITE_ADDR;
+        *IO_VDC2_DATA_LO=(uint8_t)word;
+        *IO_VDC2_DATA_HI=(uint8_t)(word>>8);
+        PCE_SGX_RECORD_VDC2_INDEX(VDC_REG_VRAM_DATA);
+        *IO_VDC2_INDEX=VDC_REG_VRAM_DATA;
+        arcade_vdc_dest=0x0012;
+        __attribute__((leaf)) asm volatile("plp" ::: "p","memory");
+    } else
+#else
+    if (vdc != 0) return false;
+#endif
+    {
+        __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
+        pce_vdc_poke(VDC_REG_VRAM_WRITE_ADDR, word);
+        extern volatile uint8_t pce_vdc_index;
+        pce_vdc_index=VDC_REG_VRAM_DATA;
+        *(volatile uint8_t*)0x20f7=VDC_REG_VRAM_DATA;
+        *IO_VDC_INDEX = VDC_REG_VRAM_DATA;
+        arcade_vdc_dest=0x0002;
+        __attribute__((leaf)) asm volatile("plp" ::: "p","memory");
+    }
     /* Native loop uses 16-byte TIA bursts through Arcade bank $40. */
     if(size) {arcade_vdc_len=size;arcade_vdc_copy();}
+    arcade_vdc_dest=0x0002;
+#ifdef PCE_SGX
+    if (vdc == 1) {
+        ++pce_sgx_metrics.uploads;
+        pce_sgx_metrics.bytes_uploaded += size;
+    }
+#endif
     return true;
+}
+bool arcade_vram(uint32_t address, uint16_t word, uint16_t size) {
+    return arcade_vram_to(0,address,word,size);
 }
 uint8_t arcade_selftest(void) {
     uint8_t mask = 0, data[8], got[8];

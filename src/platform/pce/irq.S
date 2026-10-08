@@ -11,6 +11,12 @@
 .extern pce_sky_far,pce_sky_near
 .extern pce_race_dialog
 .extern pce_draws
+#ifdef PCE_SGX
+.extern pce_sgx_metrics
+.extern pce_metrics
+.extern pce_sgx_sky_scroll_x
+.extern space_hull_ready
+#endif
 .comm pce_visible_draw,1
 .comm pce_presented,2
 .comm pce_arena_raster,1
@@ -33,6 +39,28 @@
     .word 0x0404
     .word 16
 .endm
+#ifdef PCE_SGX
+.macro VDC1_INDEX r
+    lda #\r
+    sta 0x0010
+    lda pce_sgx_metrics+4
+    and #7
+    ora #(\r*8)
+    sta pce_sgx_metrics+4
+.endm
+.macro VDC1_SCROLL x,y
+    VDC1_INDEX 7
+    lda \x
+    sta 0x0012
+    lda \x+1
+    sta 0x0013
+    VDC1_INDEX 8
+    lda \y
+    sta 0x0012
+    lda \y+1
+    sta 0x0013
+.endm
+#endif
 pce_vblank:
     pha
     inc pce_ticks
@@ -49,6 +77,10 @@ pce_vblank:
 1:
     lda pce_vdc_index
     pha
+#ifdef PCE_SGX
+    lda pce_sgx_metrics+4
+    pha
+#endif
     lda pce_raster_enabled
     beq .Lnormal
     lda pce_floor_pending
@@ -75,12 +107,22 @@ pce_vblank:
     sta pce_raster_row
     st1 #104            /* dialogue starts at scanline 40 */
     st2 #0
-    bra .Ldone
+    jmp .Ldone
 2:
     st1 #120            /* the near sky band (the mountains) at scanline 56, then the road from 128 */
     st2 #0
-    bra .Ldone
+    jmp .Ldone
 .Lnormal:
+#ifdef PCE_SGX
+    lda pce_sgx_metrics+5
+    bpl .Lnormal_pce
+    jmp .Lnormal_sgx
+.Lnormal_pce:
+    jmp .Lnormal_legacy
+.Lnormal_sgx:
+    jmp .Lnormal_legacy
+.Lnormal_legacy:
+#endif
     /* A queued generation owns its frozen scroll even if the next draw has
      * begun. Both axes stay held while an unfinished draw uploads patterns. */
     lda pce_sat_pending
@@ -110,6 +152,105 @@ pce_vblank:
     lda pce_scroll_y+1
     sta 3
 .Lscroll_done:
+#ifdef PCE_SGX
+    lda pce_sgx_metrics+5
+    bmi .Lsgx_scroll_active
+    jmp .Larena_vdc0
+.Lsgx_scroll_active:
+    /* The paired-screen flag marks scenes with a VDC0 playfield and VDC1 sky. */
+    lda pce_sgx_metrics+5
+    and #0x40
+    beq .Lsgx_not_static_sky
+    jmp .Lsgx_static_sky
+.Lsgx_not_static_sky:
+    lda pce_metrics+7
+    cmp #7
+    beq .Lsgx_stage7
+    jmp .Lsgx_vdc0_zero
+.Lsgx_stage7:
+    lda space_hull_ready
+    bne .Lsgx_hull_ready
+    jmp .Lsgx_vdc0_zero
+.Lsgx_hull_ready:
+    lda pce_sat_pending
+    beq .Lsgx_hull_live
+    st0 #7
+    lda pce_sat_scroll_x
+    sta 2
+    lda pce_sat_scroll_x+1
+    sta 3
+    st0 #8
+    lda pce_sat_scroll_y
+    sta 2
+    lda pce_sat_scroll_y+1
+    sta 3
+    jmp .Lsgx_vdc1_scroll
+.Lsgx_hull_live:
+    lda pce_scroll_hold
+    beq .Lsgx_hull_scroll_live
+    jmp .Lsgx_vdc1_scroll
+.Lsgx_hull_scroll_live:
+    st0 #7
+    lda pce_scroll_x
+    sta 2
+    lda pce_scroll_x+1
+    sta 3
+    st0 #8
+    lda pce_scroll_y
+    sta 2
+    lda pce_scroll_y+1
+    sta 3
+    jmp .Lsgx_vdc1_scroll
+.Lsgx_static_sky:
+    /* VDC0 carries the world map; VDC1 carries a static or parallax sky. */
+    lda pce_sat_pending
+    bne .Lsgx_static_sky_write
+    lda pce_scroll_hold
+    beq .Lsgx_static_sky_write
+    jmp .Larena_vdc1
+.Lsgx_static_sky_write:
+    VDC1_INDEX 7
+    lda pce_sgx_sky_scroll_x
+    sta 0x0012
+    lda pce_sgx_sky_scroll_x+1
+    sta 0x0013
+    VDC1_INDEX 8
+    stz 0x0012
+    stz 0x0013
+    jmp .Larena_vdc1
+.Lsgx_vdc0_zero:
+    st0 #7
+    stz 2
+    stz 3
+    st0 #8
+    stz 2
+    stz 3
+.Lsgx_vdc1_scroll:
+    lda pce_metrics+7
+    cmp #7
+    bne .Lsgx_world_scroll
+    VDC1_INDEX 7
+    lda pce_sky_far
+    sta 0x0012
+    lda pce_sky_far+1
+    sta 0x0013
+    VDC1_INDEX 8
+    stz 0x0012
+    stz 0x0013
+    jmp .Larena_vdc1
+.Lsgx_world_scroll:
+    lda pce_sat_pending
+    beq .Lsgx_world_live
+    VDC1_SCROLL pce_sat_scroll_x,pce_sat_scroll_y
+    jmp .Larena_vdc1
+.Lsgx_world_live:
+    lda pce_scroll_hold
+    bne .Larena_vdc1
+    VDC1_SCROLL pce_scroll_x,pce_scroll_y
+    jmp .Larena_vdc1
+#endif
+.Larena_vdc1:
+.Larena_vdc0:
     st0 #6
     st1 #255
     st2 #3
@@ -117,9 +258,21 @@ pce_vblank:
     lda pce_arena_raster
     beq .Ldone
     stz pce_raster_row
+#ifdef PCE_SGX
+    lda pce_sgx_metrics+5
+    bmi .Larena_vdc1_start
+#endif
     st0 #6
     st1 #192
     st2 #0
+    jmp .Ldone
+#ifdef PCE_SGX
+.Larena_vdc1_start:
+    VDC1_INDEX 6
+    lda #192
+    sta 0x0012
+    stz 0x0013
+#endif
 .Ldone:
     stz pce_sat_pending
     /* The palettes queued for the VCE (vce_pce.c): written now, in the vertical blank, 16 bytes a block move. */
@@ -167,6 +320,14 @@ pce_vblank:
     stx vce_q_head
 .Lvq_out:
     plx
+#ifdef PCE_SGX
+    pla
+    sta pce_sgx_metrics+4
+    lsr
+    lsr
+    lsr
+    sta 0x0010
+#endif
     pla
     sta 0
     pla
@@ -187,8 +348,18 @@ pce_hblank:
     phx
     lda pce_vdc_index
     pha
+#ifdef PCE_SGX
+    lda pce_sgx_metrics+4
+    pha
+#endif
     lda pce_raster_enabled
-    bne .Lfloor
+    beq 4f
+    jmp .Lfloor
+4:
+#ifdef PCE_SGX
+    lda pce_sgx_metrics+5
+    bmi .Lsgx_hblank
+#endif
     lda pce_arena_raster
     beq 1f
     jmp .Larena
@@ -207,6 +378,90 @@ pce_hblank:
     adc #0
     sta 3
     jmp .Lhlast
+#ifdef PCE_SGX
+.Lsgx_hblank:
+    lda pce_arena_raster
+    bne 5f
+    jmp .Lsgx_scroll_line
+5:
+    lda pce_raster_row
+    cmp #24
+    bcc 6f
+    jmp .Lhlast
+6:
+    asl
+    asl
+    tax
+    VDC1_INDEX 7
+    lda arena_floor,x
+    sta 0x0012
+    lda arena_floor+1,x
+    sta 0x0013
+    VDC1_INDEX 8
+    lda arena_floor+2,x
+    sta 0x0012
+    lda arena_floor+3,x
+    sta 0x0013
+    VDC1_INDEX 6
+    lda pce_raster_row
+    asl
+    asl
+    clc
+    adc #128
+    sta 0x0012
+    stz 0x0013
+    inc pce_raster_row
+    jmp .Lhlast
+.Lsgx_scroll_line:
+    lda pce_sgx_metrics+5
+    and #0x40
+    beq .Lsgx_scroll_world
+    jmp .Lhlast
+.Lsgx_scroll_world:
+    lda pce_metrics+7
+    cmp #7
+    bne .Lsgx_world_line
+    VDC1_INDEX 7
+    lda pce_sky_far
+    sta 0x0012
+    lda pce_sky_far+1
+    sta 0x0013
+    VDC1_INDEX 8
+    stz 0x0012
+    stz 0x0013
+    lda space_hull_ready
+    bne 7f
+    jmp .Lsgx_zero_vdc0
+7:
+    st0 #7
+    lda pce_scroll_x
+    sta 2
+    lda pce_scroll_x+1
+    sta 3
+    st0 #8
+    lda pce_scroll_y
+    sta 2
+    lda pce_scroll_y+1
+    sta 3
+    jmp .Lhlast
+.Lsgx_world_line:
+    lda pce_sat_pending
+    beq .Lsgx_world_live_line
+    VDC1_SCROLL pce_sat_scroll_x,pce_sat_scroll_y
+    bra .Lsgx_zero_vdc0
+.Lsgx_world_live_line:
+    lda pce_scroll_hold
+    bne .Lsgx_zero_vdc0
+    VDC1_SCROLL pce_scroll_x,pce_scroll_y
+.Lsgx_zero_vdc0:
+    st0 #7
+    stz 2
+    stz 3
+    st0 #8
+    stz 2
+    stz 3
+    jmp .Lhlast
+#endif
 .Lfloor:
     lda pce_raster_row
     cmp #254
@@ -295,10 +550,16 @@ pce_hblank:
     sta 2
     lda arena_floor+3,x
     sta 3
+#ifdef PCE_SGX
+    lda pce_sgx_metrics+5
+    bmi .Larena_sgx_row
+#endif
     inc pce_raster_row
     lda pce_raster_row
     cmp #24
-    bcs .Lhlast
+    bcc 8f
+    jmp .Lhlast
+8:
     asl
     asl
     clc
@@ -309,7 +570,41 @@ pce_hblank:
     lda #0
     adc #0
     sta 3
+    jmp .Lhdone
+#ifdef PCE_SGX
+.Larena_sgx_row:
+    VDC1_INDEX 7
+    lda arena_floor,x
+    sta 0x0012
+    lda arena_floor+1,x
+    sta 0x0013
+    VDC1_INDEX 8
+    lda arena_floor+2,x
+    sta 0x0012
+    lda arena_floor+3,x
+    sta 0x0013
+    inc pce_raster_row
+    lda pce_raster_row
+    cmp #24
+    bcc 9f
+    jmp .Lhlast
+9:
+    asl
+    asl
+    clc
+    adc #128
+    sta 0x0012
+    stz 0x0013
+#endif
 .Lhdone:
+#ifdef PCE_SGX
+    pla
+    sta pce_sgx_metrics+4
+    lsr
+    lsr
+    lsr
+    sta 0x0010
+#endif
     pla
     sta 0
     plx

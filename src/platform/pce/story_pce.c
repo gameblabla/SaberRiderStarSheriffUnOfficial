@@ -7,6 +7,7 @@
 #include "play_internal.h"
 #include "sprite_cache_pce.h"
 #include "scenery_pce.h"
+#include "sgx_pce.h"
 #include "audio_pcm.h"
 extern volatile uint16_t pce_sky_far,pce_sky_near;
 #include <string.h>
@@ -84,13 +85,18 @@ PCE_MISSION static void platform_box(void) {
     arcade_vram(record[1],0x4000,bytes);
     arcade_vram(record[3],PCE_FONT_WORD,3072);
     arcade_read(2,record[2],buffer+1024,336);   /* the cells go in right after that VBlank (video_cells_apply) */
-    story_column=pce_scroll_x>>3;
+    story_column=(pce_sgx_gameplay()&&(pce_metrics.stage==4||pce_metrics.stage==5))?0:pce_scroll_x>>3;
 }
 PCE_FLOW void story_graphics_restore(void) {   /* bank $6e: $6f is full */
     if(pce_metrics.stage==2||pce_metrics.stage==7)return;
     extern const PceScene *video_scene_ptr;
     uint8_t colors[32];
-    arcade_read(2,video_scene_ptr->pal+15*32,colors,32);pce_vce_copy_palette(15,colors,1);
+    uint32_t palette=video_scene_ptr->pal;
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay()&&(pce_metrics.stage==1||pce_metrics.stage==3||
+                            pce_metrics.stage==4||pce_metrics.stage==5))palette=video_scene_ptr->sgx_pal;
+#endif
+    arcade_read(2,palette+15*32,colors,32);pce_vce_copy_palette(15,colors,1);
     pce_vce_set_color(255,0x1ff);
     pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
     arcade_vram(pce_dialog_original_font[pce_metrics.stage-1],PCE_FONT_WORD,3072);
@@ -118,7 +124,8 @@ STORY_CODE static void draw(void) {
     /* The cruiser's playfield is scrolled (a multiple of 8 dots down while it greets: space_pce.c): screen row 20 is that many rows on in the BAT. */
     if(pce_metrics.stage==7)y=story_y=(20+(pce_scroll_y>>3))&31;
     /* BG cells sit (scroll & 7) pixels left of their grid on a scrolling playfield. */
-    int16_t box_x=24-(pce_raster_enabled?0:(pce_scroll_x&7)),box_y=(pce_metrics.stage==7?20:y)*8-(pce_metrics.stage!=2&&pce_metrics.stage<6?16:0);   /* platform sprites are baked 16 lines low */
+    bool fixed_overlay=pce_sgx_gameplay()&&(pce_metrics.stage==4||pce_metrics.stage==5);
+    int16_t box_x=24-(pce_raster_enabled||fixed_overlay?0:(pce_scroll_x&7)),box_y=(pce_metrics.stage==7?20:y)*8-(pce_metrics.stage!=2&&pce_metrics.stage<6?16:0);   /* platform sprites are baked 16 lines low */
     /* Blank every BG cell under the box except the four 2x2 corner blocks; the corner pieces stay in front of the
      * scenery so their rounded edges show the scenery, not a hole. */
     bool platform=pce_metrics.stage!=2&&pce_metrics.stage!=7;   /* the platform stages and Ramrod's arena: a scrolling background with the panel in BG characters and four sprite corners */
@@ -230,6 +237,12 @@ STORY_CODE void story_step(void) {
             pce_panel_column=story_column;pce_panel_restore=story_y;overlay_call(0x7b,play_draw);
         } else if(pce_metrics.stage==2)overlay_call(0x77,race_unbox);   /* the sky cells the box and the text covered, and the road's wrap copies, go back */
         else if(pce_metrics.stage==6){video_restore();overlay_call(0x6e,story_graphics_restore);}   /* the arena's columns are read in again; the font and the dialogue palette go back */
-        else video_restore();
+        else {
+            video_restore();
+#ifdef PCE_SGX
+            if(pce_sgx_gameplay()&&pce_metrics.stage==7&&space_hull_ready)
+                overlay_call(0x78,space_hull_bat);
+#endif
+        }
     }
 }

@@ -71,7 +71,10 @@ arcade_vdc_copy:
     sei
 .Ltransfer:
     .byte 0xe3
-    .word 0xc000, 0x0002, 64
+    .word 0xc000
+.global arcade_vdc_dest
+arcade_vdc_dest:
+    .word 0x0002, 64
     plp
     sec
     lda arcade_vdc_len

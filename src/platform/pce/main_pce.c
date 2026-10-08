@@ -1,5 +1,6 @@
 #include "video_pce.h"
 #include "loader_pce.h"
+#include "sgx_pce.h"
 #include "arcade_pce.h"
 #include "road_pce.h"
 #include "play_pce.h"
@@ -123,6 +124,15 @@ PCE_FLOW void flow_main(void) {
     pce_metrics.magic[0]='S';pce_metrics.magic[1]='R';pce_metrics.magic[2]='P';pce_metrics.magic[3]='C';
     pce_metrics.version=1;video_init();audio_pcm_init();
     if(!loader_font())for(;;){}
+#ifdef PCE_SGX
+    {
+        uint8_t observed=pce_ticks;
+        while(observed==pce_ticks) {}
+        overlay_call(0x78,pce_sgx_detect_init);
+        /* On ordinary PCE hardware, pce_sgx_active stays clear and the UI
+           loader uses the original one-VDC records below. */
+    }
+#endif
     if((pce_cdb_version()>>8)<3||!arcade_detect()) {
         video_vdc(VDC_REG_MEMORY,VDC_BG_SIZE_64_32);
         video_vdc(0,0);

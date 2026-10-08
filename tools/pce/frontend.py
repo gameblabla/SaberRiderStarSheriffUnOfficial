@@ -7,10 +7,12 @@ between selected/unselected palettes. Text is drawn at runtime with BG font
 characters on flat panel colours, so no glyph ever sits on a black box.
 """
 import math
+import json
 import struct
 import numpy as np
 from PIL import Image
 from formats import Archive, planar_tile, planar_sprite, vce_colors, vce_rgb, palette_for, indexed
+import palfit
 
 W, H = 320, 224
 COLS, ROWS = W // 8, H // 8
@@ -467,6 +469,125 @@ def victory_screen(canvas, layers):
     s.sprite_preview = prev
     return s
 
+def sgx_paired_background(image, archive, name, previews):
+    """Encode one static painting across the two SGX BG planes.
+
+    Each 8x8 tile pair chooses two palettes from the shared VCE allocation.
+    Every opaque pixel is assigned to exactly one plane; palette index zero
+    remains transparent so the other VDC can show through. This is a fixed
+    4bpp-per-plane image, not an 8bpp tile mode.
+    """
+    rgba = np.asarray(image.convert('RGBA'))
+    if rgba.shape[:2] != (H, W):
+        raise ValueError(f'{name}: paired BG must be {W}x{H}, got {rgba.shape[1]}x{rgba.shape[0]}')
+    cells = rgba.reshape(ROWS, 8, COLS, 8, 4).transpose(0, 2, 1, 3, 4).reshape(-1, 8, 8, 4)
+    codes = vce_colors(cells[..., :3]).astype(np.int64).reshape(-1, 64)
+    opaque = (cells[..., 3].reshape(-1, 64) >= 128)
+
+    # Fit a common 16 x 15 color pool, then iteratively refit it to pixels
+    # selected between the two best palettes for each aligned tile pair.
+    palettes, _ = palfit.fit_palettes(cells, 16, iterations=6, verbose=False)
+    safe_codes = np.where(opaque, codes, 0)
+
+    def error_tables(pals):
+        return np.asarray([palfit.error_table((p[1:] & 0x1ff).astype(np.int64)) for p in pals], np.float32)
+
+    def pair_costs(tables):
+        cost = np.empty((len(codes), 16), np.float32)
+        for p in range(16):
+            cost[:, p] = (tables[p][safe_codes] * opaque).sum(1)
+        return cost
+
+    tables = error_tables(palettes)
+    pairs = np.argsort(pair_costs(tables), axis=1)[:, :2].astype(np.uint8)
+    for _ in range(4):
+        g0, g1 = pairs[:, 0], pairs[:, 1]
+        d0 = tables[g0[:, None], safe_codes]
+        d1 = tables[g1[:, None], safe_codes]
+        choose0 = d0 <= d1
+        group0 = np.broadcast_to(g0[:, None], codes.shape).astype(np.int64)
+        group1 = np.broadcast_to(g1[:, None], codes.shape).astype(np.int64)
+        hist = np.bincount(
+            (group0[choose0 & opaque] * 512 + codes[choose0 & opaque]),
+            minlength=16 * 512,
+        )
+        hist += np.bincount(
+            (group1[~choose0 & opaque] * 512 + codes[~choose0 & opaque]),
+            minlength=16 * 512,
+        )
+        hist = hist.reshape(16, 512)
+        fitted = np.zeros((16, 16), '<u2')
+        for p in range(16):
+            colors = palfit.fit_colors(hist[p], 15, iterations=6)
+            if len(colors):
+                fitted[p, 1:] = int(colors[0])
+                fitted[p, 1:len(colors) + 1] = colors
+        palettes = fitted
+        tables = error_tables(palettes)
+        pairs = np.argsort(pair_costs(tables), axis=1)[:, :2].astype(np.uint8)
+
+    g0, g1 = pairs[:, 0], pairs[:, 1]
+    d0, d1 = tables[g0[:, None], safe_codes], tables[g1[:, None], safe_codes]
+    choose0 = d0 <= d1
+    indexes = np.empty((16, 512), np.uint8)
+    lattice = palfit.LATTICE
+    for p in range(16):
+        colors = (palettes[p, 1:] & 0x1ff).astype(np.int64)
+        indexes[p] = ((lattice[:, None, :] - lattice[colors][None, :, :]) ** 2).sum(-1).argmin(1) + 1
+
+    plane_pixels = [np.zeros((H, W), np.uint8), np.zeros((H, W), np.uint8)]
+    plane_groups = [g0, g1]
+    rendered = np.zeros((H, W, 3), np.uint16)
+    actual_colors = set()
+    total_error = 0.0
+    opaque_count = int(opaque.sum())
+    for cell in range(len(cells)):
+        cy, cx = divmod(cell, COLS)
+        m0 = (choose0[cell] & opaque[cell]).reshape(8, 8)
+        m1 = (~choose0[cell] & opaque[cell]).reshape(8, 8)
+        for layer, mask in ((0, m0), (1, m1)):
+            idx = np.where(mask, indexes[int(plane_groups[layer][cell])][codes[cell]].reshape(8, 8), 0).astype(np.uint8)
+            plane_pixels[layer][cy * 8:cy * 8 + 8, cx * 8:cx * 8 + 8] = idx
+            pal = palettes[int(plane_groups[layer][cell])]
+            if mask.any():
+                actual_colors.update(int(c) for c in (pal[idx[mask]] & 0x1ff))
+                rendered[cy * 8:cy * 8 + 8, cx * 8:cx * 8 + 8][mask] = vce_rgb(pal)[idx[mask]]
+        total_error += float(np.minimum(d0[cell], d1[cell])[opaque[cell]].sum())
+
+    def emit_plane(layer):
+        pixels = plane_pixels[layer]
+        tiles = [planar_tile(np.zeros((8, 8), np.uint8))]
+        lookup = {tiles[0]: 0}
+        words = np.empty((ROWS, COLS), '<u2')
+        groups = plane_groups[layer]
+        for cy in range(ROWS):
+            for cx in range(COLS):
+                idx = pixels[cy * 8:cy * 8 + 8, cx * 8:cx * 8 + 8]
+                key = planar_tile(idx)
+                tile = lookup.get(key)
+                if tile is None:
+                    tile = len(tiles)
+                    lookup[key] = tile
+                    tiles.append(key)
+                group = int(groups[cy * COLS + cx])
+                words[cy, cx] = (group << 12) | ((UI_TILE_WORD >> 4) + tile)
+        limit = (UI_SPRITE_WORD - UI_TILE_WORD) // 16
+        if len(tiles) > limit:
+            raise ValueError(f'{name}: paired BG{layer} needs {len(tiles)} tiles; limit is {limit}')
+        tile_offset = archive.add(f'sgx_{name}_bg{layer}_tiles', b''.join(tiles))
+        map_offset = archive.add(f'sgx_{name}_bg{layer}_map', words.tobytes())
+        return tile_offset, map_offset, len(tiles)
+
+    tiles0, map0, count0 = emit_plane(0)
+    tiles1, map1, count1 = emit_plane(1)
+    palette_offset = archive.add(f'sgx_{name}_bg_palette', palettes.astype('<u2').tobytes())
+    preview = np.clip(rendered, 0, 255).astype(np.uint8)
+    Image.fromarray(preview).resize((W * 3, H * 3), Image.Resampling.NEAREST).save(previews / f'sgx_{name}_paired.png')
+    return dict(sgx_palette=palette_offset, sgx_tiles0=tiles0, sgx_map0=map0,
+                sgx_tiles1=tiles1, sgx_map1=map1, sgx_ntiles0=count0,
+                sgx_ntiles1=count1, sgx_colors=len(actual_colors),
+                sgx_mse=total_error / max(opaque_count, 1))
+
 def glow_screen(canvas, layers, dim=1.0):
     """A 320x224 painting with lettering added on top as light.
 
@@ -557,7 +678,7 @@ def credits_pages(work):
     return struct.pack('<H', len(texts)) + struct.pack(f'<{len(texts)}H', *offsets) + b''.join(texts), len(texts)
 
 # ---------------------------------------------------------------- bake
-def bake(root, work, out, previews, cblock_frame):
+def bake(root, work, out, previews, cblock_frame, sgx=False):
     def get(rid, n=0):
         return cblock_frame(work / 'srgb' / f'{rid:08X}.srgb', n)
     archive = Archive()
@@ -571,6 +692,14 @@ def bake(root, work, out, previews, cblock_frame):
             panel.emit(archive, 'panel', panel.font), gameover.emit(archive, 'gameover')]
     # Original per-stage/per-hero victory paintings (426x240): the centred 320x224 of each, lettering added as light like GAME OVER.
     victory = []
+    sgx_report = []
+    sgx_title_pair = None
+    if sgx:
+        sgx_title_pair = sgx_paired_background(title.preview_source, archive, 'title', previews)
+        sgx_report.append(dict(name='title', colors=sgx_title_pair['sgx_colors'],
+                               mean_squared_error=sgx_title_pair['sgx_mse'],
+                               bg0_tiles=sgx_title_pair['sgx_ntiles0'],
+                               bg1_tiles=sgx_title_pair['sgx_ntiles1']))
     for stage in range(1,8):
         heroes=('saber','fireball','april','colt') if stage in (1,3,4,5) else (None,)
         for hero in heroes:
@@ -587,6 +716,11 @@ def bake(root, work, out, previews, cblock_frame):
             # each painting is its own small extent of victory.bin (about 45 KB): the disc read at a stage's end is not the whole UI
             own=Archive()
             rec=scr.emit(own,f'victory_{name}')
+            if sgx:
+                pair=sgx_paired_background(canvas,own,f'victory_{name}',previews)
+                rec.update(pair)
+                sgx_report.append(dict(name=name,colors=pair['sgx_colors'],mean_squared_error=pair['sgx_mse'],
+                                       bg0_tiles=pair['sgx_ntiles0'],bg1_tiles=pair['sgx_ntiles1']))
             rec['extra']=own.add('ui_victory_extra',ramp_table(RING_BRIGHT_DIM)+struct.pack('<H',len(scr.pieces))+b''.join(struct.pack('<HHHH',*p) for p in scr.pieces))
             victory.append((rec,own.finish()))
     # Per-screen extra blobs.
@@ -601,6 +735,8 @@ def bake(root, work, out, previews, cblock_frame):
     recs += [rec for rec, _ in victory]
     victory_bin = b''.join(data for _, data in victory)
     (out / 'victory.bin').write_bytes(victory_bin)
+    if sgx:
+        (out / 'sgx_static_report.json').write_text(json.dumps({'edition':'SuperGrafx','paired_static_screens':sgx_report},indent=2)+'\n')
     sectors = np.cumsum([0] + [len(d) // 2048 for _, d in victory])[:-1]
     glow_off = archive.add('ui_gameover_glow', gameover.glow)
     portraits = []
@@ -627,16 +763,27 @@ def bake(root, work, out, previews, cblock_frame):
          f'#define PCE_UI_GAMEOVER_SLOTS {len(GAMEOVER_GLOW_SLOTS)}',
          f'#define PCE_UI_RAMP_BYTES {RINGS * RAMP * 2}',
          f'#define PCE_UI_STATE_BYTES {4 * PANEL_PALETTES_RUNTIME * 32}']
+    if sgx:
+        h += ['typedef struct { uint32_t palette, tiles0, map0, tiles1, map1; uint16_t ntiles0, ntiles1, colors; } PceSgxUiPair;',
+              'extern const PceSgxUiPair pce_sgx_ui_pair[20];']
     names = [select.info[f'name{k}'] for k in range(4)]
     h.append('#define PCE_UI_NAME_PATTERNS {' + ','.join(str(n[0]) for n in names) + '}')
     h.append('#define PCE_UI_NAME_WIDTHS {' + ','.join(str(n[1]) for n in names) + '}')
     for key in ('left', 'right'):
         i = select.info[key]
         h.append(f'#define PCE_UI_ARROW_{key.upper()} {{{i[0]},{i[1]},{i[2]},{i[3][0]},{i[3][1]}}}')
+    ui_rows=','.join('{%d,%d,%d,%d,%d,%d,%d,%d}' % (r['pal'], r['tiles'], r['map'], r['sprpal'], r['sprpat'], r['extra'], r['ntiles'], r['nsprpat']) for r in recs)
     c = ['const uint16_t pce_victory_sector[19]={' + ','.join(str(int(v)) for v in sectors) + '};',
          'const uint32_t pce_victory_bytes[19]={' + ','.join(str(len(d)) + 'UL' for _, d in victory) + '};',
-         'const PceUiScreen pce_ui[24]={' + ','.join('{%d,%d,%d,%d,%d,%d,%d,%d}' % (r['pal'], r['tiles'], r['map'], r['sprpal'], r['sprpat'], r['extra'], r['ntiles'], r['nsprpat']) for r in recs) + '};',
+         'const PceUiScreen pce_ui[24]={' + ui_rows + '};',
          'const PceUiPortrait pce_ui_portrait[4]={' + ','.join('{%d,%d,%d,%d}' % p for p in portraits) + '};']
+    if sgx:
+        pair_rows=','.join('{%d,%d,%d,%d,%d,%d,%d,%d}' % tuple(r[k] for k in
+                           ('sgx_palette','sgx_tiles0','sgx_map0','sgx_tiles1','sgx_map1','sgx_ntiles0','sgx_ntiles1','sgx_colors'))
+                           for r,_ in victory)
+        title_row='{%d,%d,%d,%d,%d,%d,%d,%d}' % tuple(sgx_title_pair[k] for k in
+                   ('sgx_palette','sgx_tiles0','sgx_map0','sgx_tiles1','sgx_map1','sgx_ntiles0','sgx_ntiles1','sgx_colors'))
+        c.append('const PceSgxUiPair pce_sgx_ui_pair[20] __attribute__((section(".ram_bank124.rodata")))={' + pair_rows + ',' + title_row + '};')
     return h, c, len(data)
 
 PANEL_PALETTES_RUNTIME = 1      # one BG palette per hero (frame + silhouette)

@@ -3,6 +3,7 @@
 #include "sprite_cache_pce.h"
 #include "overlay_pce.h"
 #include "loader_pce.h"
+#include "sgx_pce.h"
 #include <string.h>
 
 volatile PceTelemetry pce_metrics;
@@ -12,6 +13,9 @@ volatile uint16_t pce_draws;
 volatile uint8_t pce_vdc_index;
 volatile uint16_t pce_scroll_x, pce_scroll_y;
 volatile uint8_t pce_scroll_hold;
+#ifdef PCE_SGX
+volatile uint16_t pce_sgx_sky_scroll_x PCE_WORK;
+#endif
 /* VRAM SAT sources alternate independently of the RAM drawing/scratch pages. */
 uint16_t pce_sat_word=PCE_SAT_WORD;
 volatile uint8_t pce_sat_pending;
@@ -24,6 +28,7 @@ static uint16_t cache_ids[PCE_BG_MAX_TILES] PCE_WORK;
 uint16_t cache_refs[PCE_BG_MAX_TILES] PCE_WORK;   /* (the race borrows it for its quarter-square table: race_proj.c) */
 uint16_t columns[33][30] PCE_WORK;
 static uint16_t first_column, last_column;
+extern uint16_t pce_panel_column;
 /* A tile slot whose last column has scrolled out stays unavailable until the next call: the scroll that drops the column only
  * takes effect at the next VBlank, and until then the old picture (the left edge column) is still displayed from these tiles.
  * Reusing the slot at once showed another column's tiles there on busy frames (several columns a step, a nearly full cache). */
@@ -97,7 +102,7 @@ PCE_RENDER static void timing(bool wide) {
     pce_cpu_irq_enable();
 }
 /* 320x224 timing for the front end: the 7.16 MHz dot clock, 40 characters. */
-PCE_RENDER void video_mode_ui(void) {
+__attribute__((noinline,section(".ram_bank123.text"))) static void video_mode_ui_body(void) {
     pce_arena_raster=0;
     sprite_screen_height=224;sprite_exact=1;
     pce_cpu_irq_disable();
@@ -109,8 +114,12 @@ PCE_RENDER void video_mode_ui(void) {
     video_vdc(VDC_REG_TIMING_VDISP, 223);
     video_vdc(VDC_REG_TIMING_VDISPEND, 12);
     video_vdc(VDC_REG_DMA_CONTROL, 0);
+#ifdef PCE_SGX
+    if(pce_sgx_active)overlay_call(0x72,pce_sgx_ui_mode_body);
+#endif
     pce_cpu_irq_enable();
 }
+PCE_RENDER void video_mode_ui(void) {overlay_call(0x7b,video_mode_ui_body);}
 PCE_RENDER void video_wait(void) {
     uint8_t previous = pce_ticks;
     while (previous == pce_ticks) {}
@@ -131,8 +140,13 @@ PCE_RENDER void video_display(bool enable) {
     pce_display_on=enable;
     video_vdc(VDC_REG_CONTROL, VDC_CONTROL_IRQ_VBLANK | VDC_CONTROL_IRQ_SCANLINE |
               (enable ? VDC_CONTROL_ENABLE_BG | VDC_CONTROL_ENABLE_SPRITE : 0));
+#ifdef PCE_SGX
+    if(pce_sgx_active)overlay_call(0x72,pce_sgx_display_on_body);
+#endif
 }
-PCE_RENDER void video_scroll(uint16_t x, uint16_t y) { pce_scroll_x = x; pce_scroll_y = y; }
+PCE_RENDER void video_scroll(uint16_t x, uint16_t y) {
+    pce_scroll_x = x; pce_scroll_y = y;
+}
 extern void foreground_reset(void);
 PCE_RENDER void video_scene(const PceScene *s) {
     pce_race_dialog=0;
@@ -149,10 +163,20 @@ PCE_RENDER void video_scene(const PceScene *s) {
     memset(sprite_pinned,0,sizeof sprite_pinned);
     memset(pattern_owner,0,sizeof pattern_owner);
     first_column = last_column = 0xffff;
-    pce_arena_raster=0;free_cursor=0;bg_tiles=s==&pce_scenes[5]?512:PCE_BG_MAX_TILES;
+    pce_arena_raster=0;free_cursor=0;
+    bg_tiles=s==&pce_scenes[5]?512:PCE_BG_MAX_TILES;
     for(uint8_t page=0;page<32;++page)arcade_fill(0x1e0000UL+(uint32_t)page*4096,0xff,4096);
-    arcade_read(2, s->pal, buffer, 512);
-    pce_vce_copy_palette(0, buffer, 16);
+#ifdef PCE_SGX
+    if(pce_sgx_active&&s->sgx_pal) {
+        uint16_t bytes=pce_metrics.stage==7?320:512;
+        arcade_read(2,s->sgx_pal,buffer,bytes);
+        pce_vce_copy_palette(0,buffer,bytes==320?10:16);
+    } else
+#endif
+    {
+        arcade_read(2, s->pal, buffer, 512);
+        pce_vce_copy_palette(0, buffer, 16);
+    }
     pce_vce_set_color(255, 0x1ff);
     pce_vdc_index = 0;
 }
@@ -185,8 +209,20 @@ PCE_RENDER static void held_free(void) {
  * 64 words, so only one address is programmed. IRQs stay masked meanwhile. */
 PCE_RENDER static bool column_load(uint16_t world) {
     uint8_t *cb=buffer+1920;   /* the last 128 bytes: the palette snapshot of a fade (fade_pce.c) lives in the first 1024 */
-    if (!arcade_read(1, scene->map + (uint32_t)(world % scene->cols) * 90, cb, 90)) return false;
+    uint32_t map_address=scene->map,tiles_address=scene->tiles;
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay()&&scene->sgx_map) {
+        map_address=scene->sgx_map;tiles_address=scene->sgx_tiles;
+    }
+#endif
+    if (!arcade_read(1, map_address + (uint32_t)(world % scene->cols) * 90, cb, 90)) return false;
     uint16_t *refs = columns[world % 33];
+#ifdef PCE_SGX
+    uint8_t target = pce_sgx_gameplay() &&
+        !(pce_sgx_metrics.paired_screen & PCE_SGX_STATIC_SKY) ? 1 : 0;
+#else
+    uint8_t target = 0;
+#endif
     arcade_seek(3,0x1e0000UL);
     for (uint8_t y = 0; y < 30; ++y) {
         uint16_t id = cb[y * 3] | (uint16_t)cb[y * 3 + 1] << 8;
@@ -200,9 +236,9 @@ PCE_RENDER static bool column_load(uint16_t world) {
             }
             free_cursor=slot+1;if(free_cursor==bg_tiles)free_cursor=0;
             if(cache_ids[slot]!=0xffff)directory_set(cache_ids[slot],0xffff);
-            pce_vdc_index = 2; *(volatile uint8_t *)0x20f7 = 2;
-            if (!arcade_vram(scene->tiles + (uint32_t)id * 32,
-                             PCE_BG_WORD + slot * 16, 32)) return false;
+            if (!target) {pce_vdc_index = 2; *(volatile uint8_t *)0x20f7 = 2;}
+            if (!arcade_vram_to(target,tiles_address + (uint32_t)id * 32,
+                                PCE_BG_WORD + slot * 16,32)) return false;
             cache_ids[slot] = id;
             directory_set(id,slot);
             pce_metrics.uploads += 32;
@@ -211,6 +247,13 @@ PCE_RENDER static bool column_load(uint16_t world) {
         uint16_t word=(PCE_BG_WORD>>4)+slot+((uint16_t)cb[y*3+2]<<12);
         cb[y*3]=word;cb[y*3+1]=word>>8;
     }
+#ifdef PCE_SGX
+    if(target) {
+        pce_panel_column=world;
+        overlay_call(0x6e,pce_sgx_column_write_body);
+        return true;
+    }
+#endif
     uint16_t control=*(volatile uint16_t *)0x20f3;
     pce_cpu_irq_disable();
     *(volatile uint8_t *)0x20f7 = 5;
@@ -266,7 +309,7 @@ PCE_RENDER bool video_background(uint16_t camera) {
 PCE_RENDER void video_text(uint8_t x, uint8_t y, const char *text) {
     if(pce_raster_enabled)x*=2;
     uint16_t dest = pce_raster_enabled ? (uint16_t)(48+y)*128+x :
-        (uint16_t)y*64+(((pce_scroll_x>>3)+x)&63);
+        (uint16_t)y*64+((((pce_sgx_gameplay()&&(pce_metrics.stage==4||pce_metrics.stage==5))?0:pce_scroll_x>>3)+x)&63);
     while (*text) {
         uint8_t c = *text++;
         if (c < 32 || c > 127) c = '?';
@@ -356,8 +399,14 @@ PCE_RENDER uint16_t video_sat_target(void) {
 PCE_RENDER static void sat_publish(uint16_t word,bool drawing) {
     /* Drain the last VRAM write before exposing the source to DMA. */
     (void)*IO_VDC_DATA_LO;
+#ifdef PCE_SGX
+    if(drawing)overlay_call(0x78,pce_sgx_sky_scroll_body);
+#endif
     pce_cpu_irq_disable();
-    if(drawing){pce_sat_scroll_x=pce_scroll_x;pce_sat_scroll_y=pce_scroll_y;pce_scroll_hold=0;}
+    if(drawing){
+        pce_sat_scroll_x=pce_scroll_x;pce_sat_scroll_y=pce_scroll_y;
+        pce_scroll_hold=0;
+    }
     pce_sat_word=word;
     pce_vdc_index=VDC_REG_SATB_START;
     *(volatile uint8_t*)0x20f7=VDC_REG_SATB_START;

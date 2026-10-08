@@ -3,6 +3,7 @@
 #include "loader_pce.h"
 #include "arcade_pce.h"
 #include "audio_pcm.h"
+#include "sgx_pce.h"
 #define UI_BASE __attribute__((noinline,section(".ram_bank106.text")))
 #define UI_SPRITE_CODE (UI_SPRITE_WORD>>5)
 extern uint8_t buffer[2048];
@@ -38,11 +39,16 @@ UI_BASE void ui_show(uint8_t id) {
     const PceUiScreen *s=ui_screen=&pce_ui[id];
     video_display(false);pce_raster_enabled=0;pce_scroll_x=pce_scroll_y=0;
     video_mode_ui();
+#ifdef PCE_SGX
+    pce_sgx_metrics.paired_screen=id;
+    overlay_call(0x7c,pce_sgx_ui_load_body);
+#else
     arcade_read(2,s->pal,buffer,512);pce_vce_copy_palette(0,buffer,16);
     arcade_read(2,s->sprpal,buffer,512);pce_vce_copy_palette(16,buffer,16);
     ui_vram(s->tiles,UI_TILE_WORD,(uint32_t)s->ntiles*32);
     for(uint8_t row=0;row<28;++row)ui_vram(s->map+(uint32_t)row*80,(uint16_t)row*64,80);
     if(s->nsprpat)ui_vram(s->sprpat,UI_SPRITE_WORD,(uint32_t)s->nsprpat*128);
+#endif
     if(id!=SCREEN_TITLE) {
         arcade_read(2,s->extra,ui_ramp,PCE_UI_RAMP_BYTES);
         arcade_read(2,s->pal,ui_ring,128);
@@ -65,7 +71,12 @@ UI_BASE void ui_put(uint8_t col,uint8_t row,const char *text,uint8_t slot) {
     }
     pce_cpu_irq_enable();
 }
-UI_BASE void ui_end(void) { video_sat_begin();video_sat_end(); }
+UI_BASE void ui_end(void) {
+    video_sat_begin();video_sat_end();
+#ifdef PCE_SGX
+    overlay_call(0x7c,pce_sgx_ui_end_body);
+#endif
+}
 UI_BASE void ui_fade(uint8_t level) {
     uint16_t *src=(uint16_t*)buffer,*dst=src+512;
     if(level==8){pce_vce_copy_palette_to_ram(buffer,0,32);return;}
@@ -84,4 +95,10 @@ UI_BASE void ui_fade(uint8_t level) {
 UI_FADE_CODE static void fade_step(uint8_t level) {video_wait();video_wait();video_wait();ui_fade(level);}
 UI_FADE_CODE void ui_fade_out_body(void) {ui_fade(8);for(uint8_t level=1;level<8;++level)fade_step(level);}
 UI_FADE_CODE void ui_black_body(void) {ui_fade(8);ui_fade(7);}
-UI_FADE_CODE void ui_fade_in_body(void) {video_display(true);for(uint8_t level=6;level<7;--level)fade_step(level);}
+UI_FADE_CODE void ui_fade_in_body(void) {
+    video_display(true);
+#ifdef PCE_SGX
+    overlay_call(0x72,pce_sgx_display_on_body);
+#endif
+    for(uint8_t level=6;level<7;--level)fade_step(level);
+}

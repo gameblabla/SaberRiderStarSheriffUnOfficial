@@ -6,6 +6,7 @@
 #include "overlay_pce.h"
 #include "ui_pce.h"
 #include "cdda_pce.h"
+#include "sgx_pce.h"
 
 uint8_t pce_stall PCE_WORK;
 
@@ -50,7 +51,13 @@ bool loader_font(void) {
     if (error) { pce_metrics.load_error = error; return false; }
     return true;
 }
-static bool loader_archive(uint32_t sector,uint32_t remaining,bool keep_display) {
+static uint32_t archive_sector PCE_WORK;
+static uint32_t archive_remaining PCE_WORK;
+static bool archive_keep_display PCE_WORK;
+static bool archive_result PCE_WORK;
+__attribute__((noinline,minsize,section(".ram_bank113.text"))) static void loader_archive_body(void) {
+    uint32_t sector=archive_sector,remaining=archive_remaining;
+    bool keep_display=archive_keep_display;
     audio_stop(); if(!keep_display)video_display(false);
     pce_raster_enabled = 0;
     pce_cdb_irq_disable(PCE_CDB_MASK_VBLANK_NO_BIOS | PCE_CDB_MASK_HBLANK_NO_BIOS);
@@ -62,14 +69,14 @@ static bool loader_archive(uint32_t sector,uint32_t remaining,bool keep_display)
         pce_sector_t s = {.lo=sector, .md=sector>>8, .hi=sector>>16};
         ++pce_metrics.disc_reads;
         uint8_t error = pce_cdb_cd_read(s, PCE_CDB_BANK_MPR6, 0x76, sectors);
-        if (error) { pce_metrics.load_error = error; return false; }
+        if (error) { pce_metrics.load_error = error; archive_result=false; return; }
         uint16_t chunk_sectors = sectors;
         for (uint8_t bank = 0; chunk_sectors; ++bank) {
             uint16_t size = chunk_sectors >= 4 ? 8192 : chunk_sectors << 11;
             pce_bank6_set(0x76 + bank);
             bool ok = arcade_write(0, address, (const void *)0xc000, size);
             pce_bank6_set(0x6c);
-            if (!ok) { pce_metrics.load_error = 0xfe; return false; }
+            if (!ok) { pce_metrics.load_error = 0xfe; archive_result=false; return; }
             address += size; remaining -= size; chunk_sectors -= size >> 11;
         }
         sector += sectors;
@@ -81,10 +88,15 @@ static bool loader_archive(uint32_t sector,uint32_t remaining,bool keep_display)
         pce_sector_t s={.lo=n,.md=n>>8,.hi=n>>16};
         uint8_t error=pce_cdb_cd_read(s,PCE_CDB_BANK_MPR6,part?0x79:0x76,8);
         pce_bank6_set(0x6c);
-        if(error){pce_metrics.load_error=error;return false;}
+        if(error){pce_metrics.load_error=error;archive_result=false;return;}
     }
     pce_cdb_irq_enable(PCE_CDB_MASK_VBLANK_NO_BIOS | PCE_CDB_MASK_HBLANK_NO_BIOS);
-    return true;
+    archive_result=true;
+}
+static bool loader_archive(uint32_t sector,uint32_t remaining,bool keep_display) {
+    archive_sector=sector;archive_remaining=remaining;archive_keep_display=keep_display;
+    overlay_call(0x71,loader_archive_body);
+    return archive_result;
 }
 bool loader_ui(void) {return loader_archive((uint32_t)__cd_ui_bin__sector,PCE_UI_BYTES,false);}
 /* One of the 19 victory paintings (each its own small extent of victory.bin). */
@@ -97,6 +109,9 @@ bool loader_scene(uint8_t stage) {
     video_display(false);video_scroll(0,0);
     pce_metrics.stage = stage;
     video_scene(&pce_scenes[stage-1]);
+#ifdef PCE_SGX
+    if(pce_sgx_active)overlay_call(0x78,pce_sgx_gameplay_begin_body);
+#endif
     return true;
 }
 PCE_X3 void stop_body(void) {

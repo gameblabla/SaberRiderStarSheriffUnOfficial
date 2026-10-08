@@ -9,10 +9,10 @@ BIOS = ROOT / 'PCE/[BIOS] Super CD-ROM System (Japan) (En) (v3.0).pce'
 BINARY = ROOT / 'PCE/mednafen-pce-headless'
 
 class Emulator:
-    def __init__(self, cue, base, bios=BIOS, arcade=True):
+    def __init__(self, cue, base, bios=BIOS, arcade=True, sgx=False):
         base = Path(base).resolve(); base.mkdir(parents=True, exist_ok=True)
         # These are accurate-core hardware settings; never use unlimited SAT.
-        (base/'pce.cfg').write_text(f'pce.arcadecard {int(arcade)}\npce.nospritelimit 0\n')
+        (base/'pce.cfg').write_text(f'pce.arcadecard {int(arcade)}\npce.forcesgx {int(sgx)}\npce.nospritelimit 0\n')
         self.cue=Path(cue).resolve()
         self.log = open(base/'emulator.log', 'w')
         self.proc = subprocess.Popen([str(BINARY), '--rom', str(Path(cue).resolve()), '--bios', str(bios),

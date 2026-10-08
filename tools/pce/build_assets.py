@@ -40,7 +40,7 @@ M6_ALL_SCALES = M6_SCALES + M6_BIG_SCALES
 sys.path[:0] = [str(ROOT / 'tools/saturn'), str(ROOT / 'tools/dc')]
 import levl
 import texbake
-from formats import Archive, BG_TILES, indexed, palette_for, planar_tile, planar_sprite, pack_sprite, pair_characters, vce_rgb, vce_colors
+from formats import Archive, BG_TILES, BG_WORD, indexed, palette_for, planar_tile, planar_sprite, pack_sprite, pair_characters, vce_rgb, vce_colors
 
 def run(args, **kwargs):
     result = subprocess.run([str(a) for a in args], cwd=ROOT, check=True, capture_output=True, **kwargs)
@@ -218,26 +218,47 @@ def thin_foreground(fg):
 # meanwhile. A window filled to the brim of the cache left no room for that, and the left edge showed another column's tiles.
 COLUMN_SLACK = 32
 
-def native_background(image, archive, previews, name):
+def _background_cells(image, transparent):
     w = (image.width + 7) // 8 * 8
-    canvas = Image.new('RGBA', (w, 240), (0, 0, 0, 255)); canvas.paste(image)
+    color = (0, 0, 0, 0) if transparent else (0, 0, 0, 255)
+    canvas = Image.new('RGBA', (w, 240), color); canvas.paste(image)
     rgba = np.asarray(canvas)
     cells = rgba.reshape(30, 8, w // 8, 8, 4).transpose(0, 2, 1, 3, 4).reshape(-1, 8, 8, 4)
+    return w,rgba,cells
+
+def fit_background_pair(main, sky, stage):
+    _,_,main_cells = _background_cells(main,True)
+    _,_,sky_cells = _background_cells(sky,True)
+    palettes,groups = palfit.fit_palettes(np.concatenate((main_cells,sky_cells)),16,fixed=(15,))
+    palettes = [palettes[k].copy() for k in range(16)]
+    palettes[0][0] = presentation.sky_color(stage)
+    split = len(main_cells)
+    return palettes,groups[:split].copy(),groups[split:].copy()
+
+def native_background(image, archive, previews, name, npal=16, sgx=False, record_prefix='', preview_name=None,
+                      transparent=False, palette_fit=None, write_palette=True, static_bat=False, return_preview=False):
+    w,rgba,cells = _background_cells(image,transparent)
     dialog_palette=name in ('stage1','stage3','stage4','stage5','stage6')   # palette 15 belongs to the dialogue box and the font
-    cap = (512 - 4 - COLUMN_SLACK) if name == 'stage6' else BG_TILES - 4 - COLUMN_SLACK   # (Ramrod's arena keeps the cache's top 384 characters for sprite patterns)
+    cap = (BG_TILES - 1) if static_bat else (512 - 4 - COLUMN_SLACK) if name == 'stage6' and not sgx else BG_TILES - 4 - COLUMN_SLACK   # SGX moves the arena background off the VDC0 sprite cache
     # The 16 palettes and the palette of every cell are optimised together (palfit.py), not by vertical bands of mean colour.
-    palette, groups = palfit.fit_palettes(cells, 16, fixed=(15,) if dialog_palette else ())
-    palette = [palette[k] for k in range(16)]
-    if not dialog_palette:
+    if palette_fit is None:
+        palette, groups = palfit.fit_palettes(cells, npal, fixed=(15,) if dialog_palette else ())
+        palette = [palette[k].copy() for k in range(npal)]
+    else:
+        palette,groups = palette_fit
+        groups = groups.copy()
+    if not dialog_palette and npal == 16:
         # The renderer forces BG colour 255 (palette 15, index 15) to white for the text font, so a baked cell must
         # never pick it: the last palette's last colour repeats its neighbour.
         palette[15] = palette[15].copy(); palette[15][15] = palette[15][14]
     # Transparent sky pixels all reveal VCE entry 0, independent of the cell's palette.
     backdrop = presentation.sky_color(int(name[5:]))
-    tiles, tile_lookup, names = [], {}, []
+    blank = planar_tile(np.zeros((8,8),np.uint8))
+    tiles, tile_lookup, names = [blank], {blank:0}, []
     preview = np.zeros_like(rgba)
     cell_idx = palfit.index_cells(cells, np.asarray(palette), groups)
-    cell_idx, groups, merged = tile_budget.limit_tiles(cells, cell_idx, groups, palette, w // 8, cap, reserved=(15,) if dialog_palette else ())
+    cell_idx, groups, merged = tile_budget.limit_tiles(cells, cell_idx, groups, palette, w // 8, cap,
+                                                        reserved=(15,) if dialog_palette else (), full_map=static_bat)
     if merged: print(f'{name}: redrew {merged} cells with neighbouring characters to fit the {BG_TILES}-tile cache', flush=True)
     palette[0][0] = backdrop
     for i, cell in enumerate(cells):
@@ -249,15 +270,29 @@ def native_background(image, archive, previews, name):
         y, x = divmod(i, w // 8)
         preview[y * 8:y * 8 + 8, x * 8:x * 8 + 8, :3] = np.where(
             idx[..., None] > 0, vce_rgb(palette[pal])[idx], vce_rgb(backdrop))
-        preview[y * 8:y * 8 + 8, x * 8:x * 8 + 8, 3] = 255
+        preview[y * 8:y * 8 + 8, x * 8:x * 8 + 8, 3] = (
+            np.where(cell[..., 3] >= 128,255,0) if transparent else 255)
     if len(tiles) > 65535: raise ValueError(f'{name}: too many background characters')
     n = np.asarray(names, np.uint16).reshape(30, w // 8, 2).transpose(1, 0, 2)
     mapping = b''.join(struct.pack('<HB', int(t), int(p)) for t, p in n.reshape(-1, 2))
-    pal_off = archive.add('bg_palette', np.asarray(palette, '<u2').tobytes())
-    tile_off = archive.add('bg_patterns', b''.join(tiles))
-    map_off = archive.add('bg_columns', mapping)
-    Image.fromarray(preview).save(previews / f"{name}.png")
-    return dict(pal=pal_off, tiles=tile_off, map=map_off, cols=w // 8, tile_count=len(tiles))
+    tile_data = b''.join(tiles)
+    pal_off = archive.add(record_prefix+'bg_palette', np.asarray(palette, '<u2').tobytes()) if write_palette else 0
+    tile_off = archive.add(record_prefix+'bg_patterns', tile_data)
+    bat_cols = 128 if static_bat and w > 512 else 64
+    pattern_word = 0x1000 if static_bat and bat_cols == 128 else BG_WORD
+    if static_bat:
+        bat = np.full(bat_cols*32,pattern_word>>4,dtype='<u2')
+        for i,(tile,pal) in enumerate(names):
+            y,x = divmod(i,w//8)
+            bat[y*bat_cols+x] = (pattern_word>>4)+tile+(pal<<12)
+        map_off = archive.add(record_prefix+'bg_bat',bat.tobytes())
+    else:
+        map_off = archive.add(record_prefix+'bg_columns', mapping)
+    preview_image=Image.fromarray(preview)
+    preview_image.save(previews / f"{preview_name or name}.png")
+    result=dict(pal=pal_off, tiles=tile_off, map=map_off, cols=w // 8, tile_count=len(tiles),tile_bytes=len(tile_data),bat_cols=bat_cols,pattern_word=pattern_word)
+    if return_preview:result['preview']=preview_image
+    return result
 
 BOSS_BG_W,BOSS_BG_H=180,98     # the battle cruiser (224x123 in the source) at four fifths: the screen is 256 dots wide, not 320
 BOSS_COLS,BOSS_ROWS=23,13
@@ -554,23 +589,35 @@ def flat_sky_rows(ly, bank):
             rows[y, :] = colours[counts.argmax()]
     return rows
 
-def platform_background(stage, work):
+def platform_background(stage, work, sgx=False):
     level, files = levl.load_dump(work / f'stage{stage}.layers')
     banks = {i: levl.png_bank(path, i) if path else levl.load_bank(work / 'srgb' / f'{i:08X}.srgb')
              for i, path in files.items()}
     width = math.ceil(level.width / 256) * 256
     out = Image.new('RGBA', (width, 240), (0, 0, 0, 255))
+    sgx_main = Image.new('RGBA', (width, 240), (0, 0, 0, 0)) if sgx and stage in (1, 3, 4, 5) else None
     foreground = Image.new('RGBA',(width,240))
     continuous = {}
     after = False
     flat_sky = None
+    sgx_sky = None
     for ly in level.layers:
         if ly.name == 'PlayerSprites': after = True
-        if stage == 4 and ly.name == 'SkyBG': flat_sky = flat_sky_rows(ly, banks[ly.cblock]); continue
+        if stage == 4 and ly.name == 'SkyBG': flat_sky = flat_sky_rows(ly, banks[ly.cblock])
+        if sgx and stage in (1, 3, 4, 5) and ly.name == 'SkyBG':
+            sky_width = 256 if stage in (1, 3) else 512 if stage == 4 else 1024
+            sgx_sky = levl.render_layer(ly, banks[ly.cblock], levl.layer_offset(ly, 0), sky_width, 240, None)
+            if stage == 3:
+                tint = np.array(NIGHT_TINT.get('SkyBG', (100, 100, 160)), np.int32)
+                sgx_sky[..., :3] = (sgx_sky[..., :3].astype(np.int32) * tint // 255).astype(np.uint8)
+            sgx_sky = Image.fromarray(sgx_sky)
+            continue
+        if stage == 4 and ly.name == 'SkyBG': continue
         if ly.is_tilemap and not after and 0 < ly.parallax < 1 and ly.extra != 1:
             continuous[ly.name] = continuous_layer(ly, banks[ly.cblock], width)
     for x in range(0,width,256):
         pixels=np.zeros((240,256,4),np.uint8)
+        sgx_pixels=np.zeros_like(pixels) if sgx_main is not None else None
         front=np.zeros_like(pixels);after_player=False
         # Stages 1 and 3 leave the sky transparent for the fixed scene backdrop.
         for ly in level.layers:
@@ -589,11 +636,17 @@ def platform_background(stage, work):
                 tint=np.array(NIGHT_TINT.get(ly.name,(100,100,160)),np.int32)
                 layer[...,:3]=(layer[...,:3].astype(np.int32)*tint//255).astype(np.uint8)
             if after_player: front=np.where(layer[...,3:4]>=128,layer,front)
-            else: pixels=np.where(layer[...,3:4]>=128,layer,pixels)
+            else:
+                pixels=np.where(layer[...,3:4]>=128,layer,pixels)
+                if sgx_pixels is not None and ly.name != 'SkyBG':
+                    sgx_pixels=np.where(layer[...,3:4]>=128,layer,sgx_pixels)
         out.paste(Image.fromarray(pixels),(x,0))
+        if sgx_main is not None: sgx_main.paste(Image.fromarray(sgx_pixels),(x,0))
         foreground.paste(Image.fromarray(front),(x,0))
-    if stage == 1: out = scenery_background(out, work, stage)
-    return out,foreground
+    if stage == 1:
+        out = scenery_background(out, work, stage)
+        if sgx_main is not None: sgx_main = scenery_background(sgx_main, work, stage)
+    return out,foreground,sgx_main,sgx_sky
 
 def april_palette_for(images):
     """One shared palette for April's entire animation set, fitted to the original drawing.
@@ -808,12 +861,13 @@ def font_glyphs(work):
         glyphs.append(planar_tile(((px[..., 3] >= 64) * 15).astype(np.uint8)))
     return b''.join(glyphs)
 
-def make_scene(stage, work, previews, shared):
+def make_scene(stage, work, previews, shared, sgx=False):
     a = Archive()
     meta = dict(stage=stage)
+    sgx_main = sgx_sky = None
     if stage in (1, 3, 4, 5):
         meta.update(json.loads((work / f'stage{stage}.json').read_text()))
-        bg,foreground = platform_background(stage, work)
+        bg,foreground,sgx_main,sgx_sky = platform_background(stage, work, sgx=sgx)
         # Native collision matrix is column-major for a hot 32-column cache.
         raw = np.frombuffer((work / f'stage{stage}.collision').read_bytes(), np.uint8).reshape(meta['rows'], meta['cols'])
         collision = a.add('collision_columns', raw.T.tobytes())
@@ -1350,7 +1404,29 @@ def make_scene(stage, work, previews, shared):
         foreground.crop((0,0,1024,224)).save(previews/f'foreground{stage}.png')
     if stage == 6: meta['m6_image'] = a.add('m6_image', bytes(4 * 8192), 2048)   # the arena's code images are put here after the application is linked (m6_image.py, build_disc.py)
     meta['story_offset']=story.bake(ROOT,work,stage,a,meta['presentation']['portraits'])
-    meta.update(race_sky(a, previews, race_sand) if stage == 2 else native_background(bg, a, previews, f'stage{stage}'))
+    if stage==2:
+        meta.update(race_sky(a,previews,race_sand))
+    else:
+        meta.update(native_background(bg,a,previews,f'stage{stage}',sgx=sgx))
+        if sgx and stage in (1,3,4,5) and sgx_main is not None and sgx_sky is not None:
+            palette,main_groups,sky_groups=fit_background_pair(sgx_main,sgx_sky,stage)
+            main=native_background(sgx_main,a,previews,f'stage{stage}',sgx=True,record_prefix='sgx_',
+                                   transparent=True,palette_fit=(palette,main_groups),return_preview=True)
+            sky=native_background(sgx_sky,a,previews,f'stage{stage}',sgx=True,record_prefix='sgx_sky_',
+                                  preview_name=f'stage{stage}_sgx_sky',transparent=True,
+                                  palette_fit=(palette,sky_groups),write_palette=False,static_bat=True,return_preview=True)
+            if sky['tile_bytes']>0xffff:raise ValueError(f'stage{stage}: SGX sky patterns exceed scene record')
+            meta['sgx_pal']=main['pal'];meta['sgx_tiles']=main['tiles'];meta['sgx_map']=main['map']
+            meta['sgx_sky_record']=a.add('sgx_sky_record',struct.pack('<IIHB',sky['tiles'],sky['map'],sky['tile_bytes'],sky['bat_cols']))
+            backdrop=np.asarray(vce_rgb(presentation.sky_color(stage)),np.uint8).reshape(3)
+            composite=Image.new('RGBA',(256,224),tuple(int(v) for v in backdrop)+(255,))
+            composite.alpha_composite(sky['preview'].crop((0,0,256,224)))
+            composite.alpha_composite(main['preview'].crop((0,0,256,224)))
+            composite.save(previews/f'stage{stage}_sgx_composite.png')
+        if sgx and stage==7:
+            paired=native_background(bg,a,previews,'stage7',npal=10,sgx=True,
+                                     record_prefix='sgx_',preview_name='stage7_sgx')
+            meta['sgx_pal']=paired['pal'];meta['sgx_tiles']=paired['tiles'];meta['sgx_map']=paired['map']
     sprite_table, rows, costs = add_sprites(a, list(sprites), previews)
     if stage == 6:
         # the bolt's patterns in the HUD's palette (add_sprites gave every 'hudp_' sprite of the stage one: the same call on the same images): middle and far 16x16 (64 words each), then the near 32x32 (TL, TR, BL, BR)
@@ -1363,7 +1439,7 @@ def make_scene(stage, work, previews, shared):
     return a.finish(), meta
 
 def main():
-    parser = argparse.ArgumentParser(); parser.add_argument('--out', type=Path, default=ROOT/'build/pce')
+    parser = argparse.ArgumentParser(); parser.add_argument('--out', type=Path, default=ROOT/'build/pce'); parser.add_argument('--sgx', action='store_true')
     args = parser.parse_args(); out = args.out.resolve(); out.mkdir(parents=True, exist_ok=True)
     work = out/'work'; previews = out/'preview'; previews.mkdir(exist_ok=True)
     extract(work)
@@ -1371,20 +1447,24 @@ def main():
     scenes = []
     for stage in range(1, 8):
         print(f'Baking PCE stage {stage}', flush=True)
-        data, meta = make_scene(stage, work, previews, shared)
+        data, meta = make_scene(stage, work, previews, shared, sgx=args.sgx)
         (out/f's{stage}.bin').write_bytes(data); scenes.append(meta)
-    ui_h,ui_c,ui_bytes=frontend.bake(ROOT,work,out,previews,cblock_frame)
+    ui_h,ui_c,ui_bytes=frontend.bake(ROOT,work,out,previews,cblock_frame,sgx=args.sgx)
     # 96 ASCII glyphs use background characters, palette 15: the Saturn small
     # font's 8x8 frames (frame = char - 0x21; 0x7f is its dialogue arrow).
     (out/'font.bin').write_bytes(font_glyphs(work))
+    scene_fields='typedef struct { uint32_t bytes, pal, tiles, map, collision, sprites, triggers, story, track, rules, occlusion, foreground, horse; uint16_t cols, ccols, crows, nsprites, nforeground; int16_t sx, sy, width; uint8_t ntr, cw, ch;'
+    if args.sgx:scene_fields+=' uint32_t sgx_pal, sgx_tiles, sgx_map;'
+    scene_fields+=' } PceScene;'
     h = ['/* Generated: all offsets are Arcade RAM byte addresses. */', '#pragma once', '#include <stdint.h>',
-         'typedef struct { uint32_t bytes, pal, tiles, map, collision, sprites, triggers, story, track, rules, occlusion, foreground, horse; uint16_t cols, ccols, crows, nsprites, nforeground; int16_t sx, sy, width; uint8_t ntr, cw, ch; } PceScene;',
+         scene_fields,
          'extern const PceScene pce_scenes[7];','extern const uint8_t pce_actor_ids[33];']
     c=['#include "pce_config.h"','#include "assets.h"','const PceScene pce_scenes[7] = {']
     for m in scenes:
-        values = [m['bytes'],m['pal'],m['tiles'],m['map'],m['collision'],m['sprite_table'],m.get('trigger_offset',0),m['story_offset'],m.get('track_offset',0),m.get('rules_offset',0),0,m['foreground_offset'],m.get('horse_offset',0),m['cols'],m.get('cols',0) if 'cellw' not in m else m['width']//m['cellw'],m.get('rows',0),m['sprite_count'],m['foreground_count'],*m.get('start',(128,180)),m.get('width',m['cols']*8),m.get('ntr',0),m.get('cellw',8),m.get('cellh',8)]
+        values = [m['bytes'],m['pal'],m['tiles'],m['map'],m['collision'],m['sprite_table'],m.get('trigger_offset',0),m['story_offset'],m.get('track_offset',0),m.get('rules_offset',0),m.get('sgx_sky_record',0),m['foreground_offset'],m.get('horse_offset',0),m['cols'],m.get('cols',0) if 'cellw' not in m else m['width']//m['cellw'],m.get('rows',0),m['sprite_count'],m['foreground_count'],*m.get('start',(128,180)),m.get('width',m['cols']*8),m.get('ntr',0),m.get('cellw',8),m.get('cellh',8)]
         # Native map columns and collision columns are independent.
         if 'cellw' in m: values[13] = json.loads((work/f"stage{m['stage']}.json").read_text())['cols']
+        if args.sgx:values += [m.get('sgx_pal',0),m.get('sgx_tiles',0),m.get('sgx_map',0)]
         c.append('    {' + ','.join(str(v) for v in values) + '},')
     c.append('};')
     presentation.emit_tables(out,scenes,h,c)

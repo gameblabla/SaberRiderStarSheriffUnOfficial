@@ -12,17 +12,17 @@ from formats import vce_rgb
 WINDOW = 33
 REACH = 8                  # candidate replacements come from this many columns either side
 
-def presence(grid):
+def presence(grid, window=WINDOW):
     """(tiles, windows) bool: which 33-column windows contain each tile."""
     rows, cols = grid.shape
-    n_windows = max(cols - WINDOW + 1, 1)
+    n_windows = max(cols - window + 1, 1)
     p = np.zeros((int(grid.max()) + 1, n_windows), bool)
     for x in range(cols):
-        lo, hi = max(x - WINDOW + 1, 0), min(x, n_windows - 1)
+        lo, hi = max(x - window + 1, 0), min(x, n_windows - 1)
         p[np.unique(grid[:, x]), lo:hi + 1] = True
     return p
 
-def limit_tiles(cells, indices, groups, palettes, cols, cap, reserved=()):
+def limit_tiles(cells, indices, groups, palettes, cols, cap, reserved=(), full_map=False):
     """cells: (n, 8, 8, 4) source RGBA; indices: (n, 8, 8) palette indices; groups: (n,) palette numbers
     (band * 4 + k); all row-major. Returns (indices, groups, merged cells), copies."""
     indices = np.array(indices, np.uint8); groups = np.array(groups, np.uint8)
@@ -30,7 +30,8 @@ def limit_tiles(cells, indices, groups, palettes, cols, cap, reserved=()):
     flat = indices.reshape(n, 64)
     uniq, inverse = np.unique(flat, axis=0, return_inverse=True)
     inverse = inverse.reshape(-1).astype(np.int64)
-    if presence(inverse.reshape(rows, cols)).sum(0).max() <= cap: return indices, groups, 0
+    window = cols if full_map else WINDOW
+    if presence(inverse.reshape(rows, cols),window).sum(0).max() <= cap: return indices, groups, 0
     colours = [vce_rgb(p).astype(np.int32) for p in palettes]
     candidates = [p for p in range(len(palettes)) if p not in reserved]   # any palette: the cells are no longer grouped in bands
     colours[15][15] = 4096        # BG colour 255 is the text font's white at runtime: never a candidate for a baked cell
@@ -39,7 +40,7 @@ def limit_tiles(cells, indices, groups, palettes, cols, cap, reserved=()):
     merged = 0
     for _ in range(40):
         grid = inverse.reshape(rows, cols)
-        p = presence(grid)
+        p = presence(grid,window)
         excess = p.sum(0) - cap
         if excess.max() <= 0: break
         weight = np.bincount(inverse, minlength=len(uniq))

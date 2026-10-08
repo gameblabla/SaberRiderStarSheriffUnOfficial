@@ -8,6 +8,7 @@
 #include "scenery_pce.h"
 #include "sprite_cache_pce.h"
 extern uint8_t buffer[2048];
+extern volatile uint16_t pce_sky_far;
 #define SPACE_CODE __attribute__((noinline,minsize,section(".ram_bank115.text")))
 typedef struct __attribute__((packed)) {uint16_t time;uint8_t kind,n;int16_t y;uint16_t gap;uint8_t pattern,drop;} Event;
 typedef struct {int16_t x,y;uint8_t kind,hp,pattern,drop;uint16_t clock;uint8_t charge;} Foe;
@@ -38,7 +39,7 @@ SPACE_CODE static void event_load(void) {
 }
 SPACE_CODE void space_start(void) {
     memset(foes,0,sizeof foes);memset(bolts,0,sizeof bolts);memset(expl,0,sizeof expl);memset(&sb,0,sizeof sb);space_hull_x=0;boss_die=boss_gone=0;
-    flight_clock=spawn_clock=beam_clock=0;space_flash=hull_flash=foe_flash[0]=foe_flash[1]=foe_white=0;space_hull_ready=0;space_flashing=0;event_index=pending=gun_clock=hurt=pickup=0;
+    flight_clock=spawn_clock=beam_clock=0;space_flash=hull_flash=foe_flash[0]=foe_flash[1]=foe_white=0;space_hull_ready=0;space_flashing=0;pce_sky_far=0;event_index=pending=gun_clock=hurt=pickup=0;
     pce_campaign.power_cd=pce_campaign.timer=0;
     power=1;bombs=3;ship_x=48;ship_y=112;space_boss_y=80;
     arcade_read(2,pce_scenes[6].track,&event_count,1);event_load();
@@ -276,6 +277,7 @@ PCE_SCENERY void space_frame(void) {
     for(uint8_t i=0;i<pce_control.elapsed&&!pce_campaign.event&&!pce_campaign.result&&pce_campaign.state==CAM_PLAY;++i) {
         overlay_call(0x73,space_tick);pce_control.pressed=0;
     }
+    pce_sky_far=flight_clock>>3;
     if(pce_campaign.boss_kind)space_hull_draw(space_boss_y,hull_flash,boss_gone);
     else video_background(flight_clock>>3);
     video_sat_begin();
