@@ -3,6 +3,7 @@
 #include "arcade_pce.h"
 #include "overlay_pce.h"
 #include "audio_pcm.h"
+#include "sgx_pce.h"
 /* The robot-horse herd (level 1's stampede) at the source's full size. A frame is 128x80, drawn as VDC big sprite
  * cells: four columns of a 32x64 and a 32x16 sprite (8 SAT entries a horse, not 33 pieces). The frame patterns are
  * streamed from the scene into pages of the sprite cache that the herd reserves for its length, into one of two
@@ -51,6 +52,10 @@ HERD_CODE void herd_spawn(void) {
 }
 /* Streaming runs in the flow overlay; the renderer and IRQs remain mapped. */
 PCE_FLOW static void herd_stream(void) {
+    uint8_t target_vdc=0;
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay())target_vdc=1;
+#endif
     uint8_t want=(frame>>2)%5;
     if(want!=shown) {
         /* Finish a partially prefetched frame after a missed simulation tick.
@@ -59,7 +64,7 @@ PCE_FLOW static void herd_stream(void) {
         cur^=1;
         if(prefetched<5120) {
             pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-            arcade_vram(play_scene->horse+32+(uint32_t)want*5120+prefetched,
+            arcade_vram_to(target_vdc,play_scene->horse+32+(uint32_t)want*5120+prefetched,
                 PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(cur)*256+(prefetched>>1),5120-prefetched);
         }
         shown=want;prefetch=(want+1)%5;prefetched=0;
@@ -73,7 +78,7 @@ PCE_FLOW static void herd_stream(void) {
     uint16_t target=phase==1?1280:phase==2?2560:phase==3?3840:0;
     if(target>prefetched) {
         pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-        arcade_vram(play_scene->horse+32+(uint32_t)prefetch*5120+prefetched,
+        arcade_vram_to(target_vdc,play_scene->horse+32+(uint32_t)prefetch*5120+prefetched,
             PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(cur^1)*256+(prefetched>>1),target-prefetched);
         prefetched=target;
     }

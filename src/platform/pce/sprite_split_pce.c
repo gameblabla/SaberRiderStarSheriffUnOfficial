@@ -37,6 +37,11 @@ SGX_SPLIT_CODE void pce_sgx_platform_actor_pass_body(void) {
     memcpy(buffer+256,sprite_occupancy,240);
     sat_page=1;sat_count=0;sprite_lines_clear();
 
+    /* The stampede used to monopolize VDC0's scanlines and made its source
+       foreground disappear. Give the horses VDC1's independent SAT/budget. */
+    if(herd_on&&(pce_metrics.stage==1||pce_metrics.stage==3))
+        overlay_call(0x6f,herd_draw);
+
     actors_mode=1;
     overlay_call(0x74,actors_draw);
     uint8_t props_end=sat_count;

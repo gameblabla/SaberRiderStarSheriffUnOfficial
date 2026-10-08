@@ -299,7 +299,12 @@ PCE_BOSS void play_draw(void) {
     if(pce_campaign.state!=CAM_OVER&&(!safe_timer||(frame&4)||pce_death))video_sprite(id,player.x-camera,player.y-16,facing,16);
     /* The galloping herd comes right after the hero, ahead of shots and enemies: where the SAT or a scanline is full it
      * is what the optional sprites give way to, so the horses never flicker. */
+#ifdef PCE_SGX
+    if(herd_on&&!(pce_sgx_gameplay()&&(pce_metrics.stage==1||pce_metrics.stage==3)))
+        overlay_call(0x6f,herd_draw);
+#else
     if(herd_on)overlay_call(0x6f,herd_draw);
+#endif
     /* Admission order is priority (priority_pce.c): the boss, the enemies, the enemies' bullets, then the hero's bullets and the
      * muzzle flash, which are the first to go when the SAT or a scanline is full. */
     /* The scenery props (the security camera...) are admitted first, right after the hero and the herd, so they are the last thing to be refused when the SAT or a
@@ -331,7 +336,11 @@ PCE_BOSS void play_draw(void) {
      * every horse's piece count, so the foreground layer is left out until it has passed. */
     bool herd=false;
     for(uint8_t k=0;k<8;++k)if(actors[k].active&&actors[k].type==11)herd=true;
+#ifdef PCE_SGX
+    if(!herd||(pce_sgx_gameplay()&&(pce_metrics.stage==1||pce_metrics.stage==3)))foreground_draw();
+#else
     if(!herd)foreground_draw();
+#endif
     /* A closing dialogue's cells return in the frame its sprites leave: the new SAT takes effect at the next VBlank, so
      * read the cells now, queue the SAT, and write them right after that VBlank, before the beam reaches the panel. */
     if(pce_panel_restore){video_panel_restore_prepare(pce_panel_restore);}
