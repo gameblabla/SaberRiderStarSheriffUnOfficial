@@ -118,12 +118,14 @@ def camera_wall_mask(im):
         stack += [(y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)]
     return seen
 
-def scenery_background(out, work, stage):
+def scenery_background(out, work, stage, occlusion):
     """Complete the tilemap's prop openings before quantization.
 
-    Decorative props (12..23) occupy holes in the building art. Their base
-    frame must remain behind the animated sprite even when SAT admission drops
-    it, otherwise unrelated mountains show through those holes.
+    Retained decorative props occupy holes in the building art. Their base
+    frame stays behind the animated sprite when SAT admission drops it.
+    Window props 17/18 must fill their authored openings too: omitting them
+    exposes unrelated parallax buildings through the saloon/hotel windows.
+    Only this clipped static copy is retained, never the full actor overlay.
     """
     props = dict(enumerate(['4042CD71', '71887ECA', 'BFDAB70F', '1D724DD9',
                            '211F5D78', '9393E59B', '20C6FAEF', 'ECC992CB',
@@ -154,6 +156,10 @@ def scenery_background(out, work, stage):
                 src = px[y0 + y + h, x0 + x]
                 if src[3] >= 128 and int(src[2]) <= int(src[0]) + 30:
                     patch[y, x] = src
+        # These props are on MidBGHyperjpr. Later building/terrain layers
+        # cover them; only the actual openings should expose the base frame.
+        cover = occlusion.crop((x0, y0, x0+w, y0+h))
+        patch[np.asarray(cover) >= 128, 3] = 0
         out.alpha_composite(Image.fromarray(patch), (x0, y0))
     return out
 
@@ -642,6 +648,9 @@ def platform_background(stage, work, sgx=False):
     out = Image.new('RGBA', (width, 240), (0, 0, 0, 255))
     sgx_main = Image.new('RGBA', (width, 240), (0, 0, 0, 0)) if sgx and stage in (1, 3, 4, 5) else None
     foreground = Image.new('RGBA',(width,240))
+    prop_occlusion = Image.new('L',(width,240))
+    prop_layer = next((i for i, ly in enumerate(level.layers)
+                       if ly.name == 'MidBGHyperjpr'), None)
     after_player=False
     slow_layers=[]
     if sgx:
@@ -675,9 +684,9 @@ def platform_background(stage, work, sgx=False):
     for x in range(0,width,256):
         pixels=np.zeros((240,256,4),np.uint8)
         sgx_pixels=np.zeros_like(pixels) if sgx_main is not None else None
-        front=np.zeros_like(pixels);after_player=False
+        front=np.zeros_like(pixels);cover=np.zeros((240,256),np.uint8);after_player=False
         # Stages 1 and 3 leave the sky transparent for the fixed scene backdrop.
-        for ly in level.layers:
+        for layer_index,ly in enumerate(level.layers):
             if ly.name=='PlayerSprites':after_player=True
             if not ly.is_tilemap:continue
             if stage in (1,3) and ly.name=='SkyBG':continue
@@ -694,12 +703,15 @@ def platform_background(stage, work, sgx=False):
                 # (the source multiplies the layer by r/255, g/255, b/255).
                 tint=np.array(NIGHT_TINT.get(ly.name,(100,100,160)),np.int32)
                 layer[...,:3]=(layer[...,:3].astype(np.int32)*tint//255).astype(np.uint8)
+            if not after_player and prop_layer is not None and layer_index>prop_layer:
+                cover=np.maximum(cover,layer[...,3])
             if after_player: front=np.where(layer[...,3:4]>=128,layer,front)
             else:
                 pixels=np.where(layer[...,3:4]>=128,layer,pixels)
                 if sgx_pixels is not None and ly.name != 'SkyBG':
                     sgx_pixels=np.where(layer[...,3:4]>=128,layer,sgx_pixels)
         out.paste(Image.fromarray(pixels),(x,0))
+        prop_occlusion.paste(Image.fromarray(cover),(x,0))
         if sgx_main is not None: sgx_main.paste(Image.fromarray(sgx_pixels),(x,0))
         foreground.paste(Image.fromarray(front),(x,0))
     if slow_layers:
@@ -712,8 +724,8 @@ def platform_background(stage, work, sgx=False):
             pixels=np.where(layer[...,3:4]>=128,layer,pixels)
         foreground_slow=Image.fromarray(pixels)
     if stage == 1:
-        out = scenery_background(out, work, stage)
-        if sgx_main is not None: sgx_main = scenery_background(sgx_main, work, stage)
+        out = scenery_background(out, work, stage, prop_occlusion)
+        if sgx_main is not None: sgx_main = scenery_background(sgx_main, work, stage, prop_occlusion)
     return out,foreground,foreground_slow,sgx_main,sgx_sky,sgx_near
 
 def april_palette_for(images):
@@ -1095,6 +1107,8 @@ def make_scene(stage, work, previews, shared, sgx=False):
             if not art.exists():
                 meta['actor_ids'][t]=255;continue
             if t==11:      # the galloping robot horses are drawn by the herd code from their own big-cell frames
+                meta['actor_ids'][t]=255;continue
+            if t in (17,18):  # windows are filled/clipped in the BG, never overlaid by actors
                 meta['actor_ids'][t]=255;continue
             if t==16:      # stationary security cameras are baked into stage 1 BG tiles
                 meta['actor_ids'][t]=255;continue

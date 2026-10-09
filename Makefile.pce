@@ -101,6 +101,7 @@ test-sgx:
 	python3 tools/pce/test_sgx_frontend.py --out build/sgx
 	python3 tools/pce/test_sgx_motion.py --out build/sgx
 	python3 tools/pce/test_sgx_rendering.py --out build/sgx
+	python3 tools/pce/test_sgx_house.py --out build/sgx
 	python3 tools/pce/test_sgx_regressions.py --out build/sgx
 	python3 tools/pce/test_sgx_cache_pressure.py --out build/sgx
 	python3 tools/pce/test_sgx_depth.py --out build/sgx

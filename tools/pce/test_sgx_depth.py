@@ -12,7 +12,9 @@ def run(out):
         boot(e,r.address);r.dialogs(e)
         reports=[]
         scene=json.loads((out/'manifest.json').read_text())['scenes'][0]
-        for kind,x,y,id in ((13,5792,96,48),(14,7232,144,49),(15,6624,144,50),(17,6544,80,51),(18,7168,80,52)):
+        # Window props 17/18 are clipped static BG art; test_sgx_house checks
+        # their opaque openings. Only retained actor props need SAT depth.
+        for kind,x,y,id in ((13,5792,96,48),(14,7232,144,49),(15,6624,144,50)):
             r.position(e,x);r.press(e,8);e.run(90)
             # Real source prop/waypoint and overlapping fighter. Deliberately
             # seed the obsolete VDC0 preference for this scenery actor.

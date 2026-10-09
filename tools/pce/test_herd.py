@@ -26,9 +26,9 @@ def verify(out,sgx=False):
                     assert data==blob[offset+32+pose*5120:offset+32+(pose+1)*5120],('Herd pose overwritten',label,pose)
                 sat_now=[s for s in struct.iter_unpack('<4H',bytes.fromhex(e.call('asread','sat1',0,512)['hex'])) if s[0]]
                 protected=[(base,base+80) for base in bases]
-                assert all(any(lo<=s[2]<hi for lo,hi in protected) == bool(s[3]&0x100)
+                assert all(any(lo<=s[2]<hi for lo,hi in protected) == ((s[3]&15)==13)
                            for s in sat_now),('non-herd VDC1 sprite uses a reserved horse page',label,sat_now)
-                horse_cells=[s for s in sat_now if s[3]&0x100]
+                horse_cells=[s for s in sat_now if (s[3]&15)==13]
                 top_patterns={base+16*c for base in bases for c in range(4)}
                 bottom_patterns={base+64+4*c for base in bases for c in range(4)}
                 allowed=top_patterns|bottom_patterns
@@ -73,8 +73,11 @@ def verify(out,sgx=False):
                 locked_sky=int.from_bytes(e.memory(sky_scroll,2),'little')
                 palette=bytes.fromhex(e.call('asread','pram',29*32,32)['hex'])
                 assert palette==blob[offset:offset+32],('herd palette',palette.hex())
-                cells=[s for s in struct.iter_unpack('<4H',bytes.fromhex(e.call('asread','sat1',0,512)['hex'])) if s[0] and s[3]&0x100]
-                assert cells and all(s[3]&15==13 for s in cells),('herd palette selectors',cells)
+                # Wide hero/actor cells share the horse width bit. Palette 13
+                # identifies horses; check_horse_pages also verifies ownership.
+                check_horse_pages(e,'locked convoy')
+                cells=[s for s in struct.iter_unpack('<4H',bytes.fromhex(e.call('asread','sat1',0,512)['hex'])) if s[0] and (s[3]&15)==13]
+                assert cells, 'No horses rendered in locked convoy'
 
             reads=c.metrics(e)['disc_reads']
             horse_poses=set()
@@ -94,7 +97,7 @@ def verify(out,sgx=False):
                     # All five resident poses must remain intact throughout
                     # the convoy, including while hardware SAT DMA runs.
                     check_horse_pages(e,'during convoy')
-                    live=[s for s in struct.iter_unpack('<4H',bytes.fromhex(e.call('asread','sat1',0,512)['hex'])) if s[0] and s[3]&0x100]
+                    live=[s for s in struct.iter_unpack('<4H',bytes.fromhex(e.call('asread','sat1',0,512)['hex'])) if s[0] and (s[3]&15)==13]
                     horse_poses.update(bases.index(max(b for b in bases if s[2]>=b)) for s in live)
                     # Under continuous fire, every foreground part still
                     # retained for the current camera must remain in VDC0's
