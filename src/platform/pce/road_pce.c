@@ -42,9 +42,14 @@ static uint16_t camera_x,camera_y;
 int32_t road_k[2];   /* road_fill.S: the knot being walked in the camera's frame, forward and to the right, in 1/16384 units */
 
 /* a * b for int16 a and int8 b, in 32 bits: the high and the low byte of a apart */
-ROAD_MATH static int32_t mulw(int16_t a,int8_t b) {
-    int8_t high=a>>8;uint8_t low=a;
-    return ((int32_t)(int16_t)(high*b)<<8)+(int16_t)((int16_t)low*b);
+ROAD_MATH __attribute__((minsize)) static int32_t mulw(int16_t a,int8_t b) {
+    extern uint16_t cache_refs[];
+    uint16_t am=a<0?-(uint16_t)a:(uint16_t)a;
+    uint8_t bm=b<0?-b:b,hi=am>>8,lo=am;
+    uint8_t dh=hi>bm?hi-bm:bm-hi,dl=lo>bm?lo-bm:bm-lo;
+    uint32_t product=((uint32_t)(cache_refs[(uint16_t)hi+bm]-cache_refs[dh])<<8)
+        +(cache_refs[(uint16_t)lo+bm]-cache_refs[dl]);
+    return (a<0)!=(b<0)?-(int32_t)product:(int32_t)product;
 }
 /* a * (128 m + ml): the camera's sine or cosine is the byte m (Q7) and a small remainder ml, which together keep the road still
  * while the camera turns (a Q7 value alone moves the far road three dots at each step of it) */

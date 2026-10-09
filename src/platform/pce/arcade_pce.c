@@ -1,5 +1,6 @@
 #include "arcade_pce.h"
 #include "sgx_pce.h"
+#include "overlay_pce.h"
 
 /* Do not use the SDK's page macros: port blocks have a $10 stride and the
  * offset is 16 bits. Port 0 uploads, 1 maps, 2 metadata, 3 cache directory. */
@@ -27,7 +28,11 @@ bool arcade_read(uint8_t port, uint32_t address, void *out, uint16_t size) {
     if (!range(address, size) || !arcade_seek(port, address)) return false;
     if (!size) return true;
     arcade_tai_src = 0x1a00 + ((uint16_t)port << 4);
-    arcade_tai_dst = (uint16_t)out;
+    /* LLVM-MOS represents promoted zero-page objects with an address below
+     * $100. HuC6280 block transfers use full CPU addresses, unlike direct
+     * zero-page instructions, so map these destinations into MPR1 RAM. */
+    uint16_t destination=(uint16_t)out;
+    arcade_tai_dst = destination<256?destination|0x2000:destination;
     arcade_tai_len = size;
     arcade_tai();
     return true;
@@ -87,7 +92,8 @@ __attribute__((noinline)) bool arcade_vram_to(uint8_t vdc, uint32_t address, uin
 bool arcade_vram(uint32_t address, uint16_t word, uint16_t size) {
     return arcade_vram_to(0,address,word,size);
 }
-uint8_t arcade_selftest(void) {
+static uint8_t selftest_result;
+PCE_CODE static void selftest_body(void) {
     uint8_t mask = 0, data[8], got[8];
     for (uint8_t p = 0; p < 4; ++p) {
         for (uint8_t i = 0; i < 8; ++i) data[i] = 0x39 + p * 17 + i;
@@ -99,5 +105,8 @@ uint8_t arcade_selftest(void) {
         for (i = 0; i < 8 && got[i] == data[i]; ++i) {}
         if (i == 8) mask |= 1 << p;
     }
-    return mask;
+    selftest_result=mask;
+}
+uint8_t arcade_selftest(void) {
+    overlay_call(0x69,selftest_body);return selftest_result;
 }

@@ -20,7 +20,24 @@ def verify(out,sgx=False):
             scene=json.loads((out/'manifest.json').read_text())['scenes'][0]
             blob=(out/'s1.bin').read_bytes();offset=scene['horse_offset']
             bases=(320,400,480,800,880)
+            front_poses=set();front_checks=0
             def check_horse_pages(e,label):
+                nonlocal front_checks
+                small=bytes.fromhex(e.call('asread','vram0',0x6400*2,5*1536)['hex'])
+                assert small==blob[offset+32+5*5120:offset+32+5*(5120+1536)],('Second-row poses overwritten',label)
+                front=list(struct.iter_unpack('<4H',bytes.fromhex(e.call('asread','sat0',0,512)['hex'])))
+                horses=[s for s in front if s[0] and (s[3]&15)==13]
+                for y,x,p,a in horses:
+                    pose,part=divmod(p-0x6400//32,24)
+                    assert 0<=pose<5 and part in (0,8,16,20),('Second-row pattern',label,p)
+                    assert ((a>>12)&3)==(1 if part<16 else 0) and a&256,('Second-row size',label,a)
+                    front_poses.add(pose);front_checks+=1
+                lines=[0]*224
+                for y,x,p,a in front:
+                    if not y:continue
+                    y=(y&1023)-64;h=(16,32,64,64)[(a>>12)&3]
+                    for row in range(max(0,y),min(224,y+h)):lines[row]+=2 if a&256 else 1
+                assert max(lines)<=16,('Second-row scanline overflow',label,max(lines))
                 for pose,base in enumerate(bases):
                     data=bytes.fromhex(e.call('asread','vram1',base*64,5120)['hex'])
                     assert data==blob[offset+32+pose*5120:offset+32+(pose+1)*5120],('Herd pose overwritten',label,pose)
@@ -86,13 +103,14 @@ def verify(out,sgx=False):
                 # Fire while the locked convoy fills the second VDC's SAT.
                 # This exercises actor allocation and horse admission together.
                 e.input(1);c.capture(e,f'herd-{i+1}-locked-firing')
-            fg_checks=fg_parts=hero_bullet_checks=0;shake_values=set()
+            fg_checks=fg_parts=hero_bullet_checks=0;shake_values=set();background_shakes=set()
             for pressure_sample in range(80):
                 step=31 if sgx else 30
                 c.seed(e,'safe_timer',250,1);e.run(step);frames_run+=step
                 if e.memory(on,1)==b'\0':break
                 assert c.metrics(e)['camera_x']==frozen
                 if sgx:
+                    background_shakes.add(int.from_bytes(e.memory(symbol(out/'app.elf','pce_sat_scroll_y'),2),'little'))
                     assert int.from_bytes(e.memory(sky_scroll,2),'little')==locked_sky,('sky moved while player/camera locked',i)
                     # All five resident poses must remain intact throughout
                     # the convoy, including while hardware SAT DMA runs.
@@ -107,6 +125,7 @@ def verify(out,sgx=False):
                         retained=render.foreground(e,allow_herd_shake=True)
                         fg_checks+=1;fg_parts+=retained
                         shake_values.add(render.last_fg_shake)
+                        assert render.last_fg_shake==0,'Foreground shook with the background'
                         shot_pool=e.memory(render.sym['shots'],208)
                         hero_live=any(struct.unpack_from('<4h5B',shot_pool,k*13)[4] and
                                       struct.unpack_from('<4h5B',shot_pool,k*13)[5]==0
@@ -119,7 +138,10 @@ def verify(out,sgx=False):
             assert e.memory(on,1)==e.memory(locked,1)==b'\0'
             assert e.memory(voices+16,2)==b'\0\0'
             assert c.metrics(e)['disc_reads']==reads
-            if sgx:assert horse_poses==set(range(5)),('herd animation',horse_poses)
+            if sgx:
+                assert horse_poses==set(range(5)),('herd animation',horse_poses)
+                assert front_poses==set(range(5)) and front_checks>0,('Second-row animation',front_poses,front_checks)
+                assert len(background_shakes)>1,('Background shake did not vary',background_shakes)
             if sgx and i==1:
                 assert fg_checks>=5 and fg_parts>0,('no retained foreground pressure samples',fg_checks,fg_parts)
                 assert hero_bullet_checks>0,('hero projectile never coexisted with convoy foreground',hero_bullet_checks)
@@ -145,7 +167,7 @@ def verify(out,sgx=False):
             reports.append(dict(trigger=trigger['zone'][0],stop=stop[0],spawn_camera=start['camera_x'],locked_camera=frozen,
                                 post_herd_peak=max(lines),right_edge_cells=60,herd_fps=round(fps,2),
                                 foreground_pressure_checks=fg_checks,foreground_retained_parts=fg_parts,
-                                foreground_shake_values=sorted(shake_values),
+                                foreground_shake_values=sorted(shake_values),background_shake_values=sorted(background_shakes),
                                 hero_bullet_pressure_checks=hero_bullet_checks,passed=True))
     (out/'herd-verification.json').write_text(json.dumps(reports,indent=2)+'\n');print(reports)
 if __name__=='__main__':

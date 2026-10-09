@@ -122,34 +122,83 @@ SL = 0x20db
 SH = 0x20dc
 DX = 0x20dd
 DY = 0x20de
+/* q(a+b)-q(|a-b|), with magnitudes 0..128. The table is initialized
+ * before race_start and remains resident in the race's borrowed BG cache. */
+.extern cache_refs
 smul8:
     sta T0
-    stx T1
-    stx T2
-    cla
-    ldx #8
-    lsr T1
-.Lmul_bit:
-    bcc 1f
-    clc
-    adc T0
+    txa
+    eor T0
+    sta T2
+    txa
+    bpl 1f
+    eor #$ff
+    inc
 1:
-    ror
-    ror T1
-    dex
-    bne .Lmul_bit
-    ldx T0
-    bpl 2f
+    sta T1
+    lda T0
+    bpl 1f
+    eor #$ff
+    inc
+1:
+    sta T0
+    phy
+    clc
+    adc T1
+    ldy #0
+    sty T4
+    rol T4
+    asl
+    rol T4
+    clc
+    adc #<cache_refs
+    sta T3
+    lda T4
+    adc #>cache_refs
+    sta T4
+    lda (T3),y
+    sta T5
+    iny
+    lda (T3),y
+    sta T6
     sec
-    sbc T2
-2:
-    ldx T2
-    bpl 3f
+    lda T0
+    sbc T1
+    bcs 1f
+    eor #$ff
+    inc
+1:
+    stz T4
+    asl
+    rol T4
+    clc
+    adc #<cache_refs
+    sta T3
+    lda T4
+    adc #>cache_refs
+    sta T4
+    ldy #0
     sec
+    lda T5
+    sbc (T3),y
+    sta T0
+    iny
+    lda T6
+    sbc (T3),y
+    sta T1
+    lda T2
+    bpl 1f
+    sec
+    cla
     sbc T0
-3:
-    tax
-    lda T1
+    sta T0
+    cla
+    sbc T1
+    sta T1
+1:
+    ply
+    lda T0
+    ldx T1
     rts
 /* road_k[X/4] += SH:SL << 7 (X = 0 or 4); the shift is the 24-bit SH:SL:0 arithmetic-shifted right once */
 .Lacc7:

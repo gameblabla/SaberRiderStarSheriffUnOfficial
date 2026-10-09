@@ -238,7 +238,7 @@ PCE_FLOW void flow_main(void) {
                 pce_control.stage=0;pce_control.hero=hero;
                 overlay_call(0x72,frontend_start);if(!pce_control.ok)for(;;){};
                 hero=pce_control.hero;
-                if(!change_stage(1))for(;;){};
+                if(!change_stage(pce_control.stage?pce_control.stage:1))for(;;){};
                 simulation_tick=pce_ticks;
                 continue;
             }

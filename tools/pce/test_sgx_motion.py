@@ -6,7 +6,7 @@ import struct
 from pathlib import Path
 
 from emulator import Emulator, boot, symbol
-from test_sgx_rendering import Rendering
+from test_sgx_rendering import Rendering,moon_cell
 
 SKY_RECORD = '<IIHBIHIHHHHBIHHHBII'
 
@@ -18,11 +18,13 @@ def check_visible_sky(r, e, stage):
     record = struct.unpack_from(SKY_RECORD, blob, scene['records']['sgx_sky_record']['offset'])
     (patterns, mapping, _tile_count, _cache, _fg, _nfg, _slow, _nslow,
      _first_tile, cols, _speed, wrap, near_map, near_cols, near_first,
-     _near_speed, split_row, _moon_patterns, _moon_palette) = record
+     _near_speed, split_row, moon_patterns, _moon_palette) = record
     first = r.word(e, 'pce_sgx_sky_first')
     live_near_first = int.from_bytes(
         e.memory(symbol(r.out / 'app.elf', 'pce_sgx_sky_near_x'), 2), 'little') >> 3
     vram = bytes.fromhex(e.call('asread', 'vram1', 0, 65536)['hex'])
+    camera=r.metrics(e)['camera_x'];scroll=r.word(e,'pce_sgx_sky_scroll_x')
+    bat = (e.memory(symbol(r.out/'app.elf','pce_sgx_sky_page'),1)[0]*0x800 if moon_patterns else 0)
     checked = 0
     for screen_col in range(33):
         for y in range(30):
@@ -36,8 +38,12 @@ def check_visible_sky(r, e, stage):
                 tile += id_base
             else:
                 tile, palette = 0, 0
-            cell = struct.unpack_from('<H', vram, (y * 64 + (world & 63)) * 2)[0]
+            cell = struct.unpack_from('<H', vram, (bat + y * 64 + (world & 63)) * 2)[0]
             pattern = (cell & 4095) * 16
+            moon=moon_cell(blob,moon_patterns,camera,scroll,world,y)
+            if moon is not None:
+                assert cell>>12==14 and vram[pattern*2:pattern*2+32]==moon,(stage,world,y,'moon BG1 tile')
+                checked+=1;continue
             assert cell >> 12 == palette, (
                 stage, world, y, 'BAT palette', cell >> 12, palette)
             assert vram[pattern * 2:pattern * 2 + 32] == blob[

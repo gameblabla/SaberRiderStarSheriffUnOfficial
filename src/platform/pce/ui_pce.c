@@ -6,9 +6,10 @@
 #include "sgx_pce.h"
 #ifdef PCE_SGX
 #include <pce/bank.h>
+#include "assets.h"
 #endif
 #define UI_BASE __attribute__((noinline,section(".ram_bank106.text")))
-#define UI_VRAM_CODE __attribute__((noinline,minsize,section(".ram_bank111.text")))
+#define UI_VRAM_CODE __attribute__((noinline,minsize,section(".ram_bank113.text")))
 #define UI_CYCLE_CODE __attribute__((noinline,minsize,section(".ram_bank111.text")))
 #define UI_SPRITE_CODE (UI_SPRITE_WORD>>5)
 extern uint8_t buffer[2048];
@@ -25,22 +26,21 @@ uint8_t ui_cycle_step,ui_cycle_clock,ui_dark;
 
 UI_CYCLE_CODE static void ui_cycle_body(void) {
 #ifdef PCE_SGX
+#if PCE_SGX_SELECT_FRAMES > 1
     if(pce_sgx_active && pce_ui_state==2) {
         uint8_t bank=pce_bank6_get();pce_bank6_set(135);
         pce_sgx_select_animate_body();pce_bank6_set(bank);
     }
 #endif
+#endif
     if(++ui_cycle_clock<4)return;
     ui_cycle_clock=0;
 #ifdef PCE_SGX
     if(pce_sgx_active && pce_ui_state==2) {
-        /* Only the six backdrop palettes pulse; portraits never change. */
-        if(++ui_cycle_step<8)return;
-        ui_cycle_step=0;
-        pce_sgx_select_phase=(pce_sgx_select_phase+1)&3;
-        /* Record lives in bank 124; the generated offset is a macro. */
-        arcade_read(2,PCE_SGX_SELECT_CYCLE+(uint32_t)pce_sgx_select_phase*192,buffer,192);
-        pce_vce_copy_palette(0,buffer,6);return;
+        if(++ui_cycle_step==12)ui_cycle_step=0;
+        arcade_read(2,PCE_SGX_SELECT_CYCLE+(uint16_t)ui_cycle_step*192,buffer,192);
+        pce_vce_copy_palette(0,buffer,6);
+        return; /* Portrait palettes 6..15 never participate in the cycle. */
     }
 #endif
     if(++ui_cycle_step==12)ui_cycle_step=0;

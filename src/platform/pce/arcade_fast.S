@@ -59,7 +59,22 @@ arcade_vdc_copy:
     lda #0x40
     tam #0x40
 .Lburst:
+#ifdef PCE_SGX
+    /* A PCM tick spans 1024 CPU cycles. A 32-byte transfer masks IRQs
+     * for 209 cycles; the race raster retains its shorter 16-byte bursts. */
+    ldx pce_raster_enabled
+    bne .Lshort
+    lda #128
+    ldx pce_pcm_active
+    beq .Lsize
+    lda #32
+    bra .Lsize
+.Lshort:
+#endif
     lda #16
+#ifdef PCE_SGX
+.Lsize:
+#endif
     ldx arcade_vdc_len+1
     bne 1f
     cmp arcade_vdc_len

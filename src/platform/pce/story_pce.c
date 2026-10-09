@@ -11,6 +11,7 @@
 #include "audio_pcm.h"
 extern volatile uint16_t pce_sky_far,pce_sky_near;
 #include <string.h>
+#include "dialog_layout_pce.h"
 #define STORY_CODE __attribute__((noinline,minsize,section(".ram_bank113.text")))
 static uint32_t story_address;
 static uint8_t page_count,story_y;   /* story_y: BG row of the box's top */
@@ -25,10 +26,13 @@ static uint8_t race_kept;
 extern vdc_sprite_t sat[2][64];
 extern uint8_t sat_count,race_world_count;
 extern volatile uint8_t pce_race_dialog;
+/* Indexed absolute accesses to promoted zero-page arrays hit HuC6280 I/O.
+ * Keep the VRAM readback buffer in the always-mapped work bank. */
+static uint16_t race_keep_words[8] PCE_WORK;
 PCE_X2 static void race_keep(void) {
-    uint16_t w[8];
+    uint16_t *w=race_keep_words;
     for(uint8_t row=0;row<6;++row)for(uint8_t part=0;part<7;++part) {
-        uint16_t address=(uint16_t)(53+row)*128+6+part*8;
+        uint16_t address=(uint16_t)(PCE_DIALOG_RACE_ROW+row)*128+6+part*8;
         pce_cpu_irq_disable();
         pce_vdc_index=1;*(volatile uint8_t*)0x20f7=1;*IO_VDC_INDEX=1;*IO_VDC_DATA_LO=address;*IO_VDC_DATA_HI=address>>8;
         pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;*IO_VDC_INDEX=2;
@@ -49,7 +53,7 @@ PCE_X2 static void race_keep(void) {
 }
 PCE_X2 static void race_unbox(void) {
     if(!race_kept)return;
-    for(uint8_t row=0;row<6;++row){pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;arcade_vram(RACE_KEPT+(uint32_t)row*112,(uint16_t)(53+row)*128+6,112);}
+    for(uint8_t row=0;row<6;++row){pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;arcade_vram(RACE_KEPT+(uint32_t)row*112,(uint16_t)(PCE_DIALOG_RACE_ROW+row)*128+6,112);}
     pce_race_dialog=0;race_kept=0;
 }
 PCE_X2 static void race_box(void) {   /* bank $77 (the CD buffer's second: $6f and $7c are full) */
@@ -64,7 +68,7 @@ PCE_X2 static void race_box(void) {   /* bank $77 (the CD buffer's second: $6f a
     arcade_vram(record[3],PCE_FONT_WORD,6144);
     arcade_read(2,record[2],buffer,672);
     for(uint8_t row=0;row<6;++row) {
-        video_vdc(0,(uint16_t)(53+row)*128+6);
+        video_vdc(0,(uint16_t)(PCE_DIALOG_RACE_ROW+row)*128+6);
         for(uint8_t x=0;x<56;++x)video_vdc(2,((uint16_t*)buffer)[(uint16_t)row*56+x]);
     }
     pce_race_dialog=1;
@@ -125,11 +129,11 @@ STORY_CODE static void draw(void) {
     arcade_read(2,a,&avatar,2);arcade_read(2,a+2,&colour,1);
     arcade_read(2,a+3,story_text,sizeof story_text);story_text[255]=0;
     /* The box sits at the top on the platform stages (the hero stands where a bottom box would be) and on the race, at the bottom on the cruiser's. */
-    uint8_t y=story_y=pce_metrics.stage==2||(pce_metrics.stage!=7&&!cut_phase)?5:20;   /* the race's box is BG rows 53-58 (video_text 48+y), at the top; the outrider's scene: the box goes below the actor the camera pans to */
+    uint8_t y=story_y=pce_metrics.stage==2||(pce_metrics.stage!=7&&!cut_phase)?PCE_DIALOG_TOP_ROW:PCE_DIALOG_BOTTOM_ROW;   /* the race's box is BG rows 53-58 (video_text 48+y), at the top; the outrider's scene: the box goes below the actor the camera pans to */
     /* The cruiser's playfield is scrolled (a multiple of 8 dots down while it greets: space_pce.c): screen row 20 is that many rows on in the BAT. */
-    if(pce_metrics.stage==7)y=story_y=(20+(pce_scroll_y>>3))&31;
+    if(pce_metrics.stage==7)y=story_y=(PCE_DIALOG_BOTTOM_ROW+(pce_scroll_y>>3))&31;
     /* BG cells sit (scroll & 7) pixels left of their grid on a scrolling playfield. */
-    int16_t box_x=24-(pce_raster_enabled?0:(pce_scroll_x&7)),box_y=(pce_metrics.stage==7?20:y)*8-(pce_metrics.stage!=2&&pce_metrics.stage<6?16:0);   /* platform sprites are baked 16 lines low */
+    int16_t box_x=24-(pce_raster_enabled?0:(pce_scroll_x&7)),box_y=(pce_metrics.stage==7?PCE_DIALOG_BOTTOM_ROW:y)*8-(pce_metrics.stage!=2&&pce_metrics.stage<6?16:0);   /* platform sprites are baked 16 lines low */
     /* Blank every BG cell under the box except the four 2x2 corner blocks; the corner pieces stay in front of the
      * scenery so their rounded edges show the scenery, not a hole. */
     bool platform=pce_metrics.stage!=2&&pce_metrics.stage!=7;   /* the platform stages and Ramrod's arena: a scrolling background with the panel in BG characters and four sprite corners */
@@ -143,7 +147,7 @@ STORY_CODE static void draw(void) {
     if(platform)foreground_prepare();
 #endif
     if(avatar!=65535) {
-        video_sprite(avatar,pce_metrics.stage==2?(box_x-26)*2:box_x-26,box_y-8,false,16);
+        video_sprite(avatar,PCE_DIALOG_PORTRAIT_X,box_y-8,false,16);
         /* Cache slots from 15 up share one hardware palette, which another portrait's upload overwrote since this one was
          * cached: load the speaker's own colours again. */
         extern const PceScene *video_scene_ptr;extern uint8_t sprite_slot_of[];

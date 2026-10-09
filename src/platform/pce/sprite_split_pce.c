@@ -58,8 +58,15 @@ static void platform_begin_body(void) {
        retry there. Otherwise firing steals those slots and makes retained
        scenery blink. This prefix is restored after the VDC1 pass. */
     overlay_call(0x75,foreground_draw);
+    if(herd_on&&pce_metrics.stage==1&&pce_campaign.state!=CAM_STORY) {
+        extern void pce_sgx_herd_front_draw_body(void);
+        overlay_call(0x80,pce_sgx_herd_front_draw_body);
+    }
     pce_sgx_split_count=sat_count;pce_sgx_split_last=sprite_last_free;pce_sgx_split_last_lo=sprite_last_lo;pce_sgx_split_active=1;
     sat_page=1;sat_count=count;
+    /* Adjacent 32-pixel hull rows share an eight-line budget band when the
+     * ship bobs off the grid. Count actual scanlines during boss fights. */
+    sprite_exact=pce_campaign.boss_kind!=0;
     overlay_call(0x6e,pce_sgx_budget_body);sprite_lines_clear();
     if(pce_sgx_hero_visible)video_sprite(hero_sprite,player.x-camera,player.y-16,facing,16);
     if(count) {
@@ -142,6 +149,7 @@ SGX_SPLIT_CODE void pce_sgx_platform_actor_pass_body(void) {
     overlay_call(0x78,pce_sgx_vdc1_sat_upload_body);
 
     pce_sgx_split_active=0;
+    sprite_exact=0;
     sat_page=0;sat_count=pce_sgx_split_count;sprite_last_free=pce_sgx_split_last;sprite_last_lo=pce_sgx_split_last_lo;
     overlay_call(0x6e,pce_sgx_budget_body);
 }

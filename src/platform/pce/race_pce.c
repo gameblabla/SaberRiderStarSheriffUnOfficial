@@ -24,7 +24,7 @@
 #define LAT_LIMIT 170   /* units from the road's middle: 50 beyond the kerb. The picture's windows wrap round it (road_pce.c) and the upper rows tolerate about 200 */
 TrackPoint track[256] PCE_STAGE;
 Rival rv[N_RIVALS];
-Mine mines[6];
+Mine mines[6] __attribute__((section(".bss.race_mines")));
 Blast blasts[4] PCE_STAGE;
 /* Shots: 0-5 the car's own, 6-9 the enemies' (the car's firing used to fill the pool, so the enemy never got a slot). */
 Bolt race_bolts[10] PCE_STAGE;
@@ -185,7 +185,7 @@ RACE_CODE static void drive(uint8_t keys) {
     }
 }
 /* ---- the phases ---------------------------------------------------------------------------------------------- */
-static uint8_t boss_music_pending;
+static uint8_t boss_music_started;
 RACE_CODE static void begin_pursuit(void);
 /* One-time setup runs in $7b, leaving $79 for the race's per-frame code.
  * Its callees are resident services or explicit overlays; no direct call
@@ -200,7 +200,7 @@ PCE_BOSS static void race_reset(void) {
     memset(blasts,0,sizeof blasts);
 }
 RACE_CODE void race_start(void) {
-    boss_music_pending=0;
+    boss_music_started=0;
     overlay_call(0x7b,race_reset);
     uint16_t s=63005u;
     int16_t x,y;track_point(s,48,&x,&y);
@@ -269,7 +269,7 @@ RACE_CODE static void race_tick(uint8_t keys) {
                 pce_campaign.story=2;pce_campaign.event=1;
                 boss.state=1;boss.t=0;boss.t2=90;boss.t3=250;boss.boost=0;boss.since=0;
                 memset(escort,0,sizeof escort);memset(mines,0,sizeof mines);
-                rphase=P_BOSS;pce_campaign.boss_kind=4;boss_music_pending=1;   /* mode7.c PH_BOSS */
+                rphase=P_BOSS;pce_campaign.boss_kind=4;boss_music_started=0;   /* mode7.c PH_BOSS */
             }
         }
         if(rphase==P_BOSS)pce_campaign.boss_hp=boss.hp;
@@ -281,8 +281,10 @@ RACE_CODE static void race_tick(uint8_t keys) {
     }
 }
 RACE_CODE void race_frame(void) {
-    if(boss_music_pending&&!pce_campaign.event&&pce_campaign.state==CAM_PLAY) {
-        boss_music_pending=0;audio_music(17);
+    /* Derive the request from the current phase after the radio panel closes,
+     * so entering/restoring the boss phase cannot lose a one-frame cue. */
+    if(rphase==P_BOSS&&!boss_music_started&&!pce_campaign.event&&pce_campaign.state==CAM_PLAY) {
+        boss_music_started=1;audio_music(17);
     }
     /* Keep the finish camera until its dialogue has closed. */
     if(rphase==P_FINISH&&phase_t>=192&&finish_rank<=3&&!pce_campaign.event&&pce_campaign.state==CAM_PLAY)begin_pursuit();

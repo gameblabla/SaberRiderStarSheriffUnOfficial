@@ -25,7 +25,9 @@ static Event next_event;
 uint16_t flight_clock;   /* (power_pce.c reloads the nebula from it) */
 static uint16_t spawn_clock,beam_clock;
 extern uint8_t pce_power_land;
-static uint8_t space_flash,hull_flash,foe_flash[2],foe_white;   /* foe_flash: the armoured mines' and gunships' white hit blink (kinds 4 and 5), foe_white: which are lit */
+static uint8_t space_flash,hull_flash,foe_white;
+/* Keep indexed storage out of the compiler's promoted direct page. */
+static uint8_t foe_flash[2] PCE_WORK;   /* foe_flash: the armoured mines' and gunships' white hit blink (kinds 4 and 5), foe_white: which are lit */
 static uint8_t event_index,event_count,pending,gun_clock,hurt,power,bombs,boss_die,boss_gone,noise;
 static int16_t ship_x,ship_y,pickup_x,pickup_y,space_boss_y;
 static uint8_t pickup,port_hp[7],dead_t;

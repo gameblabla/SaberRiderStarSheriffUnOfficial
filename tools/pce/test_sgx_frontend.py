@@ -66,11 +66,43 @@ def verify(out):
         t.until(e,lambda:e.memory(t.address,4)==b'SRPC' and e.memory(ui,1)==b'\1',limit=20000)
         e.run(360);check_title(e,'title')
         t.press(e,64);t.press(e,1);t.until(e,lambda:e.memory(ui,1)==b'\3');e.run(200);capture(e,'options')
+        option_addrs={i:symbol(out/'app.elf',f'pce_options.{i}') for i in (1,2)}
+        def check_numbers():
+            values={i:e.memory(addr,1)[0] for i,addr in option_addrs.items()}
+            vr=vram(e,0)
+            for row,value in ((11,values[1]),(13,values[2])):
+                words=struct.unpack_from('<2H',vr,(row*64+26)*2)
+                expected=tuple(0xf080+ord(ch)-32 for ch in f'{value:02d}')
+                assert words==expected,('options number missing',row,value,words,expected)
+        check_numbers()
+        # Exercise native redraws and zero, whose glyph must remain visible.
+        t.press(e,64)
+        t.press(e,32);check_numbers();assert e.memory(option_addrs[1],1)==b'\4'
+        capture(e,'options-lives-increased')
+        for _ in range(7):t.press(e,128)
+        check_numbers();assert e.memory(option_addrs[1],1)==b'\0'
+        t.press(e,64)
+        t.press(e,128);check_numbers();assert e.memory(option_addrs[2],1)==b'\2'
+        capture(e,'options-continues-decreased')
+        for _ in range(5):t.press(e,128)
+        check_numbers();assert e.memory(option_addrs[2],1)==b'\0'
+        capture(e,'options-zero')
+        # Restore the starting values before continuing the campaign check.
+        for _ in range(3):t.press(e,32)
+        t.press(e,16)
+        for _ in range(3):t.press(e,32)
+        check_numbers()
         t.press(e,4);t.until(e,lambda:e.memory(ui,1)==b'\1');e.run(180);check_title(e,'title-return')
-        t.press(e,1);t.until(e,lambda:e.memory(ui,1)==b'\2');e.run(240)
+        selection_reads=t.metrics(e)['disc_reads']
+        selection_start=e.call('registers')['registers']['FR']
+        t.press(e,1);t.until(e,lambda:e.memory(ui,1)==b'\2');e.run(120)
+        selection_frames=e.call('registers')['registers']['FR']-selection_start
+        assert t.metrics(e)['disc_reads']==selection_reads,'Selection must use the resident UI extent'
+        assert selection_frames<600,('Title to selection took too long',selection_frames)
         fixed=bytes.fromhex(e.call('asread','pram',6*32,10*32)['hex'])
-        animation=int(re.search(r'#define PCE_SGX_SELECT_ANIMATION (\d+)UL',(out/'assets.h').read_text()).group(1))
-        animation_phase=symbol(out/'app.elf','pce_sgx_select_animation_phase')
+        assert '#define PCE_SGX_SELECT_FRAMES 1' in (out/'assets.h').read_text()
+        animation_phase=symbol(out/'app.elf','ui_cycle_step')
+        backdrop_phases=[raw[cycle+i*192:cycle+(i+1)*192] for i in range(12)]
         phases=set()
         for hero,key in ((0,0),(1,32),(2,32),(3,32),(2,128),(1,128),(0,128),(1,32),(2,32),(3,32)):
             if key:t.press(e,key)
@@ -78,14 +110,12 @@ def verify(out):
             pg=e.memory(page,1)[0]
             compare(e,0,ft,maps[hero],fn,pg*0x800,0x1000)
             phase=e.memory(animation_phase,1)[0];phases.add(phase)
-            at,mp,nt=struct.unpack_from('<IIH',raw,animation+phase*10)
-            # The other pattern page is actively streaming, never displayed.
-            pg1=phase&1
-            compare(e,1,at,mp,nt,pg1*0x800,0x4000 if pg1 else 0x1000)
+            assert bytes.fromhex(e.call('asread','pram',0,192)['hex']) in backdrop_phases,'Invalid backdrop cycle'
+            compare(e,1,bt,bm,bn,0,0x1000)
             assert bytes.fromhex(e.call('asread','pram',6*32,10*32)['hex'])==fixed,'Portrait colors changed'
 
             capture(e,f'select-{hero}-page{pg}')
-        assert len(phases)>1,'Backdrop must rotate while portraits switch'
+        assert len(phases)>1,'Backdrop must cycle while portraits switch'
         for phase in range(4):
             e.run(32);assert bytes.fromhex(e.call('asread','pram',192,320)['hex'])==fixed
             capture(e,f'select-phase{phase}')
@@ -126,9 +156,14 @@ def verify(out):
         assert e.memory(sgx+4,1)[0]&4,'Game over must enable both BG planes'
         pal=bytes.fromhex(e.call('asread','pram',0,512)['hex'])
         e.run(160)
-        assert bytes.fromhex(e.call('asread','pram',0,512)['hex'])==pal,'Game-over pulse overwrote painting colors'
+        after=bytes.fromhex(e.call('asread','pram',0,512)['hex'])
+        assert after[:384]==pal[:384],'Game-over pulse overwrote painting colors'
+        phases=set()
+        for _ in range(16):
+            e.run(8);phases.add(bytes.fromhex(e.call('asread','pram',384,128)['hex']))
+        assert len(phases)==4,'SGX must show all four additive lettering strengths'
         capture(e,'gameover')
-    report=dict(title=title,source_art_width=512,repeat_columns=64,portrait_switches=10,
+    report=dict(title=title,selection_video_frames=selection_frames,selection_additional_disc_reads=0,source_art_width=512,repeat_columns=64,portrait_switches=10,
                 rapid_switch_frames=len(rapid_states),rapid_switch_states=sorted(set(rapid_states)),
                 hashes={f:hashlib.sha256((out/f).read_bytes()).hexdigest() for f in ('app.elf','saber_rider.iso')})
     (out/'sgx_frontend_report.json').write_text(json.dumps(report,indent=2)+'\n')

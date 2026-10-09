@@ -23,17 +23,29 @@ def verify(out):
     with tempfile.TemporaryDirectory(prefix='cdda-', dir=out) as base, Emulator(out/'saber_rider.cue', base) as e:
         boot(e, a['pce_metrics'])
 
-        def call(name, arg=0):
+        def call(name, arg=0, ports=()):
             address = a[name]
             tick = a['audio_tick']
             # After the call, keep polling music with the real VBlank, raster
             # and PCM IRQs. Gameplay cannot replace the isolated request.
-            code = bytes([0xa9, arg, 0x20, address & 255, address >> 8,
-                          0x20, tick & 255, tick >> 8, 0x4c, 0xf5, 0x3b])
+            # Debugger high-level memory pokes bypass I/O handlers. Seed
+            # hardware ports with real CPU stores before issuing the request.
+            prefix = b''.join(bytes([0xa9, value, 0x8d, port & 255, port >> 8])
+                              for port, value in ports)
+            loop = 0x3bfa + len(prefix)
+            code = prefix + bytes([0xa9, arg, 0x20, address & 255, address >> 8,
+                          0xa9, 1, 0x8d, 0xe0, 0x3b,
+                          0x20, tick & 255, tick >> 8, 0x4c, loop & 255, loop >> 8])
+            e.write(0x3be0, b'\0')
             e.write(0x3bf0, code)
             for key, value in [('P', 0), ('SP', 253), ('MPR3', 105), ('MPR6', 108), ('PC', 0x3bf0)]:
                 e.call('register_set', key, value)
-            e.run(1)
+            # Stop can wait across several VBlanks for a cancelled seek.
+            # Check its postconditions only after the native call returns.
+            for _ in range(900):
+                e.run(1)
+                if e.memory(0x3be0,1)==b'\1':break
+            else:raise AssertionError(('Native audio call did not return',name))
 
         def bus():
             return e.memory(0x1800, 1)[0]
@@ -55,11 +67,9 @@ def verify(out):
         call('audio_stop')
         assert not bus() & 0x80
         # Preserve independently enabled IFU bits through every ACK edge.
-        e.write(0x1802, b'\x10')
-        e.write(0x180f, b'\x0c')  # stale fade must be cleared by music start
         for level in (3, 2, 1):
             e.write(options+3, bytes([level]))
-            call('audio_music', 5)
+            call('audio_music', 5, ports=((0x1802,0x10),(0x180f,0x0c)))
             settled()
             e.run(180)
             rms = capture(f'stage1-volume-{level}')
@@ -101,6 +111,9 @@ def verify(out):
         e.write(options+3, b'\0')
         call('audio_music', 5)
         assert not bus() & 0x80
+        # The mixer retains a short filter tail immediately after stopping.
+        # Allow it to drain before measuring the disabled-music steady state.
+        e.run(30)
         assert capture('music-off', 30) < 10
         report['off'] = 'silent; bus free'
 

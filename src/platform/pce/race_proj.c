@@ -41,6 +41,15 @@ Visible vis[18];uint8_t nvis;
 int16_t bolt_sx[10],bolt_sy[10];uint16_t bolt_ok;uint8_t bolt_step[10];
 /* the ground point in the camera's frame: its screen column in dots, row and distance */
 PCE_X2 static bool project_point(int16_t wx,int16_t wy,int16_t *sx,int16_t *row,int16_t *depth,bool fine) {
+#ifdef PCE_SGX
+    /* SGX LTO can place the caller's output locals in zero page and pass
+     * their short addresses. Indirect stores require full HuC6280 RAM
+     * addresses; otherwise these writes hit mirrored video registers, both
+     * losing the projected cars and changing the SGX display windows. */
+    if((uint16_t)sx<256)sx=(int16_t *)((uint16_t)sx|0x2000);
+    if((uint16_t)row<256)row=(int16_t *)((uint16_t)row|0x2000);
+    if((uint16_t)depth<256)depth=(int16_t *)((uint16_t)depth|0x2000);
+#endif
     int16_t rx=wrapdiff(wx,pce_control.x),ry=wrapdiff(wy,pce_control.y);
     if(rx>1900||rx<-1900||ry>1900||ry<-1900)return false;
     int16_t f=mulq(rx,cam_c)+mulq(ry,cam_s);

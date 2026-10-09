@@ -9,10 +9,25 @@
 #include "sgx_pce.h"
 
 uint8_t pce_stall PCE_WORK;
+static uint8_t loaded_scene,loaded_ui;
 
 static uint8_t voice_priority;
 static uint16_t voice_frames;   /* frames left in the latched ADPCM voice (a countdown: pce_ticks is only 8 bits) */
 #define DISC_SECTOR(name) extern char __cd_##name##__sector[]
+#ifdef PCE_SGX
+#define __cd_s1_bin__sector __cd_s1_packed_bin__sector
+#define __cd_s2_bin__sector __cd_s2_packed_bin__sector
+#define __cd_s3_bin__sector __cd_s3_packed_bin__sector
+#define __cd_s4_bin__sector __cd_s4_packed_bin__sector
+#define __cd_s5_bin__sector __cd_s5_packed_bin__sector
+#define __cd_s6_bin__sector __cd_s6_packed_bin__sector
+#define __cd_s7_bin__sector __cd_s7_packed_bin__sector
+#define __cd_ui_bin__sector __cd_ui_packed_bin__sector
+void zx02_arcade(void);
+uint16_t zx02_source PCE_WORK;
+static uint8_t archive_compressed;
+static uint8_t archive_blocks,archive_ui_range;
+#endif
 DISC_SECTOR(s1_bin); DISC_SECTOR(s2_bin); DISC_SECTOR(s3_bin);
 DISC_SECTOR(s4_bin); DISC_SECTOR(s5_bin); DISC_SECTOR(s6_bin);
 DISC_SECTOR(s7_bin); DISC_SECTOR(font_bin);
@@ -42,14 +57,19 @@ bool loader_voice(uint8_t hero) {
     if(error){pce_metrics.load_error=error;return false;}
     return true;
 }
-bool loader_font(void) {
-    if(cdda_busy()){++pce_metrics.forbidden_reads;return false;}
+static bool font_result;
+PCE_CODE static void font_body(void) {
+    font_result=false;
+    if(cdda_busy()){++pce_metrics.forbidden_reads;return;}
     uint32_t sector=(uint32_t)__cd_font_bin__sector;
     pce_sector_t s={.lo=sector,.md=sector>>8,.hi=sector>>16};
     ++pce_metrics.disc_reads;
     uint8_t error = pce_cdb_cd_read(s, PCE_CDB_VRAM_BYTES, PCE_FONT_WORD, 3072);
-    if (error) { pce_metrics.load_error = error; return false; }
-    return true;
+    if (error) { pce_metrics.load_error = error; return; }
+    font_result=true;
+}
+bool loader_font(void) {
+    overlay_call(0x69,font_body);return font_result;
 }
 static uint32_t archive_sector PCE_WORK;
 static uint32_t archive_remaining PCE_WORK;
@@ -68,21 +88,82 @@ __attribute__((noinline,minsize,section(".ram_bank113.text"))) void loader_card_
     pce_cdb_irq_enable(PCE_CDB_MASK_VBLANK_NO_BIOS | PCE_CDB_MASK_HBLANK_NO_BIOS);
     if(error)pce_metrics.load_error=error;
 }
-__attribute__((noinline,minsize,section(".ram_bank113.text"))) static void loader_archive_body(void) {
+__attribute__((noinline,minsize,section(".ram_bank105.text"))) static void loader_archive_body(void) {
     uint32_t sector=archive_sector,remaining=archive_remaining;
     bool keep_display=archive_keep_display;
     audio_stop(); if(!keep_display)video_display(false);
     pce_raster_enabled = 0;
     pce_cdb_irq_disable(PCE_CDB_MASK_VBLANK_NO_BIOS | PCE_CDB_MASK_HBLANK_NO_BIOS);
     uint32_t address=0;
+#ifdef PCE_SGX
+    uint8_t block=0;
+    if(archive_ui_range==2){address=PCE_UI_CORE_BYTES;block=PCE_UI_CORE_BYTES/16384UL;}
+    if(archive_compressed) {
+        pce_sector_t s={.lo=sector,.md=sector>>8,.hi=sector>>16};
+        ++pce_metrics.disc_reads;
+        uint8_t error=pce_cdb_cd_read(s,PCE_CDB_BANK_MPR6,0x76,1);
+        pce_bank6_set(0x76);
+        const uint8_t *header=(const uint8_t*)0xc000;
+        uint16_t count=header[4]|(uint16_t)header[5]<<8;
+        if(error||header[0]!='Z'||header[1]!='X'||header[2]!='A'||header[3]!='1'||count>128||count!=((archive_ui_range?PCE_UI_BYTES:remaining)+16383UL)/16384UL) {
+            pce_metrics.load_error=error?error:0xfd;archive_result=false;pce_bank6_set(0x6c);return;
+        }
+        /* Keep the directory outside console RAM and the two input banks. */
+        arcade_write(2,0x1fd000,header+6,count);
+        archive_blocks=count;
+        pce_bank6_set(0x6c);++sector;
+        for(uint8_t i=0;i<block;++i){uint8_t n;arcade_read(2,0x1fd000+i,&n,1);sector+=n&127;}
+    }
+    uint8_t batch_left=0;
+    uint16_t batch_offset=0;
+#endif
     while (remaining) {
         /* $76-$77 are a 16 KiB CD transfer buffer ($78-$7c hold code). Only MPR6 changes;
          * code, IRQs, the stack and all live loader state remain mapped. */
         uint8_t sectors = remaining >= 16384UL ? 8 : remaining >> 11;
+#ifdef PCE_SGX
+        uint8_t raw=1;
+        if(archive_compressed){
+            uint8_t entry;
+            arcade_read(2,0x1fd000+block++,&entry,1);
+            raw=entry&128;sectors=entry&127;
+            if(!sectors||sectors>8){pce_metrics.load_error=0xfd;archive_result=false;return;}
+        }
+#endif
         pce_sector_t s = {.lo=sector, .md=sector>>8, .hi=sector>>16};
-        ++pce_metrics.disc_reads;
-        uint8_t error = pce_cdb_cd_read(s, PCE_CDB_BANK_MPR6, 0x76, sectors);
+        uint8_t error;
+#ifdef PCE_SGX
+        if(archive_compressed) {
+            if(!batch_left) {
+                uint8_t total=sectors;
+                for(uint8_t next=block;next<archive_blocks;++next) {
+                    uint8_t entry;arcade_read(2,0x1fd000+next,&entry,1);
+                    uint8_t n=entry&127;
+                    if(!n||n>8||total+n>31)break;
+                    total+=n;
+                }
+                pce_cdb_adpcm_reset();++pce_metrics.disc_reads;
+                error=pce_cdb_adpcm_read_from_cd(s,total,0);
+                if(error){pce_metrics.load_error=error;archive_result=false;return;}
+                batch_left=total;batch_offset=0;
+            }
+            zx02_source=batch_offset;
+            error=raw?pce_cdb_adpcm_write_to_ram(batch_offset,PCE_CDB_BANK_MPR6,0x76,(uint16_t)sectors<<11):0;
+            batch_offset+=(uint16_t)sectors<<11;batch_left-=sectors;
+        } else
+#endif
+        {
+            ++pce_metrics.disc_reads;
+            error=pce_cdb_cd_read(s,PCE_CDB_BANK_MPR6,0x76,sectors);
+        }
         if (error) { pce_metrics.load_error = error; archive_result=false; return; }
+#ifdef PCE_SGX
+        if(archive_compressed&&!raw) {
+            uint16_t size=remaining>=16384UL?16384:remaining;
+            arcade_seek(0,address);overlay_call(0x82,zx02_arcade);
+            address+=size;remaining-=size;sector+=sectors;continue;
+        }
+#endif
         uint16_t chunk_sectors = sectors;
         for (uint8_t bank = 0; chunk_sectors; ++bank) {
             uint16_t size = chunk_sectors >= 4 ? 8192 : chunk_sectors << 11;
@@ -108,16 +189,55 @@ __attribute__((noinline,minsize,section(".ram_bank113.text"))) static void loade
 }
 static bool loader_archive(uint32_t sector,uint32_t remaining,bool keep_display) {
     archive_sector=sector;archive_remaining=remaining;archive_keep_display=keep_display;
-    overlay_call(0x71,loader_archive_body);
+    overlay_call(0x69,loader_archive_body);
     return archive_result;
 }
-bool loader_ui(void) {return loader_archive((uint32_t)__cd_ui_bin__sector,PCE_UI_BYTES,false);}
+PCE_CODE static void ui_archive_body(void) {
+    if(loaded_ui){audio_stop();video_display(false);return;}
+    loaded_scene=0;
+#ifdef PCE_SGX
+    archive_compressed=1;archive_ui_range=1;
+    loaded_ui=loader_archive((uint32_t)__cd_ui_bin__sector,PCE_UI_CORE_BYTES,false);
+#else
+    loaded_ui=loader_archive((uint32_t)__cd_ui_bin__sector,PCE_UI_BYTES,false);
+#endif
+}
+bool loader_ui(void) {
+    overlay_call(0x69,ui_archive_body);return loaded_ui;
+}
+#ifdef PCE_SGX
+__attribute__((noinline,minsize,section(".ram_bank113.text"))) static void ui_animation_body(void) {
+    if(loaded_ui==2)return;
+    if(PCE_UI_BYTES==PCE_UI_CORE_BYTES){loaded_ui=2;return;}
+    archive_compressed=1;archive_ui_range=2;
+    if(loader_archive((uint32_t)__cd_ui_bin__sector,PCE_UI_BYTES-PCE_UI_CORE_BYTES,false))loaded_ui=2;
+}
+bool loader_ui_animation(void) {
+    overlay_call(0x71,ui_animation_body);return loaded_ui==2;
+}
+#endif
 /* One of the 19 victory paintings (each its own small extent of victory.bin). */
-bool loader_victory(uint8_t index) {return loader_archive((uint32_t)__cd_victory_bin__sector+pce_victory_sector[index],pce_victory_bytes[index],false);}
+bool loader_victory(uint8_t index) {
+    loaded_scene=loaded_ui=0;
+#ifdef PCE_SGX
+    archive_compressed=0;archive_ui_range=0;
+#endif
+    return loader_archive((uint32_t)__cd_victory_bin__sector+pce_victory_sector[index],pce_victory_bytes[index],false);
+}
+#ifdef PCE_SGX
+PCE_FLOW
+#endif
 bool loader_scene(uint8_t stage) {
     if(!stage||stage>7)return false;
     /* The NOW LOADING screen stays up for the whole disc read; the archive goes to Arcade RAM, not VRAM. */
-    if(!loader_archive(sector_of(stage),pce_scenes[stage-1].bytes,true))return false;
+    if(loaded_scene!=stage||stage==6) {
+        loaded_scene=loaded_ui=0;
+#ifdef PCE_SGX
+        archive_compressed=1;archive_ui_range=0;
+#endif
+        if(!loader_archive(sector_of(stage),pce_scenes[stage-1].bytes,true))return false;
+        loaded_scene=stage;
+    }
     ui_fade_out();   /* the card goes to black (the common fade) before the stage's own screen comes up from black */
     video_display(false);video_scroll(0,0);
     pce_metrics.stage = stage;

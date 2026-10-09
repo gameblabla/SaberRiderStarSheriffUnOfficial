@@ -25,7 +25,7 @@
 #define SGX_UI_TILE_WORD 0x0800
 #define SGX_UI_SPRITE_WORD 0x6800
 #define SGX_UI_MAX_TILES ((SGX_UI_SPRITE_WORD - SGX_UI_TILE_WORD) / 16)
-volatile PceSgxTelemetry pce_sgx_metrics;
+volatile PceSgxTelemetry pce_sgx_metrics __attribute__((section(".bss.pce_sgx_metrics")));
 /* The IRQ publishes VDC1's SAT at the same boundary as VDC0's. */
 volatile uint8_t pce_sgx_sat1_alt PCE_WORK;
 volatile uint8_t pce_sgx_sat1_pending PCE_WORK;

@@ -226,6 +226,11 @@ def run(out):
         record = struct.unpack_from('<IIIHB', blob,
                                     scene['boss_big_offset'] + 15 * e.memory(sym['hull_level'], 1)[0])
         restored = blob[record[0]:record[0] + 32]
+        # Flash countdown and palette publication occur at different points
+        # within the game step. Wait for the native draw after expiry.
+        for _ in range(12):
+            if palette(e,30)==restored:break
+            e.run(1)
         assert palette(e, 30) == restored, ('boss palette 30 did not restore from archive',
                                               palette(e, 30).hex(), restored.hex())
         assert palette(e, 28) == fg_palette_before, 'foreground palette 12 changed after boss flash restore'
@@ -269,6 +274,7 @@ def run(out):
         foreground_snapshot_generations = set()
         emulator_frames = 0
         camera_min = camera_max = camera
+        prior_shots = bytes(208)
         while samples < 60 and emulator_frames < 600:
             before = presented
             # The native stage boss camera continues its prescribed glide.
@@ -326,11 +332,20 @@ def run(out):
             hero_candidate_count = 0
             boss_candidate_counts = {}
             for k in range(16):
+                prior = struct.unpack_from('<4h5B', prior_shots, k * 13)
                 old = struct.unpack_from('<4h5B', previous_shots, k * 13)
                 new = struct.unpack_from('<4h5B', rawshots, k * 13)
                 ox, oy, ovx, ovy, old_active, old_enemy, *_ = old
                 x, y, vx, vy, active, enemy, *_ = new
                 if not old_active or not active or old_enemy != enemy:
+                    continue
+                # VBlank can publish the SAT before the CPU completes the
+                # next tick and spawns a shot. That newborn is already in
+                # previous_shots at the following debugger frame boundary,
+                # although it has never belonged to the published SAT. Require
+                # continuity from the preceding publication as well, and
+                # reject a pool slot reused for a different trajectory.
+                if not prior[4] or prior[5] != enemy or prior[2:4] != old[2:4]:
                     continue
                 # Ignore a bullet unless both ends of this publication step
                 # keep its 16x16 image fully onscreen. A newborn or leaving
@@ -360,6 +375,7 @@ def run(out):
                 boss_sample_count += candidate_count
                 boss_bullet_missing_candidates += missing
             boss_bullet_samples += int(boss_sample_count > 0)
+            prior_shots = previous_shots
             assert e.memory(sym['boss_flash'], 1)[0] < 5
         e.input(0)
         assert samples == 60, ('sustained-fire presentation count', samples, emulator_frames)

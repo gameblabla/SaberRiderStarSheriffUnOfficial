@@ -1,3 +1,4 @@
+#include "dialog_layout_pce.h"
 /* BIOS VBlank/HBlank callbacks return with RTS, not RTI. They use no LLVM
  * imaginary registers or C stack and preserve every register they touch.
  * The stable $68 code bank remains visible during all disc/bank operations. */
@@ -126,7 +127,7 @@ pce_vblank:
     beq 2f
     lda #254
     sta pce_raster_row
-    st1 #104            /* dialogue starts at scanline 40 */
+    st1 #PCE_DIALOG_RACE_START_RCR /* switch before the top border at scanline 24 */
     st2 #0
     jmp .Ldone
 2:
@@ -562,7 +563,7 @@ pce_hblank:
     st2 #0
     dec pce_raster_row
     st0 #6
-    st1 #152            /* restore the frozen sky below the box, scanline 88 */
+    st1 #PCE_DIALOG_RACE_END_RCR /* restore the frozen sky below the box, scanline 72 */
     st2 #0
     jmp .Lhdone
 2:

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+from zx02_archive import pack_archives
 
 def main():
     p = argparse.ArgumentParser(); p.add_argument('--out', type=Path, required=True); p.add_argument('--mos', type=Path, required=True)
@@ -17,7 +18,14 @@ def main():
         archive=bytearray((out/'s6.bin').read_bytes());blob=m6.read_bytes()
         if archive[offset:offset+len(blob)]!=blob:
             archive[offset:offset+len(blob)]=blob;(out/'s6.bin').write_bytes(bytes(archive))
-    files=['ipl.elf','app.elf',*[f's{i}.bin' for i in range(1,8)],'font.bin','ui.bin','victory.bin',*[f'voice{i}.bin' for i in range(4)]]
+    names=[*[f's{i}.bin' for i in range(1,8)],'ui.bin']
+    sgx='-DPCE_SGX' in (out/'build-flags').read_text()
+    if sgx:
+        report=pack_archives(out,names)
+        (out/'compression.json').write_text(json.dumps(report,indent=2)+'\n')
+        print(json.dumps(report,indent=2),flush=True)
+    stages=[f's{i}{"_packed" if sgx else ""}.bin' for i in range(1,8)]
+    files=['ipl.elf','app.elf',*stages,'font.bin','ui_packed.bin' if sgx else 'ui.bin','victory.bin',*[f'voice{i}.bin' for i in range(4)]]
     result=subprocess.run([str(mos/'bin/pce-mkcd'),'--ipl','ipl.bin','saber_rider.iso',*files],cwd=out,check=True,capture_output=True,text=True)
     print(result.stderr)
     extents=[]; image=(out/'saber_rider.iso').read_bytes()

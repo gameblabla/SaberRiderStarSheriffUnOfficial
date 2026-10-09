@@ -15,6 +15,7 @@ static struct __attribute__((packed)) { uint32_t tiles,map; uint16_t count; } ne
  * video_wait: expose a completed page in VBlank before beginning its successor.
  * Palettes are resident and shared, so rotation never changes portrait colors. */
 ANIMATE void pce_sgx_select_animate_body(void) {
+    if(PCE_SGX_SELECT_FRAMES<2)return;
     if(pce_sgx_select_animation_reset) {
         pce_sgx_select_animation_reset=0;pce_sgx_select_animation_phase=0;
         preparing=1;pending=0;uploaded=0;

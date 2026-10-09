@@ -10,9 +10,10 @@ import hashlib
 import json
 from pathlib import Path
 import struct
+import subprocess
 import tempfile
 
-from emulator import Emulator, boot, symbol
+from emulator import Emulator, boot, symbol, ROOT
 
 FIXTURE = Path(__file__).resolve().parent / 'fixtures' / 'sgx_stage7_cache_pressure.json'
 TRAMPOLINE = 0x3BF0
@@ -83,10 +84,13 @@ def verify(out, fixture_path, expect_refused=False, report_path=None):
 
         # JSR allocate; JMP back to itself after RTS. JSR pushes $3bf2 and RTS
         # returns to $3bf3. MPR3 maps the banked allocator body; P=4 masks IRQs.
-        allocator = symbol(app, 'allocate')
+        allocator = next(int(line.split()[0],16) for line in subprocess.check_output(
+            [str(ROOT/'PCE/llvm-mos8/bin/llvm-nm'),str(app)],text=True).splitlines()
+            if len(line.split())==3 and line.split()[2]=='allocate')
         body = allocator & 0xFFFF
+        bank = (allocator >> 16) & 255
         e.write(TRAMPOLINE, bytes([0x20, body & 0xFF, body >> 8, 0x4C, 0xF3, 0x3B]))
-        for key, value in [('P', 4), ('SP', 253), ('MPR3', 116), ('MPR6', 108), ('PC', TRAMPOLINE)]:
+        for key, value in [('P', 4), ('SP', 253), ('MPR3', bank), ('MPR6', 108), ('PC', TRAMPOLINE)]:
             e.call('register_set', key, value)
         e.run(1)
 
@@ -105,7 +109,7 @@ def verify(out, fixture_path, expect_refused=False, report_path=None):
             assert after['pattern_owner'][:48] == initial['pattern_owner'][:48], 'Original protected pages must stay untouched'
             assert after['sprite_ids'] == initial['sprite_ids'], 'Allocator body reserves a slot but does not publish its sprite ID'
         regs = e.call('registers')['registers']
-        assert regs['MPR3'] == 116 and regs['MPR6'] == 108, regs
+        assert regs['MPR3'] == bank and regs['MPR6'] == 108, regs
 
     result_obj = {
         'passed': True,
@@ -115,7 +119,7 @@ def verify(out, fixture_path, expect_refused=False, report_path=None):
         'iso_sha256': iso_hash,
         'fixture_capture_app_sha256': capture['app_sha256'],
         'allocator_symbol_cpu_address': f'${body:04x}',
-        'invocation': {'trampoline': '$3bf0', 'P': 4, 'SP': 253, 'MPR3': 116, 'MPR6': 108, 'frames': 1},
+        'invocation': {'trampoline': '$3bf0', 'P': 4, 'SP': 253, 'MPR3': bank, 'MPR6': 108, 'frames': 1},
         'sprite_id': seed['cache_id'],
         'sprite_patterns': seed['cache_count'],
         'sp_after_native_call': regs['SP'],

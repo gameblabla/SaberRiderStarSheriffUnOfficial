@@ -45,10 +45,13 @@ def autopilot(e,out,state):
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--out',type=Path,default=Path('build/pce'));p.add_argument('--tag',default='road')
-    p.add_argument('--seconds',type=int,default=12);p.add_argument('--profile',action='store_true')
-    args=p.parse_args();out=args.out.resolve();c=Campaign(out);report={}
-    with tempfile.TemporaryDirectory(dir=out) as b,Emulator(out/'saber_rider.cue',b) as e:
-        boot(e,c.address);c.stage(e,2);c.dialogs(e);e.run(240)
+    p.add_argument('--sgx',action='store_true');p.add_argument('--seconds',type=int,default=12);p.add_argument('--profile',action='store_true')
+    args=p.parse_args();out=args.out.resolve();c=Campaign(out,sgx=args.sgx);report={}
+    with tempfile.TemporaryDirectory(dir=out) as b,Emulator(out/'saber_rider.cue',b,sgx=args.sgx) as e:
+        boot(e,c.address)
+        # Retail builds have no pause-menu stage selector. Seed the next-stage
+        # number and exercise the native clear/load path, as the SGX fixtures.
+        c.seed(e,'stage',1,1);c.field(e,'state',2);c.advance(e,2);c.dialogs(e);e.run(240)
         e.screenshot(out/f'{args.tag}-grid.png')
         bxr,sel=tables(e,out);report['grid_bxr']=bxr[::8]
         e.input(KEY_UP|KEY_2);m0=raw_metrics(e,c)

@@ -1,0 +1,2 @@
+-Race 2 is completely buggy and has graphical issues, the enemy racers don't appear at all,
+the race track goes wild

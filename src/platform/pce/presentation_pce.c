@@ -174,7 +174,8 @@ PLATFORM_DRAW void actors_draw(void) {
 }
 void presentation_draw(void) {overlay_call(0x6e,presentation_frame);video_front_mark();}
 
-uint16_t pce_panel_column;
+/* Full-address block copies must not target a promoted zero-page symbol. */
+uint16_t pce_panel_column __attribute__((section(".bss.pce_panel_column")));
 static uint8_t panel_x,panel_y,panel_w,panel_h;
 PANEL static void panel_draw(void) {
     uint8_t x=panel_x,y=panel_y,w=panel_w,h=panel_h;

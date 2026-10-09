@@ -332,6 +332,9 @@ PCE_RENDER bool video_background(uint16_t camera) {
     return true;
 }
 PCE_RENDER void video_text(uint8_t x, uint8_t y, const char *text) {
+    /* A caller's small local string can live in LLVM-MOS zero page. An
+     * indirect pointer must use the full HuC6280 RAM address. */
+    if((uint16_t)text<256)text=(const char *)((uint16_t)text|0x2000);
     if(pce_raster_enabled)x*=2;
     uint16_t scroll_x=pce_scroll_x;
 #ifdef PCE_SGX

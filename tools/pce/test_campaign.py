@@ -171,7 +171,7 @@ class Campaign(Test):
             assert self.metrics(e)['camera_x']>=600,self.metrics(e)
             assert e.memory(cut,1)[0]==4
             assert e.call('registers')['registers']['Playing']==1,'The dialogue voice line plays when the box opens'
-            e.run(30);assert int.from_bytes(e.memory(symbol(self.out/'app.elf','story_y'),1),'little')==20,'Outrider dialogue must sit at the bottom'
+            e.run(30);assert int.from_bytes(e.memory(symbol(self.out/'app.elf','story_y'),1),'little')==18,'Outrider dialogue must sit at the bottom'
             self.capture(e,'campaign-outrider');self.dialogs(e)
             def panned():
                 nonlocal peak
@@ -227,7 +227,7 @@ class Campaign(Test):
             e.run(120);self.capture(e,'campaign-race-dialog')
             # The race's dialogue spans 448 dots, with two 8-dot BAT
             # characters per source glyph. It used to occupy only 224 dots.
-            bat=bytes.fromhex(e.call('asread','vram0',(53*128+6)*2,112)['hex'])
+            bat=bytes.fromhex(e.call('asread','vram0',(51*128+6)*2,112)['hex'])
             words=struct.unpack('<56H',bat)
             assert all(w>>12==14 for w in words),words
             self.results['race_dialog_width']=448

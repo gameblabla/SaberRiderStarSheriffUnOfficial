@@ -2,6 +2,7 @@
  * Called by sat_begin_body in the same flow overlay. IRQs use no scratch. */
 .section .ram_bank110.text,"ax",@progbits
 .global sprite_cache_begin
+.extern pce_metrics
 .extern sprite_used, sprite_pinned, sprite_stamp, sprite_epoch
 sprite_cache_begin:
     ldx #47
@@ -21,4 +22,13 @@ sprite_cache_begin:
     stz sprite_used,x
     dex
     bpl .Lslot
+#ifdef PCE_SGX
+    /* Slot 47 owns the resident second horse row for the whole stage. */
+    lda pce_metrics+7
+    cmp #1
+    bne 1f
+    lda #250
+    sta sprite_pinned+47
+1:
+#endif
     rts

@@ -1,6 +1,9 @@
 #pragma once
 #include "pce_config.h"
 bool loader_ui(void);
+#ifdef PCE_SGX
+bool loader_ui_animation(void);
+#endif
 bool loader_victory(uint8_t index);
 bool loader_scene(uint8_t stage);
 bool loader_font(void);

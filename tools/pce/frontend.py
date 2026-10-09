@@ -182,11 +182,11 @@ def static_text(screen, image, x, y):
 # ---------------------------------------------------------------- title
 BAYER = (np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]) + 0.5) / 16
 
-def dithered(rgb):
+def dithered(rgb, strength=1.0):
     """Ordered-dither a float RGB picture onto the 9-bit lattice (repeating, so cheap in tiles)."""
     h, w = rgb.shape[:2]
     thr = np.tile(BAYER, (h // 4 + 1, w // 4 + 1))[:h, :w, None]
-    level = np.floor(np.clip(rgb, 0, 255) / 255 * 7 + thr).clip(0, 7)
+    level = np.floor(np.clip(rgb, 0, 255) / 255 * 7 + 0.5 + (thr-0.5)*strength).clip(0, 7)
     return (level * 255 / 7).round().astype(np.uint8)
 
 def title_backdrop():
@@ -213,13 +213,24 @@ def title_screen(get, sgx=False):
     s.preview_source = canvas
     # Menu items are sprites so the highlight is a palette swap.
     start, opt = get(0x01E9B701), get(0x8FF0AB30)
+    # Original menu art is singular OPTION. Match the requested OPTIONS.
+    # Include the complete S outline (x=39..46), without the next T at x=47.
+    suffix=start.crop((38,0,47,16))
+    # Place S after the visible N, excluding the source image's trailing padding.
+    suffix_bounds=suffix.getchannel('A').getbbox()
+    suffix=suffix.crop((suffix_bounds[0],0,suffix_bounds[2],suffix.height))
+    # The right bound is exclusive, so S starts without overlapping N.
+    suffix_x=opt.getchannel('A').getbbox()[2]
+    plural=Image.new('RGBA',(suffix_x+suffix.width,opt.height))
+    plural.alpha_composite(opt,(0,0));plural.alpha_composite(suffix,(suffix_x,0))
+    opt=plural
     p0, n0, _ = two_colour_sprites(start, None)
     p1, n1, _ = two_colour_sprites(opt, None)
     s.sprite_patterns = p0 + p1
     ink_outline = lambda ink: [0, word(ink), word((0, 33, 66))]
     for slot, ink in enumerate(((255, 255, 255), (255, 182, 0))):
         s.sprite_palettes[slot][1:3] = ink_outline(ink)[1:]
-    s.items = dict(start=(0, n0), option=(n0, n1))
+    s.items = dict(start=(0, n0), option=(len(p0), n1))
     if not sgx: sprite_patches(s, canvas, first_pattern=len(s.sprite_patterns), first_palette=2, max_pieces=44, max_units=11)
     if sgx: s.patches = []
     return s
@@ -475,7 +486,7 @@ def victory_screen(canvas, layers):
     s.sprite_preview = prev
     return s
 
-def sgx_paired_background(image, archive, name, previews):
+def sgx_paired_background(image, archive, name, previews, glow=None):
     """Encode one static painting across the two SGX BG planes.
 
     Each 8x8 tile pair chooses two palettes from the shared VCE allocation.
@@ -483,28 +494,28 @@ def sgx_paired_background(image, archive, name, previews):
     remains transparent so the other VDC can show through. This is a fixed
     4bpp-per-plane image, not an 8bpp tile mode.
     """
+    palette_count = 12 if glow is not None else 16
     rgba = np.asarray(image.convert('RGBA'))
     if rgba.shape[:2] != (H, W):
         raise ValueError(f'{name}: paired BG must be {W}x{H}, got {rgba.shape[1]}x{rgba.shape[0]}')
     encoded = rgba.copy()
-    if name in ('title', 'gameover'):
-        # Spatially distribute VCE rounding instead of flattening gradients.
-        encoded[..., :3] = dithered(rgba[..., :3].astype(np.float32))
+    if name == 'title':
+        encoded[..., :3] = dithered(rgba[..., :3].astype(np.float32),0.15)
     cells = encoded.reshape(ROWS, 8, COLS, 8, 4).transpose(0, 2, 1, 3, 4).reshape(-1, 8, 8, 4)
     codes = vce_colors(cells[..., :3]).astype(np.int64).reshape(-1, 64)
     opaque = (cells[..., 3].reshape(-1, 64) >= 128)
 
     # Fit a common 16 x 15 color pool, then iteratively refit it to pixels
     # selected between the two best palettes for each aligned tile pair.
-    palettes, _ = palfit.fit_palettes(cells, 16, iterations=6, verbose=False)
+    palettes, _ = palfit.fit_palettes(cells, palette_count, iterations=6, verbose=False)
     safe_codes = np.where(opaque, codes, 0)
 
     def error_tables(pals):
         return np.asarray([palfit.error_table((p[1:] & 0x1ff).astype(np.int64)) for p in pals], np.float32)
 
     def pair_costs(tables):
-        cost = np.empty((len(codes), 16), np.float32)
-        for p in range(16):
+        cost = np.empty((len(codes), palette_count), np.float32)
+        for p in range(palette_count):
             cost[:, p] = (tables[p][safe_codes] * opaque).sum(1)
         return cost
 
@@ -519,15 +530,15 @@ def sgx_paired_background(image, archive, name, previews):
         group1 = np.broadcast_to(g1[:, None], codes.shape).astype(np.int64)
         hist = np.bincount(
             (group0[choose0 & opaque] * 512 + codes[choose0 & opaque]),
-            minlength=16 * 512,
+            minlength=palette_count * 512,
         )
         hist += np.bincount(
             (group1[~choose0 & opaque] * 512 + codes[~choose0 & opaque]),
-            minlength=16 * 512,
+            minlength=palette_count * 512,
         )
-        hist = hist.reshape(16, 512)
-        fitted = np.zeros((16, 16), '<u2')
-        for p in range(16):
+        hist = hist.reshape(palette_count, 512)
+        fitted = np.zeros((palette_count, 16), '<u2')
+        for p in range(palette_count):
             colors = palfit.fit_colors(hist[p], 15, iterations=6)
             if len(colors):
                 fitted[p, 1:] = int(colors[0])
@@ -539,9 +550,9 @@ def sgx_paired_background(image, archive, name, previews):
     g0, g1 = pairs[:, 0], pairs[:, 1]
     d0, d1 = tables[g0[:, None], safe_codes], tables[g1[:, None], safe_codes]
     choose0 = d0 <= d1
-    indexes = np.empty((16, 512), np.uint8)
+    indexes = np.empty((palette_count, 512), np.uint8)
     lattice = palfit.LATTICE
-    for p in range(16):
+    for p in range(palette_count):
         colors = (palettes[p, 1:] & 0x1ff).astype(np.int64)
         indexes[p] = ((lattice[:, None, :] - lattice[colors][None, :, :]) ** 2).sum(-1).argmin(1) + 1
 
@@ -564,6 +575,11 @@ def sgx_paired_background(image, archive, name, previews):
                 rendered[cy * 8:cy * 8 + 8, cx * 8:cx * 8 + 8][mask] = vce_rgb(pal)[idx[mask]]
         total_error += float(np.minimum(d0[cell], d1[cell])[opaque[cell]].sum())
 
+    if glow is not None:
+        # Keep the additive bitplane letters and their four pulse palettes.
+        # Both BATs clear the underlying cell; VDC0 supplies its painting+ink.
+        palettes = np.concatenate((palettes, glow.palettes[12:16]))
+
     def emit_plane(layer):
         pixels = plane_pixels[layer]
         tiles = [planar_tile(np.zeros((8, 8), np.uint8))]
@@ -573,13 +589,16 @@ def sgx_paired_background(image, archive, name, previews):
         for cy in range(ROWS):
             for cx in range(COLS):
                 idx = pixels[cy * 8:cy * 8 + 8, cx * 8:cx * 8 + 8]
+                group = int(groups[cy * COLS + cx])
+                if glow is not None and int(glow.pal[cy, cx]) >= 12:
+                    idx = glow.index[cy*8:cy*8+8, cx*8:cx*8+8] if layer == 0 else np.zeros((8,8),np.uint8)
+                    group = int(glow.pal[cy, cx])
                 key = planar_tile(idx)
                 tile = lookup.get(key)
                 if tile is None:
                     tile = len(tiles)
                     lookup[key] = tile
                     tiles.append(key)
-                group = int(groups[cy * COLS + cx])
                 words[cy, cx] = (group << 12) | ((UI_TILE_WORD >> 4) + tile)
         limit = (UI_SPRITE_WORD - UI_TILE_WORD) // 16
         if len(tiles) > limit:
@@ -726,22 +745,14 @@ def sgx_selection(get, archive, previews):
         foregrounds.append(fg)
     def cells(image):
         return np.asarray(image).reshape(ROWS,8,COLS,8,4).transpose(0,2,1,3,4).reshape(-1,8,8,4)
-    # Every portrait map covers these pixels. Excluding them saves enough
-    # VDC1 patterns for two complete, independently uploaded animation pages.
-    hidden = np.logical_and.reduce([np.asarray(fg)[...,3]>=128 for fg in foregrounds])
-    backgrounds = []
-    for angle in range(0,360,10):
-        bg = np.asarray(background(angle)).copy()
-        bg[hidden] = 0
-        backgrounds.append(cells(Image.fromarray(bg)))
-    bc = backgrounds[0]; fc = np.concatenate([cells(fg) for fg in foregrounds])
-    bp,_ = palfit.fit_palettes(np.concatenate(backgrounds[::6]),6,verbose=False)
-    tables = np.asarray([palfit.error_table(p[1:]) for p in bp])
-    def backdrop_groups(cs):
-        codes = vce_colors(cs[...,:3]).astype(np.int64)
-        mask = cs[...,3]>=128
-        return (tables[:,codes]*mask).sum(axis=(2,3)).argmin(0).astype(np.uint8)
-    bg = backdrop_groups(bc)
+    # Reuse Continue's resident palette-cycled tunnel. Full rotated bitmaps
+    # required a 1.46 MB tail before selection could appear. Keep the complete
+    # SGX portrait plane and its ten palettes unchanged.
+    backdrop_screen = Screen()
+    tunnel(backdrop_screen, RING_BRIGHT_FULL)
+    bp = np.zeros((6,16), '<u2')
+    bp[:4] = backdrop_screen.palettes[:4]
+    fc = np.concatenate([cells(fg) for fg in foregrounds])
     fp,fg = palfit.fit_palettes(fc,10,verbose=False)
     palette = np.concatenate([bp,fp])
     def emit(cs, pals, groups, slot, name, tilebase=0x100):
@@ -759,37 +770,37 @@ def sgx_selection(get, archive, previews):
             rendered.append(np.asarray(rgb).reshape(ROWS,COLS,8,8,3).transpose(0,2,1,3,4).reshape(H,W,3).astype(np.uint8))
         if len(tiles)>1408: raise ValueError(f'SGX select {name}: {len(tiles)} exceeds resident VRAM')
         return archive.add(f'sgx_select_{name}_tiles',b''.join(tiles)),maps,len(tiles),rendered
-    animation = []
-    for phase,cs in enumerate(backgrounds):
-        bt,bm,bn,br=emit(cs,bp,backdrop_groups(cs),0,f'backdrop{phase}',0x400 if phase&1 else 0x100)
-        if bn>768: raise ValueError(f'SGX backdrop phase {phase}: {bn} exceeds double-buffer budget')
-        animation.append((bt,bm[0],bn))
-        if phase==0: first_backdrop=(bt,bm,bn,br)
-    bt,bm,bn,br=first_backdrop
-    animation_offset=archive.add('sgx_select_animation',b''.join(struct.pack('<IIH',*r) for r in animation))
+    tiles=[bytes(32)]; lookup={bytes(32):0}; words=[]
+    for cy in range(ROWS):
+        for cx in range(COLS):
+            key=planar_tile(backdrop_screen.index[cy*8:cy*8+8,cx*8:cx*8+8])
+            if key not in lookup:lookup[key]=len(tiles);tiles.append(key)
+            words.append((int(backdrop_screen.pal[cy,cx])<<12)|(0x100+lookup[key]))
+    bt=archive.add('sgx_select_backdrop_tiles',b''.join(tiles))
+    bm=[archive.add('sgx_select_backdrop_map',np.asarray(words,'<u2').tobytes())]
+    bn=len(tiles)
+    br=[vce_rgb(bp[backdrop_screen.pal.repeat(8,0).repeat(8,1),backdrop_screen.index]).astype(np.uint8)]
+    def finish_animation(result):
+        pass  # Everything is resident in the core UI extent.
     ft,fm,fn,fr=emit(fc,fp,fg,6,'foreground')
     for hero in range(4):
         mask=np.asarray(foregrounds[hero])[...,3]>=128
         preview=np.where(mask[...,None],fr[hero],br[0])
         Image.fromarray(preview).save(previews/f'sgx_select_{hero}.png')
         foregrounds[hero].save(previews/f'sgx_select_source_{hero}.png')
-    backdrop.save(previews/'sgx_select_backdrop_source.png')
-    # Isolated slow brightness pulse: only backdrop slots 0..5 are writable.
+    Image.fromarray(br[0]).save(previews/'sgx_select_backdrop_source.png')
     phases=[]
-    for amount in (0,1,0,0):
-        p=bp.copy()
-        if amount:
-            codes=p.astype(np.uint16); b=codes&7;r=(codes>>3)&7;g=(codes>>6)&7
-            p=(np.maximum(g,amount)-amount)<<6|(np.maximum(r,amount)-amount)<<3|(np.maximum(b,amount)-amount)
-        phases.append(p.astype('<u2').tobytes())
+    for shift in range(RAMP):
+        phase=bp.copy()
+        phase[:4,1:13]=np.roll(bp[:4,1:13],-shift,axis=1)
+        phases.append(phase.astype('<u2').tobytes())
     cycle=archive.add('sgx_select_cycle',b''.join(phases))
     po=archive.add('sgx_select_palette',palette.astype('<u2').tobytes())
-    return dict(palette=po,tiles0=ft,maps=fm,tiles1=bt,map1=bm[0],ntiles0=fn,ntiles1=bn,cycle=cycle,animation=animation_offset,animation_frames=len(animation),
+    return dict(palette=po,tiles0=ft,maps=fm,tiles1=bt,map1=bm[0],ntiles0=fn,ntiles1=bn,cycle=cycle,animation=0,animation_frames=1,finish_animation=finish_animation,
         report=dict(name='selection',bg0_tiles=fn,bg1_tiles=bn,backdrop_palettes=[0,6],foreground_palettes=[6,16],
                     map_switch_bytes=2240,pattern_switch_bytes=0,cycle_bytes=192,
-                    rotation='36 counter-rotating spiral/moon phases, two pattern/BAT pages',
-                    animation_frames=len(animation),max_frame_patterns=max(r[2] for r in animation),
-                    animation_bytes=sum(r[2]*32+2240 for r in animation)))
+                    rotation='Continue tunnel palette cycle, resident backdrop',
+                    animation_frames=1,max_frame_patterns=bn,animation_bytes=0))
 
 def bake(root, work, out, previews, cblock_frame, sgx=False):
     def get(rid, n=0):
@@ -809,14 +820,9 @@ def bake(root, work, out, previews, cblock_frame, sgx=False):
     sgx_title_pair = None
     if sgx:
         sgx_title_pair = sgx_paired_background(title.preview_source, archive, 'title', previews)
-        # Full two-plane painting; additive lettering is baked before fitting.
-        canvas = gameover.preview_source.copy()
-        label = get(GAMEOVER_TEXT).convert('RGBA')
-        text_layer = Image.new('RGBA',(W,H));text_layer.alpha_composite(label,((W-label.width)//2,GAMEOVER_TEXT_Y))
-        a=np.asarray(canvas).copy();t=np.asarray(text_layer)
-        strength=t[...,3:4].astype(np.float32)/255
-        a[...,:3]=np.minimum(255,a[...,:3].astype(float)+t[...,:3]*strength).astype(np.uint8)
-        sgx_gameover_pair=sgx_paired_background(Image.fromarray(a),archive,'gameover',previews)
+        # Fit the painting into twelve palettes; the shared additive panel
+        # owns the remaining four, so its runtime pulse works on both targets.
+        sgx_gameover_pair=sgx_paired_background(gameover.preview_source,archive,'gameover',previews,glow=gameover)
         sgx_report.append(dict(name='gameover',colors=sgx_gameover_pair['sgx_colors'],rgb_mse=sgx_gameover_pair['sgx_rgb_mse']))
         sgx_select = sgx_selection(get, archive, previews)
         sgx_report.append(sgx_select['report'])
@@ -889,6 +895,10 @@ def bake(root, work, out, previews, cblock_frame, sgx=False):
         portraits.append((pat, pal, table, len(p['pieces'])))
     credits, ncredits = credits_pages(work)
     credits_off = archive.add('ui_credits', credits)
+    if sgx:
+        core_bytes=archive.add('ui_animation_boundary',b'',alignment=16384)
+        sgx_select['finish_animation'](sgx_select)
+        (out / 'sgx_static_report.json').write_text(json.dumps({'edition':'SuperGrafx','paired_static_screens':sgx_report},indent=2)+'\n')
     data = archive.finish()
     (out / 'ui.bin').write_bytes(data)
     h = ['typedef struct { uint32_t pal, tiles, map, sprpal, sprpat, extra; uint16_t ntiles, nsprpat; } PceUiScreen;',
@@ -906,7 +916,8 @@ def bake(root, work, out, previews, cblock_frame, sgx=False):
          f'#define PCE_UI_RAMP_BYTES {RINGS * RAMP * 2}',
          f'#define PCE_UI_STATE_BYTES {4 * PANEL_PALETTES_RUNTIME * 32}']
     if sgx:
-        h += [f'#define PCE_SGX_SELECT_ANIMATION {sgx_select["animation"]}UL',
+        h += [f'#define PCE_UI_CORE_BYTES {core_bytes}UL',
+              f'#define PCE_SGX_SELECT_ANIMATION {sgx_select["animation"]}UL',
               f'#define PCE_SGX_SELECT_FRAMES {sgx_select["animation_frames"]}',
               f'#define PCE_SGX_SELECT_INITIAL_TILES {sgx_select["tiles1"]}UL',
               f'#define PCE_SGX_SELECT_INITIAL_MAP {sgx_select["map1"]}UL',

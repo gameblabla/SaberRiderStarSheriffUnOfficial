@@ -173,8 +173,19 @@ CACHE_CODE static void allocate(void) {
         for(uint8_t p=base;p<base+pages;++p) {
             uint8_t owner=owners[p];
             if(!owner||owner==slot+1)continue;
-            if(sprite_used[owner-1]||sprite_pinned[owner-1]){available=false;break;}
+            if(sprite_used[owner-1]||sprite_pinned[owner-1]){
+                /* Every candidate starting before this protected page also
+                 * overlaps it. Skip those repeated scans of the same block. */
+                if(step==1)base=p;
+                available=false;break;
+            }
             uint8_t elapsed=sprite_epoch-sprite_stamp[owner-1];
+#ifdef PCE_SGX
+            /* Its youngest owner already makes this candidate no better
+             * than the saved block. The remaining pages cannot raise that
+             * minimum, so preserve the same LRU choice without scanning them. */
+            if(chosen!=255&&elapsed<=best_age){available=false;break;}
+#endif
             if(elapsed<age)age=elapsed;
         }
         if(available&&(chosen==255||age>best_age)){chosen=base;best_age=age;if(age==255)break;}

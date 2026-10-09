@@ -6,14 +6,14 @@ from pathlib import Path
 from emulator import Emulator,boot,symbol
 from test_campaign import Campaign
 
-def run(out,label,require_60=False):
+def run(out,label,require_60=False,warm_world=False,stage=1):
     out=out.resolve();c=Campaign(out,sgx=True);elf=out/'app.elf'
     names=('player','actors','shots','pce_presented','pce_draws','sprite_ids',
            'pattern_owner','pattern_owner1','sprite_attr','sprite_exact','sprite_words','sprite_words1','pce_control.6','paused')
     sy={n:symbol(elf,n) for n in names}
     read=lambda e,n:int.from_bytes(e.memory(sy[n],2),'little')
-    meta=json.loads((out/'manifest.json').read_text())['scenes'][0]
-    blob=(out/'s1.bin').read_bytes()
+    meta=json.loads((out/'manifest.json').read_text())['scenes'][stage-1]
+    blob=(out/f's{stage}.bin').read_bytes()
     palette_checks=wide_checks=0
     def check_palettes(e):
         checked=wide=0
@@ -43,8 +43,13 @@ def run(out,label,require_60=False):
         return checked,wide
 
     with tempfile.TemporaryDirectory(prefix='combat-',dir=out) as base,Emulator(out/'saber_rider.cue',base,sgx=True) as e:
-        boot(e,c.address);e.run(120);c.seed(e,'dialogs_done',255,1)
-        c.move(e,600);c.press(e,8);e.run(120)
+        boot(e,c.address)
+        if stage!=1:
+            c.seed(e,'stage',stage-1,1);c.field(e,'state',2);c.advance(e,stage);c.dialogs(e)
+        e.run(120);c.seed(e,'dialogs_done',255,1)
+        c.move(e,600)
+        if warm_world:e.run(120)  # settle the warped world before spawning enemies
+        c.press(e,8);e.run(120)
         e.write(sy['shots'],bytes(208))
         rows=[]
         for i in range(6):
@@ -65,13 +70,14 @@ def run(out,label,require_60=False):
                 trace.append(dict(video_frame=i+1,presented=samples[-1],function=name,pc=pc,
                     elapsed=e.memory(sy['pce_control.6'],1)[0],paused=e.memory(sy['paused'],1)[0],
                     actors=[list(struct.unpack_from('<4h4B9B',e.memory(sy['actors'],168),n*21)) for n in range(8)]))
-            if i==29:e.call('prof_dump',str(out/f'combat-{label}-first30-cycles.txt'))
+            if i==29:
+                e.call('prof_dump',str(out/f'combat-{label}-first30-cycles.txt'));e.call('prof_start')
             if i%15==14:
                 checked,wide=check_palettes(e);palette_checks+=checked;wide_checks+=wide
         (out/f'combat-{label}-trace.json').write_text(json.dumps(trace,indent=2)+'\n')
         log=out/f'combat-{label}-cycles.txt';e.call('prof_dump',str(log))
         e.screenshot(out/f'combat-{label}.png')
-        report=dict(video_frames=180,presented=(read(e,'pce_presented')-before)&65535,
+        report=dict(stage=stage,warm_world=warm_world,video_frames=180,presented=(read(e,'pce_presented')-before)&65535,
             fps=round(sum(samples)/3,2),active_actors_min=min(actors),active_actors_max=max(actors),
             upload_bytes=(c.metrics(e)['uploads']-m['uploads'])&65535,
             overflow=c.metrics(e)['essential_overflow']-m['essential_overflow'],
@@ -87,5 +93,6 @@ def run(out,label,require_60=False):
         if label=='after':assert report['fps']>=32,'Combat cadence regressed below the optimized fixture floor'
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--out',type=Path,default=Path('build/sgx'));p.add_argument('--label',default='after')
-    p.add_argument('--require-60',action='store_true')
-    a=p.parse_args();run(a.out,a.label,a.require_60)
+    p.add_argument('--stage',type=int,choices=(1,3),default=1)
+    p.add_argument('--require-60',action='store_true');p.add_argument('--warm-world',action='store_true')
+    a=p.parse_args();run(a.out,a.label,a.require_60,a.warm_world,a.stage)

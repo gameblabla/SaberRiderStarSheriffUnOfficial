@@ -1,0 +1,35 @@
+- The two background screens are no longer shaking (only the foreground sprites were not supposed to), fix this
+- Dialogue text boxes lack any text rendering (fix this)
+- Performance is still below 60 fps for some part of levels with lots of enemies on screen (that usually occurs with enemies)
+- Boss is completely invisible (fix this, its a massive regression)
+
+- Level 2 race, after dialogue (itself still missing text characters), saber_rider.6e601904fcecd5a4ebb9aaaefb7d0719-dialogue_left_over_glitch.mc0 shows the leftover graphics glitch
+- The car racers, they become smaller as they are closer to you (incorrect)
+
+- Level 3, the red background moon is displayed over the text green background tiles (incorrectly), saber_rider.6e601904fcecd5a4ebb9aaaefb7d0719-redmoon_levle3.mc0
+in fact its displayed over everything else, when it should be only above the starry sky and nothing else, it should be behind everything else (see PC version for reference)
+
+Whenever you pause in that level, the HUd becomes white for some reasons (happens in other levels too ???)
+
+
+- The loading times are atrocious, especially when losing in level -> Continue -> Game over (they are much longer than even the PC engine version had)
+Loading times for loading a new level are also bad.
+
+Dithering should not be used for game over screen and only at 15% for titlescreen.
+
+- Titlescreen text : GAME START and GAME S' instead of GAME START and OPTIONS
+
+- The character select background animation is only a few frames (and some of them randolmy darken for some reasons),
+ensure theres more of them.
+
+
+
+Idea for loading times :
+
+/home/anonymous/Documents/DEV/Saber_Rider/PCE/zx02
+
++
+/home/anonymous/Documents/DEV/Saber_Rider/game/pce_issues/cd_lib.asm
+/home/anonymous/Documents/DEV/Saber_Rider/game/pce_issues/subroutine_lst.txt
+
+Using the optimized routines (that use ADPCM space) and ZX02 compression to load data faster and into ARAM

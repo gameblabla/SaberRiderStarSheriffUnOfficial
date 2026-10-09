@@ -18,7 +18,7 @@ extern uint8_t buffer[2048];
 static inline void ui_vram_load(uint32_t address,uint16_t word,uint32_t bytes) {
     uint32_t *args=(uint32_t *)buffer;
     args[0]=address;((uint16_t *)buffer)[2]=word;args[2]=bytes;
-    overlay_call(0x6f,ui_vram);
+    overlay_call(0x71,ui_vram);
 }
 void ui_show(uint8_t id);
 void ui_put(uint8_t col,uint8_t row,const char *text,uint8_t slot);
@@ -35,7 +35,11 @@ extern uint16_t ui_ramp[4][12],ui_ring[4][16];
 extern uint8_t ui_cycle_step,ui_cycle_clock;
 /* Small helpers compiled into each overlay to spare the renderer bank. */
 static inline __attribute__((always_inline)) void ui_put_number(uint8_t col,uint8_t row,uint8_t n,uint8_t slot) {
-    char text[3]={'0'+n/10%10,'0'+n%10,0};ui_put(col,row,text,slot);
+    /* Keep address-taken text out of compiler zero-page temporaries: their
+     * offsets are not valid generic pointers on the HuC6280 ($2000 base). */
+    static char text[3];
+    text[0]='0'+n/10%10;text[1]='0'+n%10;text[2]=0;
+    ui_put(col,row,text,slot);
 }
 static inline void ui_clear_rows(uint8_t first,uint8_t last) {
     for(uint8_t r=first;r<=last;++r)ui_put(4,r,"                                ",12);

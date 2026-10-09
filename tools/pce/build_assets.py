@@ -165,7 +165,7 @@ def scenery_background(out, work, stage, occlusion):
 
 HORSE_FRAMES = 5
 
-def horse_frames(work, archive):
+def horse_frames(work, archive, sgx=False):
     """The robot-horse gallop at full size, as VDC big sprite cells: each frame (128x80) is four columns of one 32x64
     and one 32x16 sprite, so a horse costs 8 SAT entries instead of 33 pieces. Per frame, 40 patterns: the four 32x64
     blocks (8 patterns each, row-major two wide), then the four 32x16 blocks (2 each). One shared palette first."""
@@ -183,6 +183,20 @@ def horse_frames(work, archive):
             for h in range(2): pats.append(planar_sprite(idx[64:80, 32*c+16*h:32*c+16*h+16]))
         out += b''.join(pats)
     assert len(out) == 32 + HORSE_FRAMES * 5120
+    if sgx:
+        # Five resident 64x48 poses for the second depth row on VDC0.
+        # Match the original palette so both VDCs share the gallop colors.
+        for im in frames:
+            small=Image.new('RGBA',(64,48))
+            small.alpha_composite(im.resize((64,40),Image.Resampling.NEAREST),(0,8))
+            idx=indexed(small,pal);pats=[]
+            for c in range(2):
+                for r in range(2):
+                    for h in range(2):pats.append(planar_sprite(idx[16*r:16*r+16,32*c+16*h:32*c+16*h+16]))
+            for c in range(2):
+                for h in range(2):pats.append(planar_sprite(idx[32:48,32*c+16*h:32*c+16*h+16]))
+            out+=b''.join(pats)
+        assert len(out)==32+HORSE_FRAMES*(5120+1536)
     return archive.add('horse_frames', out)
 
 FG_MAX_PIECES, FG_MAX_UNITS = 20, 8    # foreground sprite pieces per 288-px window / per 16-line row
@@ -723,6 +737,15 @@ def platform_background(stage, work, sgx=False):
                 layer[...,:3]=(layer[...,:3].astype(np.int32)*tint//255).astype(np.uint8)
             pixels=np.where(layer[...,3:4]>=128,layer,pixels)
         foreground_slow=Image.fromarray(pixels)
+    if sgx and stage==4 and sgx_near is not None:
+        # Raster bands replace one another; transparent mountain pixels cannot
+        # fall through to the upper band's SkyBG on the same VDC. Keep source
+        # sky behind the mountain band, repeating at its own artwork extent.
+        sky_pixels=np.asarray(sgx_sky)
+        backing=np.tile(sky_pixels,(1,math.ceil(sgx_near.width/sgx_sky.width),1))[:, :sgx_near.width]
+        composite=Image.fromarray(backing.copy())
+        composite.alpha_composite(sgx_near)
+        sgx_near=composite
     if stage == 1:
         out = scenery_background(out, work, stage, prop_occlusion)
         if sgx_main is not None: sgx_main = scenery_background(sgx_main, work, stage, prop_occlusion)
@@ -993,7 +1016,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
         rules+=b''.join(struct.pack('<6h',*z) for z in deaths)
         rules+=b''.join(struct.pack('<4h',*z) for z in stops)
         meta['rules_offset']=a.add('flow_zones',rules)
-        if stage==1: meta['horse_offset']=horse_frames(work,a)
+        if stage==1: meta['horse_offset']=horse_frames(work,a,sgx=sgx)
 
         sprites = list(shared)
         if stage in (1,5):
@@ -1733,7 +1756,7 @@ def main():
           f"#define PCE_M6_BOLTS {next(m['m6_bolts'] for m in scenes if 'm6_bolts' in m)}UL", f"#define PCE_M6_ARMT {next(m['m6_arm'] for m in scenes if 'm6_arm' in m)}UL", f"#define PCE_M6_ARMPAL {next(m['m6_armpal'] for m in scenes if 'm6_armpal' in m)}UL"]
     if args.sgx:
         h.append(f"#define PCE_M6_BIG_BG {next(m['m6_big_bg'] for m in scenes if 'm6_big_bg' in m)}UL")
-    c.append('const uint8_t pce_car_widths[PCE_CAR_STEPS]={'+','.join(map(str,CAR_WIDTHS))+'};')
+    c.append('const uint8_t pce_car_widths[PCE_CAR_STEPS] __attribute__((section(".ram_bank124.rodata")))={'+','.join(map(str,CAR_WIDTHS))+'};')
     d_table,z_table=road_tables()
     h.append('extern const uint8_t pce_road_d[384];extern const uint8_t pce_road_z[113];')
     c.append('const uint8_t pce_road_d[384] __attribute__((section(".ram_bank111.rodata")))={'+','.join(map(str,d_table))+'};')

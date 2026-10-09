@@ -1,5 +1,13 @@
 #include "video_pce.h"
+#include "overlay_pce.h"
 #ifdef RETAIL
+#ifdef PCE_SGX
+#define PAUSE_CODE __attribute__((noinline,minsize,section(".ram_bank130.text")))
+#define PAUSE_DATA __attribute__((section(".ram_bank130.rodata")))
+#else
+#define PAUSE_CODE PCE_FLOW
+#define PAUSE_DATA __attribute__((section(".ram_bank110.rodata")))
+#endif
 /* Borrow three patterns at the end of the font while gameplay is frozen.
  * Preserve the actual VRAM SAT: foreground reordering means the RAM SAT is
  * not necessarily in display order. The first half of buffer remains intact
@@ -7,14 +15,14 @@
 #define PAUSE_WORD (PCE_FONT_WORD+0x540)
 extern uint8_t buffer[2048];
 extern vdc_sprite_t sat[2][64];
-static const uint8_t letters[5][7] __attribute__((section(".ram_bank110.rodata")))={
+static const uint8_t letters[5][7] PAUSE_DATA={
     {30,17,17,30,16,16,16}, /* P */
     {14,17,17,31,17,17,17}, /* A */
     {17,17,17,17,17,17,14}, /* U */
     {15,16,16,14,1,1,30},  /* S */
     {31,16,16,30,16,16,31} /* E */
 };
-PCE_FLOW static void pause_copy(uint16_t word,uint16_t *data,uint16_t count,bool read) {
+PAUSE_CODE static void pause_copy(uint16_t word,uint16_t *data,uint16_t count,bool read) {
     for(uint16_t i=0;i<count;++i) {
         video_vdc(read?1:0,word+i);
         pce_cpu_irq_disable();
@@ -28,18 +36,19 @@ PCE_FLOW static void pause_copy(uint16_t word,uint16_t *data,uint16_t count,bool
         pce_cpu_irq_enable();
     }
 }
-PCE_FLOW void pause_show(void) {
+PAUSE_CODE void pause_show_body(void) {
     uint16_t *saved=(uint16_t*)(buffer+1024);
     uint16_t target=video_sat_target();
     pause_copy(pce_sat_word,saved,256,true);
     pause_copy(PAUSE_WORD,saved+256,192,true);
     pce_vce_copy_palette_to_ram(saved+448,31,1);
-    /* Black outline and white ink, with transparent index zero. */
-    /* sat_page remains zero; its unused second page is temporary storage. */
-    uint16_t *colors=(uint16_t*)sat[1];
-    for(uint8_t i=0;i<16;++i)colors[i]=saved[448+i];
-    colors[14]=0;colors[15]=0x1ff;
-    pce_vce_copy_palette(31,colors,1);
+    /* Palette 31 belongs to the HUD. Use its brightest/darkest opaque
+     * entries for the label without recoloring the retained gameplay SAT. */
+    uint8_t ink=1,outline=1,bright=0,dark=255;
+    for(uint8_t i=1;i<16;++i) {
+        uint16_t c=saved[448+i];uint8_t l=(c&7)+((c>>3)&7)+((c>>6)&7);
+        if(l>bright){bright=l;ink=i;}if(l<dark){dark=l;outline=i;}
+    }
     for(uint8_t cell=0;cell<3;++cell) {
         uint16_t *pat=(uint16_t*)sat[1];
         for(uint8_t i=0;i<64;++i)pat[i]=0;
@@ -52,7 +61,11 @@ PCE_FLOW void pause_show(void) {
                     for(uint8_t y=row;y<=row+2;++y)pat[16+y]|=mask;
                 }
             }
-        for(uint8_t y=0;y<16;++y)pat[32+y]=pat[48+y]=pat[16+y];
+        for(uint8_t y=0;y<16;++y) {
+            uint16_t fill=pat[y],edge=pat[16+y]&~fill;
+            for(uint8_t plane=0;plane<4;++plane)
+                pat[plane*16+y]=((ink&(1<<plane))?fill:0)|((outline&(1<<plane))?edge:0);
+        }
         pause_copy(PAUSE_WORD+(uint16_t)cell*64,pat,64,false);
     }
     /* Put PAUSE first so the hardware sprite limits cannot hide the label.
@@ -64,12 +77,25 @@ PCE_FLOW void pause_show(void) {
     pause_copy(target,(uint16_t*)label,12,false);
     video_sat_replace(target);
 }
-PCE_FLOW void pause_hide(void) {
+PAUSE_CODE void pause_hide_body(void) {
     uint16_t *saved=(uint16_t*)(buffer+1024);
     pause_copy(PAUSE_WORD,saved+256,192,false);
-    pce_vce_copy_palette(31,saved+448,1);
     uint16_t target=video_sat_target();
     pause_copy(target,saved,256,false);
     video_sat_replace(target);
+}
+PCE_FLOW void pause_show(void) {
+#ifdef PCE_SGX
+    overlay_call(0x82,pause_show_body);
+#else
+    pause_show_body();
+#endif
+}
+PCE_FLOW void pause_hide(void) {
+#ifdef PCE_SGX
+    overlay_call(0x82,pause_hide_body);
+#else
+    pause_hide_body();
+#endif
 }
 #endif

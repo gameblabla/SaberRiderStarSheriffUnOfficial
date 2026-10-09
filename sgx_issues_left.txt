@@ -1,0 +1,15 @@
+- Level 2 racing segments should be faster, it performs poorly
+- Dialogue boxes in level 2 phase 2 are kind of glitchy and have missing top border etc...
+
+The code for dialogue boxes should be shared along all levels and reused, to avoid inconsistency issues.
+Decrease Y axis position by 16px throughout consistently (make sure text in text box is relocated too, as is portrait dialogue picture)
+
+- Level 3 has noticeable amount of slowdowns (as does level 1)
+- The dialogue portrait is partially hidden offscreen on left side, fix it so it is fully visibly by +X pixels (displayed at X=0)
+- SGX only : add an additional galloping horse range on to the other VDC and ensure no sprite flickering or slowdowns
+- Level 4 SGX : The background in level 4 is black partially / missing graphics, with random glitches appearing sometimes as you play throughout the level (a regression)
+- Game over SGX : the color additive effect on game over for SGX no longer occurs vs PCE.
+
+Please check level 5, level 6 and level 7 for any graphics regression, performance or oddities too.
+
+Git commit your changes after, and the whole SGX/PCE tree.

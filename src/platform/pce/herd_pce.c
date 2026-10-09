@@ -39,6 +39,11 @@ __attribute__((noinline,minsize,section(".ram_bank128.text")))
 void pce_sgx_herd_sky_load_body(void) {
     uint32_t horse=pce_scenes[pce_metrics.stage-1].horse;
     if(!horse)return;
+    /* VDC0's fifteen reserved pages contain all small-row animation poses.
+       Loading once avoids frame-time transfers and displayed-pattern reuse. */
+    for(uint8_t p=28;p<43;++p)pattern_owner[p]=48;
+    sprite_pinned[47]=250;
+    arcade_vram_to(0,horse+32+5UL*5120,0x6400,5*1536);
     for(uint8_t k=0;k<5;++k) {
         uint16_t word=k<3?0x2800+(uint16_t)k*0xa00:
             PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(k-3)*256;
@@ -69,6 +74,32 @@ void herd_reserve(void) {
     pce_vce_copy_palette(pce_sgx_gameplay()?29:31,colors,1);
 }
 /* Starts the convoy: the first horses are created by herd_feed (encounter_pce.c), the rest as the column nears. */
+#ifdef PCE_SGX
+/* The smaller staggered row shares the convoy state but has VDC0's own SAT
+ * and scanline budget. Foreground/HUD stay ahead of it in admission order. */
+__attribute__((noinline,minsize,section(".ram_bank128.text")))
+void pce_sgx_herd_front_draw_body(void) {
+    uint16_t code=(0x6400+(uint16_t)((frame>>2)%5)*768)>>5;
+    for(uint8_t k=0;k<8;++k) {
+        if(!actors[k].active||actors[k].type!=11)continue;
+        int16_t sx=actors[k].b.x-camera+40,sy=actors[k].b.y-88;
+        for(uint8_t c=0;c<2;++c) {
+            int16_t x=sx+c*32;if(x<=-32||x>=256)continue;
+            for(uint8_t part=0;part<2;++part) {
+                int16_t y=sy+part*32,h=part?16:32;
+                int16_t lo=y<0?0:y,hi=y+h>224?224:y+h;
+                if(hi<=lo||sat_count>=64)continue;
+                sprite_line_lo=lo;sprite_line_hi=hi;sprite_line_cells=1;
+                overlay_call(0x6e,sprite_lines_wide);
+                if(!sprite_line_cells)continue;
+                sat[0][sat_count++]=(vdc_sprite_t){y+64,x+32,
+                    code+(part?16+4*c:8*c),VDC_SPRITE_FG|13|VDC_SPRITE_WIDTH_32|
+                    (part?0:VDC_SPRITE_HEIGHT_32)};
+            }
+        }
+    }
+}
+#endif
 HERD_CODE void herd_spawn(void) {
 #ifdef PCE_SGX
     overlay_call(0x80,herd_reserve);
@@ -132,10 +163,15 @@ HERD_CODE static void herd_warm(void) {
        from being allocated. Warm only flashes and the projectile on SGX. */
     uint8_t total=5,offset=2;
 #else
-    uint8_t total=7,offset=0;
+    uint8_t total=7;
 #endif
     if(warm_count<total) {
-        uint8_t i=warm_count+offset,stage=pce_metrics.stage-1;
+#ifdef PCE_SGX
+        uint8_t i=warm_count+offset;
+#else
+        uint8_t i=warm_count;
+#endif
+        uint8_t stage=pce_metrics.stage-1;
         uint16_t id=i<2?pce_motion_base[stage]+hero*3+i:
             i<6?pce_flash_base[stage]+4+i-2:36;
         if(video_sprite_optional(id,-256,240,false,16)) {
@@ -143,7 +179,18 @@ HERD_CODE static void herd_warm(void) {
             if(slot<48&&sprite_ids[slot]==id){warm_ids[warm_count]=id;warm_slots[warm_count]=slot;++warm_count;}
         }
     }
-    for(uint8_t i=0;i<warm_count;++i)if(sprite_ids[warm_slots[i]]==warm_ids[i])sprite_pinned[warm_slots[i]]=250;
+    for(uint8_t i=0;i<warm_count;++i)if(sprite_ids[warm_slots[i]]==warm_ids[i]) {
+#ifndef PCE_SGX
+        /* Idle/run animation needs two free hero buffers. Keep the two
+           warmed firing poses resident only while fire is held; preserve
+           their final displayed generations when releasing those pins. */
+        if(i<2&&!(pce_control.keys&KEY_1)) {
+            if(sprite_pinned[warm_slots[i]]>2)sprite_pinned[warm_slots[i]]=2;
+            continue;
+        }
+#endif
+        sprite_pinned[warm_slots[i]]=250;
+    }
 }
 /* Draw every horse; releases the pages once the last one has gone. */
 HERD_CODE void herd_draw(void) {

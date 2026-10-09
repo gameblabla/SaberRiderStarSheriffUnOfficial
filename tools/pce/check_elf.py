@@ -6,7 +6,7 @@ import subprocess
 import sys
 nm=Path(sys.argv[1]).resolve();elf=Path(sys.argv[2]).resolve()
 output=subprocess.check_output([str(nm),'--undefined-only',str(elf)],text=True)
-allowed=re.compile(r'__cd_(app_elf|s[1-7]_bin|font_bin|ui_bin|victory_bin|voice[0-3]_bin)__sector$')
+allowed=re.compile(r'__cd_(app_elf|s[1-7](_packed)?_bin|font_bin|ui(_packed)?_bin|victory_bin|voice[0-3]_bin)__sector$')
 bad=[line for line in output.splitlines() if not allowed.fullmatch(line.split()[-1])]
 if bad:raise SystemExit('Unresolved application symbols:\n'+'\n'.join(bad))
 symbols=subprocess.check_output([str(nm),str(elf)],text=True)
@@ -17,14 +17,15 @@ all_addresses={p[2]:int(p[0],16) for line in symbols.splitlines()
 # These functions are entered through fixed overlay calls. Moving their
 # bodies without their callers otherwise links successfully and jumps into
 # a different bank's code. Resident copy/admission also has linker guards.
-fixed_banks={'panel_draw':115,'loader_card_restore':113,
+fixed_banks={'ui_vram':113,'panel_draw':115,'loader_card_restore':113,
              'phys_call':129,'cell_call':129,'cell':129,'spawn_clear':129,'allocate':129}
 if 'space_vdc1_actor_pass' in addresses:
     fixed_banks.update(space_vdc1_actor_pass=119,space_vdc1_sprite_body=116,
                        video_arena_bg_clear_body=113,arena_bg_palette=113)
 if 'pce_sgx_sky_stream_body' in addresses:
-    fixed_banks.update(pce_sgx_sky_load_body=130,pce_sgx_sky_stream_body=130,
-        pce_sgx_herd_sky_load_body=128,pce_sgx_hull_retire_body=130,
+    fixed_banks.update(zx02_arcade=130,pause_show_body=130,pause_hide_body=130,ui_animation_body=113,
+        pce_sgx_sky_load_body=130,pce_sgx_sky_stream_body=130,
+        pce_sgx_herd_sky_load_body=128,pce_sgx_herd_front_draw_body=128,pce_sgx_hull_retire_body=130,
         pce_sgx_story_world_body=128,
         pce_sgx_platform_actor_pass_body=114,pce_sgx_projectile_body=119,
         pce_sgx_vdc1_sat_upload_body=120,pce_sgx_sprite_upload_body=128,
@@ -32,7 +33,7 @@ if 'pce_sgx_sky_stream_body' in addresses:
         pce_sgx_select_body=110,pce_sgx_budget_body=110,pce_sgx_ui_load_body=124,pce_sgx_ui_end_body=124,
         hull_mirror_body=120,hull_claim_tail_body=128,ui_fade_body=128)
     animation=addresses.get('pce_sgx_select_animate_body',0)
-    if (animation>>16)&255!=135 or not 0xc000<=animation&65535<0xe000:
+    if animation and ((animation>>16)&255!=135 or not 0xc000<=animation&65535<0xe000):
         raise SystemExit('Selection animation must execute through MPR6 in bank 135')
     words=all_addresses.get('sprite_words1',0)
     if words>>16!=0x168 or not 0x4000<=words&65535<0x6000:
@@ -63,6 +64,15 @@ for name,kind,address,size in re.findall(r'\[\s*\d+\]\s+(\S+)\s+(PROGBITS|NOBITS
         if (address&65535)+size>0x3bf0:raise SystemExit('Console state overlaps the native-test trampoline at $3bf0'
                               ' or the reserved software stack')
         rows.append(dict(name=name,address=address&65535,bytes=size))
+# HuC6280 direct page lives at $2000. LLVM-MOS can promote arrays but
+# leave absolute indexed loads/stores at $00xx, which addresses hardware.
+# Inspect executable sections so future promotions fail the build.
+disassembly=subprocess.check_output([str(nm.parent/'llvm-objdump'),'-d',str(elf)],text=True)
+invalid=[]
+for line in disassembly.splitlines():
+    match=re.search(r':\s+([0-9a-f]{2}) ([0-9a-f]{2}) 00\s+\w+\s+\$[0-9a-f]+,[xy]\b',line)
+    if match:invalid.append(line.strip())
+if invalid:raise SystemExit('Absolute indexed access to HuC6280 hardware from promoted RAM:\n'+'\n'.join(invalid))
 compiler=subprocess.check_output([str(nm.parent/'mos-pce-cd-clang'),'--version'],text=True).strip()
 flags=(elf.parent/'build-flags').read_text().split()
 report=dict(compiler=compiler,flags=flags,sections=rows,

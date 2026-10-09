@@ -128,6 +128,9 @@ UI_CODE static void select_draw(uint8_t shown,bool due,uint8_t chosen,uint16_t t
     video_sat_end();
 }
 UI_CODE static uint8_t select_hero(uint8_t chosen) {
+#ifdef PCE_SGX
+    if(!loader_ui_animation()){pce_control.ok=0;return chosen;}
+#endif
     ui_dark=1;ui_show(SCREEN_SELECT);ui_dark=0;pce_ui_state=2;
     portrait_patterns(chosen,0);portrait_pieces_use(chosen,0);portrait_palette(chosen);select_palettes(chosen,false);
     audio_music(1);
@@ -160,7 +163,14 @@ UI_CODE static uint8_t select_hero(uint8_t chosen) {
 }
 
 /* ---------------------------------------------------------------- options */
-enum { OPT_DIFFICULTY, OPT_LIVES, OPT_CONTINUES, OPT_MUSIC, OPT_SWAP, OPT_EXIT, OPT_COUNT };
+#if DEBUG
+static uint8_t start_level=1;
+#endif
+enum { OPT_DIFFICULTY, OPT_LIVES, OPT_CONTINUES, OPT_MUSIC, OPT_SWAP,
+#if DEBUG
+    OPT_LEVEL,
+#endif
+    OPT_EXIT, OPT_COUNT };
 UI_CODE static void caps(uint8_t *lives,uint8_t *continues) {
     *lives=pce_options.difficulty==0?7:pce_options.difficulty==1?5:3;
     *continues=pce_options.difficulty==0?5:pce_options.difficulty==1?4:3;
@@ -168,8 +178,19 @@ UI_CODE static void caps(uint8_t *lives,uint8_t *continues) {
 UI_CODE static void option_row(uint8_t row,bool selected) {
     static const char *const difficulty[3]={"EASY  ","NORMAL","HARD  "};
     static const char *const music[2]={"OFF ","ON  "};
-    static const char *const label[OPT_COUNT]={"DIFFICULTY","LIVES","CONTINUES","MUSIC","SWAP I/II","EXIT"};
-    uint8_t y=9+row*2;if(row==OPT_EXIT)y=20;
+#if DEBUG
+    static char level_text[3]="01";
+#endif
+    static const char *const label[OPT_COUNT]={"DIFFICULTY","LIVES","CONTINUES","MUSIC","SWAP I/II",
+#if DEBUG
+        "LEVEL",
+#endif
+        "EXIT"};
+    uint8_t y=9+row*2;
+#if DEBUG
+    y=8+row*2;
+#endif
+    if(row==OPT_EXIT)y=20;
     ui_put(7,y,label[row],selected?13:12);
     if(row==OPT_EXIT)return;
     ui_put(24,y,selected?"<":" ",13);
@@ -178,6 +199,9 @@ UI_CODE static void option_row(uint8_t row,bool selected) {
     case OPT_LIVES:ui_put_number(26,y,pce_options.lives,15);ui_put(28,y,"    ",15);break;
     case OPT_CONTINUES:ui_put_number(26,y,pce_options.continues,15);ui_put(28,y,"    ",15);break;
     case OPT_MUSIC:ui_put(26,y,music[pce_options.music!=0],15);ui_put(30,y,"  ",15);break;
+#if DEBUG
+    case OPT_LEVEL:level_text[1]='0'+start_level;ui_put(26,y,level_text,15);ui_put(28,y,"    ",15);break;
+#endif
     case OPT_SWAP:ui_put(26,y,music[pce_options.swap_buttons!=0],15);ui_put(30,y,"  ",15);break;
     default:break;
     }
@@ -186,7 +210,11 @@ UI_CODE static void option_row(uint8_t row,bool selected) {
 UI_CODE static void option_help(uint8_t row) {
     static const char *const help[OPT_COUNT]={
         "EASY 3  NORMAL 2  HARD 1 HEARTS","EXTRA LIVES AT THE START","CONTINUES AFTER GAME OVER",
-        "CD MUSIC ON OR OFF","SWAP BUTTONS I AND II","BACK TO THE TITLE"};
+        "CD MUSIC ON OR OFF","SWAP BUTTONS I AND II",
+#if DEBUG
+        "START A NEW GAME AT THIS LEVEL",
+#endif
+        "BACK TO THE TITLE"};
     ui_clear_rows(23,23);
     ui_put(4+(32-(uint8_t)__builtin_strlen(help[row]))/2,23,help[row],14);
 }
@@ -226,6 +254,11 @@ UI_CODE static void options(void) {
                 pce_options.music=pce_options.music?0:3;
                 if(pce_options.music)audio_music(3);else audio_stop();
                 changed=true;break;
+#if DEBUG
+            case OPT_LEVEL:
+                start_level=dir>0?(start_level==7?1:start_level+1):(start_level==1?7:start_level-1);
+                changed=true;break;
+#endif
             case OPT_SWAP:
                 pce_options.swap_buttons^=1;
                 changed=true;break;
@@ -252,7 +285,13 @@ UI_CODE void frontend_start(void) {
     for(;;) {
         uint8_t choice=title();
         if(choice==1){options();continue;}
-        chosen=select_hero(chosen);pce_control.stage=0;break;
+        chosen=select_hero(chosen);
+#if DEBUG
+        pce_control.stage=start_level;
+#else
+        pce_control.stage=0;
+#endif
+        break;
     }
     audio_stop();pce_ui_state=0;pce_control.hero=chosen;pce_continues=pce_options.continues;
     pce_campaign.lives=pce_options.lives;pce_campaign.powers=2;pce_campaign.score=0;

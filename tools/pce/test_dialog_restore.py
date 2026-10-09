@@ -38,6 +38,7 @@ def packing():
 def verify(out):
     packing()
     c = Campaign(out)
+    retail='-DRETAIL' in json.loads((out/'runtime.json').read_text())['flags']
     elf = out/'app.elf'
     manifest = json.loads((out/'manifest.json').read_text())
     for scene in manifest['scenes']:
@@ -71,11 +72,22 @@ def verify(out):
             e.run(100)
             e.screenshot(captures/f'panel-{phase}.png')
             if phase == 5:
+                held_font=bytes.fromhex(e.call('asread','vram0',0x8400,3072)['hex'])
+                held_palette=bytes.fromhex(e.call('asread','pram',480,32)['hex'])
                 c.press(e, 8)
                 e.run(30)
-                assert bytes.fromhex(e.call('asread', 'vram0', 0x8400, 3072)['hex']) == original_font
-                assert bytes.fromhex(e.call('asread', 'pram', 480, 32)['hex']) == original_palette
-                c.seed(e,'pce_scroll_y',3)
+                paused_font=bytes.fromhex(e.call('asread','vram0',0x8400,3072)['hex'])
+                if retail:
+                    # Retail PAUSE retains the dialogue and borrows the last
+                    # three font patterns for its label. Debug menus restore
+                    # the scene font instead; they are separate pause paths.
+                    assert paused_font[:2688]==held_font[:2688]
+                    assert bytes.fromhex(e.call('asread','pram',480,32)['hex'])==held_palette
+                else:
+                    assert paused_font==original_font
+                    assert bytes.fromhex(e.call('asread','pram',480,32)['hex'])==original_palette
+                if not retail:c.seed(e,'pce_scroll_y',3)
+                # Retail resumes the frozen panel; the debug menu reopens it.
                 c.press(e, 8)
                 e.run(100)
                 assert c.state(e)['state'] == 1
@@ -90,7 +102,7 @@ def verify(out):
             for x in range(33):
                 world = (scroll >> 3)+x
                 for row in range(30):
-                    if 3 <= x < 31 and 5 <= row < 11:
+                    if 3 <= x < 31 and 3 <= row < 9:
                         continue
                     palette = blob[scene['map']+(world % scene['cols'])*90+row*3+2]
                     expected = 128+columns[(world % 33)*30+row]+(palette << 12)

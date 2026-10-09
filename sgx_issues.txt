@@ -1,0 +1,11 @@
+- Sky background not scrolling even tho i asked you to stream it from ARAM
+- Strange sparkle (sprite) or random garbage for galloping horses in level 1 (did not occur on PCE version)
+- Has extreme slowdowns when there's lots of enemies on screen (versus prior PC engine verison)
+- The boss in level 1 has no visible bullets (PC engine version did)
+- Random disappearing sprites whenever a dialogue pops up (for a few frames) or boss entrance (PC engine did not have this issue)
+- Attacking the boss makes it flash, but also incorrectly makes the foreground sprites flash (an issue that occured on PCE but only for last level, also a bug)
+- race specific boss music after dialogue with it etc... (see PC version for reference) fails to play on SGX build on level 2 phase 2
+- Incorrect dark sky used for level 3 (it is not a darker variant of level 1 but its own variant, see PC release with dark red moon)
+- Boss 3 (level 3) for foreground sprites in boss area incorrectly adopts palette randomly from boss
+- Level 4 is glitched out for dialogue, before dialogue etc..
+- For level 4 background graphics, the 'blue' ish bushes should be part of second background layer and it should parallax scroll at different speed from the blue sky above.

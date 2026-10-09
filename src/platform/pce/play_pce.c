@@ -44,6 +44,27 @@ static uint8_t walk_in;
 #define WALK_STOP_X 144
 
 uint8_t cell(int16_t x,int16_t y);
+#ifdef PCE_SGX
+uint8_t cell_slow(int16_t x,int16_t y);
+/* Warm the column once, then scan its six body rows directly. Repeating the
+ * full cell bounds/tag lookup for every row dominated walking enemy physics. */
+PHYS_CODE static uint8_t wall_hit(int16_t col,int16_t r0,int16_t r1,uint8_t mask) {
+    if((uint16_t)col>=scene->ccols)return 0;
+    if(r0<0)r0=0;if(r1>(int16_t)scene->crows)r1=scene->crows;
+    if(r0>=r1)return 0;
+    uint8_t slot=col&31;
+    if(column_tags[slot]!=(uint16_t)col)cell_slow(col,0);
+    const uint8_t *rows=collision[slot]+r0;
+    uint8_t count=r1-r0;
+    do {if(*rows++&mask)return 1;}while(--count);
+    return 0;
+}
+#else
+PHYS_CODE static uint8_t wall_hit(int16_t col,int16_t r0,int16_t r1,uint8_t mask) {
+    for(int16_t r=r0;r<r1;++r)if(cell(col,r)&mask)return 1;
+    return 0;
+}
+#endif
 PHYS_CODE uint8_t cell_slow(int16_t x,int16_t y) {
     if((uint16_t)x>=scene->ccols||(uint16_t)y>=scene->crows) return 0;
     uint8_t slot=x&31;
@@ -90,11 +111,11 @@ PHYS_CODE static void physics(Body *b) {
     if(b->vx>0) {
         int16_t col=(x+8)>>3;
         if(x+8>scene->width) { x=scene->width-8;hit|=1;b->vx=0; }
-        else for(int16_t r=r0;r<r1;++r) if(cell(col,r)&1) {x=col*8-8;b->vx=0;hit|=1;break;}
+        else if(wall_hit(col,r0,r1,1)) {x=col*8-8;b->vx=0;hit|=1;}
     } else if(b->vx<0) {
         int16_t col=(x-8)>>3;
         if(x-8<0) {x=8;b->vx=0;hit|=2;}
-        else for(int16_t r=r0;r<r1;++r) if(cell(col,r)&2) {x=(col+1)*8+8;b->vx=0;hit|=2;break;}
+        else if(wall_hit(col,r0,r1,2)) {x=(col+1)*8+8;b->vx=0;hit|=2;}
     }
     int16_t c0=(x-7)>>3,c1=(x+7)>>3,last=c1-(c0<c1),row;
     if(b->vy<0) {
@@ -383,8 +404,8 @@ PCE_BOSS void play_draw(void) {
      * Apply after admission so a changing shake never splits horse columns. */
     uint8_t shake_y=herd_on?((frame*13^(frame>>2))&3):0;
     #ifdef PCE_SGX
-    /* VDC0 foreground stays grounded; actors shake independently on VDC1. */
-    if(sgx_foreground_stage)shake_y=0;
+    /* Both backgrounds rumble; retained foreground sprites stay grounded. */
+    if(sgx_foreground_stage)world_first=sat_count;
 #endif
     if(shake_y)for(uint8_t i=world_first;i<sat_count;++i)sat[sat_page][i].y-=shake_y;
     pce_scroll_y=shake_y;
