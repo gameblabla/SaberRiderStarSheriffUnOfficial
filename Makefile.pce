@@ -59,7 +59,7 @@ $(OUT)/app_full.elf: $(PCE_SRC) $(wildcard src/platform/pce/*.h) $(wildcard src/
 $(OUT)/app.elf $(OUT)/m6.bin &: $(OUT)/app_full.elf tools/pce/m6_image.py
 	python3 tools/pce/m6_image.py --mos $(MOS) --out $(OUT)
 
-# Ramrod's arena (stage 6): src/platform/pce/m6/ is linked with the application into virtual banks 128-131 (link.ld), four 8 KiB code images that
+# Ramrod's arena (stage 6): src/platform/pce/m6/ is linked with the application into virtual banks 144, 145, 146 and 131 (link.ld), four 8 KiB code images that
 # m6_image.py cuts out of the link (m6.bin, and app.elf is the link without them); build_disc.py puts them into the stage 6 archive and m6_load reads
 # them into code banks $76, $77, $79 and $7a.
 $(OUT)/saber_rider.cue: $(OUT)/ipl.bin $(OUT)/ipl.elf $(OUT)/app.elf $(OUT)/m6.bin $(PCE_ASSETS) $(PCE_AUDIO) tools/pce/build_disc.py
@@ -101,6 +101,8 @@ test-sgx:
 	python3 tools/pce/test_sgx_frontend.py --out build/sgx
 	python3 tools/pce/test_sgx_motion.py --out build/sgx
 	python3 tools/pce/test_sgx_rendering.py --out build/sgx
+	python3 tools/pce/test_sgx_moon_restore.py --out build/sgx
+	python3 tools/pce/test_cdda_leadout.py --out build/sgx --sgx
 	python3 tools/pce/test_sgx_house.py --out build/sgx
 	python3 tools/pce/test_sgx_regressions.py --out build/sgx
 	python3 tools/pce/test_sgx_cache_pressure.py --out build/sgx

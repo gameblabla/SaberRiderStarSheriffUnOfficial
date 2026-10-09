@@ -136,7 +136,6 @@ SGX_SPLIT_CODE void pce_sgx_platform_actor_pass_body(void) {
 
     if(pce_campaign.boss_kind==2)split_sat_to_end(hull_first,hull_end);
     split_sat_to_end(fg_first,props_end);
-    if(pce_metrics.stage==3)overlay_call(0x80,pce_sgx_moon_draw_body);
     uint8_t shake=(herd_on?((frame*13^(frame>>2))&3):0);
     if(shake)for(uint8_t k=0;k<sat_count;++k)sat[1][k].y-=shake;
     overlay_call(0x71,pce_sgx_vdc1_stats_body);

@@ -216,7 +216,7 @@ SGX_GAME_CODE void pce_sgx_gameplay_begin_body(void) {
 
     if (pce_metrics.stage == 1 || pce_metrics.stage == 3 ||
         pce_metrics.stage == 4 || pce_metrics.stage == 5) {
-        overlay_call(0x80,pce_sgx_sky_load_body);
+        overlay_call(0x82,pce_sgx_sky_load_body);
         __attribute__((leaf)) asm volatile("plp" ::: "p", "memory");
         return;
     }
@@ -267,7 +267,7 @@ SGX_GAME_CODE void pce_sgx_gameplay_end_body(void) {
 
 SGX_GAME_CODE void pce_sgx_sky_scroll_body(void) {
     if(pce_sgx_gameplay()&&(pce_sgx_metrics.paired_screen&PCE_SGX_STATIC_SKY))
-        overlay_call(0x80,pce_sgx_sky_stream_body);
+        overlay_call(0x82,pce_sgx_sky_stream_body);
 }
 
 SGX_GAME_CODE void pce_sgx_vdc1_sat_upload_body(void) {

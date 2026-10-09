@@ -16,8 +16,8 @@ __ram_bank121 = 0x6000;
 __ram_bank122 = 0x6000;
 __ram_bank123 = 0x6000;
 __ram_bank124 = 0x6000;
-/* Physical bank $80 is the SGX sky overlay. Arena A links virtually at $90;
- * arena B links virtually at $91; C-D remain virtual $82-$83. m6_image.py removes all arena images. */
+/* SGX renderer overlays use physical banks $80 and $82. Arena A-C link
+ * virtually at $90-$92; D remains virtual $83. m6_image.py removes all arena images. */
 __ram_bank128 = 0x6000;
 __ram_bank144 = 0x6000;
 __ram_bank129 = 0x6000;   /* Resident platform collision overlay. */
@@ -25,13 +25,17 @@ __ram_bank145 = 0x6000;   /* Virtual arena image B. */
 __ram_bank130 = 0x6000;
 __ram_bank131 = 0x6000;
 /* Virtual arena storage is never loaded by the IPL. Its runtime image still
-   executes from bank $76; this frees physical $80 for the sky streamer. */
+   executes from banks $76/$77/$79/$7a, freeing the resident SGX overlays. */
 __ram_bank144_bank = 144;
 MEMORY { ram_bank144 (rwxa) : ORIGIN = 0x01906000, LENGTH = 0x2000 }
 SECTIONS { .ram_bank144 : { *(.ram_bank144 .ram_bank144.*) } >ram_bank144 }
 __ram_bank145_bank = 145;
 MEMORY { ram_bank145 (rwxa) : ORIGIN = 0x01916000, LENGTH = 0x2000 }
 SECTIONS { .ram_bank145 : { *(.ram_bank145 .ram_bank145.*) } >ram_bank145 }
+__ram_bank146 = 0x6000;
+__ram_bank146_bank = 146;
+MEMORY { ram_bank146 (rwxa) : ORIGIN = 0x01926000, LENGTH = 0x2000 }
+SECTIONS { .ram_bank146 : { *(.ram_bank146 .ram_bank146.*) } >ram_bank146 }
 INCLUDE binary-scd.ld
 __pce_app_entry = ABSOLUTE(_start);
 ASSERT(ADDR(.zp) + SIZEOF(.zp) <= 0xf82080, "Audio state overlaps compiler zero page")

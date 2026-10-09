@@ -14,6 +14,7 @@
 #ifdef PCE_SGX
 .extern pce_sgx_metrics
 .extern pce_metrics
+.extern pce_sgx_sky_page
 .extern pce_sgx_sky_scroll_x,pce_sgx_sky_near_x,pce_sgx_sky_split_line
 .extern pce_sgx_sat1_alt,pce_sgx_sat1_pending,pce_sgx_vdc1_hidden
 .extern pce_display_on
@@ -235,8 +236,12 @@ pce_vblank:
     lda pce_sgx_sky_scroll_x+1
     sta 0x0013
     VDC1_INDEX 8
-    stz 0x0012
-    stz 0x0013
+    lda pce_sat_scroll_y
+    sta 0x0012
+    clc
+    lda pce_sat_scroll_y+1
+    adc pce_sgx_sky_page
+    sta 0x0013
     jmp .Larena_vdc1
 .Lsgx_vdc0_zero:
     st0 #7

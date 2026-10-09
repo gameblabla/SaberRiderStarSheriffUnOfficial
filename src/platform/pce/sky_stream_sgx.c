@@ -18,6 +18,13 @@ extern uint8_t sat1_previous_count[2];
 static uint16_t sky_cursor PCE_WORK;
 static uint8_t sky_held_count PCE_WORK;
 static uint16_t sky_near_first PCE_WORK;
+static uint16_t moon_column PCE_WORK;
+static uint8_t moon_phase PCE_WORK,moon_visible PCE_WORK;
+#define MOON_WORD 0x3000
+#define MOON_PAGE_WORDS 2704
+volatile uint8_t pce_sgx_sky_page PCE_WORK;
+static uint16_t sky_bat PCE_WORK;
+#define SKY_BAT_SHADOW 0x1fa000UL
 volatile uint16_t pce_sgx_sky_near_x PCE_WORK;
 volatile uint8_t pce_sgx_sky_split_line PCE_WORK;
 #define SKY_DIR 0x0000
@@ -26,7 +33,7 @@ volatile uint8_t pce_sgx_sky_split_line PCE_WORK;
 #define SKY_COLUMNS 0x8e00
 #define SKY_HELD (SKY_COLUMNS+3960)
 #define SKY_HOLD 0x8000
-#define SKY_CODE __attribute__((noinline,minsize,section(".ram_bank128.text")))
+#define SKY_CODE __attribute__((noinline,minsize,section(".ram_bank130.text")))
 
 /* Port 3's auto increment advances the base, just as the main BG directory
    does. Its directory uses bank $1e; this cache owns bank $1f. */
@@ -66,6 +73,7 @@ SKY_CODE void pce_sgx_sky_load_body(void) {
     const PceScene *scene=&pce_scenes[pce_metrics.stage-1];
     pce_sgx_sky_first=sky_near_first=0xffff;sky_cursor=0;sky_held_count=0;
     pce_sgx_sky_split_line=0;
+    moon_visible=0;moon_phase=255;pce_sgx_sky_page=0;sky_bat=0;
     for(uint8_t p=0;p<54;++p)pattern_owner1[p]=0;
     pce_sgx_sky.cols=0;
     pce_sgx_metrics.paired_screen|=PCE_SGX_STATIC_SKY;
@@ -79,6 +87,11 @@ SKY_CODE void pce_sgx_sky_load_body(void) {
        (scene->horse&&pce_sgx_sky.bytes>16384)) {
         ++pce_sgx_metrics.failures;pce_sgx_metrics.paired_screen=0;return;
     }
+    if(pce_sgx_sky.moon_patterns) {
+        __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
+        sky_write(VDC_REG_MEMORY,VDC_BG_SIZE_64_64);
+        __attribute__((leaf)) asm volatile("plp" ::: "p","memory");
+    }
     cache_setup();
     cache_fill(SKY_DIR,0xff,32768);
     cache_fill(SKY_REFS,0,1792);
@@ -86,11 +99,11 @@ SKY_CODE void pce_sgx_sky_load_body(void) {
     pce_sgx_sky_split_line=pce_sgx_sky.split_row*8;
     sprite_cache_foreground_first=pce_sgx_sky.foreground_first;
     sprite_cache_stage=pce_metrics.stage;
-    if(scene->horse)pce_sgx_herd_sky_load_body();
+    if(scene->horse)overlay_call(0x80,pce_sgx_herd_sky_load_body);
     if(pce_sgx_sky.moon_patterns) {
+        cache_fill(0xa000,0,4096);
         uint8_t colors[32];
-        arcade_read(2,pce_sgx_sky.moon_palette,colors,32);pce_vce_copy_palette(29,colors,1);
-        arcade_vram_to(1,pce_sgx_sky.moon_patterns,0x2800,4608);
+        arcade_read(2,pce_sgx_sky.moon_palette,colors,32);pce_vce_copy_palette(14,colors,1);
     }
 }
 
@@ -103,11 +116,31 @@ SKY_CODE static uint16_t camera_offset(uint16_t speed) {
 SKY_CODE void pce_sgx_sky_stream_body(void) {
     const PceSgxSkyRecord *s=&pce_sgx_sky;
     if(!s->cols)return;
+    uint16_t offset=camera_offset(s->speed);
+    uint16_t near_offset=camera_offset(s->near_speed);
+    int16_t moon_left=179-((uint32_t)pce_scroll_x*5>>8);
+    uint16_t moon_world=(uint16_t)(moon_left+offset);
+    bool moon_on=s->moon_patterns&&moon_left>-96&&moon_left<256;
+    bool moon_same=moon_on==!!moon_visible&&(!moon_on||
+        (moon_column==moon_world>>3&&moon_phase==(moon_world&7)));
+    bool sky_same=pce_sgx_sky_first==offset>>3&&sky_near_first==near_offset>>3;
+    if(moon_same&&sky_same) {
+        pce_sgx_sky_scroll_x=offset;pce_sgx_sky_near_x=near_offset;return;
+    }
+    /* Keep the undecorated BAT in Arcade RAM. A VBlank tick does not prove
+     * a queued VDC DMA has started, and copying a decorated page can retain
+     * moon cells after a late transfer. Upload the complete shadow to the
+     * inactive page before adding this frame's moon. */
+    uint16_t bg_word=s->moon_patterns?0x1000:PCE_BG_WORD;
+    uint16_t moon_word=MOON_WORD;
+    if(s->moon_patterns) {
+        sky_bat=(pce_sgx_sky_page^1)?0x800:0;
+        moon_word+=sky_bat?MOON_PAGE_WORDS:0;
+    }
     /* Both planes follow the same draw's camera. Moving within a locked
        foreground view cannot move the sky; source repetition is independent
        of the monotonic BAT column coordinate. */
-    uint16_t offset=camera_offset(s->speed);
-    uint16_t offsets[2]={offset,camera_offset(s->near_speed)};
+    uint16_t offsets[2]={offset,near_offset};
     uint16_t firsts[2]={offsets[0]>>3,offsets[1]>>3};
     uint16_t olds[2]={pce_sgx_sky_first,sky_near_first};
     uint8_t bands=s->split_row?2:1;
@@ -177,19 +210,22 @@ SKY_CODE void pce_sgx_sky_stream_body(void) {
                     sky_cursor=slot+1;if(sky_cursor==limit)sky_cursor=0;
                     uint16_t previous=cache_get(SKY_IDS+slot*2);
                     if(previous!=0xffff)cache_set(SKY_DIR+previous*2,0xffff);
-                    if(!arcade_vram_to(1,s->tiles+(uint32_t)id*32,PCE_BG_WORD+slot*16,32)) {
+                    if(!arcade_vram_to(1,s->tiles+(uint32_t)id*32,bg_word+slot*16,32)) {
                         ++pce_sgx_metrics.failures;return;
                     }
                     cache_set(SKY_IDS+slot*2,id);cache_set(SKY_DIR+id*2,slot);
                 }
                 uint16_t a=SKY_REFS+slot*2;
                 cache_set(a,(cache_get(a)&~SKY_HOLD)+1);cache_set(refs_address+y*2,slot);
-                uint16_t word=(PCE_BG_WORD>>4)+slot+((uint16_t)cells[y*3+2]<<12);
+                uint16_t word=(bg_word>>4)+slot+((uint16_t)cells[y*3+2]<<12);
                 cells[y*3]=word;cells[y*3+1]=word>>8;
             }
+            if(s->moon_patterns)for(uint8_t y=y0;y<y1;++y)
+                cache_set(0xa000+(uint16_t)y*128+(col&63)*2,
+                          cells[y*3]|(uint16_t)cells[y*3+1]<<8);
             __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
             sky_write(VDC_REG_CONTROL,(refill?0:control)|0x1000);
-            sky_write(VDC_REG_VRAM_WRITE_ADDR,(uint16_t)y0*64+(col&63));
+            sky_write(VDC_REG_VRAM_WRITE_ADDR,sky_bat+(uint16_t)y0*64+(col&63));
             sky_index(VDC_REG_VRAM_DATA);
             for(uint8_t y=y0;y<y1;++y) {
                 *IO_VDC2_DATA_LO=cells[y*3];*IO_VDC2_DATA_HI=cells[y*3+1];
@@ -200,25 +236,35 @@ SKY_CODE void pce_sgx_sky_stream_body(void) {
     }
     pce_sgx_sky_first=firsts[0];sky_near_first=firsts[1];
     pce_sgx_sky_scroll_x=offsets[0];pce_sgx_sky_near_x=offsets[1];
+    if(s->moon_patterns) {
+        arcade_vram_to(1,SKY_BAT_SHADOW,sky_bat,4096);
+        moon_visible=0;
+        if(moon_on) {
+            uint16_t world=moon_world;
+            uint8_t phase=world&7;moon_column=world>>3;
+            {   /* Each inactive pattern page receives the complete phase. */
+                arcade_vram_to(1,s->moon_patterns+(uint32_t)phase*5408,moon_word,5408);
+                moon_phase=phase;
+            }
+            for(uint8_t row=0;row<13;++row) {
+                uint8_t mask[13];
+                arcade_read(2,s->moon_patterns+43264UL+(uint16_t)phase*169+(uint16_t)row*13,mask,13);
+                __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
+                for(uint8_t col=0;col<13;++col) {
+                    uint16_t at=sky_bat+(uint16_t)(row+2)*64+((moon_column+col)&63);
+                    if(!mask[col])continue;
+                    sky_write(VDC_REG_VRAM_WRITE_ADDR,at);sky_index(VDC_REG_VRAM_DATA);
+                    uint16_t tile=0xe000|((moon_word>>4)+(uint16_t)row*13+col);
+                    *IO_VDC2_DATA_LO=tile;*IO_VDC2_DATA_HI=tile>>8;
+                }
+                __attribute__((leaf)) asm volatile("plp" ::: "p","memory");
+            }
+            moon_visible=1;
+        }
+    }
+    if(s->moon_patterns)pce_sgx_sky_page=sky_bat?1:0;
     /* The shared SAT VBlank enables VDC1 after installing this window's
        scroll and actor table. Re-enabling here would expose the old scroll. */
-}
-
-extern vdc_sprite_t sat[2][64];
-extern uint8_t sat_count,sprite_line_lo,sprite_line_hi,sprite_line_ok;
-extern void sprite_lines_reserve(void),sprite_lines_release(void);
-SKY_CODE void pce_sgx_moon_draw_body(void) {
-    if(!pce_sgx_sky.moon_patterns)return;
-    int16_t left=179-((uint32_t)pce_scroll_x*5>>8);
-    for(uint8_t row=0;row<3;++row)for(uint8_t col=0;col<3;++col) {
-        int16_t x=left+col*32,y=22+row*32;
-        if(x<=-32||x>=256||sat_count==64)continue;
-        sprite_line_lo=y;sprite_line_hi=y+32;
-        sprite_lines_reserve();if(!sprite_line_ok)continue;
-        sprite_lines_reserve();if(!sprite_line_ok){sprite_lines_release();continue;}
-        sat[1][sat_count++]=(vdc_sprite_t){y+64,x+32,(0x2800>>5)+(row*3+col)*8,
-            VDC_SPRITE_FG|13|VDC_SPRITE_WIDTH_32|VDC_SPRITE_HEIGHT_32};
-    }
 }
 
 /* Replace only the old hull's SAT entries before changing its patterns. */

@@ -91,7 +91,6 @@ void pce_sgx_vdc1_stats_body(void);
 void pce_sgx_sprite_upload_body(void);
 void pce_sgx_vdc1_hide_body(void);
 void pce_sgx_hull_retire_body(void);
-void pce_sgx_moon_draw_body(void);
 void pce_sgx_story_world_body(void);
 void pce_sgx_platform_actor_pass_body(void);
 #else

@@ -256,7 +256,7 @@ def _background_cells(image, transparent):
 def fit_background_pair(main, sky, stage, npal=16, near=None):
     _,_,main_cells = _background_cells(main,True)
     _,_,sky_cells = _background_cells(sky,True)
-    fixed=(15,) if npal>15 else ()
+    fixed=(14,15) if stage==3 and npal>15 else (15,) if npal>15 else ()
     near_cells = _background_cells(near,True)[2] if near is not None else np.empty((0,8,8,4),np.uint8)
     palettes,groups = palfit.fit_palettes(np.concatenate((main_cells,sky_cells,near_cells)),npal,fixed=fixed)
     palettes = [palettes[k].copy() for k in range(npal)]
@@ -288,7 +288,7 @@ def native_background(image, archive, previews, name, npal=16, sgx=False, record
     preview = np.zeros_like(rgba)
     cell_idx = palfit.index_cells(cells, np.asarray(palette), groups)
     cell_idx, groups, merged = tile_budget.limit_tiles(cells, cell_idx, groups, palette, w // 8, cap,
-                                                        reserved=(15,) if dialog_palette else (), full_map=static_bat, wrap=wrap)
+                                                        reserved=(14,15) if sgx and name=='stage3' else (15,) if dialog_palette else (), full_map=static_bat, wrap=wrap)
     if merged: print(f'{name}: redrew {merged} cells with neighbouring characters to fit the {BG_TILES}-tile cache', flush=True)
     palette[0][0] = backdrop
     for i, cell in enumerate(cells):
@@ -1599,9 +1599,27 @@ def make_scene(stage, work, previews, shared, sgx=False):
                 tile_start=a.add('sgx_sky_band_patterns',patterns);tile_count+=near['tile_count']
             if stage==3:
                 moon=Image.open(ROOT/'assets/stage3/native/stage3_red_moon.png').convert('RGBA')
-                pal=palette_for([moon]);px=indexed(moon,pal)
-                moon_patterns=a.add('sgx_red_moon_patterns',b''.join(planar_sprite(px[y+dy:y+dy+16,x+dx:x+dx+16])
-                    for y in range(0,96,32) for x in range(0,96,32) for dx,dy in ((0,0),(16,0),(0,16),(16,16))))
+                pal=palette_for([moon],14)
+                sky_pixels=np.asarray(sky['preview']);sky_codes=vce_colors(sky_pixels[...,:3])
+                pal[15]=np.bincount(sky_codes[sky_pixels[...,3]>=128].ravel(),minlength=512).argmax()
+                px=indexed(moon,pal)
+                # BG1 keeps the moon below BG0 and actors on both VDCs.
+                # Eight sub-tile X phases preserve its independent parallax.
+                phases=[];masks=[]
+                for shift in range(8):
+                    canvas=np.zeros((104,104),np.uint8);canvas[6:102,shift:shift+96]=px
+                    tiles=[];mask=[]
+                    for y in range(0,104,8):
+                        for x in range(0,104,8):
+                            cell=canvas[y:y+8,x:x+8].copy();visible=bool(cell.any());mask.append(visible)
+                            # BG color zero reveals the lower VDC's backdrop.
+                            # Keep empty sky cells intact; use opaque black only
+                            # in the transparent edge pixels of moon cells.
+                            if visible:cell[cell==0]=15
+                            tiles.append(planar_tile(cell))
+                    phases.append(b''.join(tiles));masks.append(bytes(mask))
+                moon_patterns=a.add('sgx_red_moon_patterns',b''.join(phases)+b''.join(masks))
+                # Palette 14 is reserved on platform BGs for this overlay.
                 moon_palette=a.add('sgx_red_moon_palette',pal.tobytes())
             speed=13 if stage==3 else (max(64,round(sky_layer.parallax*256)) if sky_layer.extra==1 else round(sky_layer.parallax*256))
             wrap=1 if stage==1 else 2

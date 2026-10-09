@@ -5,6 +5,17 @@ from pathlib import Path
 from emulator import Emulator,boot,symbol
 from test_campaign import Campaign
 
+def moon_cell(blob,patterns,camera,scroll,world,row):
+    left=179-(camera*5>>8)
+    position=left+scroll
+    column=position>>3
+    if patterns and -96<left<256 and 2<=row<15 and column<=world<column+13:
+        cell=(row-2)*13+world-column
+        if not blob[patterns+43264+(position&7)*169+cell]:return None
+        offset=patterns+(position&7)*5408+cell*32
+        return blob[offset:offset+32]
+    return None
+
 class Rendering(Campaign):
     def __init__(self,out):
         super().__init__(out,sgx=True)
@@ -34,7 +45,7 @@ class Rendering(Campaign):
         stage=self.metrics(e)['stage'];scene=self.manifest['scenes'][stage-1];blob=(self.out/f's{stage}.bin').read_bytes()
         off=scene['records']['sgx_sky_record']['offset']
         (patterns,mapping,_count,_bat,_fg,_nfg,_slow,_nslow,_first_tile,cols,speed,
-         wrap,near_map,near_cols,near_first_tile,near_speed,split_row,_moon_patterns,_moon_palette)=struct.unpack_from(
+         wrap,near_map,near_cols,near_first_tile,near_speed,split_row,moon_patterns,_moon_palette)=struct.unpack_from(
              '<IIHBIHIHHHHBIHHHBII',blob,off)
         camera=self.metrics(e)['camera_x'];scroll=self.word(e,'pce_sgx_sky_scroll_x');column=self.word(e,'pce_sgx_sky_first')
         expect=(camera*speed+255)//256
@@ -44,6 +55,7 @@ class Rendering(Campaign):
         assert near_scroll==near_expect,(stage,camera,near_scroll,near_expect)
         assert e.memory(self.sym['pce_sgx_vdc1_hidden'],1)==b'\0',(stage,'VDC1 sky hidden')
         vram=bytes.fromhex(e.call('asread','vram1',0,65536)['hex']);checked=0
+        bat=(e.memory(symbol(self.out/'app.elf','pce_sgx_sky_page'),1)[0]*0x800 if moon_patterns else 0)
         for screen_col in range(33):
             for y in range(30):
                 near=bool(split_row and y>=split_row)
@@ -53,7 +65,11 @@ class Rendering(Campaign):
                 if source<source_cols:
                     tile,pal=struct.unpack_from('<HB',blob,source_map+source*90+y*3);tile+=id_base
                 else:tile,pal=0,0
-                cell=struct.unpack_from('<H',vram,(y*64+(world&63))*2)[0];word=(cell&4095)*16
+                cell=struct.unpack_from('<H',vram,(bat+y*64+(world&63))*2)[0];word=(cell&4095)*16
+                moon=moon_cell(blob,moon_patterns,camera,scroll,world,y)
+                if moon is not None:
+                    assert cell>>12==14 and vram[word*2:word*2+32]==moon,(stage,world,y,'moon BG1 tile')
+                    checked+=1;continue
                 assert cell>>12==pal,(stage,world,y,'sky palette',cell>>12,pal)
                 assert vram[word*2:word*2+32]==blob[patterns+tile*32:patterns+(tile+1)*32],(stage,world,y,'sky patterns',tile)
                 checked+=1

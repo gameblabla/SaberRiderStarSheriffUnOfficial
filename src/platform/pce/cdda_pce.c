@@ -105,7 +105,8 @@ CD_CODE static void complete(void) {
         if(last_track) {if(!send(0xde,1,0))failed();}
         else if(!send(0xd9,3,end_track))failed();
     } else if(op==0xde) {
-        if(received!=4){pce_music_status=CD_PROTOCOL;failed();return;}
+        /* Mode 1 supplies three BCD MSF bytes; some drives append a pad. */
+        if(received<3||received>4){pce_music_status=CD_PROTOCOL;failed();return;}
         if(!send(0xd9,3,0))failed();
     } else if(op==0xdd) {
         if(received!=10){pce_music_status=CD_PROTOCOL;failed();return;}

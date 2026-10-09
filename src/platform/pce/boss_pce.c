@@ -64,7 +64,7 @@ PCE_HUD static void hull_hide(void) {
 #ifdef PCE_SGX
     /* VDC1 displays the gameplay hull too. Keep its old SAT hidden while
      * either pattern set changes; the next paired publication restores it. */
-    if(pce_sgx_gameplay()){overlay_call(0x80,pce_sgx_hull_retire_body);return;}
+    if(pce_sgx_gameplay()){overlay_call(0x82,pce_sgx_hull_retire_body);return;}
 #endif
     const uint16_t lo=PCE_SPR_WORD+16*256,hi=PCE_SPR_WORD+40*256;
     uint16_t target=video_sat_target();

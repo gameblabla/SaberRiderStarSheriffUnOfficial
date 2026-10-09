@@ -23,9 +23,9 @@ if 'space_vdc1_actor_pass' in addresses:
     fixed_banks.update(space_vdc1_actor_pass=119,space_vdc1_sprite_body=116,
                        video_arena_bg_clear_body=113,arena_bg_palette=113)
 if 'pce_sgx_sky_stream_body' in addresses:
-    fixed_banks.update(pce_sgx_sky_load_body=128,pce_sgx_sky_stream_body=128,
-        pce_sgx_herd_sky_load_body=128,pce_sgx_hull_retire_body=128,
-        pce_sgx_moon_draw_body=128,pce_sgx_story_world_body=128,
+    fixed_banks.update(pce_sgx_sky_load_body=130,pce_sgx_sky_stream_body=130,
+        pce_sgx_herd_sky_load_body=128,pce_sgx_hull_retire_body=130,
+        pce_sgx_story_world_body=128,
         pce_sgx_platform_actor_pass_body=114,pce_sgx_projectile_body=119,
         pce_sgx_vdc1_sat_upload_body=120,pce_sgx_sprite_upload_body=128,
         pce_sgx_cache_upload_body=128,hull_body=128,platform_begin_body=128,
@@ -53,8 +53,8 @@ sections=subprocess.check_output([str(nm.parent/'llvm-readelf'),'-S',str(elf)],t
 rows=[];banks={}
 for name,kind,address,size in re.findall(r'\[\s*\d+\]\s+(\S+)\s+(PROGBITS|NOBITS)\s+([0-9a-f]+)\s+[0-9a-f]+\s+([0-9a-f]+)',sections):
     address,size=int(address,16),int(size,16)
-    if address>>16 in range(0x168,0x188) or address>>16 in (0x190,0x191):
-        bank=(address>>16)&255;window={104:0x4000,105:0x6000,106:0x8000,107:0xa000,108:0xc000,109:0x6000,110:0x6000,111:0x6000,112:0x6000,113:0x6000,114:0x6000,115:0x6000,116:0x6000,117:0x6000,118:0x6000,119:0x6000,120:0x6000,121:0x6000,122:0x6000,123:0x6000,124:0x6000,128:0x6000,129:0x6000,130:0x6000,131:0x6000,144:0x6000,145:0x6000}.get(bank,0xc000)
+    if address>>16 in range(0x168,0x188) or address>>16 in (0x190,0x191,0x192):
+        bank=(address>>16)&255;window={104:0x4000,105:0x6000,106:0x8000,107:0xa000,108:0xc000,109:0x6000,110:0x6000,111:0x6000,112:0x6000,113:0x6000,114:0x6000,115:0x6000,116:0x6000,117:0x6000,118:0x6000,119:0x6000,120:0x6000,121:0x6000,122:0x6000,123:0x6000,124:0x6000,128:0x6000,129:0x6000,130:0x6000,131:0x6000,144:0x6000,145:0x6000,146:0x6000}.get(bank,0xc000)
         used=(address&65535)+size-window
         if not 0<=used<=8192:raise SystemExit(f'{name} exceeds bank ${bank:02x}')
         banks[bank]=max(banks.get(bank,0),used)
