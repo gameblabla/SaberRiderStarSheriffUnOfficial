@@ -2,6 +2,7 @@
 #include "campaign_pce.h"
 #include "overlay_pce.h"
 #include "loader_pce.h"
+#include "sgx_pce.h"
 /* The world's moving parts: enemies, one step at a time (shots_pce.c has the shots). The behaviours are the source
  * game's (enemies.c) in whole steps of 1/60 s:
  *   walker  walks the way it spawned, turns at walls and cars;
@@ -127,7 +128,14 @@ ENEMY_CODE void world_update(void) {
      * placed snipers, kneelers and shields stand where the level puts them (the zone that wakes them is a screen or more behind) */
     for(Actor *a=actors;a<actors+8;++a) {   /* by pointer: indexing a 21-byte record costs a multiplication each time */
         if(!a->active)continue;
-        if(((a->b.x<(int16_t)camera-80||(a->b.x>(int16_t)camera+384&&a->type<6))&&a->type!=28)||a->b.y>272){a->active=0;continue;}
+        int16_t left=(int16_t)camera-80;
+#ifdef PCE_SGX
+        /* The added horse starts at actor X - camera - 72 + 112.
+         * Keep its last 32px column through X=-127; retire the shared actor
+         * only once that entire 128px horse is offscreen (X<=-128). */
+        if(a->type==11&&pce_sgx_gameplay())left=(int16_t)camera-167;
+#endif
+        if(((a->b.x<left||(a->b.x>(int16_t)camera+384&&a->type<6))&&a->type!=28)||a->b.y>272){a->active=0;continue;}
         /* The stampede tramples every humanoid in its way: the placed snipers and the rest are simply gone while it runs, which is
          * also what keeps its scenes inside the sprite budget (they are never drawn, uploaded or fired from). */
         if(herd_on&&(a->type<11||a->type>28)) {

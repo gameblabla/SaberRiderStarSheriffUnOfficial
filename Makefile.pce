@@ -116,6 +116,7 @@ test-sgx:
 	python3 tools/pce/test_sgx_depth.py --out build/sgx
 	python3 tools/pce/test_sgx_combat_profile.py --out build/sgx
 	python3 tools/pce/test_herd.py --out build/sgx --sgx
+	python3 tools/pce/test_sgx_herd_exit.py --out build/sgx
 	python3 tools/pce/test_race_math.py --out build/sgx --sgx
 	python3 tools/pce/test_sgx_late_stages.py --out build/sgx
 
