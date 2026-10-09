@@ -3,6 +3,7 @@
 #include "overlay_pce.h"
 #include "loader_pce.h"
 #include "sgx_pce.h"
+#include "herd_geometry.h"
 /* The world's moving parts: enemies, one step at a time (shots_pce.c has the shots). The behaviours are the source
  * game's (enemies.c) in whole steps of 1/60 s:
  *   walker  walks the way it spawned, turns at walls and cars;
@@ -130,10 +131,11 @@ ENEMY_CODE void world_update(void) {
         if(!a->active)continue;
         int16_t left=(int16_t)camera-80;
 #ifdef PCE_SGX
-        /* The added horse starts at actor X - camera - 72 + 112.
-         * Keep its last 32px column through X=-127; retire the shared actor
-         * only once that entire 128px horse is offscreen (X<=-128). */
-        if(a->type==11&&pce_sgx_gameplay())left=(int16_t)camera-167;
+        if(a->type==11&&pce_sgx_gameplay()) {
+            /* Both horses use the same anchor and full-width exit rule.
+             * Retain their shared actor until the trailing horse exits. */
+            left=(int16_t)camera+HERD_X_ANCHOR-HERD_WIDTH-HERD_STAGGER+1;
+        }
 #endif
         if(((a->b.x<left||(a->b.x>(int16_t)camera+384&&a->type<6))&&a->type!=28)||a->b.y>272){a->active=0;continue;}
         /* The stampede tramples every humanoid in its way: the placed snipers and the rest are simply gone while it runs, which is

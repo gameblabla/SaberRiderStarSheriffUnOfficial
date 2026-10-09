@@ -1,8 +1,10 @@
 /* Collect visible horse columns once. Actor is 21 bytes; records are six
  * bytes (screen X, screen Y, first/last column). All scratch is private ZP. */
+#include "herd_geometry.h"
 .section .ram_bank110.text,"ax",@progbits
 .global herd_prepare
 .extern actors, camera, herd_live, herd_horse_count, herd_cells, herd_same, herd_horses
+.extern herd_x_stagger
 herd_prepare:
     stz herd_live
     stz herd_horse_count
@@ -21,16 +23,23 @@ herd_prepare:
     jmp .Lnext
 .Lhorse:
     inc herd_live
-    sec
+    clc
     lda actors,x
-    sbc camera
+    adc herd_x_stagger
     sta $20c4
     lda actors+1,x
+    adc #0
+    sta $20c5
+    sec
+    lda $20c4
+    sbc camera
+    sta $20c4
+    lda $20c5
     sbc camera+1
     sta $20c5
     sec
     lda $20c4
-    sbc #72
+    sbc #HERD_X_ANCHOR
     sta $20c4
     lda $20c5
     sbc #0

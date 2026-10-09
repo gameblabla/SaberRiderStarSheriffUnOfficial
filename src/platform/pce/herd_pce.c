@@ -4,6 +4,7 @@
 #include "overlay_pce.h"
 #include "audio_pcm.h"
 #include "sgx_pce.h"
+#include "herd_geometry.h"
 /* The robot-horse herd (level 1's stampede) at the source's full size. A frame is 128x80, drawn as VDC big sprite
  * cells: four columns of a 32x64 and a 32x16 sprite (8 SAT entries a horse, not 33 pieces). The frame patterns are
  * streamed from the scene into pages of the sprite cache that the herd reserves for its length, into one of two
@@ -23,6 +24,10 @@ typedef struct {int16_t x,y;uint8_t first,last;} HerdHorse;
 _Static_assert(sizeof(HerdHorse)==6,"herd_prepare.S record layout changed");
 HerdHorse herd_horses[8];
 uint8_t herd_live,herd_horse_count,herd_cells,herd_same;
+uint8_t herd_x_stagger;
+static uint16_t herd_render_code;
+static uint8_t herd_render_shake;
+HERD_CODE static void herd_render(void);
 uint8_t herd_on,herd_locked;
 int16_t herd_y;
 uint16_t herd_lead;
@@ -79,31 +84,13 @@ void herd_reserve(void) {
 __attribute__((noinline,minsize,section(".ram_bank128.text")))
 void pce_sgx_herd_front_draw_body(void) {
     overlay_call(0x6e,herd_stream);
-    uint16_t code=(PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(cur)*256)>>5;
-    uint8_t shake=(frame*13^(frame>>2))&3;
-    for(uint8_t k=0;k<8;++k) {
-        if(!actors[k].active||actors[k].type!=11)continue;
-        /* Same anchor as herd_prepare, staggered half of the 224px spacing. */
-        int16_t sx=actors[k].b.x-camera-72+112,sy=actors[k].b.y-48;
-        if(sx<=-128||sx>=256)continue;
-        uint8_t first=sx<0?(-sx)/32:0;
-        uint8_t last=sx>128?(287-sx)/32:4;
-        uint8_t cells=last-first,accepted[2]={0,0};
-        if(sat_count+2*cells>64)continue;
-        /* Reserve each common Y span once, then emit all admitted columns.
-           This is the same full-size batching used by the VDC1 convoy. */
-        for(uint8_t part=0;part<2;++part) {
-            int16_t y=sy+part*64,h=part?16:64;
-            int16_t lo=y<0?0:y,hi=y+h>224?224:y+h;
-            if(hi<=lo)continue;
-            sprite_line_lo=lo;sprite_line_hi=hi;sprite_line_cells=cells;
-            overlay_call(0x6e,sprite_lines_wide);
-            accepted[part]=sprite_line_cells;
-        }
-        herd_emit_args=(HerdEmit){sx+32*first+32,sy+64-shake,code+16*first,
-            code+64+4*first,accepted[0],accepted[1],cells};
-        if(cells)overlay_call(0x6f,herd_emit);
-    }
+    /* Stagger positions by half the convoy spacing; the shared collector
+     * applies the same anchor and clipping as the VDC1 horses. */
+    herd_x_stagger=HERD_STAGGER;
+    overlay_call(0x6e,herd_prepare);
+    herd_render_code=(PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(cur)*256)>>5;
+    herd_render_shake=(frame*13^(frame>>2))&3;
+    overlay_call(0x6f,herd_render);
 }
 #endif
 HERD_CODE void herd_spawn(void) {
@@ -194,6 +181,7 @@ HERD_CODE static void herd_warm(void) {
 }
 /* Draw every horse; releases the pages once the last one has gone. */
 HERD_CODE void herd_draw(void) {
+    herd_x_stagger=0;
     overlay_call(0x6e,herd_prepare);
     if(!herd_live&&!herd_pending) {
         if(!pce_sgx_gameplay())for(uint8_t p=28;p<48;++p)pattern_owner[p]=0;
@@ -214,6 +202,13 @@ HERD_CODE void herd_draw(void) {
 #ifdef PCE_SGX
     if(pce_sgx_gameplay())code=herd_sgx_code;
 #endif
+    herd_render_code=code;herd_render_shake=0;
+    herd_render();
+}
+/* Both VDCs use the same column admission and SAT emission. Only pose storage
+ * and the point where world shake is applied differ between their passes. */
+HERD_CODE static void herd_render(void) {
+    uint16_t code=herd_render_code;
     bool shared=herd_horse_count&&herd_same&&sat_count+2*herd_cells<=64&&
         (sprite_exact||!(herd_horses[0].y&7));
     uint8_t remaining[2]={0,0};
@@ -240,7 +235,7 @@ HERD_CODE void herd_draw(void) {
             if(shared)remaining[part]=available-accepted[part];
         }
         if(batch) {
-            herd_emit_args=(HerdEmit){sx+32*first+32,sy+64,code+16*first,
+            herd_emit_args=(HerdEmit){sx+32*first+32,sy+64-herd_render_shake,code+16*first,
                 code+64+4*first,accepted[0],accepted[1],cells};
             if(cells)herd_emit();
             continue;
@@ -255,7 +250,7 @@ HERD_CODE void herd_draw(void) {
                 if(!sprite_line_ok)continue;
                 sprite_lines_reserve();
                 if(!sprite_line_ok){sprite_lines_release();continue;}
-                sat[sat_page][sat_count++]=(vdc_sprite_t){y+64,x+32,code+(part?32+2*c:8*c)*2,
+                sat[sat_page][sat_count++]=(vdc_sprite_t){y+64-herd_render_shake,x+32,code+(part?32+2*c:8*c)*2,
                     VDC_SPRITE_FG|(pce_sgx_gameplay()?13:15)|VDC_SPRITE_WIDTH_32|(part?0:VDC_SPRITE_HEIGHT_64)};
             }
         }

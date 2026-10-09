@@ -3,6 +3,7 @@
 #include "overlay_pce.h"
 #include "arcade_pce.h"
 #include "scenery_pce.h"
+#include "herd_geometry.h"
 /* Level triggers: a hero inside a trigger's zone spawns its enemy. Lives in the combat bank to leave the platform
  * bank room. Positions retain whole-world range (see play_pce.c). */
 typedef struct __attribute__((packed)) {
@@ -47,7 +48,7 @@ PCE_SCENERY void herd_feed(void) {
         uint8_t i=0;while(i<8&&actors[i].active)++i;
         if(i==8)break;
         actors[i]=(Actor){.b={.x=herd_next,.y=(((herd_y+30-48)+4)&~7)+48},.active=1,.type=11,.hp=1,.flip=1};
-        herd_next+=224;--herd_pending;
+        herd_next+=HERD_SPACING;--herd_pending;
     }
 }
 PCE_SCENERY void encounters(void)   /* $78: the mission bank is full */ {
