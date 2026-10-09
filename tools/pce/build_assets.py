@@ -165,7 +165,7 @@ def scenery_background(out, work, stage, occlusion):
 
 HORSE_FRAMES = 5
 
-def horse_frames(work, archive, sgx=False):
+def horse_frames(work, archive):
     """The robot-horse gallop at full size, as VDC big sprite cells: each frame (128x80) is four columns of one 32x64
     and one 32x16 sprite, so a horse costs 8 SAT entries instead of 33 pieces. Per frame, 40 patterns: the four 32x64
     blocks (8 patterns each, row-major two wide), then the four 32x16 blocks (2 each). One shared palette first."""
@@ -183,20 +183,6 @@ def horse_frames(work, archive, sgx=False):
             for h in range(2): pats.append(planar_sprite(idx[64:80, 32*c+16*h:32*c+16*h+16]))
         out += b''.join(pats)
     assert len(out) == 32 + HORSE_FRAMES * 5120
-    if sgx:
-        # Five resident 64x48 poses for the second depth row on VDC0.
-        # Match the original palette so both VDCs share the gallop colors.
-        for im in frames:
-            small=Image.new('RGBA',(64,48))
-            small.alpha_composite(im.resize((64,40),Image.Resampling.NEAREST),(0,8))
-            idx=indexed(small,pal);pats=[]
-            for c in range(2):
-                for r in range(2):
-                    for h in range(2):pats.append(planar_sprite(idx[16*r:16*r+16,32*c+16*h:32*c+16*h+16]))
-            for c in range(2):
-                for h in range(2):pats.append(planar_sprite(idx[32:48,32*c+16*h:32*c+16*h+16]))
-            out+=b''.join(pats)
-        assert len(out)==32+HORSE_FRAMES*(5120+1536)
     return archive.add('horse_frames', out)
 
 FG_MAX_PIECES, FG_MAX_UNITS = 20, 8    # foreground sprite pieces per 288-px window / per 16-line row
@@ -1016,7 +1002,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
         rules+=b''.join(struct.pack('<6h',*z) for z in deaths)
         rules+=b''.join(struct.pack('<4h',*z) for z in stops)
         meta['rules_offset']=a.add('flow_zones',rules)
-        if stage==1: meta['horse_offset']=horse_frames(work,a,sgx=sgx)
+        if stage==1: meta['horse_offset']=horse_frames(work,a)
 
         sprites = list(shared)
         if stage in (1,5):

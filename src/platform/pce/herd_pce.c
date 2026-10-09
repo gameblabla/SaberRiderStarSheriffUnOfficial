@@ -33,17 +33,16 @@ uint8_t warm_slots[7],warm_count;
 #define BUFFER_PAGE(b) (28+(b)*10)
 #ifdef PCE_SGX
 static uint16_t herd_sgx_code;
+PCE_FLOW static void herd_stream(void);
 /* Reserve all five poses for the entire scene, before any actor SAT can
    reference their pages. Starting a herd never overwrites displayed actors. */
 __attribute__((noinline,minsize,section(".ram_bank128.text")))
 void pce_sgx_herd_sky_load_body(void) {
     uint32_t horse=pce_scenes[pce_metrics.stage-1].horse;
     if(!horse)return;
-    /* VDC0's fifteen reserved pages contain all small-row animation poses.
-       Loading once avoids frame-time transfers and displayed-pattern reuse. */
-    for(uint8_t p=28;p<43;++p)pattern_owner[p]=48;
+    /* VDC0 uses two full-size pose buffers; VDC1 keeps all five poses. */
+    for(uint8_t p=28;p<48;++p)pattern_owner[p]=48;
     sprite_pinned[47]=250;
-    arcade_vram_to(0,horse+32+5UL*5120,0x6400,5*1536);
     for(uint8_t k=0;k<5;++k) {
         uint16_t word=k<3?0x2800+(uint16_t)k*0xa00:
             PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(k-3)*256;
@@ -75,28 +74,35 @@ void herd_reserve(void) {
 }
 /* Starts the convoy: the first horses are created by herd_feed (encounter_pce.c), the rest as the column nears. */
 #ifdef PCE_SGX
-/* The smaller staggered row shares the convoy state but has VDC0's own SAT
+/* The full-size interleaved horses share the convoy baseline and VDC0's SAT
  * and scanline budget. Foreground/HUD stay ahead of it in admission order. */
 __attribute__((noinline,minsize,section(".ram_bank128.text")))
 void pce_sgx_herd_front_draw_body(void) {
-    uint16_t code=(0x6400+(uint16_t)((frame>>2)%5)*768)>>5;
+    overlay_call(0x6e,herd_stream);
+    uint16_t code=(PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(cur)*256)>>5;
+    uint8_t shake=(frame*13^(frame>>2))&3;
     for(uint8_t k=0;k<8;++k) {
         if(!actors[k].active||actors[k].type!=11)continue;
-        int16_t sx=actors[k].b.x-camera+40,sy=actors[k].b.y-88;
-        for(uint8_t c=0;c<2;++c) {
-            int16_t x=sx+c*32;if(x<=-32||x>=256)continue;
-            for(uint8_t part=0;part<2;++part) {
-                int16_t y=sy+part*32,h=part?16:32;
-                int16_t lo=y<0?0:y,hi=y+h>224?224:y+h;
-                if(hi<=lo||sat_count>=64)continue;
-                sprite_line_lo=lo;sprite_line_hi=hi;sprite_line_cells=1;
-                overlay_call(0x6e,sprite_lines_wide);
-                if(!sprite_line_cells)continue;
-                sat[0][sat_count++]=(vdc_sprite_t){y+64,x+32,
-                    code+(part?16+4*c:8*c),VDC_SPRITE_FG|13|VDC_SPRITE_WIDTH_32|
-                    (part?0:VDC_SPRITE_HEIGHT_32)};
-            }
+        /* Same anchor as herd_prepare, staggered half of the 224px spacing. */
+        int16_t sx=actors[k].b.x-camera-72+112,sy=actors[k].b.y-48;
+        if(sx<=-128||sx>=256)continue;
+        uint8_t first=sx<0?(-sx)/32:0;
+        uint8_t last=sx>128?(287-sx)/32:4;
+        uint8_t cells=last-first,accepted[2]={0,0};
+        if(sat_count+2*cells>64)continue;
+        /* Reserve each common Y span once, then emit all admitted columns.
+           This is the same full-size batching used by the VDC1 convoy. */
+        for(uint8_t part=0;part<2;++part) {
+            int16_t y=sy+part*64,h=part?16:64;
+            int16_t lo=y<0?0:y,hi=y+h>224?224:y+h;
+            if(hi<=lo)continue;
+            sprite_line_lo=lo;sprite_line_hi=hi;sprite_line_cells=cells;
+            overlay_call(0x6e,sprite_lines_wide);
+            accepted[part]=sprite_line_cells;
         }
+        herd_emit_args=(HerdEmit){sx+32*first+32,sy+64-shake,code+16*first,
+            code+64+4*first,accepted[0],accepted[1],cells};
+        if(cells)overlay_call(0x6f,herd_emit);
     }
 }
 #endif
@@ -119,13 +125,7 @@ static void herd_stream_sgx(void) {
 }
 #endif
 PCE_FLOW static void herd_stream(void) {
-#ifdef PCE_SGX
-    if(pce_sgx_gameplay()){overlay_call(0x80,herd_stream_sgx);return;}
-#endif
-    uint8_t target_vdc=0;
-#ifdef PCE_SGX
-    if(pce_sgx_gameplay())target_vdc=1;
-#endif
+    /* Both builds stream VDC0; SGX selects its resident VDC1 pose separately. */
     uint8_t want=(frame>>2)%5;
     if(want!=shown) {
         /* Finish a partially prefetched frame after a missed simulation tick.
@@ -134,7 +134,7 @@ PCE_FLOW static void herd_stream(void) {
         cur^=1;
         if(prefetched<5120) {
             pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-            arcade_vram_to(target_vdc,play_scene->horse+32+(uint32_t)want*5120+prefetched,
+            arcade_vram_to(0,play_scene->horse+32+(uint32_t)want*5120+prefetched,
                 PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(cur)*256+(prefetched>>1),5120-prefetched);
         }
         shown=want;prefetch=(want+1)%5;prefetched=0;
@@ -148,7 +148,7 @@ PCE_FLOW static void herd_stream(void) {
     uint16_t target=phase==1?1280:phase==2?2560:phase==3?3840:0;
     if(target>prefetched) {
         pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-        arcade_vram_to(target_vdc,play_scene->horse+32+(uint32_t)prefetch*5120+prefetched,
+        arcade_vram_to(0,play_scene->horse+32+(uint32_t)prefetch*5120+prefetched,
             PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(cur^1)*256+(prefetched>>1),target-prefetched);
         prefetched=target;
     }
@@ -204,6 +204,10 @@ HERD_CODE void herd_draw(void) {
     }
     audio_pcm_gallop(true);
     if(!pce_sgx_gameplay())sprite_pinned[47]=250;
+    #ifdef PCE_SGX
+    if(pce_sgx_gameplay())overlay_call(0x80,herd_stream_sgx);
+    else
+    #endif
     overlay_call(0x6e,herd_stream);
     herd_warm();
     uint16_t code=(PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(cur)*256)>>5;

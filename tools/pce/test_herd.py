@@ -23,15 +23,17 @@ def verify(out,sgx=False):
             front_poses=set();front_checks=0
             def check_horse_pages(e,label):
                 nonlocal front_checks
-                small=bytes.fromhex(e.call('asread','vram0',0x6400*2,5*1536)['hex'])
-                assert small==blob[offset+32+5*5120:offset+32+5*(5120+1536)],('Second-row poses overwritten',label)
                 front=list(struct.iter_unpack('<4H',bytes.fromhex(e.call('asread','sat0',0,512)['hex'])))
                 horses=[s for s in front if s[0] and (s[3]&15)==13]
+                front_vram=bytes.fromhex(e.call('asread','vram0',0x6400*2,2*5120)['hex']) if horses else b''
                 for y,x,p,a in horses:
-                    pose,part=divmod(p-0x6400//32,24)
-                    assert 0<=pose<5 and part in (0,8,16,20),('Second-row pattern',label,p)
-                    assert ((a>>12)&3)==(1 if part<16 else 0) and a&256,('Second-row size',label,a)
-                    front_poses.add(pose);front_checks+=1
+                    buffer,part=divmod(p-0x6400//32,80)
+                    assert buffer in (0,1) and part in tuple(16*c for c in range(4))+tuple(64+4*c for c in range(4)),('Interleaved pattern',label,p)
+                    assert ((a>>12)&3) in ((2,3) if part<64 else (0,)) and a&256,('Interleaved full size',label,a)
+                    data=front_vram[buffer*5120:(buffer+1)*5120]
+                    poses=[pose for pose in range(5) if data==blob[offset+32+pose*5120:offset+32+(pose+1)*5120]]
+                    assert len(poses)==1,('Displayed full-size pose incomplete/overwritten',label,buffer)
+                    front_poses.add(poses[0]);front_checks+=1
                 lines=[0]*224
                 for y,x,p,a in front:
                     if not y:continue
@@ -54,6 +56,18 @@ def verify(out,sgx=False):
                 assert all(((s[3]>>12)&3) in (2,3) if s[2] in top_patterns else ((s[3]>>12)&3)==0
                            for s in horse_cells),('horse SAT cell size does not match pose region',label,horse_cells)
                 assert all(0<=s[1]<512 and 0<=s[0]<1024 for s in horse_cells),('horse SAT coordinates',label,horse_cells)
+                if horses and horse_cells:
+                    front_tops={s[0]-(64 if (s[2]-0x6400//32)%80>=64 else 0) for s in horses}
+                    back_tops={s[0]-(64 if s[2] in bottom_patterns else 0) for s in horse_cells}
+                    assert front_tops==back_tops,('Interleaved horse baseline differs',label,front_tops,back_tops)
+                    def anchor(cell,base):
+                        part=cell[2]-base
+                        column=part//16 if part<64 else (part-64)//4
+                        return cell[1]-32*column
+                    front_x={anchor(s,800+80*((s[2]-800)//80)) for s in horses}
+                    back_x={anchor(s,max(base for base in bases if base<=s[2])) for s in horse_cells}
+                    assert all(any((x-back)%224==112 for back in back_x) for x in front_x),('Interleaved horizontal spacing',label,front_x,back_x)
+
         for i,(trigger,stop) in enumerate(zip(triggers,stops)):
             c.press(e,8);e.run(120)
             if sgx:
