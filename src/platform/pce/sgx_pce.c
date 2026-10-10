@@ -275,14 +275,15 @@ SGX_GAME_CODE void pce_sgx_vdc1_sat_upload_body(void) {
     uint16_t word = pce_sgx_sat1_alt ? PCE_SAT_WORD : PCE_SAT_ALT_WORD;
     sat_copy_word = word;
     sat_copy_src = (uint16_t)sat[1];
-    /* Clear entries retired from this particular DMA source. Its remaining
-       tail is already hidden, so it need not be uploaded every frame. */
-    uint8_t count=sat1_previous_count[pce_sgx_sat1_alt];
+    /* Clear entries retired from this DMA source. Stage 6 retires the whole
+       tail, including stray entries absent from its count history; other
+       stages retain their already-hidden tails to save transfer time. */
+    uint8_t count=pce_metrics.stage==6?64:sat1_previous_count[pce_sgx_sat1_alt];
     for(uint8_t k=sat_count;k<count;++k)sat[1][k].y=0;
     if(count<sat_count)count=sat_count;
     sat_copy_len = (uint16_t)count*8;
     sat1_previous_count[pce_sgx_sat1_alt]=sat_count;
-    if(!count) {sat1_previous_count[pce_sgx_sat1_alt]=0;sat_copy_len=8;}
+    if(!count)sat_copy_len=8;
     sat_copy_vdc = 1;
     hud_copy_opcode = 0xe3;
     overlay_call(0x72, sat_copy);

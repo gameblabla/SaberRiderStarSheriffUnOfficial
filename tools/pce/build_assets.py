@@ -34,6 +34,7 @@ M6_HORIZON = 128                         # the arena's horizon row
 M6_SCALES = (0.15, 0.175, 0.205, 0.24, 0.28, 0.325, 0.38, 0.44, 0.51, 0.59, 0.68)   # the mechs' baked scales (canvas 138 x 146), a ladder of 1.16
 M6_BIG_SCALES = (0.74, 0.88, 1.01, 1.16)   # the nearest mech's bigger steps: pieces of 32x32 (at most 16 of them), drawn by m6_d.c's own emitter into two alternating VRAM buffers
 M6_PROP_SCALES = (0.18, 0.28, 0.42, 0.64, 0.95)
+M6_CACTUS_SGX_SCALES = (0.18, 0.35, 0.7, 1.3, 2.4)   # keep growing near Ramrod; tallest canvas 44x101, within the 32-pattern cache limit
 M6_FX_SCALES = (0.3, 0.45, 0.7, 1.1, 1.7)
 M6_Z = 1.6                               # the arena's zoom over the source's law (214 / distance x 0.85): sizes and the rows under the horizon grow with it, so a mech
                                          # that has walked up to Ramrod fills the screen (the bearings keep the source's 1344 dots to the turn)
@@ -1201,7 +1202,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
         for name, mult in (('rock_big', 1.3), ('rock_small', 1.0), ('cactus', 0.7)):
             mark(name.upper())
             frame = atlas(atl, name)[0]
-            for k in M6_PROP_SCALES:
+            for k in (M6_CACTUS_SGX_SCALES if sgx and name == 'cactus' else M6_PROP_SCALES):
                 im, anc = scaled(frame[1], frame[2], k * mult)
                 sprites.append((f'{name}_{round(k*1000)}', im, anc))
         # shots: Ramrod's bolt is three frames made here and written to VRAM at $7c80 (m6_c.c m6_start, drawn by m6_d.c bolt_draw), not cached sprites: a very near one (32x32),
@@ -1589,7 +1590,9 @@ def make_scene(stage, work, previews, shared, sgx=False):
     if stage==2:
         meta.update(race_sky(a,previews,race_sand))
     else:
-        meta.update(native_background(bg,a,previews,f'stage{stage}',sgx=sgx))
+        # Both arena builds reserve $2800 and above for sprite buffers.
+        # Match the runtime's 512-character cache even on the rear SGX VDC.
+        meta.update(native_background(bg,a,previews,f'stage{stage}',sgx=sgx,cache_tiles=512 if stage==6 else BG_TILES))
         if sgx and stage==6:
             palette_bytes=a.data[meta['map']+2:meta['map']+meta['cols']*90:3]
             if any(p==15 for p in palette_bytes):
@@ -1776,6 +1779,7 @@ def main():
           '#ifndef M6_RCP_ONLY',
           'static const uint8_t m6_size[101] __attribute__((section(M6_SECTION)))={' + ','.join(map(str, at_or_above(M6_ALL_SCALES, 182.0 * M6_Z))) + '};   /* mech ladder index (11 and up: the big steps), f >> 4 */',
           'static const uint8_t m6_psize[101] __attribute__((section(M6_SECTION)))={' + ','.join(map(str, at_or_above(M6_PROP_SCALES, 182.0 * M6_Z))) + '};   /* prop ladder index, f >> 4 */',
+          'static const uint8_t m6_csize[101] __attribute__((section(M6_SECTION)))={' + ','.join(map(str, at_or_above(M6_CACTUS_SGX_SCALES if args.sgx else M6_PROP_SCALES, 182.0 * M6_Z))) + '};   /* cactus ladder index, f >> 4 */',
           'static const uint8_t m6_fsize[101] __attribute__((section(M6_SECTION)))={' + ','.join(map(str, at_or_above(M6_FX_SCALES, 280.0 * M6_Z))) + '};   /* shot ladder index, f >> 4 */',
           'static const uint8_t m6_esize[101] __attribute__((section(M6_SECTION)))={' + ','.join(map(str, at_or_above((0.3, 0.55, 0.9, 1.35), 255.0 * M6_Z))) + '};   /* burst size index, f >> 4 */',
           'static const uint8_t m6_row[101] __attribute__((section(M6_SECTION)))={' + ','.join(str(min(95, round(9630 * M6_Z / max(f, 16)))) for f in range(0, 1616, 16)) + '};   /* rows under the horizon, f >> 4 */',

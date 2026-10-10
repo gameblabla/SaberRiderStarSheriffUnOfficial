@@ -166,7 +166,11 @@ void m6_draw(void) {
 #else
         uint16_t late=4096;
 #endif
-        put_at(d,late,rel,0,PCE_M6_ROCK_BIG+p->kind*5+m6_psize[d>>4]);
+        uint8_t size=m6_psize[d>>4];
+#ifdef PCE_SGX
+        if(pce_sgx_arena_sprites()&&p->kind==2)size=m6_csize[d>>4];
+#endif
+        put_at(d,late,rel,0,PCE_M6_ROCK_BIG+p->kind*5+size);
     }
     for(uint8_t k=0;k<16;++k) {
         Shot6 *s=&a6.shot[k];if(!s->life)continue;

@@ -46,6 +46,7 @@ uint8_t clipped_count;
 uint8_t sprite_screen_height=224;
 vdc_sprite_t sat[2][64];
 #ifdef PCE_SGX
+static uint8_t sat_previous_count[2]={64,64};
 uint8_t sat_page PCE_WORK;
 uint8_t sat_count PCE_WORK;
 uint8_t sprite_line_lo PCE_WORK;
@@ -360,6 +361,11 @@ __attribute__((noinline,minsize,section(".ram_bank110.text"))) void video_number
     text[5] = 0; video_text(x, y, text);
 }
 PCE_FLOW static void sat_begin_body(void) {
+#ifdef PCE_SGX
+    /* Stage 6 publishes independent front/rear SATs from its overlays.
+       Retire every front-table tail entry, including untracked stale ones. */
+    if(pce_metrics.stage==6)sat_previous_count[0]=sat_previous_count[1]=64;
+#endif
     ++sprite_epoch;
     sat_count = clipped_count = 0;front_start=64;front_keep=0;
     sprite_lines_clear();
@@ -508,9 +514,6 @@ PCE_RENDER static void sat_publish(uint16_t word,bool drawing) {
 PCE_RENDER void video_sat_commit(uint16_t word) {sat_publish(word,true);}
 /* Retirement and pause retain the displayed coordinates, including while a
  * new draw is held. They must not move old entries to that draw's camera. */
-#ifdef PCE_SGX
-static uint8_t sat_previous_count[2]={64,64};
-#endif
 PCE_RENDER void video_sat_replace(uint16_t word) {
 #ifdef PCE_SGX
     /* Retirement/pause write a whole table outside the normal draw path. */
