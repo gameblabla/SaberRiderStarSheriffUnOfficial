@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the one-shot planet through native stage-7 draws and BAT restoration."""
+"""Check the stage-7 planet, power cut-in and native BAT restoration."""
 import argparse
 import json
 import struct
@@ -13,7 +13,7 @@ from test_sgx_rendering import Rendering
 def verify(out):
     out = out.resolve()
     r = Rendering(out)
-    names = ('space_frame', 'space_near_sgx_bat_body', 'pce_control.6',
+    names = ('space_frame', 'power_frame', 'space_near_sgx_bat_body', 'pce_control.6',
              'flight_clock', 'pce_sky_near', 'space_hull_ready')
     a = {name: symbol(out / 'app.elf', name) for name in names}
     scene = r.manifest['scenes'][6]
@@ -23,6 +23,7 @@ def verify(out):
     original = struct.unpack_from('<2048H', blob, mapping)
     blank = 0x80
     samples = []
+    power_samples = []
     with tempfile.TemporaryDirectory(prefix='sgx-planet-', dir=out) as base, \
             Emulator(out / 'saber_rider.cue', base, sgx=True) as e:
         boot(e, r.address)
@@ -90,12 +91,50 @@ def verify(out):
                 assert ink > 0, ('planet disappeared before leaving', scroll)
             return {'scroll': scroll, 'retired_columns': retired, 'visible_ink_tiles': ink}
 
+        def power(scroll):
+            def read(space, address, size):
+                return bytes.fromhex(e.call('asread', space, address, size)['hex'])
+
+            bat = read('vram0', 0, 4096)
+            font = read('vram0', 0x4200 * 2, 3072)
+            sky = read('vram1', 0, 65536)
+            palette = read('pram', 0, 1024)
+            r.field(e, 'state', 5)
+            r.field(e, 'timer', 0)
+            for t in range(105):
+                invoke('power_frame', 123)
+                if t == 40:
+                    cells = struct.unpack('<2048H', read('vram0', 0, 4096))
+                    for row in range(14):
+                        kind = 6 if row == 0 else 7 if row == 13 else row % 6
+                        for x in range(33):
+                            col = ((scroll >> 3) + x) & 63
+                            expected = 0xf400 + kind * 8 + (col & 7)
+                            assert cells[(7 + row) * 64 + col] == expected, (
+                                'power wave missing from displayed planet window', scroll, row, x)
+                    e.screenshot(out / f'space-power-{scroll}.png')
+            assert r.state(e)['state'] == 0
+            assert read('vram0', 0, 4096) == bat, ('power left tiles in planet BAT', scroll)
+            assert read('vram0', 0x4200 * 2, 3072) == font, ('power font restore', scroll)
+            assert read('vram1', 0, 65536) == sky, ('power changed nebula', scroll)
+            # Palette 15 retains the animated wave ramp for the white-out;
+            # the planet and nebula use palettes 0..9.
+            restored = read('pram', 0, 1024)
+            assert restored[:10 * 32] == palette[:10 * 32], ('space background palettes', scroll)
+            check(scroll)
+            e.screenshot(out / f'space-power-{scroll}-restored.png')
+            power_samples.append({'scroll': scroll, 'visible_wave_cells': 33 * 14,
+                                  'planet_bat_restored': True, 'font_restored': True,
+                                  'nebula_unchanged': True, 'background_palettes_restored': True})
+
         # Keep the initial natural drift, then cross pixel and BAT wrap edges.
         start = int.from_bytes(e.memory(a['pce_sky_near'], 2), 'little')
         for scroll in (start, 8, 128, 248, 255, 256, 257, 259, 260, 263, 264, 512, 1024):
             e.write(a['flight_clock'], struct.pack('<H', scroll * 32))
             invoke('space_frame', 120)
             samples.append(check(min(scroll, 264)))
+            if scroll in (128, 257, 264):
+                power(min(scroll, 264))
             if scroll in (start, 128, 257, 264, 512):
                 e.screenshot(out / f'space-planet-{scroll}.png')
         # The same native BAT restore is used after dialogue and power panels.
@@ -106,7 +145,8 @@ def verify(out):
         check(264)
         r.verify_sgx_code(e, 'planet scroll and restore')
         r.metrics(e)
-    report = {'samples': samples, 'restore_kept_space': True, 'clock_wrap_kept_space': True}
+    report = {'samples': samples, 'power_samples': power_samples,
+              'restore_kept_space': True, 'clock_wrap_kept_space': True}
     (out / 'sgx-space-planet-verification.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
 

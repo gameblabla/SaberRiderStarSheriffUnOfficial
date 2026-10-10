@@ -22,6 +22,7 @@
  * not used, the BG cells go back from the column cache (as video_panel_restore_*) while the screen is white. */
 extern uint8_t buffer[2048];
 extern volatile uint16_t pce_scroll_x,pce_scroll_y;
+extern volatile uint16_t pce_sky_near;
 extern const PceScene *video_scene_ptr;
 extern uint16_t columns[33][30],flight_clock;
 uint8_t pce_power_land PCE_WORK;   /* the cut-in is over: the strike lands in the next tick */
@@ -88,6 +89,9 @@ POWER_CODE static void band_restore(uint8_t col0,uint8_t row0) {
 POWER_CODE void power_frame(void) {
     uint16_t t=pce_campaign.timer++;
     uint8_t stage=pce_metrics.stage,col0=pce_scroll_x>>3,row0=7+(pce_scroll_y>>3);
+    /* SGX draws the band on VDC0, whose planet camera is independent of
+     * the nebula camera. Once the cruiser loads, VDC0 uses its hull scroll. */
+    if(pce_sgx_gameplay()&&stage==7&&!space_hull_ready)col0=pce_sky_near>>3;
     uint32_t wave=pce_power_wave[stage-1];
     if(!t) {
         /* End the space flash's palette ownership before the cut-in starts
@@ -140,7 +144,7 @@ POWER_CODE void power_frame(void) {
         if(stage==7) {
             pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
             arcade_vram(pce_dialog_original_font[6],PCE_FONT_WORD,3072);
-            if(space_hull_ready)overlay_call(0x78,space_hull_bat);
+            if(space_hull_ready||pce_sgx_gameplay())overlay_call(0x78,space_hull_bat);
             else{video_restore();video_background(flight_clock>>3);}   /* the nebula's columns, under the white */
         } else {
             pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
