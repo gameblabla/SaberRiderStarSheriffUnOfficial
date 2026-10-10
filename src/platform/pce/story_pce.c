@@ -92,10 +92,11 @@ PCE_MISSION static void platform_box(void) {
     story_column=pce_scroll_x>>3;
 #ifdef PCE_SGX
     if(pce_sgx_arena_sprites())story_column=0;
+    if(pce_sgx_gameplay()&&pce_metrics.stage==7&&!space_hull_ready)story_column=pce_sky_near>>3;
 #endif
 }
 PCE_FLOW void story_graphics_restore(void) {   /* bank $6e: $6f is full */
-    if(pce_metrics.stage==2||pce_metrics.stage==7)return;
+    if(pce_metrics.stage==2||(pce_metrics.stage==7&&!pce_sgx_gameplay()))return;
     extern const PceScene *video_scene_ptr;
     uint8_t colors[32];
     uint32_t palette=video_scene_ptr->pal;
@@ -139,10 +140,16 @@ STORY_CODE static void draw(void) {
     int16_t box_x=24-(pce_raster_enabled?0:(pce_scroll_x&7)),box_y=(pce_metrics.stage==7?PCE_DIALOG_BOTTOM_ROW:y)*8-(pce_metrics.stage!=2&&pce_metrics.stage<6?16:0);   /* platform sprites are baked 16 lines low */
 #ifdef PCE_SGX
     if(pce_sgx_arena_sprites())box_x=24;
+    if(pce_sgx_gameplay()&&pce_metrics.stage==7&&!space_hull_ready)box_x=24-(pce_sky_near&7);
 #endif
     /* Blank every BG cell under the box except the four 2x2 corner blocks; the corner pieces stay in front of the
      * scenery so their rounded edges show the scenery, not a hole. */
     bool platform=pce_metrics.stage!=2&&pce_metrics.stage!=7;   /* the platform stages and Ramrod's arena: a scrolling background with the panel in BG characters and four sprite corners */
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay()&&pce_metrics.stage==7)platform=true;
+    if(pce_sgx_gameplay()&&pce_metrics.stage==7&&!pce_campaign.page)
+        video_story_cells_keep(y,space_hull_ready?pce_scroll_x>>3:pce_sky_near>>3);
+#endif
     if(pce_metrics.stage==2){race_colour=colour&3;overlay_call(0x77,race_box);}
     else if(!platform){video_panel(5,y,24,2);video_panel(3,y+2,28,2);video_panel(5,y+4,24,2);}
     video_sat_begin();
@@ -237,7 +244,7 @@ STORY_CODE void story_start(void) {
 #ifdef PCE_SGX
     /* Platform panels publish both SATs together; keep the old world visible
        until their complete replacement is ready. */
-    if(pce_metrics.stage>=6)overlay_call(0x78,pce_sgx_vdc1_hide_body);
+    if(pce_metrics.stage==6)overlay_call(0x78,pce_sgx_vdc1_hide_body);
     if(pce_sgx_arena_sprites()) {
         /* The actor BAT uses alternating halves; dialogue uses screen columns
            in half zero. Retire the actor before installing its panel/font. */
@@ -247,7 +254,7 @@ STORY_CODE void story_start(void) {
 #endif
     /* The race and the cockpits keep their HUD in sprites: let the last two displayed generations go (their cache slots
      * stay pinned through the SAT DMA) so the box and the avatar find slots in the same frame. */
-    if(pce_metrics.stage==7)for(uint8_t k=0;k<3;++k){video_sat_begin();video_sat_end();video_wait();}
+    if(pce_metrics.stage==7&&!pce_sgx_gameplay())for(uint8_t k=0;k<3;++k){video_sat_begin();video_sat_end();video_wait();}
     /* Resuming from Run invalidates the BAT. Remove the menu's cells before
      * reopening a panel, including the cells outside its restoration area. */
     if(pce_metrics.stage!=2&&pce_metrics.stage<6)video_background(camera);
@@ -262,18 +269,13 @@ STORY_CODE void story_step(void) {
     pce_campaign.timer=0;
     audio_pcm_tick();   /* the PC dialogue's page close: sfx 0 */
     if(++pce_campaign.page<page_count) {
-#ifdef PCE_SGX
-        if(pce_sgx_gameplay()&&pce_metrics.stage==7) {
-            overlay_call(0x78,space_hull_bat);
-        }
-#endif
         draw();
     }
     else {
         /* Retained scenery must re-admit its chunks. Platform panels now need
          * only four corner patterns: keep the displayed generation pinned until
          * the closing SAT DMA, so uploads cannot overwrite its live graphics. */
-        if(pce_metrics.stage==7) {
+        if(pce_metrics.stage==7&&!pce_sgx_gameplay()) {
             memset(sprite_used,0,sizeof sprite_used);memset(sprite_pinned,0,sizeof sprite_pinned);
         }
         foreground_reset();
@@ -283,12 +285,20 @@ STORY_CODE void story_step(void) {
              * uncovering the box column by column while its in-front corner pieces linger. */
             pce_panel_column=story_column;pce_panel_restore=story_y;overlay_call(0x7b,play_draw);
         } else if(pce_metrics.stage==2)overlay_call(0x77,race_unbox);   /* the sky cells the box and the text covered, and the road's wrap copies, go back */
-        else if(pce_metrics.stage==6){video_restore();overlay_call(0x6e,story_graphics_restore);}   /* the arena's columns are read in again; the font and the dialogue palette go back */
+        else if(pce_metrics.stage==6){
+            /* Retire the alpha corners before clearing their BG panel. */
+            video_sat_begin();video_sat_end();video_wait();
+            video_restore();overlay_call(0x6e,story_graphics_restore);
+        }
         else {
-            video_restore();
+            if(!pce_sgx_gameplay())video_restore();
 #ifdef PCE_SGX
-            if(pce_sgx_gameplay()&&pce_metrics.stage==7)
-                overlay_call(0x78,space_hull_bat);
+            if(pce_sgx_gameplay()&&pce_metrics.stage==7) {
+                video_sat_begin();overlay_call(0x78,space_dialog_ship);
+                video_sat_end();video_wait();
+                video_story_cells_restore();
+                overlay_call(0x6e,story_graphics_restore);
+            }
 #endif
         }
     }

@@ -4,6 +4,7 @@
 #include "overlay_pce.h"
 #include "loader_pce.h"
 #include "sgx_pce.h"
+#include "scenery_pce.h"
 #include <string.h>
 
 volatile PceTelemetry pce_metrics;
@@ -339,7 +340,7 @@ PCE_RENDER void video_text(uint8_t x, uint8_t y, const char *text) {
     if(pce_raster_enabled)x*=2;
     uint16_t scroll_x=pce_scroll_x;
 #ifdef PCE_SGX
-    if(pce_sgx_gameplay()&&pce_metrics.stage==7)scroll_x=pce_sky_near;
+    if(pce_sgx_gameplay()&&pce_metrics.stage==7&&!space_hull_ready)scroll_x=pce_sky_near;
     if(pce_sgx_arena_sprites())scroll_x=0;
 #endif
     uint16_t dest = pce_raster_enabled ? (uint16_t)(48+y)*128+x :

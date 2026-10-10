@@ -88,12 +88,12 @@ PCE_SCENERY void space_hull_load(void) {
     bool sgx=pce_sgx_gameplay();
 #ifdef PCE_SGX
     if(sgx) {
-        space_beam_width=0;space_hull_sgx_ok=0;
+        space_beam_width=0;space_hull_sgx_ok=0;hull_gone=0;
         overlay_call(0x71,space_hull_sgx_load_wrapper);
         if(space_hull_sgx_ok) {
             space_hull_x=240;space_hull_bat();
             if(space_hull_sgx_ok) {
-                video_scroll((uint16_t)(-16-space_hull_x),(uint16_t)-48);
+                video_scroll((uint16_t)(-32-space_hull_x),(uint16_t)-48);
                 space_flashing=hull_gone=0;space_hull_ready=1;hull_lit=0;
                 return;
             }

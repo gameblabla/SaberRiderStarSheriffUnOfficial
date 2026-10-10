@@ -131,6 +131,7 @@ test-sgx:
 	python3 tools/pce/test_sgx_last3.py --out build/sgx
 	python3 tools/pce/test_sgx_arena_sprites.py --out build/sgx
 	python3 tools/pce/test_sgx_space_planet.py --out build/sgx
+	python3 tools/pce/test_sgx_final_boss.py --out build/sgx
 
 test-presentation: all
 	python3 tools/pce/test_presentation.py --out $(OUT)

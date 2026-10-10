@@ -175,8 +175,9 @@ BOSS_STEP static void boss_guns(void) {
     }
     /* the hangar: a swarm of drones out of the bay (5 + the stage, one every 16 steps; the last carries a gift), then the mine rack from the second stage */
     uint16_t cycle=beam_clock%(round==0?600:round==1?520:460);
-    if(cycle<16*(5+round)&&!(cycle&15)){foe_in(212+space_hull_x,space_boss_y+69,1,2,1,cycle==16*(4+round)?1+((beam_clock>>9)&1):0);SPACE_BOSS_EFFECT(13);}
-    if(round&&cycle==300){foe_in(161+space_hull_x,space_boss_y+85,4,3,0,0);foe_in(161+space_hull_x,space_boss_y+97,4,3,0,0);}
+    uint8_t offset=pce_sgx_gameplay()?16:0;
+    if(cycle<16*(5+round)&&!(cycle&15)){foe_in(212+offset+space_hull_x,space_boss_y+69,1,2,1,cycle==16*(4+round)?1+((beam_clock>>9)&1):0);SPACE_BOSS_EFFECT(13);}
+    if(round&&cycle==300){foe_in(161+offset+space_hull_x,space_boss_y+85,4,3,0,0);foe_in(161+offset+space_hull_x,space_boss_y+97,4,3,0,0);}
 }
 static void boss_step(void);
 /* The ship has been shot down (space.c update_world): it bursts, 2.2 s on a spare ship flies back in where the fight is (the flight does not
@@ -215,7 +216,7 @@ SPACE_CODE static void space_tick(void) {
     if(ship_x<16)ship_x=16;if(ship_x>240)ship_x=240;
     if(ship_y<16)ship_y=16;if(ship_y>208)ship_y=208;
     if(pce_campaign.boss_kind&&ship_x>112)ship_x=112;
-    if(sb.ph==4&&space_hull_ready) {
+    if(sb.ph==4&&space_hull_ready&&!boss_die&&!boss_gone) {
 #ifdef PCE_SGX
         overlay_call(0x71,space_contact_wrapper);
 #else
@@ -286,7 +287,7 @@ SPACE_CODE static void space_tick(void) {
                 /* Armoured mines deflect ordinary shots, as in space.c. */
                 if(f->kind>=4){f->hp=f->hp>power?f->hp-power:0;if(!f->hp)foe_kill(f);else{foe_flash[f->kind-4]=5;audio_effect(22);}}   /* (a hit that does not kill: it blinks white, with the PSG zap) */
             }
-            if(b->on&&sb.ph==4&&space_hull_hit(b->x-space_hull_x,b->y-space_boss_y)) {
+            if(b->on&&sb.ph==4&&!boss_die&&!boss_gone&&space_hull_hit(b->x-space_hull_x,b->y-space_boss_y)) {
                 b->on=0;hull_flash=4;audio_effect(22);
                 uint16_t damage=power;
                 for(uint8_t j=0;j<7;++j)if(port_hp[j]&&(j<5||pce_campaign.boss_round)&&dist(b->y,space_boss_y+space_hull_port_y[j])<4) {
@@ -336,12 +337,26 @@ BOSS_STEP static void boss_step(void) {
         return;
     }
     if(boss_die) {   /* the cruiser breaks up (space.c PH_BOSS_DIE): its fire stops, fireballs burst over the hull to the big bang, then the ship is gone */
+#ifdef PCE_SGX
+        /* Keep the hull and its bursts on the same descending anchor. */
+        if(pce_sgx_gameplay())space_boss_y+=2+(72-boss_die)/18;
+        if(!--boss_die){boss_gone=1;sb.t=0;space_boss_y&=~7;blast(164,space_boss_y+space_hull_cannon_y(),false);SPACE_BOSS_EFFECT(17);}
+#else
         if(!--boss_die){boss_gone=1;space_boss_y&=~7;blast(164,space_boss_y+space_hull_cannon_y(),false);SPACE_BOSS_EFFECT(17);pce_campaign.result=1;pce_campaign.story=0;pce_campaign.event=1;}
+#endif
         else if(!(boss_die%5)){blast(84+random()%160,space_boss_y+random()%90,random()&1);if(random()%5<2)SPACE_BOSS_EFFECT(random()&1?7:8);}   /* (space.c: the bursts yell now and then) */
         return;
     }
+#ifdef PCE_SGX
+    if(boss_gone) {
+        /* Draw the absent hull and let the final fireball finish before
+         * story_start freezes gameplay and retires the effect SAT. */
+        if(++sb.t>=36){pce_campaign.result=1;pce_campaign.story=0;pce_campaign.event=1;}
+        return;
+    }
+#endif
     if(!pce_campaign.boss_hp) {
-        boss_die=72;sb.t=0;
+        boss_die=72;sb.t=0;sb.laser=0;
         for(uint8_t k=0;k<12;++k)bolts[k].on=bolts[k].on&&!bolts[k].enemy;
         return;
     }
@@ -380,8 +395,25 @@ __attribute__((noinline,section(".ram_bank113.text"))) static void boss_step_wra
 }
 #endif
 /* Scenery and flight drawing share bank $78; simulation stays in $73. */
+#ifdef PCE_SGX
+extern uint8_t sat_count;
+extern vdc_sprite_t sat[2][64];
+__attribute__((noinline,minsize,section(".ram_bank116.text"))) static void space_planet_draw(void) {
+    if(!pce_sgx_gameplay()||!space_hull_ready||pce_sky_near>=260)return;
+    uint8_t previous=pce_bank6_get();pce_bank6_set(108);
+    for(uint8_t strip=pce_sky_near>>5;strip<8;++strip) {
+        uint8_t first=sat_count;
+        video_sprite_optional(22+strip,(int16_t)strip*32-pce_sky_near,0,false,16);
+        for(uint8_t k=first;k<sat_count;++k)sat[0][k].attr&=~VDC_SPRITE_FG;
+    }
+    pce_bank6_set(previous);
+}
+#endif
 PCE_SCENERY void space_dialog_ship(void) {   /* the dialogues (story_pce.c draw) keep Ramrod's ship on view where it flies */
     if(!pce_death)video_sprite(3,ship_x,ship_y,false,16);
+#ifdef PCE_SGX
+    overlay_call(0x74,space_planet_draw);
+#endif
 }
 #ifdef PCE_SGX
 extern uint8_t sat_page,sat_count,sprite_occupancy[240],sprite_optional;
@@ -446,8 +478,15 @@ __attribute__((noinline,section(".ram_bank119.text"))) static void space_vdc1_ac
     pce_bank6_set(previous);
 }
 #endif
+/* Finish the SGX cruiser greeting outside the nearly full frame bank. */
+__attribute__((noinline,minsize,section(".ram_bank113.text")))
+static void space_greeting_complete(void) {
+    if(sb.ph!=3||pce_campaign.event||pce_campaign.state!=CAM_PLAY)return;
+    if(!pce_sgx_gameplay())overlay_call(0x78,space_hull_bat);
+    sb.ph=4;sb.t=270;
+}
 PCE_SCENERY void space_frame(void) {
-    if(sb.ph==3&&!pce_campaign.event&&pce_campaign.state==CAM_PLAY){space_hull_bat();sb.ph=4;sb.t=270;}   /* the greeting has closed: the cells it covered come back, the fight begins */
+    overlay_call(0x71,space_greeting_complete);
     for(uint8_t i=0;i<pce_control.elapsed&&!pce_campaign.event&&!pce_campaign.result&&pce_campaign.state==CAM_PLAY;++i) {
         overlay_call(0x73,space_tick);pce_control.pressed=0;
     }
@@ -471,6 +510,7 @@ PCE_SCENERY void space_frame(void) {
     overlay_call(0x7c,hud7_draw);
     if(!pce_death&&(!hurt||(flight_clock&4)))video_sprite(3,ship_x,ship_y,false,16);
 #ifdef PCE_SGX
+    overlay_call(0x74,space_planet_draw);
     if(pce_sgx_vdc1_sprites()) {
         memcpy(buffer+256,sprite_occupancy,224);
         space_sat0_count=sat_count;

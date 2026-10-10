@@ -259,6 +259,37 @@ __attribute__((noinline,section(".ram_bank115.text"))) static void cells_apply_b
     pce_cpu_irq_enable();
 }
 void video_cells_apply(uint8_t y,uint16_t column) {panel_y=y;pce_panel_column=column;overlay_call(0x73,cells_apply_body);}
+/* Stage 7 freezes the world during dialogue. Preserve its covered cells,
+ * rather than clearing/reloading the live cruiser BAT between pages. */
+#define STORY_KEEP __attribute__((noinline,minsize,section(".ram_bank110.text")))
+static uint16_t story_cells[168] __attribute__((section(".ram_bank110.bss")));
+static uint8_t story_cells_y;
+static uint16_t story_cells_column;
+STORY_KEEP static void story_cells_keep_body(void) {
+    uint8_t saved=pce_vdc_index;
+    for(uint8_t row=0;row<6;++row)for(uint8_t x=0;x<28;++x) {
+        uint16_t address=(uint16_t)((story_cells_y+row)&31)*64+((story_cells_column+3+x)&63);
+        pce_cpu_irq_disable();
+        pce_vdc_index=1;*(volatile uint8_t *)0x20f7=1;*IO_VDC_INDEX=1;
+        *IO_VDC_DATA_LO=address;*IO_VDC_DATA_HI=address>>8;
+        pce_vdc_index=2;*(volatile uint8_t *)0x20f7=2;*IO_VDC_INDEX=2;
+        uint8_t lo=*IO_VDC_DATA_LO;
+        story_cells[(uint16_t)row*28+x]=lo|(uint16_t)*IO_VDC_DATA_HI<<8;
+        pce_cpu_irq_enable();
+    }
+    pce_cpu_irq_disable();
+    pce_vdc_index=saved;*(volatile uint8_t *)0x20f7=saved;*IO_VDC_INDEX=saved;
+    pce_cpu_irq_enable();
+}
+STORY_KEEP static void story_cells_restore_body(void) {
+    memcpy(buffer+1024,story_cells,sizeof story_cells);
+    panel_y=story_cells_y;pce_panel_column=story_cells_column;
+    video_cells_apply(story_cells_y,story_cells_column);
+}
+void video_story_cells_keep(uint8_t y,uint16_t column) {
+    story_cells_y=y;story_cells_column=column;overlay_call(0x6e,story_cells_keep_body);
+}
+void video_story_cells_restore(void) {overlay_call(0x6e,story_cells_restore_body);}
 void video_panel_restore_prepare(uint8_t y) {
     panel_y=y;
 #ifdef PCE_SGX

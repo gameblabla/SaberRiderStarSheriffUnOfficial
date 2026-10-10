@@ -9,5 +9,7 @@ void video_panel(uint8_t x,uint8_t y,uint8_t w,uint8_t h);
 void video_panel_restore_prepare(uint8_t y);
 void video_panel_restore_apply(void);
 void video_cells_apply(uint8_t y,uint16_t column);   /* a dialogue's panel cells from buffer+1024 (story_pce.c), right after a VBlank */
+void video_story_cells_keep(uint8_t y,uint16_t column);
+void video_story_cells_restore(void);
 extern uint16_t pce_panel_column;
 void story_graphics_restore(void);

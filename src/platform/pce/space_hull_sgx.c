@@ -28,6 +28,7 @@ typedef struct __attribute__((packed)) {uint32_t tiles,map;uint16_t bytes;uint8_
 static SpaceNearRecord space_near_record __attribute__((section(".ram_bank113.data")));
 static uint8_t space_near_cleared __attribute__((section(".ram_bank113.bss")));
 extern volatile uint16_t pce_sky_near;
+extern uint16_t flight_clock;
 static __attribute__((always_inline)) void hull_write(uint8_t reg,uint16_t value);
 static __attribute__((always_inline)) void hull_index(uint8_t reg);
 
@@ -139,7 +140,7 @@ __attribute__((noinline,section(".ram_bank113.text"))) void space_hull_sgx_load_
     pce_vce_copy_palette(10,buffer,1);
     pce_vce_copy_palette(11,hull_palette,4);
     pce_vce_set_color(255,0x1ff);
-    const uint8_t px[7]={112,132,154,174,206,213,199};
+    const uint8_t px[7]={128,148,170,190,222,229,215};
     const uint8_t py[7]={50,50,49,48,75,65,84};
     for(uint8_t k=0;k<7;++k){space_hull_port_x[k]=px[k];space_hull_port_y[k]=py[k];}
     space_hull_sgx_ok=1;
@@ -156,6 +157,7 @@ __attribute__((noinline,section(".ram_bank113.text"))) void space_hull_sgx_bat_b
     }
     uint8_t saved=pce_vdc_index;
     hull_clear_bat();
+    if(hull_gone)return;
     for(uint8_t y=0;y<HULL_ROWS;++y) {
         for(uint8_t first=0;first<HULL_COLS;first+=16) {
             __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
@@ -184,7 +186,11 @@ __attribute__((noinline,section(".ram_bank113.text"))) void space_hull_sgx_bat_b
 
 __attribute__((noinline,section(".ram_bank113.text"))) void space_hull_sgx_draw_body(void) {
     if(!space_hull_ready)return;
-    video_scroll((uint16_t)(-(pce_sgx_gameplay()?16:76)-space_hull_x),(uint16_t)-space_hull_draw_y);
+    /* The final-boss fall is the only SGX path that takes this anchor below
+     * the playfield; hide the paired BAT once it can wrap back onto screen. */
+    if(pce_sgx_gameplay()&&space_hull_draw_y>=224)space_hull_draw_gone=1;
+    if(pce_sgx_gameplay())video_background(flight_clock>>3);
+    video_scroll((uint16_t)(-(pce_sgx_gameplay()?32:76)-space_hull_x),(uint16_t)-space_hull_draw_y);
     if(space_hull_draw_gone&&!hull_gone) {
         hull_clear_bat();
         hull_gone=1;

@@ -75,7 +75,7 @@ def art_tips(hero,cell):
     return [stand,run(88,None,40),mean([reach(alpha(cell(120)),64)]),None,None,
             mean([diag_up(alpha(cell(44)))]),mean([reach(alpha(cell(42)),50)]),run(100,diag_up,0),run(98,None,44)]
 
-def add_art(root,work,stage,sprites,frame):
+def add_art(root,work,stage,sprites,frame,sgx=False):
     def get(rid,n=0):return frame(work/'srgb'/f'{rid:08X}.srgb',n)
     def add(name,im,anchor=(0,0)):
         i=len(sprites);sprites.append((name,im,anchor));return i
@@ -99,7 +99,7 @@ def add_art(root,work,stage,sprites,frame):
     dialog=len(sprites)
     for rid in BOX_TILESETS:
         box=dialog_box([get(rid,n) for n in range(9)])
-        if stage in (1,3,4,5,6):
+        if stage in (1,3,4,5,6) or (sgx and stage==7):
             # BG characters carry the panel and text. Only rounded corners
             # remain sprites, preserving the scenery through their alpha.
             corners=Image.new('RGBA',box.size)

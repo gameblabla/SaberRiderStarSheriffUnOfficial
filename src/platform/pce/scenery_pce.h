@@ -11,7 +11,7 @@ void space_screen_flash(uint8_t frames);
 void space_screen_flash_end(void);
 /* Match the visible hull rather than the former 128x64 rectangle. */
 static inline __attribute__((always_inline)) bool space_hull_hit(int16_t x,int16_t y) {
-    uint8_t left=pce_sgx_gameplay()?16:76,width=pce_sgx_gameplay()?224:180;
+    uint8_t left=pce_sgx_gameplay()?32:76,width=pce_sgx_gameplay()?224:180;
     uint8_t height=pce_sgx_gameplay()?123:98;
     if(!space_hull_ready||x<left||x>=left+width||y<0||y>=height)return false;
     uint8_t c=(x-left)>>3;
@@ -19,7 +19,7 @@ static inline __attribute__((always_inline)) bool space_hull_hit(int16_t x,int16
 }
 
 static inline __attribute__((always_inline)) int16_t space_hull_cannon_x(void) {
-    return pce_sgx_gameplay()?26:84;
+    return pce_sgx_gameplay()?42:84;
 }
 static inline __attribute__((always_inline)) int16_t space_hull_cannon_y(void) {
     return pce_sgx_gameplay()?56:48;

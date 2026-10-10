@@ -792,7 +792,7 @@ def add_sprites(archive, sprites, previews, sgx=False, race=False):
     palette_offsets = {}
     if sgx:
         for family in ('hero0', 'hero1', 'hero3', 'walker', 'grunt', 'sniper',
-                       'kneel', 'shield', 'brown', 'blue', 'grenade', 'burst'):
+                       'kneel', 'shield', 'brown', 'blue', 'grenade', 'burst', 'planet'):
             frames = [im for name, im, _ in sprites if name.split('_')[0] == family
                       or (family == 'kneel' and name.startswith('kneel'))
                       or (family == 'grenade' and name.startswith('grenade'))
@@ -1409,10 +1409,15 @@ def make_scene(stage, work, previews, shared, sgx=False):
         # to keep): ids 12-16 at 48 dots, 17-21 at 32
         sprites+=atlas(ROOT/'assets/space/atlas.png','expl',48)[:5]
         sprites+=[(f'expl_small{n}',im,anchor) for n,(_,im,anchor) in enumerate(atlas(ROOT/'assets/space/atlas.png','expl',32)[:5])]
+        if sgx:
+            # Retain the departing near layer when the cruiser takes BG0.
+            # Narrow strips keep offscreen art out of the SAT/cache budget.
+            sprites += [(f'planet_{x//32}', near.crop((x,0,x+32,224)), (0,0))
+                        for x in range(0,256,32)]
         meta['track_offset']=a.add('space_timeline',timeline.bake(ROOT/'src/space.c'))
         # the portraits and dialogue pieces before the HUD (their ids come before the HUD's, so they get slots of their own palette: the box and the speaker's portrait
         # would otherwise share the HUD's palette and the last one written wins)
-        meta['presentation']=presentation.add_art(ROOT,work,stage,sprites,cblock_frame)
+        meta['presentation']=presentation.add_art(ROOT,work,stage,sprites,cblock_frame,sgx=sgx)
         hud=hudart.Hud(sprites)
         hudart.space_hud(hud,hudart.Fonts(work,cblock_frame),Image.open(ROOT/'assets/space/atlas.png').convert('RGBA'))
         meta['hud']=hud.base;meta['hud_macros']=hud.macros('H7')
@@ -1543,10 +1548,10 @@ def make_scene(stage, work, previews, shared, sgx=False):
         meta['hud']=hud.base;meta['hud_macros']=hud.macros('H2')
         collision = 0
     # Append presentation art after fixed gameplay IDs to retain mission IDs.
-    if stage in (1,3,4,5,6):platform_dialog(a,work)
+    if stage in (1,3,4,5,6) or (sgx and stage==7):platform_dialog(a,work)
     if stage not in (6,7): meta['presentation']=presentation.add_art(ROOT,work,stage,sprites,cblock_frame)
     if stage in (1,3,4,5,7): a.add('power_wave', power_wave())
-    if stage == 7: a.add('dialog_original_font', font_glyphs(work))   # (the cut-in puts the font back; the other stages' copy comes with their dialogue panels)
+    if stage == 7 and not sgx: a.add('dialog_original_font', font_glyphs(work))   # (SGX stores it with its BG dialogue panels)
     meta['foreground_offset']=0;meta['foreground_count']=0
     meta['foreground_slow_offset']=0;meta['foreground_slow_count']=0
     meta['sgx_foreground_first']=0xffff
