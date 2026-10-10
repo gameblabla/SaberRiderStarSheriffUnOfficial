@@ -15,6 +15,7 @@ endif
 ifeq ($(SGX),1)
 PCE_FLAGS += -DPCE_SGX
 PCE_ASSET_FLAGS := --sgx
+PCE_MATH_LINK := $(foreach helper,mulqi3 mulhi3 mulsi3 udivqi3 udivhi3 udivsi3 umodqi3 umodhi3 divhi3,-Wl,--wrap=__$(helper))
 endif
 PCE_SRC := $(wildcard src/platform/pce/*.c)
 PCE_SRC := $(filter-out src/platform/pce/ipl.c,$(PCE_SRC))
@@ -56,7 +57,7 @@ $(PCE_ASSETS) &: tools/pce/build_assets.py tools/pce/formats.py tools/pce/palfit
 	python3 tools/pce/build_assets.py --out $(OUT) $(PCE_ASSET_FLAGS)
 
 $(OUT)/app_full.elf: $(PCE_SRC) $(wildcard src/platform/pce/*.h) $(wildcard src/platform/pce/m6/*.h) $(OUT)/assets.h $(OUT)/m6.h $(OUT)/samples.h $(OUT)/pcm.h $(OUT)/psg.h $(OUT)/music.h $(OUT)/build-flags Makefile.pce tools/pce/check_elf.py src/platform/pce/link/link.ld
-	$(PCE_CC) $(PCE_FLAGS) $(PCE_SRC) -I src/platform/pce/m6 -o $@ -T src/platform/pce/link/link.ld -Wl,-Map,$(OUT)/app.elf.map
+	$(PCE_CC) $(PCE_FLAGS) $(PCE_SRC) -I src/platform/pce/m6 -o $@ -T src/platform/pce/link/link.ld -Wl,-Map,$(OUT)/app.elf.map $(PCE_MATH_LINK)
 	python3 tools/pce/check_elf.py $(MOS)/bin/llvm-nm $@
 	$(MOS)/bin/llvm-objcopy --remove-section=.llvm_sympart --remove-section=.rela.llvm_sympart $@
 
@@ -101,6 +102,7 @@ test-campaign: all
 # The generic presentation fixtures below drive a non-retail debug stage menu.
 test-sgx:
 	$(MAKE) -f Makefile.pce SGX=1 OUT=build/sgx all
+	python3 tools/pce/test_sgx_fast_math.py --out build/sgx
 	python3 tools/pce/test_campaign.py --out build/sgx --sgx
 	python3 tools/pce/test_sgx_frontend.py --out build/sgx
 	python3 tools/pce/test_sgx_motion.py --out build/sgx
@@ -119,6 +121,7 @@ test-sgx:
 	python3 tools/pce/test_sgx_herd_exit.py --out build/sgx
 	python3 tools/pce/test_race_math.py --out build/sgx --sgx
 	python3 tools/pce/test_sgx_late_stages.py --out build/sgx
+	python3 tools/pce/test_sgx_last2.py --out build/sgx
 
 test-presentation: all
 	python3 tools/pce/test_presentation.py --out $(OUT)

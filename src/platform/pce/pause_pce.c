@@ -1,5 +1,6 @@
 #include "video_pce.h"
 #include "overlay_pce.h"
+#include "sgx_pce.h"
 #ifdef RETAIL
 #ifdef PCE_SGX
 #define PAUSE_CODE __attribute__((noinline,minsize,section(".ram_bank130.text")))
@@ -71,6 +72,15 @@ PAUSE_CODE void pause_show_body(void) {
     /* Put PAUSE first so the hardware sprite limits cannot hide the label.
      * The last three actors are omitted only while paused; all 64 restore. */
     pause_copy(target+12,saved,244,false);
+#ifdef PCE_SGX
+    /* The added herd row shares VDC0 with the retained foreground. Hiding
+     * VDC1 alone only removes the original row. Keep the saved SAT intact
+     * for unpause, but hide the VDC0 horses in the temporary pause table. */
+    if(pce_sgx_gameplay()&&pce_metrics.stage==1)for(uint8_t i=0;i<61;++i)
+        if((saved[(uint16_t)i*4+3]&15)==13) {
+            video_vdc(0,target+12+(uint16_t)i*4);video_vdc(2,0);
+        }
+#endif
     vdc_sprite_t *label=sat[1];
     for(uint8_t i=0;i<3;++i)label[i]=(vdc_sprite_t){64+104,32+(pce_raster_enabled?232:104)+i*16,
         (PAUSE_WORD>>5)+i*2,VDC_SPRITE_FG|15};

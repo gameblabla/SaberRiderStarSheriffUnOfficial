@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Native herd SAT/scanline equivalence and exact double-buffer contents."""
-import argparse,json,random,struct,tempfile
+import argparse,json,random,struct,subprocess,tempfile
 from pathlib import Path
-from emulator import Emulator,boot,symbol
+from emulator import Emulator,ROOT,boot,symbol
 
 def reference(horses,camera,code,count,occupancy,exact):
     entries=[];occ=list(occupancy)
@@ -24,8 +24,14 @@ def reference(horses,camera,code,count,occupancy,exact):
 
 def verify(out):
     elf=out/'app.elf';rng=random.Random(6280);checks=0
-    names='herd_draw actors camera frame sat sat_count sat_page sprite_occupancy sprite_exact cur shown prefetch prefetched play_scene'.split()
+    names='herd_draw actors camera frame sat sat_count sat_page sprite_occupancy sprite_exact cur shown prefetch prefetched play_scene pce_sat_pending herd_pending herd_live herd_horse_count pce_display_on vce_q_head vce_q_tail vce_hold'.split()
     addr={name:symbol(elf,name) for name in names}
+    nm=ROOT/'PCE/llvm-mos8/bin/llvm-nm'
+    symbols={}
+    for line in subprocess.check_output([str(nm),str(elf)],text=True).splitlines():
+        fields=line.split()
+        if len(fields)==3:symbols.setdefault(fields[2],int(fields[0],16))
+    def bank(name):return (symbols[name]>>16)&255
     with tempfile.TemporaryDirectory(prefix='herd-render-',dir=out) as base,Emulator(out/'saber_rider.cue',base) as e:
         boot(e,symbol(elf,'pce_metrics'));e.run(120)
         # Inject isolated calls into resident console RAM. Mask all hardware
@@ -34,10 +40,20 @@ def verify(out):
         def call(name):
             a=symbol(elf,name)
             e.write(0x3bf0,bytes([0x20,a&255,a>>8,0x4c,0xf3,0x3b]))
-            bank=110 if name=='presentation_frame' else 111
-            for key,val in [('P',4),('SP',253),('MPR3',bank),('MPR6',108),('PC',0x3bf0)]:e.call('register_set',key,val)
+            for key,val in [('P',4),('SP',253),('MPR3',bank(name)),('MPR6',108),('PC',0x3bf0)]:e.call('register_set',key,val)
             e.run(2)
+            # Direct helper calls can span multiple video frames (notably a
+            # first herd pose upload). Do not read partially-mutated state
+            # just because the initial run quantum expired.
+            for _ in range(120):
+                regs=e.call('registers')['registers']
+                if regs['PC']==0x3bf3:return
+                e.run(1)
+            raise AssertionError((name,'native helper did not return to sentinel',regs))
         def seed(name,data):e.write(addr[name],data)
+        # The synthetic calls run with IRQs masked. Disable the active-display
+        # palette queue so a full palette ring cannot enter video_wait forever.
+        seed('pce_display_on',b'\0');seed('vce_q_head',b'\0');seed('vce_q_tail',b'\0');seed('vce_hold',b'\0')
         call('herd_reserve')
         for exact in (0,1):
             for case in range(80):
@@ -45,14 +61,24 @@ def verify(out):
                 horses=[(camera+rng.choice([-200,-60,40,72,180,290,328,500]),rng.choice([-32,32,48,55,160,230,270])) for _ in range(rng.randrange(1,6))]
                 actors=b''.join(struct.pack('<4h13B',x,y,0,0,0,0,4,4,1,11,1,0,1,0,0,0,0) for x,y in horses)
                 seed('actors',actors+bytes(21*(8-len(horses))))
+                # herd_draw skips its renderer when no encounter convoy is
+                # pending; this isolated fixture supplies one synthetic horse.
+                seed('herd_pending',b'\1');seed('herd_live',b'\1')
                 seed('camera',struct.pack('<H',camera));seed('frame',b'\0\0')
                 seed('sat_count',bytes([count]));seed('sat_page',bytes([page]));seed('sprite_exact',bytes([exact]))
                 occ=bytes(rng.randrange(17) for _ in range(240)) if case%3==0 else bytes([rng.randrange(17)])*240
                 seed('sprite_occupancy',occ)
+                # This harness masks hardware IRQs and calls the draw helper
+                # directly, so each synthetic draw acknowledges publication.
+                seed('pce_sat_pending',b'\0')
                 call('herd_draw')
                 cur=e.memory(addr['cur'],1)[0];code=(0x4800+(28+cur*10)*256)>>5
                 entries,n,expected=reference(horses,camera,code,count,occ,exact)
-                assert e.memory(addr['sat_count'],1)[0]==n,(exact,case,horses)
+                actual_count=e.memory(addr['sat_count'],1)[0]
+                assert actual_count==n,('count',exact,case,horses,'expected',n,'actual',actual_count,
+                                        'pending/live/collected',e.memory(addr['herd_pending'],1)[0],
+                                        e.memory(addr['herd_live'],1)[0],e.memory(addr['herd_horse_count'],1)[0],
+                                        'sat_pending',e.memory(addr['pce_sat_pending'],1)[0])
                 actual=e.memory(addr['sat']+page*512+count*8,len(entries))
                 assert actual==entries,(exact,case,horses,count,actual.hex(),entries.hex())
                 assert e.memory(addr['sprite_occupancy'],240)==expected,(exact,case,'occupancy')
@@ -67,18 +93,22 @@ def verify(out):
         source=(out/'s1.bin').read_bytes()[horse+32:horse+32+5*5120]
         assert len(source)==25600
         seed('actors',struct.pack('<4h13B',2072,160,0,0,0,0,4,4,1,11,1,0,1,0,0,0,0)+bytes(7*21))
+        seed('herd_pending',b'\1');seed('herd_live',b'\1')
         seed('shown',b'\xff');seed('prefetch',b'\xff');seed('prefetched',b'\0\0')
         seed('sat_page',b'\0');seed('sprite_exact',b'\1')
         for tick in list(range(24))+[26,28,33,40,41,42,43,44]:
             seed('frame',struct.pack('<H',tick));seed('sat_count',b'\0');seed('sprite_occupancy',bytes(240))
             oldcur=e.memory(addr['cur'],1)[0]
             old=bytes.fromhex(e.call('asread','vram0',(0x4800+(28+oldcur*10)*256)*2,5120)['hex'])
+            # The IRQ is deliberately masked for this isolated helper call,
+            # so acknowledge the previous synthetic presentation explicitly.
+            seed('pce_sat_pending',b'\0')
             call('herd_draw')
             cur=e.memory(addr['cur'],1)[0];want=(tick>>2)%5
             actual=bytes.fromhex(e.call('asread','vram0',(0x4800+(28+cur*10)*256)*2,5120)['hex'])
             assert actual==source[want*5120:(want+1)*5120],('frame bytes',tick)
-            if cur!=oldcur and tick%4==0:
-                assert bytes.fromhex(e.call('asread','vram0',(0x4800+(28+oldcur*10)*256)*2,5120)['hex'])==old,('display buffer',tick)
+            if cur!=oldcur:
+                assert bytes.fromhex(e.call('asread','vram0',(0x4800+(28+oldcur*10)*256)*2,5120)['hex'])==old,('previously displayed horse buffer changed before synthetic publication',tick)
         # Compare retained HUD replay with a fresh native build for every
         # sheriff/HP combination and both occupancy representations.
         try:hero_address=symbol(elf,'pce_control')+5
@@ -103,7 +133,8 @@ def verify(out):
                     assert e.memory(addr['sat'],n*8)==expected_sat,('HUD SAT',hero,hp)
                     assert e.memory(addr['sprite_occupancy'],240)==expected_lines,('HUD lines',hero,hp)
                     hud_cases+=1
-    report=dict(sat_and_occupancy_cases=checks,hud_cases=hud_cases,animation_frames=5,stream_ticks=32,passed=True)
+    report=dict(sat_and_occupancy_cases=checks,hud_cases=hud_cases,animation_frames=5,stream_ticks=32,
+                missed_tick_old_buffer_stable=True,passed=True)
     (out/'herd-render-verification.json').write_text(json.dumps(report,indent=2)+'\n');print(report)
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--out',type=Path,default=Path('build/pce'));verify(p.parse_args().out.resolve())

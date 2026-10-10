@@ -126,6 +126,30 @@ DY = 0x20de
  * before race_start and remains resident in the race's borrowed BG cache. */
 .extern cache_refs
 smul8:
+#ifdef PCE_SGX
+    /* Signed byte product from the resident unsigned table. Correct the
+       high byte for each negative input; the low byte is identical. */
+    sta T0
+    stx T1
+    phy
+    jsr pce_fast_mul8
+    sta T2
+    txa
+    ldy T0
+    bpl 1f
+    sec
+    sbc T1
+1:
+    ldy T1
+    bpl 2f
+    sec
+    sbc T0
+2:
+    tax
+    lda T2
+    ply
+    rts
+#else
     sta T0
     txa
     eor T0
@@ -200,6 +224,7 @@ smul8:
     lda T0
     ldx T1
     rts
+#endif
 /* road_k[X/4] += SH:SL << 7 (X = 0 or 4); the shift is the 24-bit SH:SL:0 arithmetic-shifted right once */
 .Lacc7:
     lda SH

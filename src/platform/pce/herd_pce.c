@@ -113,6 +113,10 @@ static void herd_stream_sgx(void) {
 #endif
 PCE_FLOW static void herd_stream(void) {
     /* Both builds stream VDC0; SGX selects its resident VDC1 pose separately. */
+    extern volatile uint8_t pce_sat_pending;
+    /* The alternate pose can still belong to the preceding displayed SAT.
+     * Wait for its replacement before reusing any of its pattern storage. */
+    while(pce_sat_pending) {}
     uint8_t want=(frame>>2)%5;
     if(want!=shown) {
         /* Finish a partially prefetched frame after a missed simulation tick.
@@ -125,6 +129,10 @@ PCE_FLOW static void herd_stream(void) {
                 PCE_SPR_WORD+(uint16_t)BUFFER_PAGE(cur)*256+(prefetched>>1),5120-prefetched);
         }
         shown=want;prefetch=(want+1)%5;prefetched=0;
+        /* A skipped tick may switch poses at phase 1, 2 or 3. The old pose
+         * remains visible until this draw is published, so prefetch it only
+         * on a subsequent draw, after the publication wait above. */
+        return;
     }
     /* Start reusing the previous buffer after its final display VBlank.
      * Four equal 1280-byte slices bound the work of every draw; the last

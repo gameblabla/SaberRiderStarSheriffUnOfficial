@@ -57,12 +57,12 @@ POWER_CODE static void band_cells(uint8_t x0,uint8_t x1,uint8_t col0,uint8_t row
 POWER_CODE static void band_restore(uint8_t col0,uint8_t row0) {
     const PceScene *sc=video_scene_ptr;
     uint16_t *words=(uint16_t*)(buffer+1024);   /* (the palette snapshot is in the first 1024 bytes) */
-    if(pce_sgx_gameplay()&&pce_metrics.stage!=1&&pce_metrics.stage!=3) {
+    if(pce_sgx_gameplay()&&pce_metrics.stage>=6) {
         for(uint16_t i=0;i<COLS*BAND_ROWS;++i)words[i]=PCE_FONT_WORD>>4;
     } else {
     uint32_t map=sc->map;
 #ifdef PCE_SGX
-    if(pce_sgx_gameplay()&&(pce_metrics.stage==1||pce_metrics.stage==3))map=sc->sgx_map;
+    if(pce_sgx_gameplay()&&sc->sgx_map)map=sc->sgx_map;
 #endif
     for(uint8_t x=0;x<COLS;++x) {
         uint16_t world=(uint16_t)(pce_scroll_x>>3)+x;
@@ -153,7 +153,7 @@ POWER_CODE void power_frame(void) {
         if(!(pce_sgx_gameplay()&&stage==7)) {
             uint32_t palette=video_scene_ptr->pal;
 #ifdef PCE_SGX
-            if(pce_sgx_gameplay()&&(stage==1||stage==3))palette=video_scene_ptr->sgx_pal;
+            if(pce_sgx_gameplay()&&video_scene_ptr->sgx_pal)palette=video_scene_ptr->sgx_pal;
 #endif
             arcade_read(2,palette+15*32,buffer+1024,32);
             pce_vce_copy_palette(15,buffer+1024,1);

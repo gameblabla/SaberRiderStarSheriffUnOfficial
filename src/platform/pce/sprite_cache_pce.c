@@ -16,23 +16,31 @@ uint8_t sprite_slot_of[PCE_SPRITE_IDS],sprite_count[48],sprite_len[48],sprite_p0
 uint16_t sprite_words1[48] __attribute__((section(".ram_bank104.cache")));
 uint8_t pattern_owner1[54];
 uint32_t sprite_requested_palette;
-uint32_t sprite_palette_key[48] __attribute__((section(".ram_bank129.palette")));
+uint32_t sprite_palette_key[16] __attribute__((section(".ram_bank129.palette")));
 uint8_t sprite_palette_needs_upload;
 static uint8_t palette_slot;
 static uint8_t palette_result;
+__attribute__((noinline,section(".ram_bank129.text")))
+void sprite_palette_reset(void) {
+    for(uint8_t p=0;p<16;++p)sprite_palette_key[p]=0;
+}
 /* Pattern slots are independent of the VCE's twelve actor palettes. Exact
  * archive palette identity lets all poses retain the same hardware colors. */
 __attribute__((noinline,section(".ram_bank129.text")))
 static void palette_prepare(void) {
     uint16_t protected=0;
     palette_result=255;sprite_palette_needs_upload=1;
+    /* VCE palettes are shared by all poses and both VDCs. Search twelve
+       hardware identities once, rather than comparing up to 48 pose keys.
+       Retiring a pattern does not change its palette's VCE contents. */
+    for(uint8_t pal=0;pal<12;++pal)
+        if(sprite_palette_key[pal]==sprite_requested_palette) {
+            palette_result=pal;sprite_palette_needs_upload=0;return;
+        }
     for(uint8_t q=0;q<48;++q) {
         if(sprite_ids[q]==65535)continue;
         uint8_t pal=sprite_attr[q]&15;
         if(pal>=12)continue;
-        if(sprite_palette_key[q]==sprite_requested_palette) {
-            palette_result=pal;sprite_palette_needs_upload=0;return;
-        }
         if(sprite_used[q]||sprite_pinned[q])protected|=(uint16_t)1<<pal;
     }
     for(uint8_t pal=0;pal<12;++pal)if(!(protected&((uint16_t)1<<pal))) {
@@ -65,6 +73,23 @@ uint8_t sprite_palette(uint16_t id,uint8_t slot) {
     return slot<15?slot:15;
 }
 #define CACHE_CODE __attribute__((noinline,section(".ram_bank129.text")))
+#ifdef PCE_SGX
+CACHE_CODE static void pages_release(uint8_t *owners,uint16_t *words,uint8_t slot) {
+    uint8_t owner=slot+1;
+    /* Owner 48 also marks horse/hull reservations, which need not be
+       described by slot 47's ordinary pose metadata. */
+    if(slot==47) {
+        for(uint8_t p=0;p<54;++p)if(owners[p]==owner)owners[p]=0;
+        return;
+    }
+    /* Each ordinary allocation is one contiguous block per VDC. Keep the
+       ownership check: part of an old block may already be retired. */
+    uint8_t first=(words[slot]>>8)-(PCE_SPR_WORD>>8);
+    if(first>=54)return;
+    uint8_t end=first+((sprite_count[slot]+3)>>2);
+    for(uint8_t p=first;p<end;++p)if(owners[p]==owner)owners[p]=0;
+}
+#endif
 CACHE_CODE static void allocate(void) {
     uint16_t id=cache_id;uint8_t count=cache_count;
     const PceScene *s=&pce_scenes[pce_metrics.stage-1];
@@ -161,6 +186,11 @@ CACHE_CODE static void allocate(void) {
 #ifdef PCE_SGX
     if(second&&hud&&first==14)first=0;
     else if(split&&hud&&first==14&&id<sprite_cache_foreground_first)first=8;
+    /* The split platform hero lives on VDC1. VDC0 needs only the HUD's
+     * pages 0..7; its unused hero range must remain available to foreground
+     * chunks beside the two reserved horse buffers. Live fallback actors
+     * are still protected by the normal page-owner/generation checks. */
+    if(split&&!second&&hud&&id>=sprite_cache_foreground_first)first=8;
 #endif
     /* Race dialogue glyphs extend through $4dff; leave those six pages
      * reserved throughout the race, including before a panel opens. */
@@ -201,21 +231,17 @@ CACHE_CODE static void allocate(void) {
             if(palette_result==255)return;
         }
         if(palette_result>=12) {
-            for(uint8_t q=0;q<48;++q)
-                if(sprite_ids[q]!=65535&&(sprite_attr[q]&15)==palette_result&&
-                   sprite_palette_key[q]==sprite_requested_palette) {sprite_palette_needs_upload=0;break;}
+            if(sprite_palette_key[palette_result]==sprite_requested_palette)sprite_palette_needs_upload=0;
         }
         sprite_attr[slot]=palette_result;
-        sprite_palette_key[slot]=sprite_requested_palette;
+        sprite_palette_key[palette_result]=sprite_requested_palette;
     }
 
     if(split&&!cached) {
         /* Reusing a palette/descriptor slot retires its allocations on both
            VDCs. The shared pins above protect either displayed generation. */
-        for(uint8_t q=0;q<54;++q) {
-            if(pattern_owner[q]==slot+1)pattern_owner[q]=0;
-            if(pattern_owner1[q]==slot+1)pattern_owner1[q]=0;
-        }
+        pages_release(pattern_owner,sprite_words,slot);
+        pages_release(pattern_owner1,sprite_words1,slot);
         sprite_pb_hi[slot]=0;
     }
 #endif
@@ -229,10 +255,18 @@ CACHE_CODE static void allocate(void) {
             } else
 #endif
             sprite_ids[owner-1]=0xffff;
+#ifdef PCE_SGX
+            pages_release(owners,words,owner-1);
+#else
             for(uint8_t q=0;q<54;++q)if(owners[q]==owner)owners[q]=0;
+#endif
         }
     }
+#ifdef PCE_SGX
+    pages_release(owners,words,slot);
+#else
     for(uint8_t q=0;q<54;++q)if(owners[q]==slot+1)owners[q]=0;
+#endif
     for(uint8_t p=base;p<base+pages;++p)owners[p]=slot+1;
     words[slot]=PCE_SPR_WORD+(uint16_t)base*256;
     cache_result=slot;return;

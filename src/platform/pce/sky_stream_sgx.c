@@ -15,11 +15,13 @@ extern volatile uint8_t pce_display_on,pce_sat_pending;
 extern uint8_t buffer[2048];
 extern void pce_sgx_herd_sky_load_body(void);
 extern uint8_t sat1_previous_count[2];
+void sprite_palette_reset(void);
 static uint16_t sky_cursor PCE_WORK;
 static uint8_t sky_held_count PCE_WORK;
 static uint16_t sky_near_first PCE_WORK;
 static uint16_t moon_column PCE_WORK;
 static uint8_t moon_phase PCE_WORK,moon_visible PCE_WORK;
+static uint8_t moon_page_phase[2] PCE_WORK;
 #define MOON_WORD 0x3000
 #define MOON_PAGE_WORDS 2704
 volatile uint8_t pce_sgx_sky_page PCE_WORK;
@@ -71,9 +73,13 @@ static inline void sky_write(uint8_t reg,uint16_t word) {
 
 SKY_CODE void pce_sgx_sky_load_body(void) {
     const PceScene *scene=&pce_scenes[pce_metrics.stage-1];
+    /* Menus/cutscenes and same-stage restarts may have replaced sprite VCE
+       palettes even when cached archive addresses happen to be identical. */
+    overlay_call(0x81,sprite_palette_reset);
     pce_sgx_sky_first=sky_near_first=0xffff;sky_cursor=0;sky_held_count=0;
     pce_sgx_sky_split_line=0;
     moon_visible=0;moon_phase=255;pce_sgx_sky_page=0;sky_bat=0;
+    moon_page_phase[0]=moon_page_phase[1]=255;
     for(uint8_t p=0;p<54;++p)pattern_owner1[p]=0;
     pce_sgx_sky.cols=0;
     pce_sgx_metrics.paired_screen|=PCE_SGX_STATIC_SKY;
@@ -111,6 +117,7 @@ SKY_CODE void pce_sgx_sky_load_body(void) {
  * windows and BAT rows. The horse scene caps the cache at $2800, where its
  * three resident poses begin; streamed panoramas can never overwrite them. */
 SKY_CODE static uint16_t camera_offset(uint16_t speed) {
+    if(speed==256)return pce_scroll_x;
     return (pce_scroll_x>>8)*speed+(((pce_scroll_x&255)*speed+255)>>8);
 }
 SKY_CODE void pce_sgx_sky_stream_body(void) {
@@ -118,7 +125,10 @@ SKY_CODE void pce_sgx_sky_stream_body(void) {
     if(!s->cols)return;
     uint16_t offset=camera_offset(s->speed);
     uint16_t near_offset=camera_offset(s->near_speed);
-    int16_t moon_left=179-((uint32_t)pce_scroll_x*5>>8);
+    /* Stage cameras are 16 bits; byte decomposition avoids a long multiply.
+       Stages without a moon do not need any moon-position arithmetic. */
+    int16_t moon_left=s->moon_patterns?179-((pce_scroll_x>>8)*5+
+        ((uint16_t)(uint8_t)pce_scroll_x*5>>8)):0;
     uint16_t moon_world=(uint16_t)(moon_left+offset);
     bool moon_on=s->moon_patterns&&moon_left>-96&&moon_left<256;
     bool moon_same=moon_on==!!moon_visible&&(!moon_on||
@@ -242,10 +252,11 @@ SKY_CODE void pce_sgx_sky_stream_body(void) {
         if(moon_on) {
             uint16_t world=moon_world;
             uint8_t phase=world&7;moon_column=world>>3;
-            {   /* Each inactive pattern page receives the complete phase. */
+            if(moon_page_phase[sky_bat?1:0]!=phase) {
                 arcade_vram_to(1,s->moon_patterns+(uint32_t)phase*5408,moon_word,5408);
-                moon_phase=phase;
+                moon_page_phase[sky_bat?1:0]=phase;
             }
+            moon_phase=phase;
             for(uint8_t row=0;row<13;++row) {
                 uint8_t mask[13];
                 arcade_read(2,s->moon_patterns+43264UL+(uint16_t)phase*169+(uint16_t)row*13,mask,13);

@@ -68,6 +68,11 @@ def check_camera_scroll(r, e, stage):
     assert main == expected_main, (stage, 'main sky camera offset', camera, main, expected_main)
     assert first == main >> 3, (stage, 'main BAT column', first, main)
     assert near == expected_near, (stage, 'near sky camera offset', camera, near, expected_near)
+    # The debugger exposes the second VDC's BXR under the duplicate BXR key.
+    # Hardware keeps only the low ten scroll bits, including at BAT wraps.
+    bxr = e.call('registers')['registers']['BXR']
+    assert bxr == (expected_main & 0x3FF), (
+        stage, 'VDC1 BXR', camera, bxr, expected_main & 0x3FF)
     near_first = near >> 3
     return {'camera_x': camera, 'main_scroll': main, 'expected_main': expected_main,
             'near_scroll': near, 'expected_near': expected_near, 'bat_first': first,
@@ -92,7 +97,7 @@ def run(out):
     r = Rendering(out)
     r.sym.update({name: symbol(out / 'app.elf', name) for name in
                   ('camera', 'cut_phase', 'pce_scroll_x', 'pce_sgx_sky_near_x',
-                   'pce_sgx_vdc1_hidden', 'walk_in')})
+                   'pce_sgx_sky_split_line', 'pce_sgx_vdc1_hidden', 'walk_in')})
     report = {'camera_samples': [], 'visible_sky_cells': {}}
     with Emulator(out / 'saber_rider.cue', out / 'motion-emulator', sgx=True) as e:
         boot(e, r.address)
@@ -181,16 +186,18 @@ def run(out):
             r.settle(e)
             checks = check_visible_sky(r, e, stage)
             camera_state = check_camera_scroll(r, e, stage)
-            if stage != 4:
-                assert camera_state['main_window_crosses_bat'], (stage, 'main BAT edge not crossed', camera_state)
-            else:
-                assert camera_state['near_window_crosses_bat'], ('stage 4 near BAT edge not crossed', camera_state)
+            assert camera_state['main_window_crosses_bat'], (stage, 'main BAT edge not crossed', camera_state)
             report['visible_sky_cells'][f'stage{stage}_sample'] = checks
             if stage == 4:
                 record = struct.unpack_from(
                     SKY_RECORD, (out / 's4.bin').read_bytes(),
                     r.manifest['scenes'][3]['records']['sgx_sky_record']['offset'])
-                assert record[16] == 8 and record[13] > 0, ('stage 4 split band missing', record[13], record[16])
+                assert record[10] == 256 and record[12] == 0 and record[16] == 0, (
+                    'stage 4 sky must use one full-speed panorama',
+                    record[10], record[12], record[16])
+                assert r.word(e, 'pce_sgx_sky_near_x') == 0
+                assert e.memory(r.sym['pce_sgx_sky_split_line'], 1) == b'\0'
+                assert camera_state['main_scroll'] == camera_state['camera_x'], camera_state
             report.setdefault('camera_by_stage', {})[str(stage)] = camera_state
             r.metrics(e)
 

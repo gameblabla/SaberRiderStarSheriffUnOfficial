@@ -26,3 +26,10 @@ static inline int16_t hypot16(int16_t dx,int16_t dy) {
 }
 /* (a * b) / 128 for |b| <= 127, in 16 bits (the magnitude of a is cut to 14 bits' worth of precision): one copy, in the resident bank (race_pce.c) */
 int16_t muls(int16_t a,int8_t b);
+#ifdef PCE_SGX
+/* Road tables use bytes 0..767 and knots use 1024..1087. The platform
+ * column cache is idle in the race; its remaining space holds exact segment
+ * reciprocals, rebuilt once when the track loads. */
+extern uint16_t columns[33][30];
+#define RACE_SEGMENT_INV ((uint16_t *)((uint8_t *)columns+1152))
+#endif

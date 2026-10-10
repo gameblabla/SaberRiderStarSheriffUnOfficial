@@ -39,3 +39,6 @@ void foes_aimed_bolt(void);    /* arg_x, arg_y, arg_speed, arg_life */
 extern Visible vis[18];extern uint8_t nvis;
 extern int16_t bolt_sx[10],bolt_sy[10];extern uint16_t bolt_ok;extern uint8_t bolt_step[10],lap_banner;
 void project_entities(void),qtable_init(void);
+#ifdef PCE_SGX
+void race_segment_init(void);
+#endif

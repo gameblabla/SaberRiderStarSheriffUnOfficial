@@ -37,6 +37,7 @@ __ram_bank146_bank = 146;
 MEMORY { ram_bank146 (rwxa) : ORIGIN = 0x01926000, LENGTH = 0x2000 }
 SECTIONS { .ram_bank146 : { *(.ram_bank146 .ram_bank146.*) } >ram_bank146 }
 INCLUDE binary-scd.ld
+pce_qsquare_cpu = DEFINED(pce_qsquare_low) ? ((pce_qsquare_low & 0x1fff) | 0xc000) : 0;
 __pce_app_entry = ABSOLUTE(_start);
 ASSERT(ADDR(.zp) + SIZEOF(.zp) <= 0xf82080, "Audio state overlaps compiler zero page")
 ASSERT(__zp_bss_start + __zp_bss_size <= 0xf82080, "Audio state overlaps compiler zero page")

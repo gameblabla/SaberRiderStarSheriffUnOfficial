@@ -89,7 +89,13 @@ RACE_CODE static int16_t project(void) {
     /* where the car is along its segment, exactly (Q8): the segments are 36 to 66 units long, and a fixed length made the progress
      * (the stripes) and the road's direction jump each time the nearest sample changed. The division by the segment's squared length is a
      * multiplication by its reciprocal (2^24 / length^2), made when the nearest sample changes: a 32-bit division took 3,000 cycles a step. */
-    if(seg_index!=bi){seg_index=bi;seg_inv=(uint16_t)(16777216UL/(uint16_t)(sx*sx+sy*sy));}
+    if(seg_index!=bi){seg_index=bi;
+#ifdef PCE_SGX
+        seg_inv=RACE_SEGMENT_INV[bi];
+#else
+        seg_inv=(uint16_t)(16777216UL/(uint16_t)(sx*sx+sy*sy));
+#endif
+    }
     int16_t dot=smul(rx,sx)+smul(ry,sy);
     uint16_t dm=dot<0?-dot:dot,magnitude=(uint16_t)umul(dm>>8,seg_inv>>8)+((uint16_t)(umul(dm>>8,seg_inv&255)+umul(dm&255,seg_inv>>8))>>8);   /* |dot| * inv >> 16 */
     int16_t along=dot<0?-(int16_t)magnitude:(int16_t)magnitude;
@@ -193,6 +199,10 @@ RACE_CODE static void begin_pursuit(void);
 PCE_BOSS static void race_reset(void) {
     audio_pcm_turbo_loop(false);
     arcade_read(1,pce_scenes[1].track,track,sizeof track);
+#ifdef PCE_SGX
+    overlay_call(0x80,race_segment_init);
+    seg_index=255;seg_inv=RACE_SEGMENT_INV[255];
+#endif
     car_max=pce_options.difficulty==0?16:pce_options.difficulty==1?12:8;car_hp=car_max;
     pce_metrics.hp=8;pce_campaign.lap=1;lap_banner=0;pce_campaign.rank=8;pce_campaign.boss_kind=0;pce_campaign.boss_hp=0;
     boost=255;boost_on=boost_locked=0;hurt=spin=shake=fire_cd=ram_cd=0;speed=0;tilt=0;race_time=0;phase_t=0;

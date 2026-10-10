@@ -323,6 +323,9 @@ void pce_sgx_sprite_upload_body(void) {
 
 SGX_GAME_CODE void pce_sgx_vdc1_hide_body(void) {
     if(!pce_sgx_vdc1_sprites())return;
+    /* A pending publication can otherwise clear hidden between these stores
+     * and enable VDC1 again while the pause SAT is being prepared. */
+    __attribute__((leaf)) asm volatile("php\nsei" ::: "p", "memory");
     pce_sgx_vdc1_hidden = 1;
     pce_sgx_sat1_pending = pce_sgx_sat1_ready = 0;
     bool show_bg = pce_sgx_arena_sprites() ?
@@ -330,6 +333,7 @@ SGX_GAME_CODE void pce_sgx_vdc1_hide_body(void) {
         pce_sgx_vdc1_sprites();
     vdc1_write(VDC_REG_CONTROL,
         pce_display_on && show_bg ? VDC_CONTROL_ENABLE_BG : 0);
+    __attribute__((leaf)) asm volatile("plp" ::: "p", "memory");
 }
 
 /* The renderer prepares a transformed BAT column in buffer[1920..2010]. */

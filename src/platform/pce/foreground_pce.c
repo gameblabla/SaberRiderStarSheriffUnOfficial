@@ -111,6 +111,14 @@ FG_ENTER_CODE static void enter_body(void) {
     int16_t entry[3];
     uint16_t offset=(enter_index<<2)+(enter_index<<1);
     arcade_read(2,enter_base+offset,entry,6);
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay()&&pce_metrics.stage<6&&pce_metrics.stage!=2) {
+        /* These are temporary canonical-X entries, not a displayed SAT.
+         * Chunks at different world positions must not compete at X=96
+         * while building the retained list. Admission runs again at draw. */
+        sat_count=0;sprite_lines_clear();
+    }
+#endif
     uint8_t before=sat_count;
 #ifdef PCE_SGX
     enter_sprite_id=entry[2];enter_sprite_y=entry[1];

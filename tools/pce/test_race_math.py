@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exhaustively execute the signed-byte road multiply on the native CPU."""
-import argparse,struct,tempfile
+import argparse,json,struct,tempfile
 from pathlib import Path
 from emulator import Emulator,boot,symbol
 from test_campaign import Campaign
@@ -9,6 +9,30 @@ def verify(out,sgx=False):
     out=out.resolve();c=Campaign(out,sgx=sgx);elf=out/'app.elf'
     with tempfile.TemporaryDirectory(prefix='race-math-',dir=out) as base,Emulator(out/'saber_rider.cue',base,sgx=sgx) as e:
         boot(e,c.address);c.seed(e,'stage',1,1);c.field(e,'state',2);c.advance(e,2);c.dialogs(e)
+        if sgx:
+            # race_reset precomputes one exact 2^24 / segment-length^2
+            # reciprocal for each of the track's 256 wraparound segments.
+            manifest=json.loads((out/'manifest.json').read_text())
+            scene=manifest['scenes'][1]
+            record=scene['records']['track'];blob=(out/'s2.bin').read_bytes()
+            points=[struct.unpack_from('<HHB',blob,record['offset']+i*5)
+                    for i in range(256)]
+            want=[]
+            for i,(x,y,_heading) in enumerate(points):
+                nx,ny,_=points[(i+1)&255]
+                dx=((nx-x+32768)&0xffff)-32768
+                dy=((ny-y+32768)&0xffff)-32768
+                if dx>4096:dx-=8192
+                elif dx<-4096:dx+=8192
+                if dy>4096:dy-=8192
+                elif dy<-4096:dy+=8192
+                denominator=dx*dx+dy*dy
+                assert denominator>0,('zero-length track segment',i)
+                want.append((1<<24)//denominator)
+            columns=symbol(elf,'columns')
+            got=struct.unpack('<256H',e.memory(columns+1152,512))
+            assert list(got)==want,('SGX road reciprocal table',next(
+                (i,got[i],want[i]) for i in range(256) if got[i]!=want[i]))
         # Run a standalone loop in a retired renderer bank with IRQs masked.
         # The work bank containing quarter squares stays mapped. Real CPU
         # stores configure the Arcade port; debugger I/O pokes bypass handlers.
@@ -37,5 +61,6 @@ def verify(out,sgx=False):
         expected=b''.join(struct.pack('<h',(a if a<128 else a-256)*(b if b<128 else b-256)) for b in range(256) for a in range(256))
         assert actual==expected,'Signed road multiply differs from exact products'
     print('Native road multiply: all 65,536 signed-byte pairs passed')
+    if sgx:print('SGX road reciprocals: all 256 track segments exact')
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--out',type=Path,default=Path('build/pce'));p.add_argument('--sgx',action='store_true');a=p.parse_args();verify(a.out,a.sgx)

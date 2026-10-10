@@ -16,6 +16,16 @@
 extern uint16_t cache_refs[];
 #define QSQ cache_refs                                 /* 511 entries: q(0..510) */
 #define BELOW ((uint8_t*)cache_refs+1022)             /* 10080 / f for f 40..560 */
+#ifdef PCE_SGX
+__attribute__((noinline,minsize,section(".ram_bank128.text")))
+void race_segment_init(void) {
+    for(uint16_t i=0;i<256;++i) {
+        uint8_t n=i+1;
+        int16_t dx=wrapdiff(track[n].x,track[i].x),dy=wrapdiff(track[n].y,track[i].y);
+        RACE_SEGMENT_INV[i]=(uint16_t)(16777216UL/(uint16_t)(dx*dx+dy*dy));
+    }
+}
+#endif
 PCE_X2 void qtable_init(void) {
     uint16_t m2=0;
     for(uint16_t m=0;m<=255;++m){QSQ[2*m]=m2;QSQ[2*m+1]=m2+m;m2+=2*m+1;}   /* q(2m) = m^2, q(2m+1) = m^2 + m */

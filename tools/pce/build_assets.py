@@ -731,7 +731,12 @@ def platform_background(stage, work, sgx=False):
         backing=np.tile(sky_pixels,(1,math.ceil(sgx_near.width/sgx_sky.width),1))[:, :sgx_near.width]
         composite=Image.fromarray(backing.copy())
         composite.alpha_composite(sgx_near)
-        sgx_near=composite
+        # The forest sky is one scrolling panorama, including its mountains.
+        # A raster split moved the two parts at different speeds and left
+        # independently cached row bands visible during column replacement.
+        composite.info.update(sgx_sky.info)
+        sgx_sky=composite
+        sgx_near=None
     if stage == 1:
         out = scenery_background(out, work, stage, prop_occlusion)
         if sgx_main is not None: sgx_main = scenery_background(sgx_main, work, stage, prop_occlusion)
@@ -1630,7 +1635,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
                 moon_patterns=a.add('sgx_red_moon_patterns',b''.join(phases)+b''.join(masks))
                 # Palette 14 is reserved on platform BGs for this overlay.
                 moon_palette=a.add('sgx_red_moon_palette',pal.tobytes())
-            speed=13 if stage==3 else (max(64,round(sky_layer.parallax*256)) if sky_layer.extra==1 else round(sky_layer.parallax*256))
+            speed=256 if stage==4 else 13 if stage==3 else (max(64,round(sky_layer.parallax*256)) if sky_layer.extra==1 else round(sky_layer.parallax*256))
             wrap=1 if stage==1 else 2
             if tile_count>16384:raise ValueError('SGX sky bands exceed the shared directory')
             meta['sgx_sky_record']=a.add('sgx_sky_record',struct.pack('<IIHBIHIHHHHBIHHHBII',tile_start,sky['map'],tile_count,64,

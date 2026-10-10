@@ -31,7 +31,7 @@ if 'pce_sgx_sky_stream_body' in addresses:
         pce_sgx_vdc1_sat_upload_body=120,pce_sgx_sprite_upload_body=128,
         pce_sgx_cache_upload_body=128,hull_body=128,platform_begin_body=128,
         pce_sgx_select_body=110,pce_sgx_budget_body=110,pce_sgx_ui_load_body=124,pce_sgx_ui_end_body=124,
-        hull_mirror_body=120,hull_claim_tail_body=128,ui_fade_body=128)
+        hull_mirror_body=120,hull_claim_tail_body=128,ui_fade_body=128,race_segment_init=128,sprite_palette_reset=129)
     animation=addresses.get('pce_sgx_select_animate_body',0)
     if animation and ((animation>>16)&255!=135 or not 0xc000<=animation&65535<0xe000):
         raise SystemExit('Selection animation must execute through MPR6 in bank 135')
@@ -50,6 +50,16 @@ for name,bank in fixed_banks.items():
         raise SystemExit(f'{name} must stay in overlay bank ${bank:02x}')
 if re.search(r'\b__(?:u?div|u?mod|mul|add|sub|eq|ne|lt|le|gt|ge)(?:sf|df|di)\w*\b',symbols):
     raise SystemExit('Floating-point or 64-bit arithmetic reached the target image')
+if 'pce_fast_mul8' in addresses:
+    if re.search(r'\b__(?:u?div|u?mod|mul)(?:qi|hi|si)3\b',symbols):
+        raise SystemExit('Generic SDK arithmetic reached the SGX image; use the exact fast variants')
+    for name in ('mul8','mul16','mul32','udiv8','udiv16','udiv32','umod8','umod16','div16'):
+        address=addresses.get('pce_fast_'+name,0)
+        if address>>16!=0x168 or not 0x4000<=address&65535<0x6000:
+            raise SystemExit(f'pce_fast_{name} must remain in always-mapped bank $68')
+    table=all_addresses.get('pce_qsquare_low',0)
+    if table>>16!=0x180 or table&255:
+        raise SystemExit('Quarter-square table must remain page-aligned in bank $80')
 sections=subprocess.check_output([str(nm.parent/'llvm-readelf'),'-S',str(elf)],text=True)
 rows=[];banks={}
 for name,kind,address,size in re.findall(r'\[\s*\d+\]\s+(\S+)\s+(PROGBITS|NOBITS)\s+([0-9a-f]+)\s+[0-9a-f]+\s+([0-9a-f]+)',sections):

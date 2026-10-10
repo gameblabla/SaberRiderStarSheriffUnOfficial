@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Seed each convoy approach; native triggers, scrolling and audio run normally."""
 import argparse,json,struct,tempfile
+from collections import Counter
 from pathlib import Path
 from emulator import Emulator,boot,symbol
 from test_campaign import Campaign
@@ -16,6 +17,19 @@ def verify(out,sgx=False):
         boot(e,c.address);e.run(120)
         on=symbol(out/'app.elf','herd_on');locked=symbol(out/'app.elf','herd_locked')
         voices=symbol(out/'app.elf','pce_pcm_voices')
+        pause_hidden=symbol(out/'app.elf','pce_sgx_vdc1_hidden') if sgx else None
+        def horse_cells(vdc):
+            return [row for row in struct.iter_unpack('<4H',
+                    bytes.fromhex(e.call('asread',f'sat{vdc}',0,512)['hex']))
+                    if row[0] and (row[3]&15)==13]
+        def pause_labels_ready():
+            rows=list(struct.iter_unpack('<4H',bytes.fromhex(e.call('asread','sat0',0,512)['hex'])))
+            first=(0x4200+0x540)>>5
+            raster=e.memory(symbol(out/'app.elf','pce_raster_enabled'),1)[0]
+            y=64+104
+            x=32+(232 if raster else 104)
+            return all(rows[i][0]==y and rows[i][1]==x+16*i and
+                       rows[i][2]==first+2*i and (rows[i][3]&15)==15 for i in range(3))
         if sgx:
             scene=json.loads((out/'manifest.json').read_text())['scenes'][0]
             blob=(out/'s1.bin').read_bytes();offset=scene['horse_offset']
@@ -69,6 +83,7 @@ def verify(out,sgx=False):
                     assert all(any((x-back)%224==112 for back in back_x) for x in front_x),('Interleaved horizontal spacing',label,front_x,back_x)
 
         for i,(trigger,stop) in enumerate(zip(triggers,stops)):
+            pause_result=None
             c.press(e,8);e.run(120)
             if sgx:
                 # All five horse poses are loaded at scene start. Their VDC1
@@ -109,6 +124,48 @@ def verify(out,sgx=False):
                 check_horse_pages(e,'locked convoy')
                 cells=[s for s in struct.iter_unpack('<4H',bytes.fromhex(e.call('asread','sat1',0,512)['hex'])) if s[0] and (s[3]&15)==13]
                 assert cells, 'No horses rendered in locked convoy'
+                if i==0:
+                    before0=horse_cells(0);before1=horse_cells(1)
+                    assert before0 and before1,('pause fixture needs both horse rows',len(before0),len(before1))
+                    before0_nonhorse=[row for row in struct.iter_unpack('<4H',
+                        bytes.fromhex(e.call('asread','sat0',0,512)['hex']))
+                        if row[0] and (row[3]&15)!=13]
+                    # Toggle immediately after the snapshot. Campaign.press's
+                    # 30-frame debounce is useful for menus, but here it lets
+                    # the live herd advance before pause is applied.
+                    e.input(8)
+                    c.until(e,lambda:e.memory(pause_hidden,1)==b'\1',limit=120,step=1)
+                    try:c.until(e,pause_labels_ready,limit=120,step=1)
+                    except AssertionError as exc:
+                        rows=list(struct.iter_unpack('<4H',bytes.fromhex(e.call('asread','sat0',0,512)['hex'])))
+                        raster=e.memory(symbol(out/'app.elf','pce_raster_enabled'),1)[0]
+                        raise AssertionError(('pause label SAT did not publish',raster,rows[:8])) from exc
+                    e.input(0);e.run(1)
+                    paused0=horse_cells(0);paused1=horse_cells(1)
+                    assert not paused0,('VDC0 interleaved horse row remained in pause SAT',paused0)
+                    assert paused1,('VDC1 horse SAT was cleared rather than hidden by its sprite-enable bit')
+                    cr=e.call('registers')['registers']['CR']
+                    assert cr&0x40==0,('VDC1 CR sprite enable remains set during pause',hex(cr))
+                    paused0_all=[row for row in struct.iter_unpack('<4H',
+                        bytes.fromhex(e.call('asread','sat0',0,512)['hex'])) if row[0]]
+                    assert not (Counter(before0_nonhorse)-Counter(paused0_all)),(
+                        'pause changed retained HUD/foreground/world entries',before0_nonhorse,paused0_all)
+                    e.screenshot(out/'herd-paused.png')
+                    e.input(8)
+                    c.until(e,lambda:e.memory(pause_hidden,1)==b'\0' and not pause_labels_ready() and
+                            bool(horse_cells(0)) and bool(horse_cells(1)),limit=120,step=1)
+                    e.input(0);e.run(1)
+                    after0=horse_cells(0);after1=horse_cells(1)
+                    assert after0 and after1,('both horse rows did not restore after unpause',len(after0),len(after1))
+                    cr=e.call('registers')['registers']['CR']
+                    assert cr&0x40,('VDC1 CR sprite enable was not restored after unpause',hex(cr))
+                    pause_result=dict(active_vdc0_horses=len(before0),active_vdc1_horses=len(before1),
+                                      paused_vdc0_horses=len(paused0),paused_vdc1_sat_entries=len(paused1),
+                                      vdc1_hidden_flag=True,
+                                      vdc1_cr_sprite_bit_cleared=True,
+                                      retained_vdc0_entries_unchanged=True,
+                                      unpaused_vdc0_horses=len(after0),unpaused_vdc1_horses=len(after1),
+                                      vdc1_cr_sprite_bit_restored=True)
 
             reads=c.metrics(e)['disc_reads']
             horse_poses=set()
@@ -182,7 +239,7 @@ def verify(out,sgx=False):
                                 post_herd_peak=max(lines),right_edge_cells=60,herd_fps=round(fps,2),
                                 foreground_pressure_checks=fg_checks,foreground_retained_parts=fg_parts,
                                 foreground_shake_values=sorted(shake_values),background_shake_values=sorted(background_shakes),
-                                hero_bullet_pressure_checks=hero_bullet_checks,passed=True))
+                                hero_bullet_pressure_checks=hero_bullet_checks,pause=pause_result,passed=True))
     (out/'herd-verification.json').write_text(json.dumps(reports,indent=2)+'\n');print(reports)
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--out',type=Path,default=Path('build/pce'));p.add_argument('--sgx',action='store_true');a=p.parse_args();verify(a.out.resolve(),a.sgx)

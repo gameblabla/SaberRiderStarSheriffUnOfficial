@@ -22,12 +22,13 @@ with tempfile.TemporaryDirectory(dir=out) as base,Emulator(out/'saber_rider.cue'
  holes=covered&(source_near[...,3]<128);holes[:64]=False
  scene=c.manifest['scenes'][3];blob=(out/'s4.bin').read_bytes()
  record=struct.unpack_from('<IIHBIHIHHHHBIHHHBII',blob,scene['records']['sgx_sky_record']['offset'])
+ assert record[10]==256 and record[12]==0 and record[16]==0,('Stage 4 must bake one full-speed sky record',record[10],record[12],record[16])
  checked=0
- for x in range(record[13]):
+ for x in range(record[9]):
   for row in range(8,30):
    mask=holes[row*8:row*8+8,x*8:x*8+8]
    if not mask.any():continue
-   id=struct.unpack_from('<H',blob,record[12]+x*90+row*3)[0]+record[14]
+   id=struct.unpack_from('<H',blob,record[1]+x*90+row*3)[0]
    pixels=decode_tile(blob[record[0]+id*32:record[0]+(id+1)*32])
    assert (pixels[mask]>0).all(),('Stage 4 missing sky behind mountain band',x,row)
    checked+=int(mask.sum())

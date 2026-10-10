@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native SGX rendering checks with seeded camera, projectile and death fixtures."""
 import argparse,json,struct
+from collections import Counter
 from pathlib import Path
 from emulator import Emulator,boot,symbol
 from test_campaign import Campaign
@@ -88,7 +89,8 @@ class Rendering(Campaign):
             checked+=1
         return {'normal':normal,'slow':slow,'expected':expected,'checked':checked}
 
-    def validate_foreground(self,e,snapshot,allow_herd_shake=False,allow_camera_lag=False):
+    def validate_foreground(self,e,snapshot,allow_herd_shake=False,allow_camera_lag=False,
+                            context=None):
         sat=self.sat(e,0);normal=snapshot['normal'];slow=snapshot['slow'];expected=snapshot['expected']
         if allow_herd_shake:
             assert all((y,x,pattern,attr) in sat for y,x,pattern,attr,_index in expected),(
@@ -111,12 +113,63 @@ class Rendering(Campaign):
             assert not missing,('missing foreground',normal,slow,missing[:8],
                                  [row for row in sat if row[0] and row[3]&15==12][:24])
             self.last_fg_shake=0
-        assert not any(s[0] and s[3]&15==12 for s in self.sat(e,1))
+        vdc1=self.sat(e,1)
+        vdc1_foreground=[row for row in vdc1 if row[0] and row[3]&15==12]
+        assert not vdc1_foreground,('unexpected foreground palette on VDC1',context,
+                                    {'normal':normal,'slow':slow,
+                                     'foreground_checked':snapshot['checked'],
+                                     'expected':expected[:8]},
+                                    {'active_count':sum(bool(row[0]) for row in vdc1),
+                                     'foreground_palette_entries':vdc1_foreground[:32]})
         return snapshot['checked']
 
-    def foreground(self,e,allow_herd_shake=False,allow_camera_lag=False):
+    def foreground(self,e,allow_herd_shake=False,allow_camera_lag=False,context=None):
         return self.validate_foreground(e,self.foreground_snapshot(e),
-                                        allow_herd_shake,allow_camera_lag)
+                                        allow_herd_shake,allow_camera_lag,context)
+
+    def foreground_source_coverage(self,e,stage):
+        """Require every source-visible piece to enter the retained list.
+
+        SAT matching alone can pass when a chunk was refused before it was
+        retained: the old list simply omitted that source chunk. Compare the
+        visible pieces in the complete baked source windows with the list that
+        the renderer keeps. Foreground chunks are admitted at canonical X=96,
+        so use that X when applying the native sprite clip rules.
+        """
+        scene=self.manifest['scenes'][stage-1]
+        blob=(self.out/f's{stage}.bin').read_bytes()
+        sources=((1,scene['sgx_foreground_offset'],scene['sgx_foreground_count'],self.word(e,'fg_camera')),
+                 (0,scene['foreground_slow_offset'],scene['foreground_slow_count'],self.word(e,'fg_camera_slow')))
+        expected=Counter()
+        table=scene['sprite_table']
+        for group,offset,count,camera in sources:
+            for index in range(count):
+                world_x,y,sprite=struct.unpack_from('<hhH',blob,offset+index*6)
+                if not camera-31<=world_x<camera+256:
+                    continue
+                _patterns,pieces,_palette,part_count=struct.unpack_from('<3IH',blob,table+sprite*16)
+                for part in range(part_count):
+                    dx,dy,_piece=struct.unpack_from('<hhh',blob,pieces+part*6)
+                    flags=struct.unpack_from('<H',blob,pieces+part*6+4)[0]
+                    if flags&0x4000:continue
+                    width=32 if flags&0x8000 else 16
+                    px=96+dx;py=y+dy
+                    if px<=-width or px>=256 or py<=-16 or py>=224:
+                        continue
+                    expected[(group,index)]+=1
+        count=e.memory(self.sym['fg_count'],1)[0]
+        address=134*8192+(self.sym['fg_parts']&8191)
+        raw=e.memory(address,count*14,logical=False)
+        retained=Counter((part[7]&1,part[8]) for part in
+                         (struct.unpack_from('<4H4BH',raw,index*14) for index in range(count)))
+        missing={key:pieces-retained[key] for key,pieces in expected.items() if retained[key]<pieces}
+        unexpected={key:pieces-expected[key] for key,pieces in retained.items() if expected[key]<pieces}
+        assert not missing and not unexpected,('visible foreground source pieces differ from retained list',
+                                               stage,dict(expected),dict(retained),missing,unexpected)
+        return {'visible_source_chunks':len(expected),'visible_source_parts':sum(expected.values()),
+                'retained_source_chunks':len(retained),'retained_source_parts':sum(retained.values()),
+                'slow_chunks':sum(group==0 for group,_index in expected),
+                'main_chunks':sum(group==1 for group,_index in expected)}
 
     def sprite_entries(self,e,sprite_id):
         slot=e.memory(self.sym['sprite_slot_of']+sprite_id,1)[0]
@@ -156,11 +209,59 @@ class Rendering(Campaign):
                 if rec[5]:xs.append(max(160,struct.unpack_from('<h',blob,rec[4])[0]+40))
                 checks=[]
                 for x in xs:
-                    self.position(e,x);self.settle(e);checks.append(dict(camera=self.metrics(e)['camera_x'],sky=self.sky(e),foreground=self.foreground(e)))
+                    self.position(e,x);self.settle(e)
+                    camera=self.metrics(e)['camera_x']
+                    checks.append(dict(camera=camera,sky=self.sky(e),
+                                       foreground=self.foreground(e,context={'stage':stage,'world_x':x,
+                                                                            'camera_x':camera}),
+                                       foreground_source_coverage=self.foreground_source_coverage(e,stage)))
                     if stage==1:e.screenshot(self.out/f'sky-repeat-{x-120}.png')
                 e.screenshot(self.out/f'rendering-stage{stage}.png');reports[f'stage{stage}']=checks
                 print('Stage',stage,'sky/foreground passed',flush=True)
             self.stage(e,1);self.position(e,400)
+            # Reproduce the supplied stage-1 save's hero/camera neighborhood,
+            # plus the preceding camera window where eight foreground chunks
+            # overlap at canonical X=96 during admission.
+            issue_foreground=[]
+            hero_address=symbol(self.out/'app.elf','hero')
+            try:control_hero=symbol(self.out/'app.elf','pce_control.3')
+            except ValueError:control_hero=None
+            for camera,player_x in ((8416,8536),(8489,8609)):
+                if control_hero is not None:e.write(control_hero,b'\x02')
+                e.write(hero_address,b'\x02')
+                e.write(self.sym['actors'],bytes(168));e.write(self.sym['shots'],bytes(208))
+                e.write(self.sym['player'],struct.pack('<4h4B',player_x,177,0,0,0,0,4,4))
+                e.write(self.sym['camera'],struct.pack('<H',camera))
+                self.seed(e,'safe_timer',250,1);self.seed(e,'dialogs_done',255,1)
+                e.input(0);e.run(90);self.settle(e)
+                d=self.metrics(e)
+                assert d['stage']==1 and d['hero']==2 and abs(d['camera_x']-camera)<=2,(
+                    'supplied foreground scenario did not settle',camera,player_x,d)
+                retained=self.foreground(e,allow_camera_lag=True)
+                coverage=self.foreground_source_coverage(e,1)
+                issue_foreground.append(dict(camera=d['camera_x'],hero=d['hero'],
+                                              rendered_source_parts=retained,**coverage))
+                if camera==8489:e.screenshot(self.out/'foreground-supplied-state.png')
+            reports['supplied_state_foreground']=issue_foreground
+            walk=[]
+            for camera in [*range(8416,8490,8),8489]:
+                player_x=camera+120
+                if control_hero is not None:e.write(control_hero,b'\x02')
+                e.write(hero_address,b'\x02')
+                e.write(self.sym['player'],struct.pack('<4h4B',player_x,177,0,0,0,0,4,4))
+                e.write(self.sym['camera'],struct.pack('<H',camera))
+                e.input(0);e.run(90 if camera==8416 else 1);self.settle(e)
+                d=self.metrics(e)
+                assert d['stage']==1 and d['hero']==2 and abs(d['camera_x']-camera)<=2,(
+                    'foreground camera walk did not settle',camera,d)
+                retained=self.foreground(e,allow_camera_lag=True)
+                coverage=self.foreground_source_coverage(e,1)
+                walk.append(dict(camera=d['camera_x'],rendered_source_parts=retained,**coverage))
+            e.screenshot(self.out/'foreground-supplied-state-walk.png')
+            reports['supplied_state_foreground_camera_walk']=walk
+            if control_hero is not None:e.write(control_hero,b'\0')
+            e.write(hero_address,b'\0')
+            self.position(e,400)
             # A stationary active hero bullet, above the terrain and clear of enemies.
             e.write(self.sym['shots'],struct.pack('<4h5B',self.metrics(e)['player_x']+60,100,0,0,1,0,0,0,0)+bytes(195))
             # The debugger may seed the object after this draw's shot pass.
