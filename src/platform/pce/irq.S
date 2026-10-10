@@ -192,6 +192,16 @@ pce_vblank:
 .Lsgx_stage7:
     lda space_hull_ready
     bne .Lsgx_hull_ready
+    /* The planet is a one-shot near layer, independent of the repeating
+     * nebula's camera inherited from the normal scroll publication. */
+    st0 #7
+    lda pce_sky_near
+    sta 2
+    lda pce_sky_near+1
+    sta 3
+    st0 #8
+    st1 #0
+    st2 #0
     jmp .Lsgx_vdc1_scroll
 .Lsgx_hull_ready:
     lda pce_sat_pending

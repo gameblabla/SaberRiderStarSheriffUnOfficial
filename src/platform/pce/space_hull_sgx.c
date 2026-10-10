@@ -26,11 +26,37 @@ extern volatile uint8_t pce_vdc_index;
 volatile uint8_t space_hull_sgx_ok PCE_WORK;
 typedef struct __attribute__((packed)) {uint32_t tiles,map;uint16_t bytes;uint8_t bat_cols;} SpaceNearRecord;
 static SpaceNearRecord space_near_record __attribute__((section(".ram_bank113.data")));
+static uint8_t space_near_cleared __attribute__((section(".ram_bank113.bss")));
+extern volatile uint16_t pce_sky_near;
 static __attribute__((always_inline)) void hull_write(uint8_t reg,uint16_t value);
+static __attribute__((always_inline)) void hull_index(uint8_t reg);
+
+/* Retire columns only after their last pixel has left the view. The BAT's
+ * hardware wrap then reveals transparent space instead of another planet. */
+__attribute__((noinline,section(".ram_bank113.text"))) void space_near_sgx_scroll_body(void) {
+    if(!(pce_sgx_metrics.paired_screen&PCE_SGX_SPACE_NEAR))return;
+    uint8_t end=pce_sky_near>>3;
+    if(end>33)end=33;
+    if(end<=space_near_cleared)return;
+    uint8_t saved=pce_vdc_index;
+    for(uint8_t y=0;y<32;++y) {
+        __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
+        hull_write(VDC_REG_VRAM_WRITE_ADDR,(uint16_t)y*64+space_near_cleared);
+        hull_index(VDC_REG_VRAM_DATA);
+        for(uint8_t x=space_near_cleared;x<end;++x) {
+            *IO_VDC_DATA_LO=(uint8_t)(PCE_BG_WORD>>4);
+            *IO_VDC_DATA_HI=(PCE_BG_WORD>>4)>>8;
+        }
+        hull_index(saved);
+        __attribute__((leaf)) asm volatile("plp" ::: "p","memory");
+    }
+    space_near_cleared=end;
+}
 
 __attribute__((noinline,section(".ram_bank113.text"))) void space_near_sgx_load_body(void) {
     const PceScene *scene=&pce_scenes[6];
     space_hull_sgx_ok=0;
+    space_near_cleared=0;
     pce_sgx_metrics.paired_screen&=(uint8_t)~PCE_SGX_SPACE_NEAR;
     if(!scene->occlusion||!arcade_read(2,scene->occlusion,&space_near_record,sizeof space_near_record)||
        !space_near_record.tiles||!space_near_record.map||!space_near_record.bytes||
@@ -56,6 +82,8 @@ __attribute__((noinline,section(".ram_bank113.text"))) void space_near_sgx_bat_b
         ++pce_sgx_metrics.failures;
         pce_sgx_metrics.paired_screen&=(uint8_t)~PCE_SGX_SPACE_NEAR;
     }
+    space_near_cleared=0;
+    space_near_sgx_scroll_body();
 }
 
 static __attribute__((always_inline)) void hull_index(uint8_t reg) {

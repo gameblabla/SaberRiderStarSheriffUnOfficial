@@ -9,6 +9,7 @@
 #include "sprite_cache_pce.h"
 #ifdef PCE_SGX
 #include <pce/bank.h>
+void space_near_sgx_scroll_body(void);
 #endif
 extern uint8_t buffer[2048];
 extern volatile uint16_t pce_sky_far,pce_sky_near;
@@ -451,7 +452,17 @@ PCE_SCENERY void space_frame(void) {
         overlay_call(0x73,space_tick);pce_control.pressed=0;
     }
     pce_sky_far=flight_clock>>3;
-    pce_sky_near=flight_clock>>5;
+#ifdef PCE_SGX
+    if(pce_sgx_gameplay()) {
+        /* The 260-pixel planet exits once; retain the empty window even if
+         * the flight clock eventually wraps during a long encounter. */
+        uint16_t near=flight_clock>>5;
+        if(near>264)near=264;
+        if(near>pce_sky_near)pce_sky_near=near;
+        if(!pce_campaign.boss_kind)overlay_call(0x71,space_near_sgx_scroll_body);
+    } else
+#endif
+        pce_sky_near=flight_clock>>5;
     if(pce_campaign.boss_kind)space_hull_draw(space_boss_y,hull_flash,boss_gone);
     else video_background(flight_clock>>3);
     video_sat_begin();
