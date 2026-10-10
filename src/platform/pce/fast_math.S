@@ -493,4 +493,116 @@ pce_fast_udiv32:
     stz $2002
     stz $2003
     rts
+/* The race owns cache_refs until video_scene returns it to the BG cache.
+ * Unlike the general compiler helper, these byte planes are already mapped.
+ * A * X -> A:X; $08,$09,$0c,$0d,Y clobbered. */
+.extern cache_refs
+.global race_umul8, race_mulw
+race_umul8:
+    sta $2008
+    stx $2009
+    clc
+    adc $2009
+    tay
+    bcc 2f
+    lda cache_refs+256,y
+    sta $200c
+    lda cache_refs+768,y
+    bra 3f
+2:
+    lda cache_refs,y
+    sta $200c
+    lda cache_refs+512,y
+3:
+    sta $200d
+    lda $2008
+    sec
+    sbc $2009
+    bcs 1f
+    eor #255
+    inc
+1:
+    tay
+    lda $200c
+    sec
+    sbc cache_refs,y
+    pha
+    lda $200d
+    sbc cache_refs+512,y
+    tax
+    pla
+    rts
+/* Signed word by signed byte, exact long result (LLVM-MOS ABI).
+ * Magnitudes use two byte products, then one sign correction. */
+race_mulw:
+    sta $2004
+    stx $2005
+    txa
+    eor $2002
+    sta $2007
+    txa
+    bpl 1f
+    sec
+    cla
+    sbc $2004
+    sta $2004
+    cla
+    sbc $2005
+    sta $2005
+1:
+    lda $2002
+    bpl 2f
+    eor #255
+    inc
+2:
+    sta $2006
+    tax
+    lda $2005
+    pha
+    lda $2004
+    jsr race_umul8
+    sta $2004
+    stx $2005
+    pla
+    ldx $2006
+    jsr race_umul8
+    clc
+    adc $2005
+    sta $2005
+    txa
+    adc #0
+    sta $2002
+    stz $2003
+    lda $2007
+    bpl 3f
+    sec
+    cla
+    sbc $2004
+    sta $2004
+    cla
+    sbc $2005
+    sta $2005
+    cla
+    sbc $2002
+    sta $2002
+    cla
+    sbc $2003
+    sta $2003
+3:
+    lda $2004
+    ldx $2005
+    rts
+.global race_u8s8
+race_u8s8:
+    jsr race_umul8
+    pha
+    txa
+    ldy $2009
+    bpl 1f
+    sec
+    sbc $2008
+1:
+    tax
+    pla
+    rts
 #endif

@@ -71,6 +71,11 @@ static bool big_draw(uint16_t key,int16_t sx,int16_t sy) {
     uint8_t buf=big_key[big_shown]==key?big_shown:big_shown^1;
     if(big_key[buf]!=key) {
         pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
+#ifdef PCE_SGX
+        if(pce_sgx_arena_sprites())
+            arcade_vram_to(1,patterns,BIG_WORD[buf],(uint16_t)n*512);
+        else
+#endif
         m6_vram(patterns,BIG_WORD[buf],(uint16_t)n*512);
         big_key[buf]=key;
     }

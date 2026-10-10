@@ -15,7 +15,7 @@
  * 113 + 10080 / f; its offset from the middle is l * rows / 26.6 dots. */
 extern uint16_t cache_refs[];
 #define QSQ cache_refs                                 /* 511 entries: q(0..510) */
-#define BELOW ((uint8_t*)cache_refs+1022)             /* 10080 / f for f 40..560 */
+#define BELOW ((uint8_t*)cache_refs+1024)             /* 10080 / f for f 40..560 */
 #ifdef PCE_SGX
 __attribute__((noinline,minsize,section(".ram_bank128.text")))
 void race_segment_init(void) {
@@ -28,18 +28,36 @@ void race_segment_init(void) {
 #endif
 PCE_X2 void qtable_init(void) {
     uint16_t m2=0;
-    for(uint16_t m=0;m<=255;++m){QSQ[2*m]=m2;QSQ[2*m+1]=m2+m;m2+=2*m+1;}   /* q(2m) = m^2, q(2m+1) = m^2 + m */
+    for(uint16_t m=0;m<=255;++m){
+#ifdef PCE_SGX
+        uint8_t *q=(uint8_t *)cache_refs;
+        uint16_t odd=m2+m;
+        q[2*m]=m2;q[512+2*m]=m2>>8;
+        q[2*m+1]=odd;q[513+2*m]=odd>>8;
+#else
+        QSQ[2*m]=m2;QSQ[2*m+1]=m2+m;
+#endif
+        m2+=2*m+1;
+    }   /* q(2m) = m^2, q(2m+1) = m^2 + m */
     for(uint16_t f=40;f<=560;++f)BELOW[f-40]=10080u/f;
 }
 static inline __attribute__((always_inline)) uint16_t umul(uint8_t a,uint8_t b) {
+#ifdef PCE_SGX
+    return race_umul8(a,b);
+#else
     uint8_t d=a>b?a-b:b-a;
     return QSQ[(uint16_t)a+b]-QSQ[d];
+#endif
 }
 /* a * b exactly, a 16-bit and b 8-bit, both signed */
 PCE_X2 static int32_t mulw(int16_t a,int8_t b) {
+#ifdef PCE_SGX
+    return race_mulw(a,b);
+#else
     uint16_t am=a<0?-a:a;uint8_t bm=b<0?-b:b;
     uint32_t p=((uint32_t)umul(am>>8,bm)<<8)+umul(am&255,bm);
     return (a<0)!=(b<0)?-(int32_t)p:(int32_t)p;
+#endif
 }
 /* (a * b) >> 7 for |a| < 4096 */
 PCE_X2 static int16_t mulq(int16_t a,int8_t b) {

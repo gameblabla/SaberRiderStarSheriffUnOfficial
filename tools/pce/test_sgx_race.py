@@ -5,6 +5,7 @@ The lifecycle uses native race/story transitions with a seeded final lap.
 The distance sweep invokes the compiled draw path with fixed world positions.
 """
 import argparse,json,struct,tempfile,wave
+from PIL import Image
 import numpy as np
 from pathlib import Path
 from emulator import Emulator,boot,symbol
@@ -173,6 +174,31 @@ def verify(out):
             if sweep:assert width>=sweep[-1]['width'],('Car shrank while approaching',sweep[-1],distance,width)
             sweep.append(dict(distance=distance,depth=point[2],width=width,sprite_id=id))
             if distance in (540,200,100):e.screenshot(out/f'race-depth-{distance}.png')
+            if distance==200:
+                # Native 32-dot cells must reproduce the two 16-dot pieces
+                # exactly. Restore partner descriptors and compare the actual
+                # hardware-rendered image at the identical halted camera.
+                wide_path=out/'race-cells-32.png';narrow_path=out/'race-cells-16.png'
+                e.screenshot(wide_path);original=[];wide_count=0
+                for sprite in range(scene['sprite_count']):
+                    _pat,desc,_pal,count,_w,_h=struct.unpack_from('<IIIHBB',blob,scene['sprite_table']+sprite*16)
+                    raw=blob[desc:desc+count*6];parts=list(struct.iter_unpack('<hhH',raw));changed=False
+                    for part in range(len(parts)-1):
+                        x,y,index=parts[part]
+                        if not index&0x8000:continue
+                        assert parts[part+1][2]&0x4000
+                        parts[part]=(x,y,index&0x3fff)
+                        parts[part+1]=(x+16,y,(index&0x3fff)+1)
+                        changed=True;wide_count+=1
+                    if changed:
+                        original.append((desc,raw));e.write(desc,b''.join(struct.pack('<hhH',*p) for p in parts),space='acram')
+                assert wide_count>0,'Race assets must use native 32-dot cells'
+                for key,value in [('P',0),('SP',253),('MPR3',124),('MPR6',108),('PC',0x3bf0)]:e.call('register_set',key,value)
+                e.run(12);e.screenshot(narrow_path)
+                assert np.array_equal(np.asarray(Image.open(wide_path)),np.asarray(Image.open(narrow_path))),'Native 32-dot race cells changed rendered pixels'
+                for desc,raw in original:e.write(desc,raw,space='acram')
+                report['wide_cells']=dict(paired_cells=wide_count,pixel_identical=True)
+
         assert len({s['width'] for s in sweep})==6,sweep
         report['perspective_sweep']=sweep
     (out/'sgx-race-verification.json').write_text(json.dumps(report,indent=2)+'\n')

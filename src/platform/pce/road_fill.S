@@ -132,7 +132,7 @@ smul8:
     sta T0
     stx T1
     phy
-    jsr pce_fast_mul8
+    jsr race_umul8
     sta T2
     txa
     ldy T0

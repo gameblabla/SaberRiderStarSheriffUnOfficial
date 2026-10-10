@@ -90,6 +90,9 @@ PCE_MISSION static void platform_box(void) {
     arcade_vram(record[3],PCE_FONT_WORD,3072);
     arcade_read(2,record[2],buffer+1024,336);   /* the cells go in right after that VBlank (video_cells_apply) */
     story_column=pce_scroll_x>>3;
+#ifdef PCE_SGX
+    if(pce_sgx_arena_sprites())story_column=0;
+#endif
 }
 PCE_FLOW void story_graphics_restore(void) {   /* bank $6e: $6f is full */
     if(pce_metrics.stage==2||pce_metrics.stage==7)return;
@@ -134,6 +137,9 @@ STORY_CODE static void draw(void) {
     if(pce_metrics.stage==7)y=story_y=(PCE_DIALOG_BOTTOM_ROW+(pce_scroll_y>>3))&31;
     /* BG cells sit (scroll & 7) pixels left of their grid on a scrolling playfield. */
     int16_t box_x=24-(pce_raster_enabled?0:(pce_scroll_x&7)),box_y=(pce_metrics.stage==7?PCE_DIALOG_BOTTOM_ROW:y)*8-(pce_metrics.stage!=2&&pce_metrics.stage<6?16:0);   /* platform sprites are baked 16 lines low */
+#ifdef PCE_SGX
+    if(pce_sgx_arena_sprites())box_x=24;
+#endif
     /* Blank every BG cell under the box except the four 2x2 corner blocks; the corner pieces stay in front of the
      * scenery so their rounded edges show the scenery, not a hole. */
     bool platform=pce_metrics.stage!=2&&pce_metrics.stage!=7;   /* the platform stages and Ramrod's arena: a scrolling background with the panel in BG characters and four sprite corners */
@@ -232,6 +238,12 @@ STORY_CODE void story_start(void) {
     /* Platform panels publish both SATs together; keep the old world visible
        until their complete replacement is ready. */
     if(pce_metrics.stage>=6)overlay_call(0x78,pce_sgx_vdc1_hide_body);
+    if(pce_sgx_arena_sprites()) {
+        /* The actor BAT uses alternating halves; dialogue uses screen columns
+           in half zero. Retire the actor before installing its panel/font. */
+        video_wait();
+        overlay_call(0x71,video_arena_bg_clear_body);
+    }
 #endif
     /* The race and the cockpits keep their HUD in sprites: let the last two displayed generations go (their cache slots
      * stay pinned through the SAT DMA) so the box and the avatar find slots in the same frame. */

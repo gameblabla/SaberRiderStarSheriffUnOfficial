@@ -45,7 +45,7 @@ def autopilot(e,out,state):
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--out',type=Path,default=Path('build/pce'));p.add_argument('--tag',default='road')
-    p.add_argument('--sgx',action='store_true');p.add_argument('--seconds',type=int,default=12);p.add_argument('--profile',action='store_true')
+    p.add_argument('--require-fps',type=float,default=0);p.add_argument('--sgx',action='store_true');p.add_argument('--seconds',type=int,default=12);p.add_argument('--profile',action='store_true')
     args=p.parse_args();out=args.out.resolve();c=Campaign(out,sgx=args.sgx);report={}
     with tempfile.TemporaryDirectory(dir=out) as b,Emulator(out/'saber_rider.cue',b,sgx=args.sgx) as e:
         boot(e,c.address)
@@ -55,6 +55,7 @@ def main():
         e.screenshot(out/f'{args.tag}-grid.png')
         bxr,sel=tables(e,out);report['grid_bxr']=bxr[::8]
         e.input(KEY_UP|KEY_2);m0=raw_metrics(e,c)
+        presented=symbol(out/'app.elf','pce_presented');p0=int.from_bytes(e.memory(presented,2),'little')
         for k in range(args.seconds):
             for _ in range(12):
                 e.run(5);e.input(autopilot(e,out,None)|(KEY_2 if k%4<2 else 0))
@@ -63,10 +64,14 @@ def main():
             print(k,'ovf',raw_metrics(e,c)['essential_overflow'],'sat',raw_metrics(e,c)['sat_count'],'bxr',bxr[::12],'sel',''.join(map(str,sel[::2])),flush=True)
         m1=raw_metrics(e,c)
         report['commits_per_second']=((m1['floor_commits']-m0['floor_commits'])&65535)/args.seconds
+        p1=int.from_bytes(e.memory(presented,2),'little')
+        report['presentations_per_second']=((p1-p0)&65535)/args.seconds
         report['essential_overflow']=m1['essential_overflow'];report['video_frames_per_second']=((m1['frames']-m0['frames'])&65535)/args.seconds
         print(report,flush=True)
         if args.profile:
             e.call('prof_start');e.run(300);path=out/f'{args.tag}-cycles.txt';e.call('prof_dump',str(path))
     (out/f'{args.tag}-report.json').write_text(json.dumps(report,indent=2)+'\n')
+    assert report['commits_per_second']>=args.require_fps,('Road cadence below required rate',report,args.require_fps)
+    assert report['presentations_per_second']>=args.require_fps-0.2,('SAT presentation cadence below required rate',report,args.require_fps)
 
 if __name__=='__main__':main()

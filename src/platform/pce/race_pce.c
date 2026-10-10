@@ -37,10 +37,31 @@ uint8_t rphase,car_hp,car_max,boost,boost_on,hurt,shake,finish_rank,spin,ram_cd,
 int8_t lapp,cam_c,cam_s,cam_cl,cam_sl;
 uint8_t road_idx;
 __attribute__((noinline)) int16_t muls(int16_t a,int8_t b) {
+#ifdef PCE_SGX
+    uint16_t am=absolute(a)>>2;
+    uint8_t bm=b<0?-b:b;
+    uint16_t m=race_umul8(am,bm);
+    if(am>>8)m+=race_umul8(am>>8,bm)<<8;
+    m>>=5;
+#else
     uint16_t m=(uint16_t)(absolute(a)>>2)*(uint8_t)(b<0?-b:b)>>5;
+#endif
     return (a<0)!=(b<0)?-(int16_t)m:(int16_t)m;
 }
 static uint8_t pfx,pfy,fire_cd;
+#ifdef PCE_SGX
+/* 256 == 1 (mod 3), so the two byte remainders add exactly. */
+static const uint8_t MOD3[256] __attribute__((section(".ram_bank121.rodata")))={
+    0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,
+    2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,
+    1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,
+    0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,
+    2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,
+    1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,
+    0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,
+    2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,
+};
+#endif
 static uint16_t spawn_t;
 
 /* Fixed resident code: called by $79, $7a and the escort spawner in $72. */
@@ -65,8 +86,12 @@ RACE_CODE static void standings(void) {overlay_call(0x6d,field_standings_call);}
 /* a * b for magnitudes up to 255 by a table of quarter squares (race_proj.c): the generic 16-bit multiply took 600 cycles a product */
 extern uint16_t cache_refs[];
 static inline __attribute__((always_inline)) uint16_t umul(uint8_t a,uint8_t b) {
+#ifdef PCE_SGX
+    return race_umul8(a,b);
+#else
     uint8_t d=a>b?a-b:b-a;
     return cache_refs[(uint16_t)a+b]-cache_refs[d];
+#endif
 }
 static inline __attribute__((always_inline)) int16_t smul(int16_t a,int16_t b) {   /* |a|, |b| <= 255 */
     uint16_t p=umul(a<0?-a:a,b<0?-b:b);
@@ -148,11 +173,18 @@ RACE_CODE static void drive(uint8_t keys) {
     if(boost_locked&&boost>=128)boost_locked=0;
     bool turbo=(keys&KEY_2)&&!boost_locked&&boost>13&&!spin&&playing;
     if(turbo){
-        vmax=vmax*27/20;boost-=(phase_t&1)?1:2;boost_on=1;
+        vmax=cls==2?634:cls==1?513:337;boost-=(phase_t&1)?1:2;boost_on=1;
         if(boost<=13){boost=0;boost_locked=1;boost_on=0;}
     } else {
         boost_on=0;
+#ifdef PCE_SGX
+        if(boost<255) {
+            uint8_t rem=MOD3[(uint8_t)phase_t]+MOD3[phase_t>>8];
+            if(rem==0||rem==3)++boost;
+        }
+#else
         if(boost<255&&phase_t%3==0)++boost;
+#endif
         if(boost_locked&&boost>=128)boost_locked=0;
     }
     if(boost_on&&!turbo_was_on){audio_pcm_turbo_start();audio_pcm_turbo_loop(true);}

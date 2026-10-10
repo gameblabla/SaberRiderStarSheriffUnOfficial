@@ -95,7 +95,7 @@ def native_wrap_walk(r, e, stage):
         for _ in range(8):
             r.settle(e)
             current = r.metrics(e)['camera_x']
-            if r.word(e, 'pce_sgx_sky_scroll_x') == current:
+            if r.word(e, 'pce_sgx_sky_scroll_x') == (current * 64 + 255) // 256:
                 break
         else:
             raise AssertionError(('camera/sky did not settle at a presented frame',
@@ -131,7 +131,7 @@ def native_wrap_walk(r, e, stage):
         for _ in range(8):
             r.settle(e)
             current = r.metrics(e)['camera_x']
-            if r.word(e, 'pce_sgx_sky_scroll_x') == current:
+            if r.word(e, 'pce_sgx_sky_scroll_x') == (current * 64 + 255) // 256:
                 break
         else:
             raise AssertionError(('camera/sky did not settle on reverse walk', stage,
@@ -188,8 +188,8 @@ def check_unified_stage4(r):
     blob = (r.out / 's4.bin').read_bytes()
     record = struct.unpack_from(
         SKY_RECORD, blob, scene['records']['sgx_sky_record']['offset'])
-    assert record[10] == 256 and record[12] == 0 and record[16] == 0, (
-        'stage 4 must use one camera-speed panorama with no near map',
+    assert record[10] == 64 and record[12] == 0 and record[16] == 0, (
+        'stage 4 must use one quarter-speed panorama with no near map',
         record[10], record[12], record[16])
     return {'speed_q8': record[10], 'near_map': record[12],
             'split_row': record[16], 'columns': record[9]}

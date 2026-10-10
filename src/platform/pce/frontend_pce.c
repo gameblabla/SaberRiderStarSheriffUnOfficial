@@ -163,11 +163,11 @@ UI_CODE static uint8_t select_hero(uint8_t chosen) {
 }
 
 /* ---------------------------------------------------------------- options */
-#if DEBUG
+#if LEVEL_SELECT
 static uint8_t start_level=1;
 #endif
 enum { OPT_DIFFICULTY, OPT_LIVES, OPT_CONTINUES, OPT_MUSIC, OPT_SWAP,
-#if DEBUG
+#if LEVEL_SELECT
     OPT_LEVEL,
 #endif
     OPT_EXIT, OPT_COUNT };
@@ -178,16 +178,16 @@ UI_CODE static void caps(uint8_t *lives,uint8_t *continues) {
 UI_CODE static void option_row(uint8_t row,bool selected) {
     static const char *const difficulty[3]={"EASY  ","NORMAL","HARD  "};
     static const char *const music[2]={"OFF ","ON  "};
-#if DEBUG
+#if LEVEL_SELECT
     static char level_text[3]="01";
 #endif
     static const char *const label[OPT_COUNT]={"DIFFICULTY","LIVES","CONTINUES","MUSIC","SWAP I/II",
-#if DEBUG
+#if LEVEL_SELECT
         "LEVEL",
 #endif
         "EXIT"};
     uint8_t y=9+row*2;
-#if DEBUG
+#if LEVEL_SELECT
     y=8+row*2;
 #endif
     if(row==OPT_EXIT)y=20;
@@ -199,7 +199,7 @@ UI_CODE static void option_row(uint8_t row,bool selected) {
     case OPT_LIVES:ui_put_number(26,y,pce_options.lives,15);ui_put(28,y,"    ",15);break;
     case OPT_CONTINUES:ui_put_number(26,y,pce_options.continues,15);ui_put(28,y,"    ",15);break;
     case OPT_MUSIC:ui_put(26,y,music[pce_options.music!=0],15);ui_put(30,y,"  ",15);break;
-#if DEBUG
+#if LEVEL_SELECT
     case OPT_LEVEL:level_text[1]='0'+start_level;ui_put(26,y,level_text,15);ui_put(28,y,"    ",15);break;
 #endif
     case OPT_SWAP:ui_put(26,y,music[pce_options.swap_buttons!=0],15);ui_put(30,y,"  ",15);break;
@@ -211,7 +211,7 @@ UI_CODE static void option_help(uint8_t row) {
     static const char *const help[OPT_COUNT]={
         "EASY 3  NORMAL 2  HARD 1 HEARTS","EXTRA LIVES AT THE START","CONTINUES AFTER GAME OVER",
         "CD MUSIC ON OR OFF","SWAP BUTTONS I AND II",
-#if DEBUG
+#if LEVEL_SELECT
         "START A NEW GAME AT THIS LEVEL",
 #endif
         "BACK TO THE TITLE"};
@@ -254,7 +254,7 @@ UI_CODE static void options(void) {
                 pce_options.music=pce_options.music?0:3;
                 if(pce_options.music)audio_music(3);else audio_stop();
                 changed=true;break;
-#if DEBUG
+#if LEVEL_SELECT
             case OPT_LEVEL:
                 start_level=dir>0?(start_level==7?1:start_level+1):(start_level==1?7:start_level-1);
                 changed=true;break;
@@ -286,7 +286,7 @@ UI_CODE void frontend_start(void) {
         uint8_t choice=title();
         if(choice==1){options();continue;}
         chosen=select_hero(chosen);
-#if DEBUG
+#if LEVEL_SELECT
         pce_control.stage=start_level;
 #else
         pce_control.stage=0;

@@ -22,7 +22,7 @@ with tempfile.TemporaryDirectory(dir=out) as base,Emulator(out/'saber_rider.cue'
  holes=covered&(source_near[...,3]<128);holes[:64]=False
  scene=c.manifest['scenes'][3];blob=(out/'s4.bin').read_bytes()
  record=struct.unpack_from('<IIHBIHIHHHHBIHHHBII',blob,scene['records']['sgx_sky_record']['offset'])
- assert record[10]==256 and record[12]==0 and record[16]==0,('Stage 4 must bake one full-speed sky record',record[10],record[12],record[16])
+ assert record[10]==64 and record[12]==0 and record[16]==0,('Stage 4 must bake one quarter-speed sky record',record[10],record[12],record[16])
  checked=0
  for x in range(record[9]):
   for row in range(8,30):

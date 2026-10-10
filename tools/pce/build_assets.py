@@ -21,6 +21,7 @@ import tile_budget
 import palfit
 import hudart
 import frontend
+import road_curves
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
@@ -766,7 +767,7 @@ def april_palette_for(images):
     pal[1:len(fitted) + 1] = fitted
     return pal
 
-def add_sprites(archive, sprites, previews, sgx=False):
+def add_sprites(archive, sprites, previews, sgx=False, race=False):
     rows, costs = [], []
     fg=[im for name,im,_ in sprites if name.startswith('foreground_')]
     fg_palette=palette_for(fg) if fg else None
@@ -801,7 +802,7 @@ def add_sprites(archive, sprites, previews, sgx=False):
         family = name.split('_')[0]
         if name.startswith('grenade'): family = 'grenade'
         if name.startswith('burst'): family = 'burst'
-        pat, parts, palette, line = pack_sprite(im, anchor,april_palette if name.startswith('hero2_') else boss_palette if name in ('gunship_left','gunship_right','hyperjumper_left','hyperjumper_right') else fg_palette if name.startswith("foreground_") else hud_palette if name.startswith('hudp_') else power_palette[int(name[3])] if name.startswith('pwr') else shared.get(family), wide=sgx and (family.startswith('hero') or family in shared))
+        pat, parts, palette, line = pack_sprite(im, anchor,april_palette if name.startswith('hero2_') else boss_palette if name in ('gunship_left','gunship_right','hyperjumper_left','hyperjumper_right') else fg_palette if name.startswith("foreground_") else hud_palette if name.startswith('hudp_') else power_palette[int(name[3])] if name.startswith('pwr') else shared.get(family), wide=sgx and (race or family.startswith('hero') or family in shared))
         if (not parts and name != 'battle_cruiser') or len(parts)>32:
             raise ValueError(f'{name}: expected 1..32 visible sprite pieces, got {len(parts)}')
         offset = archive.add(name + '_patterns', pat)
@@ -1524,6 +1525,8 @@ def make_scene(stage, work, previews, shared, sgx=False):
         sand_index = int(np.bincount((ground & 15)[(ground >> 4) == 0].ravel(), minlength=16).argmax())
         race_sand = vce_rgb(pal[sand_index:sand_index + 1])[0]
         meta['track_offset']=a.add('track', (work/'track.bin').read_bytes())
+        if sgx:
+            a.add('road_curves',road_curves.bake((work/'track.bin').read_bytes()),128)
         road = road_assets(race_sand, previews)
         a.add('road_tiles', road['tiles']); a.add('road_bat', road['bat']); a.add('road_palette', road['palette'])
         # Pursuit is the source's straight desert road; both working sets fit by representing its repeated row
@@ -1635,7 +1638,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
                 moon_patterns=a.add('sgx_red_moon_patterns',b''.join(phases)+b''.join(masks))
                 # Palette 14 is reserved on platform BGs for this overlay.
                 moon_palette=a.add('sgx_red_moon_palette',pal.tobytes())
-            speed=256 if stage==4 else 13 if stage==3 else (max(64,round(sky_layer.parallax*256)) if sky_layer.extra==1 else round(sky_layer.parallax*256))
+            speed=64 if stage==4 else 13 if stage==3 else (max(64,round(sky_layer.parallax*256)) if sky_layer.extra==1 else round(sky_layer.parallax*256))
             wrap=1 if stage==1 else 2
             if tile_count>16384:raise ValueError('SGX sky bands exceed the shared directory')
             meta['sgx_sky_record']=a.add('sgx_sky_record',struct.pack('<IIHBIHIHHHHBIHHHBII',tile_start,sky['map'],tile_count,64,
@@ -1662,7 +1665,7 @@ def make_scene(stage, work, previews, shared, sgx=False):
             composite=far['preview'].crop((0,0,256,224))
             composite.alpha_composite(closer['preview'].crop((0,0,256,224)))
             composite.save(previews/'stage7_sgx_composite.png')
-    sprite_table, rows, costs = add_sprites(a, list(sprites), previews, sgx=sgx)
+    sprite_table, rows, costs = add_sprites(a, list(sprites), previews, sgx=sgx, race=stage==2)
     if stage in (1,3,4,5):
         # The cache reserves two four-page HUD blocks and three two-page
         # hero blocks. Fail the bake if presentation layout or size changes.
@@ -1757,6 +1760,8 @@ def main():
     h += ['#define PCE_HERO_FRAMES 9', '#define PCE_SHOT_ID 36', '#define PCE_ENEMY_SHOT_ID 37', '#define PCE_BLAST_ID 38']
     for name in ('road_tiles','road_bat','road_palette','race_map','pursuit_row','dialog_wide'):
         h.append(f"#define PCE_RACE_{name.upper()} {scenes[1]['records'][name]['offset']}UL")
+    if args.sgx:
+        h.append(f"#define PCE_RACE_ROAD_CURVES {scenes[1]['records']['road_curves']['offset']}UL")
     (out/'assets.h').write_text('\n'.join(h)+'\n')
     # Ramrod's arena: the size ladder and the projection tables, indexed by the distance f in units (f >> 4, or f >> 3 for the lateral factor)
     def at_or_above(scales, law):

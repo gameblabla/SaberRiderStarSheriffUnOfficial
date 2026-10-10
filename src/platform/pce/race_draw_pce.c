@@ -20,6 +20,7 @@ DRAW_CODE static void put(uint16_t offset,int16_t x,int16_t y) {
 }
 /* digits at a 16-dot pitch; colour 0 white, 1 gold, 2 pink */
 DRAW_CODE static void number(int16_t x,int16_t y,uint16_t value,uint8_t digits,uint8_t color) {
+    if(digits==1){put(PCE_H2_DIGIT_WHITE_0+(uint16_t)color*10+(value<10?value:value%10),x,y);return;}
     uint16_t divisor=digits==4?1000:digits==3?100:digits==2?10:1;
     for(uint8_t k=0;k<digits;++k) {
         put(PCE_H2_DIGIT_WHITE_0+(uint16_t)color*10+(value/divisor)%10,x+k*14,y);
@@ -85,7 +86,9 @@ DRAW_CODE void race_draw(void) {
         video_sprite_optional(PCE_CAR_ORB+(race_bolts[k].own?0:PCE_ORB_STEPS)+bolt_step[k],bolt_sx[k],bolt_sy[k]-(below>>3)-(below>>6),false,16);   /* 1400 / f without the division; big at the gun, smaller as it flies away */
     }
     /* HUD: the car's damage bar and spare cars, the turbo bar (no speedometer), then what the phase has to say */
-    uint16_t hp_frac=(uint16_t)car_hp*64/car_max;   /* 16-bit throughout: the 32-bit multiply and divide cost the road its updates */
+    static const uint8_t HP12[13]={0,5,10,16,21,26,32,37,42,48,53,58,64};
+    /* race_reset owns these three difficulty maxima and clamps HP to it. */
+    uint16_t hp_frac=car_max==16?car_hp*4:car_max==8?car_hp*8:HP12[car_hp];
     put(PCE_H2_ICON,10,12);
     bar(46,16,4,hp_frac,car_hp*2>car_max?0:car_hp*4>car_max?1:2);
     put(PCE_H2_X,10,32);number(26,32,pce_campaign.lives,1,0);

@@ -37,12 +37,20 @@ void road_advance(int8_t dx,int8_t dy);
 /* the knots of the frame (scanline and offset, Q4 dots), after the tables in the platform background cache array */
 #define kn_d ((int16_t*)((uint8_t*)columns+1024))
 #define kn_x ((int16_t*)((uint8_t*)columns+1056))
+#ifdef PCE_SGX
+/* Retain the reference builder for native geometry comparisons. */
+volatile uint8_t road_reference;
+void road_baked_call(void);
+#endif
 static uint8_t kn_n,pursuit;
 static uint16_t camera_x,camera_y;
 int32_t road_k[2];   /* road_fill.S: the knot being walked in the camera's frame, forward and to the right, in 1/16384 units */
 
 /* a * b for int16 a and int8 b, in 32 bits: the high and the low byte of a apart */
 ROAD_MATH __attribute__((minsize)) static int32_t mulw(int16_t a,int8_t b) {
+#ifdef PCE_SGX
+    return race_mulw(a,b);
+#else
     extern uint16_t cache_refs[];
     uint16_t am=a<0?-(uint16_t)a:(uint16_t)a;
     uint8_t bm=b<0?-b:b,hi=am>>8,lo=am;
@@ -50,6 +58,7 @@ ROAD_MATH __attribute__((minsize)) static int32_t mulw(int16_t a,int8_t b) {
     uint32_t product=((uint32_t)(cache_refs[(uint16_t)hi+bm]-cache_refs[dh])<<8)
         +(cache_refs[(uint16_t)lo+bm]-cache_refs[dl]);
     return (a<0)!=(b<0)?-(int32_t)product:(int32_t)product;
+#endif
 }
 /* a * (128 m + ml): the camera's sine or cosine is the byte m (Q7) and a small remainder ml, which together keep the road still
  * while the camera turns (a Q7 value alone moves the far road three dots at each step of it) */
@@ -64,8 +73,12 @@ extern uint16_t cache_refs[];
 ROAD_MATH static int16_t dots_q4(int16_t side,int16_t d) {
     /* side * d * 77 / 512 in 16 bits: the product by the table of quarter squares (race_proj.c) as A 256 + B, then 77 / 512 = 1/8 + 1/64 + 1/128 + 1/512 */
     uint16_t sm=side<0?-side:side;
+#ifdef PCE_SGX
+    uint16_t A=race_umul8(sm>>8,d),B=race_umul8(sm,d);
+#else
     uint8_t da=sm>>8,db=sm,dd=d,m1=da>dd?da-dd:dd-da,m2=db>dd?db-dd:dd-db;uint16_t s1=(uint16_t)da+dd,s2=(uint16_t)db+dd;
     uint16_t A=cache_refs[s1]-cache_refs[m1],B=cache_refs[s2]-cache_refs[m2];
+#endif
     uint16_t y=(((A<<6)+(A<<3)+(A<<2)+A)>>1)+(B>>3)+(B>>6)+(B>>7)+(B>>9);
     int16_t limit=d<64?7680:12800;
     int16_t x=y>(uint16_t)limit?limit:(int16_t)y;
@@ -128,6 +141,10 @@ ROAD_CODE static void road_update(void) {
     uint8_t back=pce_floor_page^1;
     road_fill_base=(uint8_t*)columns+(back?128:0);road_sel_base=road_fill_base+512;
     pursuit=rphase>=P_PURSUIT;camera_x=pce_control.x;camera_y=pce_control.y;
+#ifdef PCE_SGX
+    if(!road_reference)overlay_call(0x80,road_baked_call);
+    else {
+#endif
     overlay_call(0x6f,knots_call);
     int16_t dcur=DMAX;
     if(!kn_n)fill(dcur,-2,0,0);
@@ -145,6 +162,9 @@ ROAD_CODE static void road_update(void) {
         }
         fill(dcur,-2,x_p,0);                     /* the far end: the road's last centre, up to the horizon */
     }
+#ifdef PCE_SGX
+    }
+#endif
     road_along=pursuit?(uint8_t)(-camera_y):(uint8_t)((ps>>8)*52+(((ps&255)*52)>>8));
     road_stripes();
     pce_sky_far=(cam_hd>>7)&511;

@@ -339,6 +339,7 @@ PCE_RENDER void video_text(uint8_t x, uint8_t y, const char *text) {
     uint16_t scroll_x=pce_scroll_x;
 #ifdef PCE_SGX
     if(pce_sgx_gameplay()&&pce_metrics.stage==7)scroll_x=pce_sky_near;
+    if(pce_sgx_arena_sprites())scroll_x=0;
 #endif
     uint16_t dest = pce_raster_enabled ? (uint16_t)(48+y)*128+x :
         (uint16_t)y*64+(((scroll_x>>3)+x)&63);

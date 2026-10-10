@@ -19,8 +19,15 @@ static inline int16_t d52(int16_t v) {return (v>>6)+(v>>8);}
 FIELD_CODE static void track_point(uint16_t s,int16_t lat,int16_t *x,int16_t *y) {
     uint8_t i=s>>8,n=i+1,fr=s;
     int16_t dx=wrapdiff(track[n].x,track[i].x),dy=wrapdiff(track[n].y,track[i].y);
+#ifdef PCE_SGX
+    /* Track steps fit signed bytes; fr is an unsigned byte. Keep the
+       original signed-word truncation before each arithmetic shift. */
+    *x=(track[i].x+(race_u8s8(fr,(int8_t)dx)>>8)-d52((int16_t)race_mulw(lat,(int8_t)dy)))&8191;
+    *y=(track[i].y+(race_u8s8(fr,(int8_t)dy)>>8)+d52((int16_t)race_mulw(lat,(int8_t)dx)))&8191;
+#else
     *x=(track[i].x+(dx*fr>>8)-d52(dy*lat))&8191;
     *y=(track[i].y+(dy*fr>>8)+d52(dx*lat))&8191;
+#endif
 }
 FIELD_CODE static void bump(int16_t x,int16_t y,int16_t dist,int16_t r) {
     int16_t nx=wrapdiff(px,x),ny=wrapdiff(py,y);

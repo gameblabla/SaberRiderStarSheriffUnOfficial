@@ -8,6 +8,10 @@ DEBUG ?= 0
 ifeq ($(DEBUG),1)
 PCE_FLAGS += -DDEBUG=1
 endif
+LEVEL_SELECT ?= $(DEBUG)
+ifeq ($(LEVEL_SELECT),1)
+PCE_FLAGS += -DLEVEL_SELECT=1
+endif
 RETAIL ?= 1
 ifeq ($(RETAIL),1)
 PCE_FLAGS += -DRETAIL
@@ -53,7 +57,7 @@ $(OUT)/ipl.elf: src/platform/pce/ipl.c src/platform/pce/link/ipl.ld $(OUT)/ipl_f
 assets: | $(OUT)
 	python3 tools/pce/build_assets.py --out $(OUT) $(PCE_ASSET_FLAGS)
 
-$(PCE_ASSETS) &: tools/pce/build_assets.py tools/pce/formats.py tools/pce/palfit.py tools/pce/tile_budget.py tools/pce/export.c tools/pce/export_muzzle.c tools/pce/export_track.c tools/pce/story.py tools/pce/timeline.py tools/pce/presentation.py tools/pce/frontend.py $(wildcard src/*.[ch]) $(wildcard SaberRider/data/*.pck) $(wildcard assets/*.png assets/*.txt assets/pce/*.png assets/victory/*.png assets/ramrod/*.png assets/ramrod/*.txt assets/space/*.png assets/space/*.txt assets/stage3/native/*.png) $(OUT)/build-flags | $(OUT)
+$(PCE_ASSETS) &: tools/pce/build_assets.py tools/pce/road_curves.py tools/pce/formats.py tools/pce/palfit.py tools/pce/tile_budget.py tools/pce/export.c tools/pce/export_muzzle.c tools/pce/export_track.c tools/pce/story.py tools/pce/timeline.py tools/pce/presentation.py tools/pce/frontend.py $(wildcard src/*.[ch]) $(wildcard SaberRider/data/*.pck) $(wildcard assets/*.png assets/*.txt assets/pce/*.png assets/victory/*.png assets/ramrod/*.png assets/ramrod/*.txt assets/space/*.png assets/space/*.txt assets/stage3/native/*.png) $(OUT)/build-flags | $(OUT)
 	python3 tools/pce/build_assets.py --out $(OUT) $(PCE_ASSET_FLAGS)
 
 $(OUT)/app_full.elf: $(PCE_SRC) $(wildcard src/platform/pce/*.h) $(wildcard src/platform/pce/m6/*.h) $(OUT)/assets.h $(OUT)/m6.h $(OUT)/samples.h $(OUT)/pcm.h $(OUT)/psg.h $(OUT)/music.h $(OUT)/build-flags Makefile.pce tools/pce/check_elf.py src/platform/pce/link/link.ld
@@ -120,8 +124,11 @@ test-sgx:
 	python3 tools/pce/test_herd.py --out build/sgx --sgx
 	python3 tools/pce/test_sgx_herd_exit.py --out build/sgx
 	python3 tools/pce/test_race_math.py --out build/sgx --sgx
+	python3 tools/pce/test_road_curves.py --out build/sgx
+	python3 tools/pce/test_road.py --out build/sgx --sgx --tag road-speed --require-fps 25
 	python3 tools/pce/test_sgx_late_stages.py --out build/sgx
 	python3 tools/pce/test_sgx_last2.py --out build/sgx
+	python3 tools/pce/test_sgx_last3.py --out build/sgx
 
 test-presentation: all
 	python3 tools/pce/test_presentation.py --out $(OUT)

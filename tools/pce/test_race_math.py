@@ -60,7 +60,57 @@ def verify(out,sgx=False):
         actual=b''.join(bytes.fromhex(e.call('asread','acram',0x1d0000+i,16384)['hex']) for i in range(0,131072,16384))
         expected=b''.join(struct.pack('<h',(a if a<128 else a-256)*(b if b<128 else b-256)) for b in range(256) for a in range(256))
         assert actual==expected,'Signed road multiply differs from exact products'
+        if sgx:
+            # Boundary and random word products exercise the native long
+            # result/sign correction, including INT16_MIN and INT8_MIN.
+            import random
+            rng=random.Random(0x6280)
+            cases=[(a,b) for a in (-32768,-4096,-256,-255,-1,0,1,127,128,255,256,4096,32767)
+                   for b in (-128,-127,-64,-1,0,1,64,127)]
+            cases += [(rng.randrange(-32768,32768),rng.randrange(-128,128)) for _ in range(256)]
+            for start in range(0,len(cases),128):
+                group=cases[start:start+128];code=bytearray()
+                def emit(*v):code.extend(v)
+                def store(addr,value):emit(0xa9,value&255,0x8d,addr&255,addr>>8)
+                for addr,value in ((0x1a32,0),(0x1a33,0),(0x1a34,29),(0x1a35,0),(0x1a36,0),(0x1a37,1),(0x1a38,0),(0x1a39,0x11)):
+                    store(addr,value)
+                fn=symbol(elf,'race_mulw')
+                for a,b in group:
+                    store(0x2002,b);emit(0xa9,a&255,0xa2,(a>>8)&255,0x20,fn&255,fn>>8)
+                    emit(0x8d,0x30,0x1a,0x8e,0x30,0x1a)
+                    for addr in (0x2002,0x2003):emit(0xad,addr&255,addr>>8,0x8d,0x30,0x1a)
+                store(0x3b92,1);end=0xc000+len(code);emit(0x4c,end&255,end>>8)
+                e.write(0xc000,code);e.write(0x3b92,b'\0')
+                for key,val in [('P',4),('SP',253),('PC',0xc000)]:e.call('register_set',key,val)
+                e.run(4)
+                assert e.memory(0x3b92,1)==b'\1','Word product probe did not complete'
+                actual=bytes.fromhex(e.call('asread','acram',0x1d0000,len(group)*4)['hex'])
+                want=b''.join(struct.pack('<i',a*b) for a,b in group)
+                assert actual==want,('Native signed word/byte products',group)
+            # The shared Q7 movement helper also receives escort/leader Q8
+            # steps above 1023; testing only player speeds would miss a lost
+            # high byte in those pursuit paths.
+            group=[(a,b) for a in (-4096,-2773,-1275,-1024,-1023,-1,0,1,1023,1024,1275,2773,4096)
+                   for b in (-128,-127,-64,-1,0,1,64,127)]
+            code=bytearray()
+            def emit(*v):code.extend(v)
+            def store(addr,value):emit(0xa9,value&255,0x8d,addr&255,addr>>8)
+            for addr,value in ((0x1a32,0),(0x1a33,0),(0x1a34,29),(0x1a35,0),(0x1a36,0),(0x1a37,1),(0x1a38,0),(0x1a39,0x11)):store(addr,value)
+            fn=symbol(elf,'muls');want=bytearray()
+            for a,b in group:
+                store(0x2002,b);emit(0xa9,a&255,0xa2,(a>>8)&255,0x20,fn&255,fn>>8)
+                emit(0x8d,0x30,0x1a,0x8e,0x30,0x1a)
+                m=((((abs(a)>>2)*abs(b))&65535)>>5)
+                want.extend(struct.pack('<h',-m if (a<0)!=(b<0) else m))
+            store(0x3b92,1);end=0xc000+len(code);emit(0x4c,end&255,end>>8)
+            e.write(0xc000,code);e.write(0x3b92,b'\0')
+            for key,val in [('P',4),('SP',253),('PC',0xc000)]:e.call('register_set',key,val)
+            e.run(4)
+            assert e.memory(0x3b92,1)==b'\1','Movement product probe did not complete'
+            assert bytes.fromhex(e.call('asread','acram',0x1d0000,len(want))['hex'])==want,'Native movement high byte lost'
+
+
     print('Native road multiply: all 65,536 signed-byte pairs passed')
-    if sgx:print('SGX road reciprocals: all 256 track segments exact')
+    if sgx:print('SGX road reciprocals: all 256 track segments exact; signed word/byte boundaries and random products exact')
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--out',type=Path,default=Path('build/pce'));p.add_argument('--sgx',action='store_true');a=p.parse_args();verify(a.out,a.sgx)

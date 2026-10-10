@@ -73,16 +73,22 @@ static void bolt_draw(uint8_t frame,int16_t x,int16_t y) {
 }
 #ifdef PCE_SGX
 #define SGX_ARENA_SPLIT 420
+static uint16_t arena_front_depth;
+static uint8_t arena_bg_index;
 static bool arena_far(const Item *item) {
-    bool plasma=item->id>=PCE_M6_PLASMA&&item->id<PCE_M6_EXPL;
-    return item->d>SGX_ARENA_SPLIT&&((item->id&0xf000)!=BOLT_FLAG)&&!plasma;
+    return item->d>arena_front_depth||
+        (item->id>=BIG_FLAG&&item!=&items[arena_bg_index]);
 }
 #endif
 static bool draw_item(const Item *item) {
     int16_t ix=item->sx-shake_x,iy=item->sy-shake_y;
     if(item->id>=BIG_FLAG) {
 #ifdef PCE_SGX
-        if(pce_sgx_arena_sprites()&&a6.bg_actor_drawn)return true;
+        if(pce_sgx_arena_sprites()&&a6.bg_actor_drawn&&
+           item==&items[arena_bg_index])return true;
+#endif
+#ifdef PCE_SGX
+        if(!pce_sgx_arena_sprites()||sat_page==1)
 #endif
         if(blit(0,item->id&~BIG_FLAG,ix,iy,false))return true;
         return video_sprite_optional(PCE_M6_MECH+(((item->id&~BIG_FLAG)>>2)*PCE_M6_STEPS)+PCE_M6_STEPS-1,ix,iy,false,16);
@@ -111,13 +117,31 @@ void m6_draw(void) {
     uint8_t *threat=a6.threat;threat[0]=threat[1]=threat[2]=0;
     bool big_taken=false;
     uint8_t nearest=255;{uint16_t best=0xffff;for(uint8_t k=0;k<3;++k){Mech6 *m=&a6.mech[k];if(m->st!=S_OFF&&m->dist<best){best=m->dist;nearest=k;}}}
+#ifdef PCE_SGX
+    uint8_t second=255;
+    if(pce_sgx_arena_sprites()) {
+        uint16_t best=0xffff;
+        for(uint8_t k=0;k<3;++k)if(k!=nearest&&a6.mech[k].st!=S_OFF&&a6.mech[k].dist<best) {
+            best=a6.mech[k].dist;second=k;
+        }
+    }
+#endif
     for(uint8_t k=0;k<3;++k) {
         Mech6 *m=&a6.mech[k];if(m->st==S_OFF)continue;
         uint16_t d=m->dist>>2;int16_t rel=relq(m->ang);
         if(abs16(rel)>162*16||d>1600){if(m->st!=S_DYING)threat[k]=rel<0?1:2;continue;}
         uint8_t idx=m6_size[d>>4],v=m->variant;
         if(v==2)idx=idx+2>14?14:idx+2;   /* the command mech is 1.3 times the others: two steps up the ladder */
-        if(idx>=PCE_M6_STEPS&&(big_taken||k!=nearest))idx=PCE_M6_STEPS-1;   /* only the nearest takes a big step */
+        if(idx>=PCE_M6_STEPS) {
+#ifdef PCE_SGX
+            if(pce_sgx_arena_sprites()) {
+                /* BG0 holds the nearest; VDC1's two protected sprite buffers
+                   hold the next robot at its full distance-selected size. */
+                if(k!=nearest&&k!=second)idx=PCE_M6_STEPS-1;
+            } else
+#endif
+            if(big_taken||k!=nearest)idx=PCE_M6_STEPS-1;
+        }
         uint8_t pose=(m->anim>>5)&3;
         switch(m->st){case S_AIM:case S_FIRE:pose=4;break;case S_WINDUP:pose=5;break;case S_PUNCH:pose=6;break;case S_STAGGER:case S_DYING:pose=7;break;default:break;}
         if(m->st==S_AIM||m->st==S_WINDUP||m->st==S_CHARGE)threat[k]|=4;
@@ -137,7 +161,12 @@ void m6_draw(void) {
         Prop6 *p=&a6.prop[k];
         uint16_t d=p->dist>>2;int16_t rel=relq(p->ang);
         if(d>1500||abs16(rel)>162*16)continue;
-        put_at(d,4096,rel,0,PCE_M6_ROCK_BIG+p->kind*5+m6_psize[d>>4]);
+#ifdef PCE_SGX
+        uint16_t late=pce_sgx_arena_sprites()?0:4096;
+#else
+        uint16_t late=4096;
+#endif
+        put_at(d,late,rel,0,PCE_M6_ROCK_BIG+p->kind*5+m6_psize[d>>4]);
     }
     for(uint8_t k=0;k<16;++k) {
         Shot6 *s=&a6.shot[k];if(!s->life)continue;
@@ -155,10 +184,12 @@ void m6_draw(void) {
     }
 #ifdef PCE_SGX
     if(pce_sgx_arena_sprites()) {
+        arena_front_depth=SGX_ARENA_SPLIT;arena_bg_index=255;
         uint8_t big=0xff;
         for(uint8_t k=0;k<nitems;++k)if(items[k].id>=BIG_FLAG){big=k;break;}
         if(big!=0xff) {
             a6.blit_key=items[big].id&~BIG_FLAG;
+            arena_bg_index=big;arena_front_depth=items[big].d;
             a6.blit_x=items[big].sx-shake_x;a6.blit_y=items[big].sy-shake_y;
         } else a6.blit_key=0xffff;
         arena_bg_draw();
@@ -180,28 +211,22 @@ void m6_draw(void) {
     /* the world, nearest first */
 #ifdef PCE_SGX
     if(pce_sgx_arena_sprites()) {
-        /* Mode 1 puts VDC0 sprites over VDC1 sprites. Keep the nearer half
-           with the HUD and Ramrod's arm; distant objects use a second SAT
-           and its independent per-scanline admission budget. */
+        /* Split at the BG robot's depth: VDC0 sprites are above BG0, and
+           VDC1 sprites below it. Both SATs retain nearest-first order. */
         for(uint8_t k=0;k<nitems;++k)if(!arena_far(&items[k]))(void)draw_item(&items[k]);
         uint8_t sat0_count=sat_count;
         memcpy(buffer,sprite_occupancy,224);
         sat_page=1;sat_count=0;sprite_lines_clear();
-        for(uint8_t k=0;k<nitems;++k)if(arena_far(&items[k])&&!draw_item(&items[k])) {
-            uint8_t sat1_count=sat_count;
-            memcpy(buffer+256,sprite_occupancy,224);
-            memcpy(sprite_occupancy,buffer,224);
-            sat_page=0;sat_count=sat0_count;
-            if(draw_item(&items[k]))sat0_count=sat_count;
-            memcpy(buffer,sprite_occupancy,224);
-            memcpy(sprite_occupancy,buffer+256,224);
-            sat_page=1;sat_count=sat1_count;
-        }
+        /* A rear object must stay below BG0 and every nearer VDC0 sprite.
+           Retrying it on VDC0 would reverse depth when the rear SAT fills. */
+        for(uint8_t k=0;k<nitems;++k)if(arena_far(&items[k]))(void)draw_item(&items[k]);
         overlay_call(0x71,pce_sgx_vdc1_stats_body);
         for(uint8_t k=sat_count;k<64;++k)sat[1][k].y=0;
+        /* The upload retires entries using sat_count. Publish while it still
+           describes VDC1, before restoring the independent VDC0 count. */
+        overlay_call(0x78,pce_sgx_vdc1_sat_upload_body);
         sat_page=0;sat_count=sat0_count;
         memcpy(sprite_occupancy,buffer,224);
-        overlay_call(0x78,pce_sgx_vdc1_sat_upload_body);
     } else
 #endif
     {
