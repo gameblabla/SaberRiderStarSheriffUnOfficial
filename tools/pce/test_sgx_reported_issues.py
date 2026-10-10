@@ -61,8 +61,11 @@ def run(out):
         restored=b''.join(read_space(e,'vram0',((51+row)*128+6)*2,112) for row in range(6))
         assert restored==kept,'Race left dialogue BAT cells behind'
         report['race_restored_cells']=336
-        refs=read_space(e,'cpu',symbol(elf,'cache_refs'),1543)
-        expected=b''.join(struct.pack('<H',n*n//4) for n in range(511))+bytes(10080//f for f in range(40,561))
+        # SGX's quarter-square kernel uses separate 512-byte low/high tables.
+        # The reciprocal rows now start at byte 1024 (race_proj.c).
+        refs=read_space(e,'cpu',symbol(elf,'cache_refs'),1545)
+        squares=[n*n//4 for n in range(512)]
+        expected=bytes(n&255 for n in squares)+bytes(n>>8 for n in squares)+bytes(10080//f for f in range(40,561))
         assert refs==expected,'Race projection tables changed during dialogue'
         e.screenshot(out/'reported-race-after-text.png')
         c.seed(e,'pce_continues',0,1);c.field(e,'state',3)

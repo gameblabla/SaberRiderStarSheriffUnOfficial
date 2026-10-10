@@ -170,10 +170,10 @@ def run(out):
             e.screenshot(out/f'motion-repeat-{len(report["repeat_boundary_samples"]):02d}-{camera_seed}.png')
 
         # Verify source wrapping and BAT wrapping at late, distinct native
-        # positions for all platform scenes with an SGX sky, including stage 4's split band.
+        # positions for all platform scenes with an SGX sky.
         # Keep each camera below any stage-ending trigger while deliberately
         # placing the 33-column viewport across a 64-column BAT edge.
-        windows = {1: (4000, 4100), 3: (6000, 6100), 4: (5000, 5100),
+        windows = {1: (4000, 4100), 3: (6000, 6100), 4: (6000, 6100),
                    5: (6464, 6564)}
         for stage in (1, 3, 4, 5):
             if stage != 1:
@@ -192,12 +192,12 @@ def run(out):
                 record = struct.unpack_from(
                     SKY_RECORD, (out / 's4.bin').read_bytes(),
                     r.manifest['scenes'][3]['records']['sgx_sky_record']['offset'])
-                assert record[10] == 256 and record[12] == 0 and record[16] == 0, (
-                    'stage 4 sky must use one full-speed panorama',
+                assert record[10] == 64 and record[12] == 0 and record[16] == 0, (
+                    'stage 4 sky must use one quarter-speed panorama',
                     record[10], record[12], record[16])
                 assert r.word(e, 'pce_sgx_sky_near_x') == 0
                 assert e.memory(r.sym['pce_sgx_sky_split_line'], 1) == b'\0'
-                assert camera_state['main_scroll'] == camera_state['camera_x'], camera_state
+                assert camera_state['main_scroll'] == (camera_state['camera_x']+3)//4, camera_state
             report.setdefault('camera_by_stage', {})[str(stage)] = camera_state
             r.metrics(e)
 

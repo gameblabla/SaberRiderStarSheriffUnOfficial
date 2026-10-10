@@ -67,10 +67,16 @@ def verify(out):
         e.run(360);check_title(e,'title')
         t.press(e,64);t.press(e,1);t.until(e,lambda:e.memory(ui,1)==b'\3');e.run(200);capture(e,'options')
         option_addrs={i:symbol(out/'app.elf',f'pce_options.{i}') for i in (1,2)}
+        # The optional retail level selector shifts the options up one row.
+        try:
+            symbol(out/'app.elf','start_level')
+            options_y=8
+        except ValueError:
+            options_y=9
         def check_numbers():
             values={i:e.memory(addr,1)[0] for i,addr in option_addrs.items()}
             vr=vram(e,0)
-            for row,value in ((11,values[1]),(13,values[2])):
+            for row,value in ((options_y+2,values[1]),(options_y+4,values[2])):
                 words=struct.unpack_from('<2H',vr,(row*64+26)*2)
                 expected=tuple(0xf080+ord(ch)-32 for ch in f'{value:02d}')
                 assert words==expected,('options number missing',row,value,words,expected)

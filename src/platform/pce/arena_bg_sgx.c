@@ -14,6 +14,12 @@
 extern uint8_t buffer[2048];
 extern volatile uint8_t pce_vdc_index;
 
+/* End of VDC0's unused big-sprite buffer, before the second arm buffer.
+ * SGX big sprites use VDC1. Character zero aliases the
+ * first sixteen BAT cells and cannot serve as a stable blank pattern. */
+#define ARENA_BLANK_WORD 0x3ff0
+#define ARENA_BLANK_CELL (ARENA_BLANK_WORD >> 4)
+
 static void arena_vdc_index(uint8_t reg) {
     pce_vdc_index=reg;
     *(volatile uint8_t *)0x20f7=reg;
@@ -27,12 +33,11 @@ static void arena_vdc_write(uint8_t reg,uint16_t value) {
 }
 
 /* VDC0 becomes the transparent BG0 object plane; its panorama/floor map is
- * streamed on VDC1. Tile zero is transparent in mode 1, so clear its BAT and
- * the 16-word character along with it before stage 6 begins. */
+ * streamed on VDC1. Both BAT halves reference a dedicated transparent tile. */
 __attribute__((noinline)) static void arena_bg_clear_bank135(void) {
     __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
     uint16_t control=*(volatile uint16_t *)0x20f3;
-    uint16_t quiet=(control&~0x3000)&~VDC_CONTROL_ENABLE_BG;
+    uint16_t quiet=(control&~0x1800)&~VDC_CONTROL_ENABLE_BG;
     pce_vdc_index=VDC_REG_CONTROL;*(volatile uint8_t *)0x20f7=VDC_REG_CONTROL;
     *IO_VDC_INDEX=VDC_REG_CONTROL;*(volatile uint16_t *)0x20f3=quiet;
     *IO_VDC_DATA_LO=(uint8_t)quiet;*IO_VDC_DATA_HI=(uint8_t)(quiet>>8);
@@ -40,7 +45,13 @@ __attribute__((noinline)) static void arena_bg_clear_bank135(void) {
     *IO_VDC_INDEX=VDC_REG_VRAM_WRITE_ADDR;*IO_VDC_DATA_LO=0;*IO_VDC_DATA_HI=0;
     pce_vdc_index=VDC_REG_VRAM_DATA;*(volatile uint8_t *)0x20f7=VDC_REG_VRAM_DATA;
     *IO_VDC_INDEX=VDC_REG_VRAM_DATA;
-    for(uint16_t i=0;i<2064;++i){*IO_VDC_DATA_LO=0;*IO_VDC_DATA_HI=0;}
+    for(uint16_t i=0;i<2048;++i){
+        *IO_VDC_DATA_LO=(uint8_t)ARENA_BLANK_CELL;
+        *IO_VDC_DATA_HI=(uint8_t)(ARENA_BLANK_CELL>>8);
+    }
+    arena_vdc_write(VDC_REG_VRAM_WRITE_ADDR,ARENA_BLANK_WORD);
+    arena_vdc_index(VDC_REG_VRAM_DATA);
+    for(uint8_t i=0;i<16;++i){*IO_VDC_DATA_LO=0;*IO_VDC_DATA_HI=0;}
     (void)*IO_VDC_DATA_LO;
     pce_vdc_index=VDC_REG_CONTROL;*(volatile uint8_t *)0x20f7=VDC_REG_CONTROL;
     *IO_VDC_INDEX=VDC_REG_CONTROL;*(volatile uint16_t *)0x20f3=control;
@@ -185,11 +196,11 @@ __attribute__((noinline)) void pce_sgx_arena_bg_draw_body(void) {
         uint16_t control=*(volatile uint16_t *)0x20f3;
         uint8_t index=pce_vdc_index;
         __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
-        arena_vdc_write(VDC_REG_CONTROL,control&~0x3000);
+        arena_vdc_write(VDC_REG_CONTROL,control&~0x1800);
         __attribute__((leaf)) asm volatile("plp" ::: "p","memory");
         for(uint8_t y=y0;y<y1;++y) {
             while(cursor<tile_count&&anchor_y+(int8_t)list[cursor*3+1]<y)++cursor;
-            for(uint8_t x=0;x<32;++x)row[x]=0;
+            for(uint8_t x=0;x<32;++x)row[x]=ARENA_BLANK_CELL;
             uint16_t i=cursor;
             while(i<tile_count) {
                 int16_t ty=anchor_y+(int8_t)list[i*3+1];

@@ -70,6 +70,11 @@ __attribute__((noinline)) bool arcade_vram_to(uint8_t vdc, uint32_t address, uin
 #endif
     {
         __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
+        /* Pattern streams must not inherit a BAT column's 64-word stride:
+         * a valid contiguous range would then wrap through the BAT. */
+        uint16_t control=*(volatile uint16_t *)0x20f3 & ~0x1800U;
+        pce_vdc_poke(VDC_REG_CONTROL,control);
+        *(volatile uint16_t *)0x20f3=control;
         pce_vdc_poke(VDC_REG_VRAM_WRITE_ADDR, word);
         extern volatile uint8_t pce_vdc_index;
         pce_vdc_index=VDC_REG_VRAM_DATA;
