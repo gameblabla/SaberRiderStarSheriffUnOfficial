@@ -773,7 +773,10 @@ def add_sprites(archive, sprites, previews, sgx=False, race=False):
     fg=[im for name,im,_ in sprites if name.startswith('foreground_')]
     fg_palette=palette_for(fg) if fg else None
     # The HUD pieces of a stage share one palette (the cache gives them the shared-palette slots, see sprite_cache_pce.c).
-    hud=[im for name,im,_ in sprites if name.startswith('hudp_')]
+    # Platform portraits/health bars (hud0_..hud3_) and hud_digit0..9
+    # also use the shared HUD slot. A newly loaded counter must retain the
+    # same colour indices as an already cached portrait.
+    hud=[im for name,im,_ in sprites if name.startswith('hud')]
     hud_palette=palette_for(hud,unique=True) if hud else None
     # One mapping for April's entire animation set. Per-pose median cuts
     # changed identical clothing/boot pixels as the pose's histogram changed.
@@ -803,7 +806,7 @@ def add_sprites(archive, sprites, previews, sgx=False, race=False):
         family = name.split('_')[0]
         if name.startswith('grenade'): family = 'grenade'
         if name.startswith('burst'): family = 'burst'
-        pat, parts, palette, line = pack_sprite(im, anchor,april_palette if name.startswith('hero2_') else boss_palette if name in ('gunship_left','gunship_right','hyperjumper_left','hyperjumper_right') else fg_palette if name.startswith("foreground_") else hud_palette if name.startswith('hudp_') else power_palette[int(name[3])] if name.startswith('pwr') else shared.get(family), wide=sgx and (race or family.startswith('hero') or family in shared))
+        pat, parts, palette, line = pack_sprite(im, anchor,april_palette if name.startswith('hero2_') else boss_palette if name in ('gunship_left','gunship_right','hyperjumper_left','hyperjumper_right') else fg_palette if name.startswith("foreground_") else hud_palette if name.startswith('hud') else power_palette[int(name[3])] if name.startswith('pwr') else shared.get(family), wide=sgx and (race or family.startswith('hero') or family in shared))
         if (not parts and name != 'battle_cruiser') or len(parts)>32:
             raise ValueError(f'{name}: expected 1..32 visible sprite pieces, got {len(parts)}')
         offset = archive.add(name + '_patterns', pat)
