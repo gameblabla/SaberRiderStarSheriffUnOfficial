@@ -1,0 +1,44 @@
+{
+  "arrival_planet_entries": 16,
+  "greeting_visible_text": true,
+  "greeting_planet_entries": 9,
+  "greeting_pages": [
+    {
+      "page": 0,
+      "planet_entries": 9,
+      "ship_sky_vram_unchanged": true
+    },
+    {
+      "page": 1,
+      "planet_entries": 9,
+      "ship_sky_vram_unchanged": true
+    },
+    {
+      "page": 2,
+      "planet_entries": 9,
+      "ship_sky_vram_unchanged": true
+    },
+    {
+      "page": 3,
+      "planet_entries": 9,
+      "ship_sky_vram_unchanged": true
+    }
+  ],
+  "greeting_restore": {
+    "source_cells": 168,
+    "corners_retired": 4,
+    "ship_sky_vram_unchanged": true,
+    "opening_frames_checked": 288,
+    "closing_frames_checked": 1,
+    "restore_frames": 2
+  },
+  "nebula_scroll": 905,
+  "death_clears_enemies_and_projectiles": true,
+  "boss_fall": {
+    "frames": 52,
+    "offscreen_frame": 38,
+    "final_y": 288,
+    "bat_cleared_before_death_end": true
+  },
+  "explosion_completed_before_dialogue": true
+}

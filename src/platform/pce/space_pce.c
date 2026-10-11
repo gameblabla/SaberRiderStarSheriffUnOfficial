@@ -26,9 +26,15 @@ static Event next_event;
 uint16_t flight_clock;   /* (power_pce.c reloads the nebula from it) */
 static uint16_t spawn_clock,beam_clock;
 extern uint8_t pce_power_land;
-static uint8_t space_flash,hull_flash,foe_white;
+static uint8_t space_flash,hull_flash;
+#ifdef PCE_SGX
+uint8_t space_hull_falling PCE_WORK;
+static uint8_t foe_flash[8] PCE_WORK,space_sprite_flash PCE_WORK;
+#else
+static uint8_t foe_white;
 /* Keep indexed storage out of the compiler's promoted direct page. */
 static uint8_t foe_flash[2] PCE_WORK;   /* foe_flash: the armoured mines' and gunships' white hit blink (kinds 4 and 5), foe_white: which are lit */
+#endif
 static uint8_t event_index,event_count,pending,gun_clock,hurt,power,bombs,boss_die,boss_gone,noise;
 static int16_t ship_x,ship_y,pickup_x,pickup_y,space_boss_y;
 static uint8_t pickup,port_hp[7],dead_t;
@@ -83,7 +89,14 @@ SPACE_EVENT_CODE static void event_load(void) {
 }
 SPACE_CODE void space_start(void) {
     memset(foes,0,sizeof foes);memset(bolts,0,sizeof bolts);memset(expl,0,sizeof expl);memset(&sb,0,sizeof sb);space_hull_x=0;boss_die=boss_gone=0;
-    flight_clock=spawn_clock=beam_clock=0;space_flash=hull_flash=foe_flash[0]=foe_flash[1]=foe_white=0;space_hull_ready=0;space_flashing=0;pce_sky_far=pce_sky_near=0;event_index=pending=gun_clock=hurt=pickup=0;
+    flight_clock=spawn_clock=beam_clock=0;space_flash=hull_flash=0;memset(foe_flash,0,sizeof foe_flash);
+#ifdef PCE_SGX
+    space_sprite_flash=space_hull_falling=0;
+    for(uint8_t i=1;i<16;++i)pce_vce_set_color(30*16+i,0x1ff);
+#else
+    foe_white=0;
+#endif
+    space_hull_ready=0;space_flashing=0;pce_sky_far=pce_sky_near=0;event_index=pending=gun_clock=hurt=pickup=0;
     pce_campaign.power_cd=pce_campaign.timer=0;
     power=1;bombs=3;ship_x=48;ship_y=112;space_boss_y=80;
     arcade_read(2,pce_scenes[6].track,&event_count,1);
@@ -124,6 +137,9 @@ SPACE_CODE
 static void spawn(void) {
     for(uint8_t k=0;k<8;++k)if(!foes[k].kind) {
         uint8_t n=next_event.n-pending;
+#ifdef PCE_SGX
+        foe_flash[k]=0;
+#endif
         foes[k]=(Foe){272,next_event.y+(next_event.kind==4?0:n*next_event.gap),
             next_event.kind,next_event.kind==5?22:3,next_event.pattern,next_event.drop,0,0};
         if(foes[k].y>208)foes[k].y=208;
@@ -162,7 +178,11 @@ BOSS_STEP static void port_shot(uint8_t k,int8_t spread) {
     bolt(space_hull_port_x[k]-4+space_hull_x,y,-3,vy>3?3:vy<-3?-3:vy,true);
 }
 BOSS_STEP static void foe_in(int16_t x,int16_t y,uint8_t kind,uint8_t hp,uint8_t pattern,uint8_t drop) {
-    for(uint8_t k=0;k<8;++k)if(!foes[k].kind){foes[k]=(Foe){x,y,kind,hp,pattern,drop,0,0};return;}
+    for(uint8_t k=0;k<8;++k)if(!foes[k].kind){
+#ifdef PCE_SGX
+        foe_flash[k]=0;
+#endif
+        foes[k]=(Foe){x,y,kind,hp,pattern,drop,0,0};return;}
 }
 
 BOSS_STEP static void boss_guns(void) {
@@ -208,7 +228,7 @@ SPACE_CODE static void space_tick(void) {
         --pce_campaign.powers;pce_campaign.state=CAM_POWER;pce_campaign.timer=0;pce_control.power=0;return;
     }
     if(space_flash)--space_flash;if(hull_flash)--hull_flash;
-    for(uint8_t k=0;k<2;++k)if(foe_flash[k])--foe_flash[k];
+    for(uint8_t k=0;k<sizeof foe_flash;++k)if(foe_flash[k])--foe_flash[k];
     ++flight_clock;if(gun_clock)--gun_clock;if(hurt)--hurt;
     uint8_t velocity=keys&KEY_SELECT?1:2;
     if(keys&KEY_LEFT)ship_x-=velocity;if(keys&KEY_RIGHT)ship_x+=velocity;
@@ -285,7 +305,13 @@ SPACE_CODE static void space_tick(void) {
                 Foe *f=&foes[j];if(!f->kind||dist(b->x,f->x)>24||dist(b->y,f->y)>16)continue;
                 b->on=0;
                 /* Armoured mines deflect ordinary shots, as in space.c. */
-                if(f->kind>=4){f->hp=f->hp>power?f->hp-power:0;if(!f->hp)foe_kill(f);else{foe_flash[f->kind-4]=5;audio_effect(22);}}   /* (a hit that does not kill: it blinks white, with the PSG zap) */
+                if(f->kind>=4){f->hp=f->hp>power?f->hp-power:0;if(!f->hp)foe_kill(f);else{foe_flash[
+#ifdef PCE_SGX
+                    j
+#else
+                    f->kind-4
+#endif
+                    ]=5;audio_effect(22);}}   /* (a hit that does not kill: it blinks white, with the PSG zap) */
             }
             if(b->on&&sb.ph==4&&!boss_die&&!boss_gone&&space_hull_hit(b->x-space_hull_x,b->y-space_boss_y)) {
                 b->on=0;hull_flash=4;audio_effect(22);
@@ -357,7 +383,13 @@ BOSS_STEP static void boss_step(void) {
 #endif
     if(!pce_campaign.boss_hp) {
         boss_die=72;sb.t=0;sb.laser=0;
+#ifdef PCE_SGX
+        space_hull_falling=1;
+        memset(foes,0,sizeof foes);memset(bolts,0,sizeof bolts);
+        memset(foe_flash,0,sizeof foe_flash);pending=pickup=0;event_index=event_count;
+#else
         for(uint8_t k=0;k<12;++k)bolts[k].on=bolts[k].on&&!bolts[k].enemy;
+#endif
         return;
     }
     ++beam_clock;
@@ -426,7 +458,10 @@ __attribute__((noinline,minsize,section(".ram_bank116.text"))) static void space
     uint8_t previous=pce_bank6_get();pce_bank6_set(108);
     uint16_t id=sprite_emit_id;int16_t x=sprite_emit_x,y=sprite_emit_y;
     sprite_optional=1;
+    uint8_t first=sat_count;
     bool admitted=video_sprite(id,x,y,false,16);
+    if(space_sprite_flash)for(uint8_t k=first;k<sat_count;++k)
+        sat[sat_page][k].attr=(sat[sat_page][k].attr&~15U)|14;
     sprite_optional=0;
     if(!admitted&&sat_page==1) {
         uint8_t sat1_count=sat_count;
@@ -434,7 +469,10 @@ __attribute__((noinline,minsize,section(".ram_bank116.text"))) static void space
         memcpy(sprite_occupancy,buffer+256,224);
         sat_page=0;sat_count=space_sat0_count;
         sprite_optional=1;
+        first=sat_count;
         admitted=video_sprite(id,x,y,false,16);
+        if(space_sprite_flash)for(uint8_t k=first;k<sat_count;++k)
+            sat[0][k].attr=(sat[0][k].attr&~15U)|14;
         sprite_optional=0;
         space_sat0_count=sat_count;
         memcpy(buffer+256,sprite_occupancy,224);
@@ -456,7 +494,10 @@ SPACE_VDC1_CODE static void space_vdc1_actor_sprites(void) {
         if(!space_vdc1_sprite(bolts[k].enemy?1:0,bolts[k].x,bolts[k].y))bolts[k].on=0;
     for(uint8_t k=0;k<8;++k)if(foes[k].kind) {
         Foe *f=&foes[k];
-        if(!space_vdc1_sprite(f->kind<=3?8:f->kind==5?5:4,f->x,f->y)) {
+        space_sprite_flash=foe_flash[k];
+        bool admitted=space_vdc1_sprite(f->kind<=3?8:f->kind==5?5:4,f->x,f->y);
+        space_sprite_flash=0;
+        if(!admitted) {
             f->kind=0;continue;
         }
         if(f->charge>20&&(flight_clock&4))
@@ -543,6 +584,7 @@ PCE_SCENERY void space_frame(void) {
             video_sprite_optional(1,x,y+reach,false,16);video_sprite_optional(1,x,y-reach,false,16);
         }
     }
+#ifndef PCE_SGX
     for(uint8_t k=0;k<2;++k) {   /* a struck mine or gunship is a white blank: its own palette (the cache's slot of its picture) is overwritten with white while it blinks, and loaded again after */
         bool on=foe_flash[k]!=0;
         if(!on&&!(foe_white&(1<<k)))continue;
@@ -553,6 +595,7 @@ PCE_SCENERY void space_frame(void) {
         }
         if(on)foe_white|=1<<k;else foe_white&=~(1<<k);
     }
+#endif
     {
         uint8_t beam=sb.laser==2?(pce_campaign.boss_round>=2?2:1):0;
         if(boss_die||boss_gone)beam=0;

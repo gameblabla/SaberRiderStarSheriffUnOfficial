@@ -363,9 +363,9 @@ __attribute__((noinline,minsize,section(".ram_bank110.text"))) void video_number
 }
 PCE_FLOW static void sat_begin_body(void) {
 #ifdef PCE_SGX
-    /* Stage 6 publishes independent front/rear SATs from its overlays.
+    /* Stages 6 and 7 publish independent SATs from their overlays.
        Retire every front-table tail entry, including untracked stale ones. */
-    if(pce_metrics.stage==6)sat_previous_count[0]=sat_previous_count[1]=64;
+    if(pce_metrics.stage>=6)sat_previous_count[0]=sat_previous_count[1]=64;
 #endif
     ++sprite_epoch;
     sat_count = clipped_count = 0;front_start=64;front_keep=0;

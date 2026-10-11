@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/home/anonymous/Documents/DEV/Saber_Rider/game/tools/pce/test_sgx_final_boss.py", line 254, in <module>
+    verify(p.parse_args().out)
+    ~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/home/anonymous/Documents/DEV/Saber_Rider/game/tools/pce/test_sgx_final_boss.py", line 174, in verify
+    assert not leftover_glyphs, ('Greeting left text below the ship',leftover_glyphs)
+           ^^^^^^^^^^^^^^^^^^^
+AssertionError: ('Greeting left text below the ship', [(833, 62546), (834, 62561), (835, 62573), (836, 62578), (961, 62564), (962, 62575)])

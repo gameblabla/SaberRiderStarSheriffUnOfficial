@@ -147,8 +147,15 @@ STORY_CODE static void draw(void) {
     bool platform=pce_metrics.stage!=2&&pce_metrics.stage!=7;   /* the platform stages and Ramrod's arena: a scrolling background with the panel in BG characters and four sprite corners */
 #ifdef PCE_SGX
     if(pce_sgx_gameplay()&&pce_metrics.stage==7)platform=true;
-    if(pce_sgx_gameplay()&&pce_metrics.stage==7&&!pce_campaign.page)
-        video_story_cells_keep(y,space_hull_ready?pce_scroll_x>>3:pce_sky_near>>3);
+    if(pce_sgx_gameplay()&&pce_metrics.stage==7&&!pce_campaign.page) {
+        /* Read the promoted zero-page scroll directly. A conditional load
+           can become an indirect pointer to $00xx (I/O on HuC6280), rather
+           than the scroll's full RAM address at $20xx. Keep the volatile
+           read unconditional so both camera choices stay scalar loads. */
+        uint16_t column=pce_scroll_x>>3;
+        if(!space_hull_ready)column=pce_sky_near>>3;
+        video_story_cells_keep(y,column);
+    }
 #endif
     if(pce_metrics.stage==2){race_colour=colour&3;overlay_call(0x77,race_box);}
     else if(!platform){video_panel(5,y,24,2);video_panel(3,y+2,28,2);video_panel(5,y+4,24,2);}

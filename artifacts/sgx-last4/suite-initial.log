@@ -1,0 +1,423 @@
+make -f Makefile.pce SGX=1 OUT=build/sgx all
+make[1]: Entering directory '/home/anonymous/Documents/DEV/Saber_Rider/game'
+../PCE/llvm-mos8/bin/mos-pce-cd-clang -std=gnu11 -Os -Wall -Wextra -Werror -Isrc/platform/pce -Ibuild/sgx -flto -mlto-zp=96 -DRETAIL -DPCE_SGX src/platform/pce/admission_pce.c src/platform/pce/arcade_pce.c src/platform/pce/arena_bg_sgx.c src/platform/pce/arena_pce.c src/platform/pce/audio_pcm.c src/platform/pce/boss_pce.c src/platform/pce/campaign_pce.c src/platform/pce/card_pce.c src/platform/pce/cdda_pce.c src/platform/pce/combat_pce.c src/platform/pce/credits_pce.c src/platform/pce/dark_pce.c src/platform/pce/encounter_pce.c src/platform/pce/enemy_pce.c src/platform/pce/foreground_pce.c src/platform/pce/frontend_pce.c src/platform/pce/herd_pce.c src/platform/pce/hud_pce.c src/platform/pce/loader_pce.c src/platform/pce/main_pce.c src/platform/pce/overlay_pce.c src/platform/pce/pause_pce.c src/platform/pce/play_pce.c src/platform/pce/power_pce.c src/platform/pce/presentation_pce.c src/platform/pce/priority_pce.c src/platform/pce/psg_pce.c src/platform/pce/race_draw_pce.c src/platform/pce/race_field_pce.c src/platform/pce/race_foes_pce.c src/platform/pce/race_pce.c src/platform/pce/race_proj.c src/platform/pce/road_baked_pce.c src/platform/pce/road_pce.c src/platform/pce/save_pce.c src/platform/pce/scenery_pce.c src/platform/pce/select_animation_sgx.c src/platform/pce/sgx_pce.c src/platform/pce/shots_pce.c src/platform/pce/sky_stream_sgx.c src/platform/pce/space_hull_sgx.c src/platform/pce/space_pce.c src/platform/pce/sprite_cache_pce.c src/platform/pce/sprite_generic_pce.c src/platform/pce/sprite_split_pce.c src/platform/pce/story_pce.c src/platform/pce/ui_pce.c src/platform/pce/vce_pce.c src/platform/pce/victory_pce.c src/platform/pce/video_pce.c src/platform/pce/arcade_fast.S src/platform/pce/audio_pcm.S src/platform/pce/fast_math.S src/platform/pce/herd_emit.S src/platform/pce/herd_prepare.S src/platform/pce/hud_copy.S src/platform/pce/irq.S src/platform/pce/road_baked.S src/platform/pce/road_fill.S src/platform/pce/sat_copy.S src/platform/pce/save_bram.S src/platform/pce/sprite_cache_begin.S src/platform/pce/sprite_emit.S src/platform/pce/sprite_lines.S src/platform/pce/zp_init.S src/platform/pce/zx02_arcade.S src/platform/pce/m6/m6_a.c src/platform/pce/m6/m6_b.c src/platform/pce/m6/m6_c.c src/platform/pce/m6/m6_d.c  build/sgx/assets.c -I src/platform/pce/m6 -o build/sgx/app_full.elf -T src/platform/pce/link/link.ld -Wl,-Map,build/sgx/app.elf.map -Wl,--wrap=__mulqi3 -Wl,--wrap=__mulhi3 -Wl,--wrap=__mulsi3 -Wl,--wrap=__udivqi3 -Wl,--wrap=__udivhi3 -Wl,--wrap=__udivsi3 -Wl,--wrap=__umodqi3 -Wl,--wrap=__umodhi3 -Wl,--wrap=__divhi3
+python3 tools/pce/check_elf.py ../PCE/llvm-mos8/bin/llvm-nm build/sgx/app_full.elf
+../PCE/llvm-mos8/bin/llvm-objcopy --remove-section=.llvm_sympart --remove-section=.rela.llvm_sympart build/sgx/app_full.elf
+python3 tools/pce/m6_image.py --mos ../PCE/llvm-mos8 --out build/sgx
+  arena image a: 7709 of 8192 bytes
+  arena image b: 6386 of 8192 bytes
+  arena image c: 8108 of 8192 bytes
+  arena image d: 7989 of 8192 bytes
+python3 tools/pce/build_disc.py --mos ../PCE/llvm-mos8 --out build/sgx
+{
+  "s1.bin": {
+    "raw_bytes": 1433600,
+    "disc_bytes": 837632,
+    "blocks": 88,
+    "raw_blocks": 0
+  },
+  "s2.bin": {
+    "raw_bytes": 1820672,
+    "disc_bytes": 352256,
+    "blocks": 112,
+    "raw_blocks": 0
+  },
+  "s3.bin": {
+    "raw_bytes": 985088,
+    "disc_bytes": 460800,
+    "blocks": 61,
+    "raw_blocks": 0
+  },
+  "s4.bin": {
+    "raw_bytes": 1447936,
+    "disc_bytes": 1032192,
+    "blocks": 89,
+    "raw_blocks": 0
+  },
+  "s5.bin": {
+    "raw_bytes": 1282048,
+    "disc_bytes": 735232,
+    "blocks": 79,
+    "raw_blocks": 0
+  },
+  "s6.bin": {
+    "raw_bytes": 1470464,
+    "disc_bytes": 897024,
+    "blocks": 90,
+    "raw_blocks": 0
+  },
+  "s7.bin": {
+    "raw_bytes": 235520,
+    "disc_bytes": 106496,
+    "blocks": 15,
+    "raw_blocks": 0
+  },
+  "ui.bin": {
+    "raw_bytes": 327680,
+    "disc_bytes": 190464,
+    "blocks": 20,
+    "raw_blocks": 0
+  }
+}
+Writing "sector_0" (__cd_sector_0) to ISO @ sector 0, size 1
+Writing "ipl.elf" (__cd_ipl_elf) to ISO @ sector 1, size 1
+Writing "app.elf" (__cd_app_elf) to ISO @ sector 2, size 128
+Writing "s1_packed.bin" (__cd_s1_packed_bin) to ISO @ sector 130, size 409
+Writing "s2_packed.bin" (__cd_s2_packed_bin) to ISO @ sector 539, size 172
+Writing "s3_packed.bin" (__cd_s3_packed_bin) to ISO @ sector 711, size 225
+Writing "s4_packed.bin" (__cd_s4_packed_bin) to ISO @ sector 936, size 504
+Writing "s5_packed.bin" (__cd_s5_packed_bin) to ISO @ sector 1440, size 359
+Writing "s6_packed.bin" (__cd_s6_packed_bin) to ISO @ sector 1799, size 438
+Writing "s7_packed.bin" (__cd_s7_packed_bin) to ISO @ sector 2237, size 52
+Writing "font.bin" (__cd_font_bin) to ISO @ sector 2289, size 2
+Writing "ui_packed.bin" (__cd_ui_packed_bin) to ISO @ sector 2291, size 93
+Writing "victory.bin" (__cd_victory_bin) to ISO @ sector 2384, size 868
+Writing "voice0.bin" (__cd_voice0_bin) to ISO @ sector 3252, size 32
+Writing "voice1.bin" (__cd_voice1_bin) to ISO @ sector 3284, size 31
+Writing "voice2.bin" (__cd_voice2_bin) to ISO @ sector 3315, size 30
+Writing "voice3.bin" (__cd_voice3_bin) to ISO @ sector 3345, size 31
+Finished writing ISO, size 3526
+
+make[1]: Leaving directory '/home/anonymous/Documents/DEV/Saber_Rider/game'
+python3 tools/pce/test_sgx_fast_math.py --out build/sgx
+{'mul8_pairs': 65536, 'udiv8_umod8_pairs': 65280, 'word_operand_pairs': 248, 'long_operand_pairs': 235, 'mpr6_restored': 109, 'rc16_rc31_preserved': True}
+python3 tools/pce/test_campaign.py --out build/sgx --sgx
+Captured campaign-dialog
+Captured campaign-outrider
+Captured campaign-town-clear
+Captured campaign-race-dialog
+Captured campaign-pursuit-clear
+platform stage entry 3 {'state': 2, 'lives': 3, 'powers': 2, 'result': 0, 'event': 0, 'story': 3, 'page': 4, 'diagnostic': 0, 'boss_kind': 4, 'boss_round': 0, 'wave': 0, 'lap': 3, 'rank': 1, 'score': 1, 'boss_hp': 0, 'timer': 0, 'boost': 0, 'power_cd': 695} 2 00
+Captured campaign-boss3
+platform stage clear 3 {'state': 2, 'lives': 3, 'powers': 2, 'result': 0, 'event': 0, 'story': 2, 'page': 4, 'diagnostic': 0, 'boss_kind': 0, 'boss_round': 0, 'wave': 0, 'lap': 3, 'rank': 1, 'score': 2, 'boss_hp': 0, 'timer': 0, 'boost': 0, 'power_cd': 0}
+platform stage entry 4 {'state': 2, 'lives': 3, 'powers': 2, 'result': 0, 'event': 0, 'story': 2, 'page': 4, 'diagnostic': 0, 'boss_kind': 0, 'boss_round': 0, 'wave': 0, 'lap': 3, 'rank': 1, 'score': 2, 'boss_hp': 0, 'timer': 0, 'boost': 0, 'power_cd': 0} 3 00
+Captured campaign-boss4
+platform stage clear 4 {'state': 2, 'lives': 3, 'powers': 2, 'result': 0, 'event': 0, 'story': 2, 'page': 7, 'diagnostic': 0, 'boss_kind': 2, 'boss_round': 2, 'wave': 0, 'lap': 3, 'rank': 1, 'score': 4, 'boss_hp': 0, 'timer': 0, 'boost': 0, 'power_cd': 0}
+platform stage entry 5 {'state': 2, 'lives': 3, 'powers': 2, 'result': 0, 'event': 0, 'story': 2, 'page': 7, 'diagnostic': 0, 'boss_kind': 2, 'boss_round': 2, 'wave': 0, 'lap': 3, 'rank': 1, 'score': 4, 'boss_hp': 0, 'timer': 0, 'boost': 0, 'power_cd': 0} 4 00
+Captured campaign-boss5
+Captured campaign-dark-april
+platform stage clear 5 {'state': 2, 'lives': 3, 'powers': 2, 'result': 0, 'event': 0, 'story': 3, 'page': 6, 'diagnostic': 0, 'boss_kind': 0, 'boss_round': 1, 'wave': 0, 'lap': 3, 'rank': 1, 'score': 5, 'boss_hp': 0, 'timer': 0, 'boost': 0, 'power_cd': 0}
+Captured campaign-mech
+Captured campaign-arena-bg-mech
+Captured campaign-space
+Captured campaign-cruiser
+Captured campaign-ending
+SGX campaign scenario checks passed.
+python3 tools/pce/test_sgx_frontend.py --out build/sgx
+SGX source crop and retail front-end passed
+python3 tools/pce/test_sgx_motion.py --out build/sgx
+{
+  "camera_samples": [
+    {
+      "case": "stationary_player_camera_pan",
+      "player_x": 4220,
+      "camera_x": 4100,
+      "main_scroll": 1025,
+      "expected_main": 1025,
+      "near_scroll": 0,
+      "expected_near": 0,
+      "bat_first": 128,
+      "main_window_crosses_bat": false,
+      "near_window_crosses_bat": false
+    },
+    {
+      "case": "moving_player_fixed_camera",
+      "player_before": 4200,
+      "player_after": 4174,
+      "camera_x": 4100,
+      "sky_before": 1025,
+      "sky_after": 1025,
+      "main_scroll": 1025,
+      "expected_main": 1025,
+      "near_scroll": 0,
+      "expected_near": 0,
+      "bat_first": 128,
+      "main_window_crosses_bat": false,
+      "near_window_crosses_bat": false
+    }
+  ],
+  "visible_sky_cells": {
+    "startup_stage1": 990,
+    "camera_pan_stage1": 990,
+    "stage1_sample": 990,
+    "stage3_sample": 990,
+    "stage4_sample": 990,
+    "stage5_sample": 990
+  },
+  "repeat_boundary_samples": [
+    {
+      "camera_x": 2020,
+      "main_scroll": 505,
+      "expected_main": 505,
+      "near_scroll": 0,
+      "expected_near": 0,
+      "bat_first": 63,
+      "main_window_crosses_bat": true,
+      "near_window_crosses_bat": false,
+      "cells": 990
+    },
+    {
+      "camera_x": 2044,
+      "main_scroll": 511,
+      "expected_main": 511,
+      "near_scroll": 0,
+      "expected_near": 0,
+      "bat_first": 63,
+      "main_window_crosses_bat": true,
+      "near_window_crosses_bat": false,
+      "cells": 990
+    },
+    {
+      "camera_x": 2048,
+      "main_scroll": 512,
+      "expected_main": 512,
+      "near_scroll": 0,
+      "expected_near": 0,
+      "bat_first": 64,
+      "main_window_crosses_bat": false,
+      "near_window_crosses_bat": false,
+      "cells": 990
+    },
+    {
+      "camera_x": 2052,
+      "main_scroll": 513,
+      "expected_main": 513,
+      "near_scroll": 0,
+      "expected_near": 0,
+      "bat_first": 64,
+      "main_window_crosses_bat": false,
+      "near_window_crosses_bat": false,
+      "cells": 990
+    },
+    {
+      "camera_x": 2076,
+      "main_scroll": 519,
+      "expected_main": 519,
+      "near_scroll": 0,
+      "expected_near": 0,
+      "bat_first": 64,
+      "main_window_crosses_bat": false,
+      "near_window_crosses_bat": false,
+      "cells": 990
+    },
+    {
+      "camera_x": 2052,
+      "main_scroll": 513,
+      "expected_main": 513,
+      "near_scroll": 0,
+      "expected_near": 0,
+      "bat_first": 64,
+      "main_window_crosses_bat": false,
+      "near_window_crosses_bat": false,
+      "cells": 990
+    },
+    {
+      "camera_x": 2048,
+      "main_scroll": 512,
+      "expected_main": 512,
+      "near_scroll": 0,
+      "expected_near": 0,
+      "bat_first": 64,
+      "main_window_crosses_bat": false,
+      "near_window_crosses_bat": false,
+      "cells": 990
+    },
+    {
+      "camera_x": 2044,
+      "main_scroll": 511,
+      "expected_main": 511,
+      "near_scroll": 0,
+      "expected_near": 0,
+      "bat_first": 63,
+      "main_window_crosses_bat": true,
+      "near_window_crosses_bat": false,
+      "cells": 990
+    },
+    {
+      "camera_x": 4092,
+      "main_scroll": 1023,
+      "expected_main": 1023,
+      "near_scroll": 0,
+      "expected_near": 0,
+      "bat_first": 127,
+      "main_window_crosses_bat": true,
+      "near_window_crosses_bat": false,
+      "cells": 990
+    },
+    {
+      "camera_x": 4096,
+      "main_scroll": 1024,
+      "expected_main": 1024,
+      "near_scroll": 0,
+      "expected_near": 0,
+      "bat_first": 128,
+      "main_window_crosses_bat": false,
+      "near_window_crosses_bat": false,
+      "cells": 990
+    },
+    {
+      "camera_x": 4100,
+      "main_scroll": 1025,
+      "expected_main": 1025,
+      "near_scroll": 0,
+      "expected_near": 0,
+      "bat_first": 128,
+      "main_window_crosses_bat": false,
+      "near_window_crosses_bat": false,
+      "cells": 990
+    }
+  ],
+  "camera_by_stage": {
+    "1": {
+      "camera_x": 4000,
+      "main_scroll": 1000,
+      "expected_main": 1000,
+      "near_scroll": 0,
+      "expected_near": 0,
+      "bat_first": 125,
+      "main_window_crosses_bat": true,
+      "near_window_crosses_bat": false
+    },
+    "3": {
+      "camera_x": 6000,
+      "main_scroll": 305,
+      "expected_main": 305,
+      "near_scroll": 0,
+      "expected_near": 0,
+      "bat_first": 38,
+      "main_window_crosses_bat": true,
+      "near_window_crosses_bat": false
+    },
+    "4": {
+      "camera_x": 6000,
+      "main_scroll": 1500,
+      "expected_main": 1500,
+      "near_scroll": 0,
+      "expected_near": 0,
+      "bat_first": 187,
+      "main_window_crosses_bat": true,
+      "near_window_crosses_bat": false
+    },
+    "5": {
+      "camera_x": 6464,
+      "main_scroll": 1288,
+      "expected_main": 1288,
+      "near_scroll": 0,
+      "expected_near": 0,
+      "bat_first": 161,
+      "main_window_crosses_bat": true,
+      "near_window_crosses_bat": false
+    }
+  }
+}
+python3 tools/pce/test_sgx_rendering.py --out build/sgx
+Cadence {'idle': 60.0, 'fire': 60.0}
+Stage 1 sky/foreground passed
+Stage 3 sky/foreground passed
+Stage 4 sky/foreground passed
+Stage 5 sky/foreground passed
+SGX rendering checks passed
+python3 tools/pce/test_sgx_house.py --out build/sgx
+House openings passed: {'openings': [{'type': 17, 'region': (6544, 80, 6592, 112), 'filled_pixels': 1536}, {'type': 18, 'region': (7168, 80, 7216, 112), 'filled_pixels': 1536}], 'native_samples': 114, 'native_cells': 91884}
+python3 tools/pce/test_sgx_house_moon.py --out build/sgx
+House and moon passed {'fans': 2, 'min_red_pixels': 103, 'max_red_pixels': 1104}
+python3 tools/pce/test_sgx_moon_restore.py --out build/sgx
+Native moon restoration passed 19 camera checks
+python3 tools/pce/test_cdda_leadout.py --out build/sgx --sgx
+Native lead-out replies passed {'3': 2518.9633905376263, '4': 2586.7111973349606}
+python3 tools/pce/test_sgx_regressions.py --out build/sgx
+{
+  "boss_hit": {
+    "hp": 9,
+    "flash": 4,
+    "camera": 9697,
+    "boss_x": 9825,
+    "boss_y": 49,
+    "hull_level": 3,
+    "boss_dir": 0,
+    "presented": 1157,
+    "palette30_white_observed": true,
+    "palette30_at_hit_check": "ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01",
+    "hull": {
+      "level": 3,
+      "expected_visible_parts": 18,
+      "actual_palette14_parts": 18,
+      "palette14_vdc1": true,
+      "published_pose_offset_pixels": [
+        0,
+        0
+      ],
+      "screenshot_hull_bbox": [
+        25,
+        6,
+        233,
+        150
+      ]
+    },
+    "pixels_white_immediately_after_palette_write": 115,
+    "white_hull_presentation_observed": true,
+    "white_hull_screenshot_samples": [
+      {
+        "frame": 1,
+        "flash_before_frame": 3,
+        "pram_white_before_frame": true,
+        "presentation_delta": 1,
+        "white_hull_pixels": 6783
+      }
+    ],
+    "white_hull_pixel_threshold": 256,
+    "palette30_after_capture_wait": "ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01",
+    "foreground_palette_28_unchanged": true
+  },
+  "boss_restore": {
+    "flash": 0,
+    "palette30_restored": true,
+    "foreground_palette28_unchanged": true
+  },
+  "sustained_fire": {
+    "published_presentations": 60,
+    "camera_x_min": 9697,
+    "camera_x_max": 9697,
+    "onscreen_hull_presentations": 60,
+    "foreground_parts_checked": 240,
+    "foreground_nonempty_presentations": 60,
+    "foreground_parts_at_setup": 4,
+    "foreground_common_publication_shifts": [
+      [
+        0,
+        0
+      ]
+    ],
+    "foreground_sat_matched_snapshot": [
+      "prior"
+    ],
+    "every_visible_retained_foreground_part_matched_when_present": true,
+    "foreground_palette28_stable": true,
+    "hero_projectile_presentations": 58,
+    "boss_projectile_presentations": 42,
+    "persistent_onscreen_hero_bullet_candidates": 59,
+    "persistent_onscreen_boss_bullet_candidates": 73,
+    "hero_live_bullet_without_sat_match": 0,
+    "boss_live_bullet_without_sat_match": 0,
+    "hull_patterns_checked_at": [
+      1,
+      60
+    ],
+    "all_onscreen_hull_parts_present": true,
+    "all_visible_bullets_use_valid_per_vdc_pattern_words": true
+  }
+}
+python3 tools/pce/test_sgx_reported_issues.py --out build/sgx
+{'stage1_decoded_bytes': 1433600, 'pause_hud_palette_preserved': True, 'retry_disc_reads': 2, 'retry_video_frames': 453, 'stage2_decoded_bytes': 1820672, 'race_restored_cells': 336, 'gameover_video_frames': 720, 'gameover_to_title_disc_reads': 0, 'title_distinct_menu_patterns': True}
+python3 tools/pce/test_sgx_race.py --out build/sgx
+SGX race restoration and perspective passed {'restored_dialogues': ['opening', 'finish', 'boss', 'victory'], 'native_field': [{'frames': 0, 'keys': 0, 'rivals': 6, 'sprites': [9, 10, 27, 30, 35]}, {'frames': 180, 'keys': 0, 'rivals': 0, 'sprites': []}, {'frames': 120, 'keys': 16, 'rivals': 0, 'sprites': []}, {'frames': 120, 'keys': 48, 'rivals': 0, 'sprites': []}, {'frames': 120, 'keys': 16, 'rivals': 0, 'sprites': []}], 'native_driving': [{'second': 1, 'bxr': [316, 316, 379, 454, 525, 594, 664, 733, 801, 870], 'visible': 0}, {'second': 2, 'bxr': [240, 240, 270, 307, 336, 362, 388, 411, 436, 460], 'visible': 0}, {'second': 3, 'bxr': [213, 213, 235, 255, 263, 267, 273, 277, 281, 285], 'visible': 0}, {'second': 4, 'bxr': [168, 168, 195, 226, 247, 258, 266, 276, 280, 285], 'visible': 0}, {'second': 5, 'bxr': [91, 91, 171, 222, 241, 250, 254, 258, 261, 263], 'visible': 0}, {'second': 6, 'bxr': [154, 154, 198, 230, 249, 261, 272, 278, 286, 290], 'visible': 0}, {'second': 7, 'bxr': [198, 198, 220, 246, 259, 268, 275, 281, 287, 291], 'visible': 0}, {'second': 8, 'bxr': [67, 67, 126, 207, 242, 259, 269, 276, 282, 287], 'visible': 0}, {'second': 9, 'bxr': [425, 425, 335, 274, 268, 266, 268, 269, 272, 274], 'visible': 0}, {'second': 10, 'bxr': [233, 233, 262, 262, 251, 240, 230, 219, 211, 202], 'visible': 0}, {'second': 11, 'bxr': [224, 224, 244, 252, 255, 257, 258, 258, 258, 258], 'visible': 0}, {'second': 12, 'bxr': [163, 163, 194, 230, 246, 255, 260, 265, 267, 270], 'visible': 0}], 'boss_music': {'transition': 2584.912547652546, 'restored-phase': 2624.857186352436}, 'wide_cells': {'paired_cells': 468, 'pixel_identical': True}, 'perspective_sweep': [{'distance': 540, 'depth': 535, 'width': 32, 'sprite_id': 9}, {'distance': 420, 'depth': 416, 'width': 32, 'sprite_id': 9}, {'distance': 320, 'depth': 317, 'width': 48, 'sprite_id': 10}, {'distance': 250, 'depth': 248, 'width': 48, 'sprite_id': 10}, {'distance': 200, 'depth': 198, 'width': 64, 'sprite_id': 11}, {'distance': 160, 'depth': 158, 'width': 80, 'sprite_id': 12}, {'distance': 125, 'depth': 124, 'width': 104, 'sprite_id': 13}, {'distance': 100, 'depth': 99, 'width': 128, 'sprite_id': 14}, {'distance': 80, 'depth': 79, 'width': 128, 'sprite_id': 14}, {'distance': 60, 'depth': 59, 'width': 128, 'sprite_id': 14, 'offscreen': True}, {'distance': 45, 'depth': 44, 'width': 128, 'sprite_id': 14, 'offscreen': True}]}
+python3 tools/pce/test_sgx_cache_pressure.py --out build/sgx
+Traceback (most recent call last):
+  File "/home/anonymous/Documents/DEV/Saber_Rider/game/tools/pce/test_sgx_cache_pressure.py", line 147, in <module>
+    verify(args.out, args.fixture.resolve(), args.expect_refused, args.report)
+    ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/anonymous/Documents/DEV/Saber_Rider/game/tools/pce/test_sgx_cache_pressure.py", line 106, in verify
+    assert result == slot, ('native allocator result', result, slot)
+           ^^^^^^^^^^^^^^
+AssertionError: ('native allocator result', 48, 8)
+make: *** [Makefile.pce:121: test-sgx] Error 1

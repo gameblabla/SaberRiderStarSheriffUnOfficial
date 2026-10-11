@@ -119,6 +119,10 @@ CACHE_CODE static void allocate(void) {
     uint16_t hud=pce_present_base[pce_metrics.stage-1][0];
     uint8_t low=id>=sprite_cache_foreground_first?15:0,high=id>=sprite_cache_foreground_first?48:arena?13:15;
 #ifdef PCE_SGX
+    /* Space uses palette 14 for per-actor white hit flashes. */
+    if(pce_sgx_gameplay()&&pce_metrics.stage==7&&low==0)high=14;
+#endif
+#ifdef PCE_SGX
     if(pce_sgx_gameplay()&&hud&&id>=hud&&id<hud+26){low=15;high=48;}
     /* BG/HUD, foreground and herd have different palettes even though the
        VDCs share one VCE. Reserve palettes 12 (foreground), 13 (herd), 14 (hull). */

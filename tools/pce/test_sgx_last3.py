@@ -98,7 +98,12 @@ def verify(out):
         e.input(0)
         assert restored_frame is not None, 'Arena panel BAT did not restore after story close'
         assert not corner_entries(final_corner_ranges), 'Arena dialogue corner entries remained after close'
-        report['arena_dialogue_restore']={'pages':pages,'corner_entries':len(corners),'restored_frame':restored_frame}
+        scene=r.manifest['scenes'][5];blob=(out/'s6.bin').read_bytes()
+        palette_offset=struct.unpack_from('<I',blob,scene['sprite_table']+scene['hud']*16+8)[0]
+        expected_hud=blob[palette_offset:palette_offset+32]
+        r.settle(e)
+        assert read(e,'pram',31*32,32)==expected_hud, 'Arena HUD palette did not restore immediately after dialogue'
+        report['arena_dialogue_restore']={'pages':pages,'corner_entries':len(corners),'restored_frame':restored_frame,'hud_palette_restored':True}
         r.press(e, 8)
         arena = 108*8192 + (symbol(out/'app.elf', 'trigger_cache') & 8191)
         aim = struct.unpack('<h', e.memory(arena+505, 2, logical=False))[0]

@@ -15,7 +15,7 @@ def verify(out):
     a = {n: symbol(out/'app.elf', n) for n in
          ('flight_clock', 'foes', 'hurt', 'boss_die', 'boss_gone', 'hull_gone',
           'pce_sky_near', 'pce_scroll_x', 'pce_scroll_y', 'expl', 'ship_x', 'ship_y',
-          'space_boss_y', 'page_count', 'story_cells', 'story_cells_y', 'story_cells_column')}
+          'space_boss_y', 'space_hull_draw_y', 'pce_sat_scroll_y', 'bolts', 'page_count', 'story_cells', 'story_cells_y', 'story_cells_column')}
     scene = r.manifest['scenes'][6]
     assert [s['name'] for s in scene['sprites'][22:30]] == [f'planet_{i}' for i in range(8)]
     blob = (out/'s7.bin').read_bytes()
@@ -114,6 +114,7 @@ def verify(out):
         saved_cells=e.memory(snapshot_address,168*2,logical=False)
         saved_y=e.memory(a['story_cells_y'],1)[0]
         saved_col=int.from_bytes(e.memory(a['story_cells_column'],2),'little')
+        assert saved_col==word(e,'pce_scroll_x')>>3, ('Dialogue backed up the wrong cruiser columns',saved_col,word(e,'pce_scroll_x')>>3)
         open_sat=r.sat(e,0)
         dialog=scene['presentation']['dialog']
         cache_ids=struct.unpack('<48H',e.memory(r.sym['sprite_ids'],96))
@@ -169,9 +170,21 @@ def verify(out):
         # must remain intact at the screen's right edge.
         assert (word(e, 'pce_scroll_x')+32+int.from_bytes(e.memory(
             symbol(out/'app.elf', 'space_hull_x'),2),'little'))&65535 == 0
+        fight_bat=struct.unpack('<2048H',bytes.fromhex(e.call('asread','vram0',0,4096)['hex']))
+        leftover_glyphs=[(i,c) for i,c in enumerate(fight_bat) if 0xf420<=c<=0xf47f]
+        assert not leftover_glyphs, ('Greeting left text below the ship',leftover_glyphs)
+        report['cruiser_dialogue_bat_restored']={'saved_column':saved_col,'no_leftover_glyphs':True}
         e.screenshot(out/'final-boss-fight.png')
+        # Defeating the cruiser clears its live escorts and both kinds of
+        # projectile immediately, before the death animation or story.
+        e.write(a['foes'],struct.pack('<hhBBBBHB',180,100,5,22,0,0,1,0)+bytes(77))
+        e.write(a['bolts'],struct.pack('<hhbbBB',150,100,-3,0,1,1)+
+                struct.pack('<hhbbBB',50,20,6,0,1,0)+bytes(80))
         r.field(e, 'boss_hp', 0)
         r.until(e, lambda:e.memory(a['boss_die'],1)!=b'\0', step=1, limit=120)
+        assert all(e.memory(a['foes']+k*11+4,1)==b'\0' for k in range(8)), 'Boss death retained enemies'
+        assert all(e.memory(a['bolts']+k*8+6,1)==b'\0' for k in range(12)), 'Boss death retained projectiles'
+        report['death_clears_enemies_and_projectiles']=True
         e.run(20)
         assert r.state(e)['state']==0 and e.memory(a['hull_gone'],1)==b'\0'
         assert any(e.memory(a['expl']+k*6+4,1)!=b'\0' for k in range(10)), 'Missing hull explosions'
@@ -197,6 +210,17 @@ def verify(out):
             elif remaining:
                 ticks=previous_die-remaining
                 assert 2*ticks<=delta<=5*ticks, ('Boss fall stopped or jumped',previous,y,fall_frames,previous_die,remaining)
+            # Check the last published anchor. Even while the CPU prepares
+            # the next draw, rows that would wrap above it must be blank.
+            scroll = int.from_bytes(e.memory(a['pce_sat_scroll_y'],2),'little')
+            drawn_y = (-scroll)&65535
+            hull_bat=struct.unpack('<2048H',bytes.fromhex(e.call('asread','vram0',0,4096)['hex']))
+            if not e.memory(a['hull_gone'],1)[0]:
+                for row in range(16):
+                    if drawn_y+row*8>=256:
+                        assert all(c==0x80 for c in hull_bat[row*64:row*64+28]), ('Falling hull row wrapped',drawn_y,row)
+            assert all(e.memory(a['foes']+k*11+4,1)==b'\0' for k in range(8)), 'Escorts survived during boss fall'
+            assert all(e.memory(a['bolts']+k*8+6,1)==b'\0' for k in range(12)), 'Projectiles survived during boss fall'
             previous=y
             previous_die=remaining
             if y>=224 and offscreen_frame is None:
@@ -214,6 +238,8 @@ def verify(out):
         assert e.memory(a['hull_gone'],1)==b'\1', 'Hull was not removed before dialogue'
         e.screenshot(out/'final-boss-gone.png')
         r.until(e, lambda:r.state(e)['state']==1, step=1, limit=180)
+        assert all(e.memory(a['foes']+k*11+4,1)==b'\0' for k in range(8)), 'Dialogue froze live enemies'
+        assert all(e.memory(a['bolts']+k*8+6,1)==b'\0' for k in range(12)), 'Dialogue froze live projectiles'
         assert all(e.memory(a['expl']+k*6+4,1)==b'\0' for k in range(10)), 'Dialogue froze active explosions'
         e.run(100)
         e.screenshot(out/'final-boss-victory-dialogue.png')

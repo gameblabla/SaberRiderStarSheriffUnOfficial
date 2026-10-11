@@ -1,0 +1,38 @@
+{
+  "forest_parallax": [
+    {
+      "camera": 128,
+      "sky": 32
+    },
+    {
+      "camera": 510,
+      "sky": 128
+    },
+    {
+      "camera": 518,
+      "sky": 130
+    },
+    {
+      "camera": 1022,
+      "sky": 256
+    },
+    {
+      "camera": 2054,
+      "sky": 514
+    }
+  ],
+  "arena_dialogue_screen_cells": 144,
+  "arena_dialogue_restore": {
+    "pages": 7,
+    "corner_entries": 4,
+    "restored_frame": 4,
+    "hud_palette_restored": true
+  },
+  "two_large_robots": {
+    "nearest": "BG0",
+    "second": "VDC1 sprites",
+    "second_sprite_entries": 8,
+    "pattern_bytes": 4096
+  },
+  "late_dialogue_and_robot_restore": true
+}

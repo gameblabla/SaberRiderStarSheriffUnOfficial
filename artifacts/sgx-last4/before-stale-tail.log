@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/tmp/test_sgx_last4_before_tails.py", line 76, in <module>
+    verify(p.parse_args().out)
+    ~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/test_sgx_last4_before_tails.py", line 47, in verify
+    assert r.sat(e,vdc)[63][0]==0, ('Stale SAT tail survived',vdc)
+           ^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ('Stale SAT tail survived', 0)

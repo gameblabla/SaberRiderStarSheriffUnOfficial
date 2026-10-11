@@ -26,9 +26,11 @@ extern volatile uint8_t pce_vdc_index;
 volatile uint8_t space_hull_sgx_ok PCE_WORK;
 typedef struct __attribute__((packed)) {uint32_t tiles,map;uint16_t bytes;uint8_t bat_cols;} SpaceNearRecord;
 static SpaceNearRecord space_near_record __attribute__((section(".ram_bank113.data")));
+static uint8_t hull_rows_visible __attribute__((section(".ram_bank113.bss")));
 static uint8_t space_near_cleared __attribute__((section(".ram_bank113.bss")));
 extern volatile uint16_t pce_sky_near;
 extern uint16_t flight_clock;
+extern uint8_t space_hull_falling;
 static __attribute__((always_inline)) void hull_write(uint8_t reg,uint16_t value);
 static __attribute__((always_inline)) void hull_index(uint8_t reg);
 
@@ -157,6 +159,7 @@ __attribute__((noinline,section(".ram_bank113.text"))) void space_hull_sgx_bat_b
     }
     uint8_t saved=pce_vdc_index;
     hull_clear_bat();
+    hull_rows_visible=HULL_ROWS;
     if(hull_gone)return;
     for(uint8_t y=0;y<HULL_ROWS;++y) {
         for(uint8_t first=0;first<HULL_COLS;first+=16) {
@@ -191,6 +194,24 @@ __attribute__((noinline,section(".ram_bank113.text"))) void space_hull_sgx_draw_
     if(pce_sgx_gameplay()&&space_hull_draw_y>=224)space_hull_draw_gone=1;
     if(pce_sgx_gameplay())video_background(flight_clock>>3);
     video_scroll((uint16_t)(-(pce_sgx_gameplay()?32:76)-space_hull_x),(uint16_t)-space_hull_draw_y);
+    /* Retire each bottom row when it leaves the playfield, before the
+       256-pixel BAT wrap can bring that row back above the falling hull. */
+    if(space_hull_falling&&!hull_gone&&space_hull_draw_y>96) {
+        uint8_t rows=space_hull_draw_y>=224?0:(224-space_hull_draw_y+7)>>3;
+        uint8_t saved=pce_vdc_index;
+        while(hull_rows_visible>rows) {
+            --hull_rows_visible;
+            __attribute__((leaf)) asm volatile("php\nsei" ::: "p","memory");
+            hull_write(VDC_REG_VRAM_WRITE_ADDR,(uint16_t)hull_rows_visible*64);
+            hull_index(VDC_REG_VRAM_DATA);
+            for(uint8_t x=0;x<HULL_COLS;++x) {
+                *IO_VDC_DATA_LO=(uint8_t)(PCE_BG_WORD>>4);
+                *IO_VDC_DATA_HI=(PCE_BG_WORD>>4)>>8;
+            }
+            hull_index(saved);
+            __attribute__((leaf)) asm volatile("plp" ::: "p","memory");
+        }
+    }
     if(space_hull_draw_gone&&!hull_gone) {
         hull_clear_bat();
         hull_gone=1;

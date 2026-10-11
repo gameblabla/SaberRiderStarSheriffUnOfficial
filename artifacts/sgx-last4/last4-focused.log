@@ -1,0 +1,17 @@
+{
+  "hit_flash": {
+    "same_type_actors": 2,
+    "only_struck_actor_white": true,
+    "restored_after_expiry": true,
+    "hud_palette_unchanged": true
+  },
+  "stale_sat_tails": {
+    "vdc_count": 2,
+    "dma_sources_per_vdc": 2,
+    "retired": true
+  },
+  "empty_cruiser_sprite": {
+    "no_sat_entries": true,
+    "no_cache_upload": true
+  }
+}

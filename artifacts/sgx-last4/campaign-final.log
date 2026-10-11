@@ -1,0 +1,21 @@
+Captured campaign-dialog
+Captured campaign-outrider
+Captured campaign-town-clear
+Captured campaign-race-dialog
+Captured campaign-pursuit-clear
+platform stage entry 3 {'state': 2, 'lives': 3, 'powers': 2, 'result': 0, 'event': 0, 'story': 3, 'page': 4, 'diagnostic': 0, 'boss_kind': 4, 'boss_round': 0, 'wave': 0, 'lap': 3, 'rank': 1, 'score': 1, 'boss_hp': 0, 'timer': 0, 'boost': 0, 'power_cd': 695} 2 00
+Captured campaign-boss3
+platform stage clear 3 {'state': 2, 'lives': 3, 'powers': 2, 'result': 0, 'event': 0, 'story': 2, 'page': 4, 'diagnostic': 0, 'boss_kind': 0, 'boss_round': 0, 'wave': 0, 'lap': 3, 'rank': 1, 'score': 2, 'boss_hp': 0, 'timer': 0, 'boost': 0, 'power_cd': 0}
+platform stage entry 4 {'state': 2, 'lives': 3, 'powers': 2, 'result': 0, 'event': 0, 'story': 2, 'page': 4, 'diagnostic': 0, 'boss_kind': 0, 'boss_round': 0, 'wave': 0, 'lap': 3, 'rank': 1, 'score': 2, 'boss_hp': 0, 'timer': 0, 'boost': 0, 'power_cd': 0} 3 00
+Captured campaign-boss4
+platform stage clear 4 {'state': 2, 'lives': 3, 'powers': 2, 'result': 0, 'event': 0, 'story': 2, 'page': 7, 'diagnostic': 0, 'boss_kind': 2, 'boss_round': 2, 'wave': 0, 'lap': 3, 'rank': 1, 'score': 4, 'boss_hp': 0, 'timer': 0, 'boost': 0, 'power_cd': 0}
+platform stage entry 5 {'state': 2, 'lives': 3, 'powers': 2, 'result': 0, 'event': 0, 'story': 2, 'page': 7, 'diagnostic': 0, 'boss_kind': 2, 'boss_round': 2, 'wave': 0, 'lap': 3, 'rank': 1, 'score': 4, 'boss_hp': 0, 'timer': 0, 'boost': 0, 'power_cd': 0} 4 00
+Captured campaign-boss5
+Captured campaign-dark-april
+platform stage clear 5 {'state': 2, 'lives': 3, 'powers': 2, 'result': 0, 'event': 0, 'story': 3, 'page': 6, 'diagnostic': 0, 'boss_kind': 0, 'boss_round': 1, 'wave': 0, 'lap': 3, 'rank': 1, 'score': 5, 'boss_hp': 0, 'timer': 0, 'boost': 0, 'power_cd': 0}
+Captured campaign-mech
+Captured campaign-arena-bg-mech
+Captured campaign-space
+Captured campaign-cruiser
+Captured campaign-ending
+SGX campaign scenario checks passed.

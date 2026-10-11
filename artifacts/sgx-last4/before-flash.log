@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/home/anonymous/Documents/DEV/Saber_Rider/game/tools/pce/test_sgx_last4.py", line 111, in <module>
+    verify(p.parse_args().out)
+    ~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/home/anonymous/Documents/DEV/Saber_Rider/game/tools/pce/test_sgx_last4.py", line 60, in verify
+    assert actual==gunship_colours, ('Unstruck gunship palette changed',frame,palette,actual.hex())
+           ^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ('Unstruck gunship palette changed', 0, 1, 'ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01ff01')

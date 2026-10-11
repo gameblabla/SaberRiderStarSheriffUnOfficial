@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/home/anonymous/Documents/DEV/Saber_Rider/game/tools/pce/test_sgx_final_boss.py", line 251, in <module>
+    verify(p.parse_args().out)
+    ~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/home/anonymous/Documents/DEV/Saber_Rider/game/tools/pce/test_sgx_final_boss.py", line 180, in verify
+    assert all(e.memory(a['foes']+k*11+4,1)==b'\0' for k in range(8)), 'Boss death retained enemies'
+           ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Boss death retained enemies

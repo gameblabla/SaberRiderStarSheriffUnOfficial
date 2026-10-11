@@ -1,0 +1,32 @@
+{
+  "passed": true,
+  "mode": "expect_allocated",
+  "out": "/home/anonymous/Documents/DEV/Saber_Rider/game/build/sgx",
+  "app_sha256": "ebeb4bd3b5ff84f90d874a4f1768035348dff10d88eb0dcd891159008f6fd343",
+  "iso_sha256": "645083a9dd5ae88a3842eaf361556f84e4cf2d5f648916fafc3ec0ce27894aea",
+  "fixture_capture_app_sha256": "1d6bd935b232fbb9e40214eba850c7097cdb5f3ca9dd9735d122d70370e43ef9",
+  "allocator_symbol_cpu_address": "$6ec3",
+  "invocation": {
+    "trampoline": "$3bf0",
+    "P": 4,
+    "SP": 253,
+    "MPR3": 129,
+    "MPR6": 108,
+    "frames": 1
+  },
+  "sprite_id": 35,
+  "fixture_sprite_id": 32,
+  "sprite_patterns": 21,
+  "sp_after_native_call": 253,
+  "cache_result": 8,
+  "sprite_words_slot8": 30720,
+  "pattern_owner_pages_48_to_53": [
+    9,
+    9,
+    9,
+    9,
+    9,
+    9
+  ],
+  "protected_pages_0_to_47_unchanged": true
+}

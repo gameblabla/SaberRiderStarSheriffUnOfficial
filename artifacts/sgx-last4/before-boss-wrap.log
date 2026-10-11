@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/tmp/test_sgx_last4_before_rows.py", line 245, in <module>
+    verify(p.parse_args().out)
+    ~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/test_sgx_last4_before_rows.py", line 214, in verify
+    assert all(c==0x80 for c in hull_bat[row*64:row*64+28]), ('Falling hull row wrapped',drawn_y,row)
+           ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ('Falling hull row wrapped', 139, 15)

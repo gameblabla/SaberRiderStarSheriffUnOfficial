@@ -40,6 +40,11 @@ def verify(out, fixture_path, expect_refused=False, report_path=None):
     app = out / 'app.elf'
     cue = out / 'saber_rider.cue'
     assert app.is_file() and cue.is_file(), f'Missing PCE output in {out}'
+    # Planet strips and cropped BG dialogue corners moved the original
+    # panel IDs. Preserve the captured six-page stress request and live-page
+    # pins, but select a dialogue panel by its current semantic identity.
+    requested_id=seed['cache_id'] if expect_refused else json.loads(
+        (out/'manifest.json').read_text())['scenes'][seed['stage']-1]['presentation']['dialog']
     app_hash = sha256(app)
     iso_hash = sha256(out / 'saber_rider.iso')
     if expect_refused:
@@ -78,7 +83,7 @@ def verify(out, fixture_path, expect_refused=False, report_path=None):
         e.write(addr['sprite_stamp'], bytes_from_hex(seed['sprite_stamp_hex']))
         for name, data in initial.items():
             e.write(addr[name], data)
-        e.write(addr['cache_id'], struct.pack('<H', seed['cache_id']))
+        e.write(addr['cache_id'], struct.pack('<H', requested_id))
         e.write(addr['cache_count'], struct.pack('<H', seed['cache_count']))
         e.write(addr['cache_result'], b'\xaa\xaa')
 
@@ -120,7 +125,8 @@ def verify(out, fixture_path, expect_refused=False, report_path=None):
         'fixture_capture_app_sha256': capture['app_sha256'],
         'allocator_symbol_cpu_address': f'${body:04x}',
         'invocation': {'trampoline': '$3bf0', 'P': 4, 'SP': 253, 'MPR3': bank, 'MPR6': 108, 'frames': 1},
-        'sprite_id': seed['cache_id'],
+        'sprite_id': requested_id,
+        'fixture_sprite_id': seed['cache_id'],
         'sprite_patterns': seed['cache_count'],
         'sp_after_native_call': regs['SP'],
         'cache_result': result,

@@ -1,0 +1,569 @@
+python3 tools/pce/test_sgx_cache_pressure.py --out build/sgx
+{
+  "passed": true,
+  "mode": "expect_allocated",
+  "out": "/home/anonymous/Documents/DEV/Saber_Rider/game/build/sgx",
+  "app_sha256": "ebeb4bd3b5ff84f90d874a4f1768035348dff10d88eb0dcd891159008f6fd343",
+  "iso_sha256": "645083a9dd5ae88a3842eaf361556f84e4cf2d5f648916fafc3ec0ce27894aea",
+  "fixture_capture_app_sha256": "1d6bd935b232fbb9e40214eba850c7097cdb5f3ca9dd9735d122d70370e43ef9",
+  "allocator_symbol_cpu_address": "$6ec3",
+  "invocation": {
+    "trampoline": "$3bf0",
+    "P": 4,
+    "SP": 253,
+    "MPR3": 129,
+    "MPR6": 108,
+    "frames": 1
+  },
+  "sprite_id": 35,
+  "fixture_sprite_id": 32,
+  "sprite_patterns": 21,
+  "sp_after_native_call": 253,
+  "cache_result": 8,
+  "sprite_words_slot8": 30720,
+  "pattern_owner_pages_48_to_53": [
+    9,
+    9,
+    9,
+    9,
+    9,
+    9
+  ],
+  "protected_pages_0_to_47_unchanged": true
+}
+python3 tools/pce/test_sgx_depth.py --out build/sgx
+{'props': [{'type': 13, 'vdc': 1, 'prop_parts': 1, 'fighter_parts': 3}, {'type': 14, 'vdc': 1, 'prop_parts': 9, 'fighter_parts': 3}, {'type': 15, 'vdc': 1, 'prop_parts': 9, 'fighter_parts': 3}], 'passed': True}
+python3 tools/pce/test_sgx_combat_profile.py --out build/sgx
+{'stage': 1, 'warm_world': False, 'video_frames': 180, 'presented': 165, 'fps': 55.0, 'active_actors_min': 3, 'active_actors_max': 6, 'upload_bytes': 57120, 'overflow': 0, 'admission': 'bands', 'presentations_per_30_frames': [17, 28, 30, 30, 30, 30], 'wide_parts_checked': 85, 'palette_parts_checked': 262, 'missed_video_frames': 15, 'presentations_per_video_frame': {'0': 15, '1': 165}}
+python3 tools/pce/test_herd.py --out build/sgx --sgx
+Captured herd-1-locked
+Captured herd-1-locked-firing
+Captured herd-1-after
+Captured herd-2-locked
+Captured herd-2-locked-firing
+Captured herd-2-after
+Captured herd-3-locked
+Captured herd-3-locked-firing
+Captured herd-3-after
+[{'trigger': 2252, 'stop': 2392, 'spawn_camera': 2118, 'locked_camera': 2257, 'post_herd_peak': 7, 'right_edge_cells': 60, 'herd_fps': 59.88, 'foreground_pressure_checks': 4, 'foreground_retained_parts': 60, 'foreground_shake_values': [0], 'background_shake_values': [0, 1, 2, 3], 'hero_bullet_pressure_checks': 4, 'pause': {'active_vdc0_horses': 4, 'active_vdc1_horses': 8, 'paused_vdc0_horses': 0, 'paused_vdc1_sat_entries': 8, 'vdc1_hidden_flag': True, 'vdc1_cr_sprite_bit_cleared': True, 'retained_vdc0_entries_unchanged': True, 'unpaused_vdc0_horses': 6, 'unpaused_vdc1_horses': 8, 'vdc1_cr_sprite_bit_restored': True}, 'passed': True}, {'trigger': 5916, 'stop': 6292, 'spawn_camera': 5784, 'locked_camera': 6156, 'post_herd_peak': 7, 'right_edge_cells': 60, 'herd_fps': 59.95, 'foreground_pressure_checks': 5, 'foreground_retained_parts': 20, 'foreground_shake_values': [0], 'background_shake_values': [0, 1, 2, 3], 'hero_bullet_pressure_checks': 5, 'pause': None, 'passed': True}, {'trigger': 8648, 'stop': 8976, 'spawn_camera': 8514, 'locked_camera': 8839, 'post_herd_peak': 7, 'right_edge_cells': 60, 'herd_fps': 60.0, 'foreground_pressure_checks': 5, 'foreground_retained_parts': 65, 'foreground_shake_values': [0], 'background_shake_values': [0, 1, 2, 3], 'hero_bullet_pressure_checks': 5, 'pause': None, 'passed': True}]
+python3 tools/pce/test_sgx_herd_exit.py --out build/sgx
+{'exit_positions': 138, 'vdc_parity_positions': 387, 'horses_per_vdc': 2, 'last_visible_x': -127, 'fully_culled_x': -128, 'passed': True}
+python3 tools/pce/test_race_math.py --out build/sgx --sgx
+Native road multiply: all 65,536 signed-byte pairs passed
+SGX road reciprocals: all 256 track segments exact; signed word/byte boundaries and random products exact
+python3 tools/pce/test_road_curves.py --out build/sgx
+Lookup road comparison: 160 poses; max 85 dots; near 5 dots
+python3 tools/pce/test_road.py --out build/sgx --sgx --tag road-speed --require-fps 25
+0 ovf 0 sat 32 bxr [261, 261, 265, 274, 280, 287, 293, 299, 306, 312] sel 00000000000001010011000111000001111111000000000000111111
+1 ovf 0 sat 27 bxr [231, 231, 241, 243, 239, 236, 232, 228, 224, 219] sel 00000000000010110110011100001111110000000011111111111111
+2 ovf 0 sat 26 bxr [238, 238, 257, 275, 287, 298, 308, 317, 327, 337] sel 00000000000000010110001110000111111000000000111111111111
+3 ovf 0 sat 27 bxr [153, 153, 203, 238, 259, 269, 276, 282, 289, 294] sel 00000000000001010011001110000011111100000000000111111111
+4 ovf 0 sat 33 bxr [106, 106, 196, 239, 262, 277, 287, 298, 305, 312] sel 00000000000001011011000111100000111111100000000000011111
+5 ovf 1 sat 41 bxr [175, 175, 212, 249, 274, 291, 305, 319, 328, 338] sel 00000000000010100100011000011111000000001111111111111000
+6 ovf 1 sat 27 bxr [187, 187, 211, 245, 262, 276, 287, 294, 302, 309] sel 00000000000010100110011100001111100000000111111111111110
+7 ovf 1 sat 38 bxr [134, 134, 201, 231, 241, 246, 247, 249, 249, 249] sel 00000000000001001001100011110000011111111100000000000000
+8 ovf 1 sat 43 bxr [101, 101, 169, 235, 257, 269, 278, 284, 290, 295] sel 00000000000001010011000111000001111111000000000001111111
+9 ovf 1 sat 33 bxr [191, 191, 200, 231, 255, 275, 287, 299, 309, 318] sel 00000000000011101001110001111000000111111111100000000000
+10 ovf 1 sat 28 bxr [287, 287, 259, 255, 259, 264, 267, 270, 273, 276] sel 00000000000001011011100111100000111111110000000000000111
+11 ovf 1 sat 35 bxr [518, 518, 513, 393, 301, 262, 238, 225, 215, 207] sel 00000000000010110110011100001111110000000011111111111111
+{'grid_bxr': [306, 306, 306, 319, 330, 342, 355, 369, 383, 398, 413, 429, 445, 461], 'commits_per_second': 29.666666666666668, 'presentations_per_second': 29.583333333333332, 'essential_overflow': 1, 'video_frames_per_second': 29.583333333333332}
+python3 tools/pce/test_sgx_late_stages.py --out build/sgx
+4 [40, 232, 424, 616, 808, 1000, 1192, 1384, 1576, 1768, 1960, 2152, 2344, 2536, 2728, 2920, 3112, 3304, 3496, 3688, 3880, 4072, 4264, 4456, 4648, 4840, 5032, 5224, 5416, 5608, 5800, 5992]
+5 [40, 232, 424, 616, 808, 1000, 1192, 1384, 1576, 1768, 1960, 2152, 2344, 2536, 2728, 2920, 3112, 3304, 3496, 3688, 3880, 4072, 4264, 4456, 4648, 4840, 5032, 5224, 5416, 5608, 5800, 5992, 6184]
+6 {'video_frames': 180, 'presentations': 64, 'fps': 21.33, 'sprite_entries': 41, 'peak_units': [8, 7], 'essential_overflow': 0}
+7 {'video_frames': 180, 'presentations': 171, 'fps': 57.0, 'sprite_entries': 26, 'peak_units': [2, 3], 'essential_overflow': 0}
+python3 tools/pce/test_sgx_last2.py --out build/sgx
+Stage 1: power restored at cameras 128, 510, 518, 1022, 1030
+Stage 3: power restored at cameras 128, 510, 518, 1022, 1030
+Stage 4: power restored at cameras 128, 510, 518, 1022, 1030
+Stage 5: power restored at cameras 128, 510, 518, 1022, 1030
+{
+  "stage4_unified_sky": {
+    "speed_q8": 64,
+    "near_map": 0,
+    "split_row": 0,
+    "columns": 220
+  },
+  "power_restore": {
+    "1": [
+      {
+        "camera_x": 128,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 32
+      },
+      {
+        "camera_x": 510,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 128
+      },
+      {
+        "camera_x": 518,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 130
+      },
+      {
+        "camera_x": 1022,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 256
+      },
+      {
+        "camera_x": 1030,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 258
+      }
+    ],
+    "3": [
+      {
+        "camera_x": 128,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 7
+      },
+      {
+        "camera_x": 510,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 26
+      },
+      {
+        "camera_x": 518,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 27
+      },
+      {
+        "camera_x": 1022,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 52
+      },
+      {
+        "camera_x": 1030,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 53
+      }
+    ],
+    "4": [
+      {
+        "camera_x": 128,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 32
+      },
+      {
+        "camera_x": 510,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 128
+      },
+      {
+        "camera_x": 518,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 130
+      },
+      {
+        "camera_x": 1022,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 256
+      },
+      {
+        "camera_x": 1030,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 258
+      }
+    ],
+    "5": [
+      {
+        "camera_x": 128,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 26
+      },
+      {
+        "camera_x": 510,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 102
+      },
+      {
+        "camera_x": 518,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 104
+      },
+      {
+        "camera_x": 1022,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 204
+      },
+      {
+        "camera_x": 1030,
+        "covered_cells": 462,
+        "font_pattern_bytes": 3072,
+        "temporary_panel_tiles_not_referenced": true,
+        "palette15_restored": true,
+        "sky_cells": 990,
+        "sky_bxr": 206
+      }
+    ]
+  },
+  "native_wrap_walk": {
+    "start_camera": 488,
+    "right_samples": [
+      {
+        "camera_x": 494,
+        "player_x": 614
+      },
+      {
+        "camera_x": 501,
+        "player_x": 621
+      },
+      {
+        "camera_x": 508,
+        "player_x": 628
+      },
+      {
+        "camera_x": 514,
+        "player_x": 634
+      },
+      {
+        "camera_x": 521,
+        "player_x": 641
+      },
+      {
+        "camera_x": 528,
+        "player_x": 648
+      },
+      {
+        "camera_x": 534,
+        "player_x": 654
+      },
+      {
+        "camera_x": 541,
+        "player_x": 661
+      }
+    ],
+    "left_samples": [
+      {
+        "camera_x": 541,
+        "player_x": 654
+      },
+      {
+        "camera_x": 541,
+        "player_x": 648
+      },
+      {
+        "camera_x": 541,
+        "player_x": 641
+      },
+      {
+        "camera_x": 541,
+        "player_x": 634
+      },
+      {
+        "camera_x": 541,
+        "player_x": 628
+      },
+      {
+        "camera_x": 541,
+        "player_x": 621
+      },
+      {
+        "camera_x": 541,
+        "player_x": 614
+      },
+      {
+        "camera_x": 541,
+        "player_x": 608
+      }
+    ],
+    "right_camera_after_wrap": 541,
+    "left_walk_end_player_x": 608,
+    "left_walk_kept_camera": true
+  }
+}
+python3 tools/pce/test_sgx_last3.py --out build/sgx
+{
+  "forest_parallax": [
+    {
+      "camera": 128,
+      "sky": 32
+    },
+    {
+      "camera": 510,
+      "sky": 128
+    },
+    {
+      "camera": 518,
+      "sky": 130
+    },
+    {
+      "camera": 1022,
+      "sky": 256
+    },
+    {
+      "camera": 2054,
+      "sky": 514
+    }
+  ],
+  "arena_dialogue_screen_cells": 144,
+  "arena_dialogue_restore": {
+    "pages": 7,
+    "corner_entries": 4,
+    "restored_frame": 4,
+    "hud_palette_restored": true
+  },
+  "two_large_robots": {
+    "nearest": "BG0",
+    "second": "VDC1 sprites",
+    "second_sprite_entries": 8,
+    "pattern_bytes": 4096
+  },
+  "late_dialogue_and_robot_restore": true
+}
+python3 tools/pce/test_sgx_arena_sprites.py --out build/sgx
+{
+  "background_peak_tiles": 474,
+  "rear_robot_pattern_frames": 300,
+  "stale_tail_sources_cleared": 4,
+  "cactus_heights_far_to_near": [
+    15,
+    29,
+    55,
+    101,
+    101
+  ]
+}
+python3 tools/pce/test_sgx_space_planet.py --out build/sgx
+{
+  "samples": [
+    {
+      "scroll": 8,
+      "retired_columns": 1,
+      "visible_ink_tiles": 678
+    },
+    {
+      "scroll": 8,
+      "retired_columns": 1,
+      "visible_ink_tiles": 678
+    },
+    {
+      "scroll": 128,
+      "retired_columns": 16,
+      "visible_ink_tiles": 263
+    },
+    {
+      "scroll": 248,
+      "retired_columns": 31,
+      "visible_ink_tiles": 1
+    },
+    {
+      "scroll": 255,
+      "retired_columns": 31,
+      "visible_ink_tiles": 1
+    },
+    {
+      "scroll": 256,
+      "retired_columns": 32,
+      "visible_ink_tiles": 0
+    },
+    {
+      "scroll": 257,
+      "retired_columns": 32,
+      "visible_ink_tiles": 0
+    },
+    {
+      "scroll": 259,
+      "retired_columns": 32,
+      "visible_ink_tiles": 0
+    },
+    {
+      "scroll": 260,
+      "retired_columns": 32,
+      "visible_ink_tiles": 0
+    },
+    {
+      "scroll": 263,
+      "retired_columns": 32,
+      "visible_ink_tiles": 0
+    },
+    {
+      "scroll": 264,
+      "retired_columns": 33,
+      "visible_ink_tiles": 0
+    },
+    {
+      "scroll": 264,
+      "retired_columns": 33,
+      "visible_ink_tiles": 0
+    },
+    {
+      "scroll": 264,
+      "retired_columns": 33,
+      "visible_ink_tiles": 0
+    }
+  ],
+  "power_samples": [
+    {
+      "scroll": 128,
+      "visible_wave_cells": 462,
+      "planet_bat_restored": true,
+      "font_restored": true,
+      "nebula_unchanged": true,
+      "background_palettes_restored": true
+    },
+    {
+      "scroll": 257,
+      "visible_wave_cells": 462,
+      "planet_bat_restored": true,
+      "font_restored": true,
+      "nebula_unchanged": true,
+      "background_palettes_restored": true
+    },
+    {
+      "scroll": 264,
+      "visible_wave_cells": 462,
+      "planet_bat_restored": true,
+      "font_restored": true,
+      "nebula_unchanged": true,
+      "background_palettes_restored": true
+    }
+  ],
+  "restore_kept_space": true,
+  "clock_wrap_kept_space": true
+}
+python3 tools/pce/test_sgx_final_boss.py --out build/sgx
+{
+  "arrival_planet_entries": 16,
+  "greeting_visible_text": true,
+  "greeting_planet_entries": 9,
+  "greeting_pages": [
+    {
+      "page": 0,
+      "planet_entries": 9,
+      "ship_sky_vram_unchanged": true
+    },
+    {
+      "page": 1,
+      "planet_entries": 9,
+      "ship_sky_vram_unchanged": true
+    },
+    {
+      "page": 2,
+      "planet_entries": 9,
+      "ship_sky_vram_unchanged": true
+    },
+    {
+      "page": 3,
+      "planet_entries": 9,
+      "ship_sky_vram_unchanged": true
+    }
+  ],
+  "greeting_restore": {
+    "source_cells": 168,
+    "corners_retired": 4,
+    "ship_sky_vram_unchanged": true,
+    "opening_frames_checked": 288,
+    "closing_frames_checked": 1,
+    "restore_frames": 2
+  },
+  "nebula_scroll": 905,
+  "cruiser_dialogue_bat_restored": {
+    "saved_column": 8188,
+    "no_leftover_glyphs": true
+  },
+  "death_clears_enemies_and_projectiles": true,
+  "boss_fall": {
+    "frames": 52,
+    "offscreen_frame": 38,
+    "final_y": 288,
+    "bat_cleared_before_death_end": true
+  },
+  "explosion_completed_before_dialogue": true
+}
+python3 tools/pce/test_sgx_last4.py --out build/sgx
+{
+  "hit_flash": {
+    "same_type_actors": 2,
+    "only_struck_actor_white": true,
+    "restored_after_expiry": true,
+    "hud_palette_unchanged": true
+  },
+  "stale_sat_tails": {
+    "vdc_count": 2,
+    "dma_sources_per_vdc": 2,
+    "retired": true
+  },
+  "empty_cruiser_sprite": {
+    "no_sat_entries": true,
+    "no_cache_upload": true
+  }
+}
+SGX continuation checks passed.
