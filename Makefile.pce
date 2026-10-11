@@ -90,6 +90,7 @@ test: all
 	python3 tools/pce/test_foreground.py --out $(OUT)
 	python3 tools/pce/test_presentation.py --out $(OUT)
 	python3 tools/pce/test_dialog_restore.py --out $(OUT)
+	python3 tools/pce/test_race_dialog_corners.py --out $(OUT)
 	python3 tools/pce/test_graphics_stability.py --out $(OUT)
 	python3 tools/pce/test_audio.py --out $(OUT)
 	python3 tools/pce/test_pause_audio.py --out $(OUT)
@@ -120,6 +121,7 @@ test-sgx:
 	python3 tools/pce/test_sgx_regressions.py --out build/sgx
 	python3 tools/pce/test_sgx_reported_issues.py --out build/sgx
 	python3 tools/pce/test_sgx_race.py --out build/sgx
+	python3 tools/pce/test_race_dialog_corners.py --out build/sgx --sgx
 	python3 tools/pce/test_sgx_cache_pressure.py --out build/sgx
 	python3 tools/pce/test_sgx_depth.py --out build/sgx
 	python3 tools/pce/test_sgx_combat_profile.py --out build/sgx
@@ -157,6 +159,7 @@ test-herd: all
 
 test-dialog: all
 	python3 tools/pce/test_dialog_restore.py --out $(OUT)
+	python3 tools/pce/test_race_dialog_corners.py --out $(OUT) $(if $(filter 1,$(SGX)),--sgx,)
 
 # Needs a debug (RETAIL=0) build: it drives the debug stage menu.
 test-dialog-palette:

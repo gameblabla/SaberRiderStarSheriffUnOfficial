@@ -118,6 +118,9 @@ CACHE_CODE static void allocate(void) {
     bool arena=pce_metrics.stage==6;
     uint16_t hud=pce_present_base[pce_metrics.stage-1][0];
     uint8_t low=id>=sprite_cache_foreground_first?15:0,high=id>=sprite_cache_foreground_first?48:arena?13:15;
+    /* Race presentation follows its HUD in the archive. Rounded corners
+     * need private palettes rather than the HUD/portrait's shared slot 31. */
+    if(pce_metrics.stage==2&&id>=pce_dialog_base[1]&&id<pce_dialog_base[1]+8){low=0;high=15;}
 #ifdef PCE_SGX
     /* Space uses palette 14 for per-actor white hit flashes. */
     if(pce_sgx_gameplay()&&pce_metrics.stage==7&&low==0)high=14;

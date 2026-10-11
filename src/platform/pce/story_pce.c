@@ -56,6 +56,20 @@ PCE_X2 static void race_unbox(void) {
     for(uint8_t row=0;row<6;++row){pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;arcade_vram(RACE_KEPT+(uint32_t)row*112,(uint16_t)(PCE_DIALOG_RACE_ROW+row)*128+6,112);}
     pce_race_dialog=0;race_kept=0;
 }
+/* The PCE projection bank and the SGX story bank are nearly full; place
+ * corner preparation in the other overlay for each target. */
+#ifdef PCE_SGX
+PCE_X2
+#else
+STORY_CODE
+#endif
+static void race_corner_cells(void) {
+    extern uint8_t buffer[2048];
+    for(uint8_t row=0;row<6;++row)if(row<2||row>=4) {
+        arcade_read(2,RACE_KEPT+(uint16_t)row*112,buffer+(uint16_t)row*112,8);
+        arcade_read(2,RACE_KEPT+(uint16_t)row*112+104,buffer+(uint16_t)row*112+104,8);
+    }
+}
 PCE_X2 static void race_box(void) {   /* bank $77 (the CD buffer's second: $6f and $7c are full) */
     uint32_t record[4];uint16_t bytes;
     extern uint8_t buffer[2048];
@@ -67,6 +81,13 @@ PCE_X2 static void race_box(void) {   /* bank $77 (the CD buffer's second: $6f a
     arcade_vram(record[1],0x4000,bytes);
     arcade_vram(record[3],PCE_FONT_WORD,6144);
     arcade_read(2,record[2],buffer,672);
+    /* The four 32x16 sprite corners need the frozen sky underneath,
+     * including on later pages after the panel has already been drawn. */
+#ifdef PCE_SGX
+    race_corner_cells();
+#else
+    overlay_call(0x71,race_corner_cells);
+#endif
     for(uint8_t row=0;row<6;++row) {
         video_vdc(0,(uint16_t)(PCE_DIALOG_RACE_ROW+row)*128+6);
         for(uint8_t x=0;x<56;++x)video_vdc(2,((uint16_t*)buffer)[(uint16_t)row*56+x]);
@@ -184,13 +205,14 @@ STORY_CODE static void draw(void) {
      * through them. They are ordinary cached sprites (private slots, their own palettes): the earlier fixed
      * patterns stole shared palette 31 and recolored every shared-slot sprite (the stage-4 foreground, the
      * arena HUD) for the whole dialogue. */
-    if(pce_metrics.stage!=2){video_sprite(box,box_x,box_y,false,16);video_sprite(box+1,box_x+112,box_y,false,16);}
+    if(pce_metrics.stage==2){video_sprite(box,48,box_y,false,16);video_sprite(box+1,272,box_y,false,16);}
+    else {video_sprite(box,box_x,box_y,false,16);video_sprite(box+1,box_x+112,box_y,false,16);}
     uint16_t left=0xffff,top=0xffff;
     for(uint8_t k=first;k<sat_count;++k){if(sat[sat_page][k].x<left)left=sat[sat_page][k].x;if(sat[sat_page][k].y<top)top=sat[sat_page][k].y;}
     for(uint8_t k=first;k<sat_count;++k) {
         vdc_sprite_t *e=&sat[sat_page][k];
         bool corner=(e->x==left||e->x==left+208)&&(e->y==top||e->y==top+32);
-        if(!platform&&!corner)e->attr&=~VDC_SPRITE_FG;
+        if(!platform&&pce_metrics.stage!=2&&!corner)e->attr&=~VDC_SPRITE_FG;
     }
     /* The world stands still behind the text: the hero (behind the box, which comes first in the SAT), the actors
      * (the cutscene outrider stays put) and the boss stay on screen. */
