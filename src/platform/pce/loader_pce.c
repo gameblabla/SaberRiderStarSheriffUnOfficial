@@ -265,7 +265,7 @@ __attribute__((noinline,section(".ram_bank117.text"))) static void effect_body(v
     uint8_t tone=effect_tone;
     /* 1 the hero's shot, 2 jump, 5 hurt, 6 death, 7/8 enemy hit / death yells, 9 alarm "!", 10 dialogue line, 11 fall, 12-17 the flying bosses'
      * engine pass, gun, rider's gun, both, blast and big bang: CD ADPCM voices (the bank picks a variant) except the guns, which are PSG; a hero
-     * voice is never cut by a lower-priority one. audio_adpcm_reset before each play: the controller is shared with the BIOS transfer that loaded
+     * voice is never cut by a lower-priority one. audio_adpcm_prepare before each play: the controller is shared with the BIOS transfer that loaded
      * the bank, and a length counter left in the broken $1xxxx range makes every voice mute itself (audio_pcm.c). */
     if(tone>=20){psg_voice=0;psg_script=tone-17;overlay_call(0x75,psg_start);return;}   /* Countdown, GO and hit zap use voice 0; boss guns retain independent voice 1. */
     if(tone==1||(tone>=13&&tone<=15)){psg_voice=tone!=1;psg_script=tone==1?0:tone==14?2:1;overlay_call(0x75,psg_start);return;}
@@ -280,9 +280,11 @@ __attribute__((noinline,section(".ram_bank117.text"))) static void effect_body(v
          * still sounding, and voice_priority expires on its own instead of surviving until the next stage change. */
         if(!voice_frames)voice_priority=0;   /* the latched voice has run its length: nothing is owed priority */
         if(!voice_priority||pce_voice.priority>=voice_priority) {
-            pce_cdb_adpcm_stop();          /* clears IFU_INT_END/HALF from the mask, so the reset below cannot raise IRQ2 */
-            audio_adpcm_reset();           /* clean flags, length counter and pointers: the shared controller's state */
-            if(!pce_cdb_adpcm_play(pce_voice.address,pce_voice.bytes,pce_voice.rate,PCE_CDB_ADPCM_ONE_SHOT)) {
+            /* The old voice is stopped even if preparation or AD_PLAY fails;
+             * do not leave its priority/lifetime blocking subsequent cues. */
+            voice_priority=0;voice_frames=0;
+            if(audio_adpcm_prepare()&&
+               !pce_cdb_adpcm_play(pce_voice.address,pce_voice.bytes,pce_voice.rate,PCE_CDB_ADPCM_ONE_SHOT)) {
                 voice_priority=pce_voice.priority;
                 /* 32000/(16-rate) Hz, two nibbles a byte; +1 so a voice is never cut in the frame it starts. */
                 uint16_t hz=32000/(16-pce_voice.rate);

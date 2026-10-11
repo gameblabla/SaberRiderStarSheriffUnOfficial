@@ -39,6 +39,19 @@ The existing CD-DA music and CD hardware ADPCM character voices remain separate.
 death x2, fall, enemy hit x3, enemy death x3, the Outrider's alarm and the level-1 dialogue line. The PC game's
 random variant choice is reproduced by `voice_pick` (bank `$75`); priorities: dialogue > death/fall > hurt > the rest.
 
+Tentative PCE/SGX ADPCM replacement fix (2026-10-11): `audio_adpcm_prepare`
+stops BIOS playback, disables ADPCM DMA, and holds controller reset for at least
+two decoder clocks at 16 kHz. It then waits for `$180c` bit 3 (decoder busy) to
+clear before releasing reset and calling BIOS AD_PLAY. The wait is bounded and
+keeps interrupts enabled. In the local MesenCE source,
+`../PCE/MesenCE/Core/PCE/CdRom/PceAdpcm.cpp`, `Reset()` clears counters but
+`PlaySample()` clears `Playing` on a sample clock; the former one-NOP pulse
+could leave BIOS playback seeing the previous sample as busy. Replacing a voice
+also clears its software priority/lifetime before preparation, including on a
+timeout or BIOS failure. Existing priority rules still apply. Validation is
+limited to PCE and SGX builds; repeated and interrupted playback still needs
+confirmation in Geargrafx/Mesen and on hardware.
+
 Twelve isolated video frames measured these percentages of all CPU cycles.
 Service percentages exclude the resident IRQ wrapper and BIOS dispatch;
 handler percentages include the wrapper but still exclude BIOS dispatch.

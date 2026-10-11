@@ -84,16 +84,33 @@ void audio_pcm_turbo_loop(bool on) {request=on?PCM_SAMPLE_TURBO_LOOP:PCM_SAMPLE_
  * would otherwise leave ADPCM itself faded to silence). $1802 is deliberately NOT touched: HuC's ad_reset clears it, but that would also drop the
  * CD-DA driver's own IFU enables (cdda_pce.c keeps its own snapshot). */
 #define IFU_ADPCM_DMA (*(volatile uint8_t*)0x180b)
+#define IFU_ADPCM_FLG (*(volatile uint8_t*)0x180c)
 #define IFU_ADPCM_CTL (*(volatile uint8_t*)0x180d)
 #define IFU_ADPCM_SPD (*(volatile uint8_t*)0x180e)
 #define IFU_AUDIO_FADE (*(volatile uint8_t*)0x180f)
-PCM_CODE void audio_adpcm_reset(void) {
-    IFU_ADPCM_CTL=0x80;                 /* ADPCM_RESET, held one opcode as the verificator does */
-    __asm__ __volatile__("nop");
-    IFU_ADPCM_CTL=0x00;
-    IFU_ADPCM_DMA=0x00;                 /* stop ADPCM DMA from CD */
+PCM_CODE bool audio_adpcm_prepare(void) {
+    /* AD_STOP clears END/HALF enables without disturbing CD-DA IRQs, but
+     * the decoder's busy status clears on its next sample clock, not on
+     * the control write. Mesen's Reset() likewise leaves Playing latched
+     * until PlaySample(). A one-NOP reset followed by BIOS AD_PLAY can
+     * therefore reject a replacement as busy. Keep reset asserted until
+     * the decoder has clocked it and the BIOS busy bit has actually fallen.
+     * Interrupts stay enabled throughout for raster and PSG DDA service. */
+    pce_cdb_adpcm_stop();
+    IFU_ADPCM_DMA=0x00;
+    IFU_ADPCM_SPD=14;                  /* 16 kHz: two decoder clocks = 125 us */
+    IFU_ADPCM_CTL=0x80;
+    /* Even the NOPs alone take 1024 CPU cycles (>125 us at 7.16 MHz).
+     * Also hold reset for an idle decoder, whose busy bit is already clear. */
+    for(uint16_t n=0;n<512;++n)__asm__ __volatile__("nop");
+    bool ready=false;
+    for(uint16_t n=0;n<4096;++n) {
+        if(!(IFU_ADPCM_FLG&0x08)){ready=true;break;}
+    }
+    IFU_ADPCM_CTL=0x00;                /* release reset even on timeout */
     IFU_AUDIO_FADE=0x00;                /* byte mode for the RAM port, and cancel any BIOS fade */
     IFU_ADPCM_SPD=0x00;                 /* ad_play sets the sample's own rate next */
+    return ready;
 }
 /* tone (audio_effect) -> voice event: jump hurt death fall enemy_hit enemy_death alarm dialogue line, then the flying
  * bosses' engine pass, gun, rider's gun, both guns, blast and big bang (tones 12-17), the cruiser's cannon gathering and firing (18, 19) */
