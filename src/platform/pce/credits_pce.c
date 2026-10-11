@@ -75,7 +75,8 @@ CREDITS_CODE void frontend_credits(void) {
         text[159]=0;
         uint8_t lines=1;
         for(const char *c=text;*c;++c)if(*c=='\n')++lines;
-        ui_clear_rows(8,22);
+        /* Ten-line name pages begin on row 7; clear their first line too. */
+        ui_clear_rows(7,22);
         uint8_t row=12-lines/2;
         char *line=text;
         while(*line&&row<22) {

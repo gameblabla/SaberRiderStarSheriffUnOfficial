@@ -76,6 +76,7 @@ $(OUT)/saber_rider.cue: $(OUT)/ipl.bin $(OUT)/ipl.elf $(OUT)/app.elf $(OUT)/m6.b
 
 test: all
 	python3 tools/pce/test_port.py --out $(OUT)
+	python3 tools/pce/test_credits_cleanup.py --out $(OUT) $(if $(filter 1,$(SGX)),--sgx,)
 	python3 tools/pce/test_campaign.py --out $(OUT)
 	python3 tools/pce/test_wip.py --out $(OUT)
 	python3 tools/pce/test_boss_presentation.py --out $(OUT)
@@ -113,6 +114,7 @@ test-sgx:
 	python3 tools/pce/test_sgx_fast_math.py --out build/sgx
 	python3 tools/pce/test_campaign.py --out build/sgx --sgx
 	python3 tools/pce/test_sgx_frontend.py --out build/sgx
+	python3 tools/pce/test_credits_cleanup.py --out build/sgx --sgx
 	python3 tools/pce/test_sgx_motion.py --out build/sgx
 	python3 tools/pce/test_sgx_rendering.py --out build/sgx
 	python3 tools/pce/test_sgx_house.py --out build/sgx
