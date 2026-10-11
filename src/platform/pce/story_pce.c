@@ -187,7 +187,7 @@ STORY_CODE static void draw(void) {
     bool platform=pce_metrics.stage!=2&&pce_metrics.stage!=7;   /* the platform stages and Ramrod's arena: a scrolling background with the panel in BG characters and four sprite corners */
 #ifdef PCE_SGX
     if(pce_metrics.stage==7)platform=true;   /* the fallback's cruiser panel is BG cells too: its sprite halves hold only the corners */
-    if(pce_sgx_gameplay()&&pce_metrics.stage==7&&!pce_campaign.page) {
+    if(pce_metrics.stage==7&&!pce_campaign.page) {   /* (the fallback keeps its covered cells too: the last dialogue's text would otherwise stay up) */
         /* Read the promoted zero-page scroll directly. A conditional load
            can become an indirect pointer to $00xx (I/O on HuC6280), rather
            than the scroll's full RAM address at $20xx. Keep the volatile
@@ -347,8 +347,7 @@ STORY_CODE void story_step(void) {
         else {
             if(!pce_sgx_gameplay())video_restore();
 #ifdef PCE_SGX
-            if(!pce_sgx_gameplay()&&pce_metrics.stage==7)overlay_call(0x6e,story_graphics_restore);
-            if(pce_sgx_gameplay()&&pce_metrics.stage==7) {
+            if(pce_metrics.stage==7) {
                 video_sat_begin();overlay_call(0x78,space_dialog_ship);
                 video_sat_end();video_wait();
                 video_story_cells_restore();

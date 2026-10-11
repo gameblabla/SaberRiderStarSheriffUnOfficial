@@ -123,7 +123,7 @@ CACHE_CODE static void allocate(void) {
     if(pce_metrics.stage==2&&id>=pce_dialog_base[1]&&id<pce_dialog_base[1]+8){low=0;high=15;}
 #ifdef PCE_SGX
     /* Space uses palette 14 for per-actor white hit flashes. */
-    if(pce_sgx_gameplay()&&pce_metrics.stage==7&&low==0)high=14;
+    if(pce_metrics.stage==7&&low==0)high=14;
 #endif
 #ifdef PCE_SGX
     if(pce_sgx_gameplay()&&hud&&id>=hud&&id<hud+26){low=15;high=48;}

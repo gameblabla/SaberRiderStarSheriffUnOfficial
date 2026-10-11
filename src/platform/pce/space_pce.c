@@ -30,7 +30,6 @@ static uint8_t space_flash,hull_flash;
 #ifdef PCE_SGX
 uint8_t space_hull_falling PCE_WORK;
 static uint8_t foe_flash[8] PCE_WORK,space_sprite_flash PCE_WORK;
-static uint8_t foe_white PCE_WORK;   /* the fallback's lit kinds, as below */
 #else
 static uint8_t foe_white;
 /* Keep indexed storage out of the compiler's promoted direct page. */
@@ -92,7 +91,7 @@ SPACE_CODE void space_start(void) {
     memset(foes,0,sizeof foes);memset(bolts,0,sizeof bolts);memset(expl,0,sizeof expl);memset(&sb,0,sizeof sb);space_hull_x=0;boss_die=boss_gone=0;
     flight_clock=spawn_clock=beam_clock=0;space_flash=hull_flash=0;memset(foe_flash,0,sizeof foe_flash);
 #ifdef PCE_SGX
-    space_sprite_flash=space_hull_falling=foe_white=0;
+    space_sprite_flash=space_hull_falling=0;
     for(uint8_t i=1;i<16;++i)pce_vce_set_color(30*16+i,0x1ff);
 #else
     foe_white=0;
@@ -527,27 +526,6 @@ static void space_greeting_complete(void) {
     if(!pce_sgx_gameplay())overlay_call(0x78,space_hull_bat);
     sb.ph=4;sb.t=270;
 }
-/* A struck mine or gunship is a white blank: its own palette (the cache's slot of its picture) is overwritten with white while it blinks, and loaded again after. */
-#ifdef PCE_SGX
-__attribute__((noinline,minsize,section(".ram_bank116.text")))
-#endif
-static void space_foe_flash_body(void) {
-    for(uint8_t k=0;k<2;++k) {
-#ifdef PCE_SGX
-        bool on=false;   /* (the SGX build flashes per foe slot: any struck foe of this kind lights it) */
-        for(uint8_t j=0;j<8;++j)if(foes[j].kind==4+k&&foe_flash[j])on=true;
-#else
-        bool on=foe_flash[k]!=0;
-#endif
-        if(!on&&!(foe_white&(1<<k)))continue;
-        uint8_t slot=sprite_slot_of[4+k];
-        if(slot<15&&sprite_ids[slot]==4+k) {
-            if(on){for(uint8_t i=0;i<16;++i)((uint16_t*)buffer)[i]=0x1ff;vce_copy(16+slot,buffer,1);}
-            else sprite_ids[slot]=0xffff;
-        }
-        if(on)foe_white|=1<<k;else foe_white&=~(1<<k);
-    }
-}
 PCE_SCENERY void space_frame(void) {
     overlay_call(0x71,space_greeting_complete);
     for(uint8_t i=0;i<pce_control.elapsed&&!pce_campaign.event&&!pce_campaign.result&&pce_campaign.state==CAM_PLAY;++i) {
@@ -592,7 +570,13 @@ PCE_SCENERY void space_frame(void) {
             if(!video_sprite_optional(bolts[k].enemy?1:0,bolts[k].x,bolts[k].y,false,16))bolts[k].on=0;
         for(uint8_t k=0;k<8;++k)if(foes[k].kind) {
             Foe *f=&foes[k];
+#ifdef PCE_SGX
+            uint8_t first=sat_count;
+#endif
             if(!video_sprite_optional(f->kind<=3?8:f->kind==5?5:4,f->x,f->y,false,16)){f->kind=0;continue;}
+#ifdef PCE_SGX
+            if(foe_flash[k])for(uint8_t i=first;i<sat_count;++i)sat[sat_page][i].attr=(sat[sat_page][i].attr&~15U)|14;   /* only this foe: its entries take the white palette 14 */
+#endif
             if(f->charge>20&&(flight_clock&4))video_sprite_optional(1,f->x-20,f->y,false,16);
         }
         if(pickup)video_sprite_optional(8+pickup,pickup_x,pickup_y,false,16);
@@ -606,10 +590,17 @@ PCE_SCENERY void space_frame(void) {
             video_sprite_optional(1,x,y+reach,false,16);video_sprite_optional(1,x,y-reach,false,16);
         }
     }
-#ifdef PCE_SGX
-    if(!pce_sgx_vdc1_sprites())overlay_call(0x74,space_foe_flash_body);
-#else
-    space_foe_flash_body();
+#ifndef PCE_SGX
+    for(uint8_t k=0;k<2;++k) {   /* a struck mine or gunship is a white blank: its own palette (the cache's slot of its picture) is overwritten with white while it blinks, and loaded again after */
+        bool on=foe_flash[k]!=0;
+        if(!on&&!(foe_white&(1<<k)))continue;
+        uint8_t slot=sprite_slot_of[4+k];
+        if(slot<15&&sprite_ids[slot]==4+k) {
+            if(on){for(uint8_t i=0;i<16;++i)((uint16_t*)buffer)[i]=0x1ff;vce_copy(16+slot,buffer,1);}
+            else sprite_ids[slot]=0xffff;
+        }
+        if(on)foe_white|=1<<k;else foe_white&=~(1<<k);
+    }
 #endif
     {
         uint8_t beam=sb.laser==2?(pce_campaign.boss_round>=2?2:1):0;
