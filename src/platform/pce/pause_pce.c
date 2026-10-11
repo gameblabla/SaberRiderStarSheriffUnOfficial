@@ -1,3 +1,4 @@
+#define VCE_RAW
 #include "video_pce.h"
 #include "overlay_pce.h"
 #include "sgx_pce.h"
@@ -16,6 +17,18 @@
 #define PAUSE_WORD (PCE_FONT_WORD+0x540)
 extern uint8_t buffer[2048];
 extern vdc_sprite_t sat[2][64];
+static uint8_t pause_palette;
+/* Read/write the actual displayed colors, including during a held screen
+ * flash. One color per critical section leaves raster/timer IRQs responsive. */
+PCE_FLOW static void pause_colors(uint16_t *colors,bool read) {
+    for(uint8_t i=0;i<16;++i) {
+        pce_cpu_irq_disable();
+        uint16_t index=((uint16_t)(16+pause_palette)<<4)+i;
+        if(read)colors[i]=pce_vce_get_color(index)&0x1ff;
+        else pce_vce_set_color(index,colors[i]);
+        pce_cpu_irq_enable();
+    }
+}
 static const uint8_t letters[5][7] PAUSE_DATA={
     {30,17,17,30,16,16,16}, /* P */
     {14,17,17,31,17,17,17}, /* A */
@@ -37,19 +50,39 @@ PAUSE_CODE static void pause_copy(uint16_t word,uint16_t *data,uint16_t count,bo
         pce_cpu_irq_enable();
     }
 }
-PAUSE_CODE void pause_show_body(void) {
+PCE_FLOW static void pause_palette_show(void) {
     uint16_t *saved=(uint16_t*)(buffer+1024);
-    uint16_t target=video_sat_target();
-    pause_copy(pce_sat_word,saved,256,true);
-    pause_copy(PAUSE_WORD,saved+256,192,true);
-    pce_vce_copy_palette_to_ram(saved+448,31,1);
-    /* Palette 31 belongs to the HUD. Use its brightest/darkest opaque
-     * entries for the label without recoloring the retained gameplay SAT. */
+    /* VDC1 is hidden while paused. Borrow a palette unused by the retained
+     * VDC0 table so the label has explicit white/black even during a flash
+     * or before the HUD palette has been loaded. Preserve every color. */
+    uint16_t used=0;
+    for(uint8_t i=0;i<64;++i)if(saved[(uint16_t)i*4]&1023)
+        used|=(uint16_t)1<<(saved[(uint16_t)i*4+3]&15);
+    pause_palette=15;
+    for(uint8_t i=0;i<16;++i)if(!(used&((uint16_t)1<<i))){pause_palette=i;break;}
+    pause_colors(saved+448,true);
     uint8_t ink=1,outline=1,bright=0,dark=255;
     for(uint8_t i=1;i<16;++i) {
         uint16_t c=saved[448+i];uint8_t l=(c&7)+((c>>3)&7)+((c>>6)&7);
         if(l>bright){bright=l;ink=i;}if(l<dark){dark=l;outline=i;}
     }
+    if(!(used&((uint16_t)1<<pause_palette))) {
+        uint16_t colors[16];
+        for(uint8_t i=0;i<16;++i)colors[i]=saved[448+i];
+        ink=1;outline=2;colors[1]=0x1ff;colors[2]=0;
+        pause_colors(colors,false);
+    }
+    /* Pass the indices across overlays immediately after the saved colors. */
+    buffer[1952]=ink;buffer[1953]=outline;
+}
+PCE_FLOW static void pause_palette_hide(void) {pause_colors((uint16_t*)(buffer+1024)+448,false);}
+PAUSE_CODE void pause_show_body(void) {
+    uint16_t *saved=(uint16_t*)(buffer+1024);
+    uint16_t target=video_sat_target();
+    pause_copy(pce_sat_word,saved,256,true);
+    pause_copy(PAUSE_WORD,saved+256,192,true);
+    overlay_call(0x6e,pause_palette_show);
+    uint8_t ink=buffer[1952],outline=buffer[1953];
     for(uint8_t cell=0;cell<3;++cell) {
         uint16_t *pat=(uint16_t*)sat[1];
         for(uint8_t i=0;i<64;++i)pat[i]=0;
@@ -83,16 +116,22 @@ PAUSE_CODE void pause_show_body(void) {
 #endif
     vdc_sprite_t *label=sat[1];
     for(uint8_t i=0;i<3;++i)label[i]=(vdc_sprite_t){64+104,32+(pce_raster_enabled?232:104)+i*16,
-        (PAUSE_WORD>>5)+i*2,VDC_SPRITE_FG|15};
+        (PAUSE_WORD>>5)+i*2,VDC_SPRITE_FG|pause_palette};
     pause_copy(target,(uint16_t*)label,12,false);
     video_sat_replace(target);
 }
 PAUSE_CODE void pause_hide_body(void) {
     uint16_t *saved=(uint16_t*)(buffer+1024);
-    pause_copy(PAUSE_WORD,saved+256,192,false);
     uint16_t target=video_sat_target();
     pause_copy(target,saved,256,false);
     video_sat_replace(target);
+    /* Wait for the restored SAT to replace the label in hardware before
+     * recycling its patterns/palette. The old label otherwise displays
+     * pieces of the restored font for several frames during this upload. */
+    (void)video_sat_target();
+    video_wait();
+    pause_copy(PAUSE_WORD,saved+256,192,false);
+    overlay_call(0x6e,pause_palette_hide);
 }
 PCE_FLOW void pause_show(void) {
 #ifdef PCE_SGX

@@ -29,7 +29,7 @@ def verify(out,sgx=False):
             y=64+104
             x=32+(232 if raster else 104)
             return all(rows[i][0]==y and rows[i][1]==x+16*i and
-                       rows[i][2]==first+2*i and (rows[i][3]&15)==15 for i in range(3))
+                       rows[i][2]==first+2*i for i in range(3))
         if sgx:
             scene=json.loads((out/'manifest.json').read_text())['scenes'][0]
             blob=(out/'s1.bin').read_bytes();offset=scene['horse_offset']

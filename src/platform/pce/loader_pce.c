@@ -267,7 +267,7 @@ __attribute__((noinline,section(".ram_bank117.text"))) static void effect_body(v
      * engine pass, gun, rider's gun, both, blast and big bang: CD ADPCM voices (the bank picks a variant) except the guns, which are PSG; a hero
      * voice is never cut by a lower-priority one. audio_adpcm_reset before each play: the controller is shared with the BIOS transfer that loaded
      * the bank, and a length counter left in the broken $1xxxx range makes every voice mute itself (audio_pcm.c). */
-    if(tone>=20){psg_voice=tone>21;psg_script=tone-17;overlay_call(0x75,psg_start);return;}   /* 20 the countdown's pip, 21 GO (voice 0), 22 a bolt striking a Renegade (voice 1): synthesised PSG scripts 3-5 */
+    if(tone>=20){psg_voice=0;psg_script=tone-17;overlay_call(0x75,psg_start);return;}   /* Countdown, GO and hit zap use voice 0; boss guns retain independent voice 1. */
     if(tone==1||(tone>=13&&tone<=15)){psg_voice=tone!=1;psg_script=tone==1?0:tone==14?2:1;overlay_call(0x75,psg_start);return;}
     if(tone==2||(tone>=5&&tone<=19)) {
         audio_pcm_voice(tone);

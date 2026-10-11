@@ -92,6 +92,7 @@ test: all
 	python3 tools/pce/test_dialog_restore.py --out $(OUT)
 	python3 tools/pce/test_graphics_stability.py --out $(OUT)
 	python3 tools/pce/test_audio.py --out $(OUT)
+	python3 tools/pce/test_pause_audio.py --out $(OUT)
 	python3 tools/pce/test_adpcm2.py --out $(OUT)
 	python3 tools/pce/test_software_adpcm.py --out $(OUT)
 
@@ -106,6 +107,7 @@ test-campaign: all
 # The generic presentation fixtures below drive a non-retail debug stage menu.
 test-sgx:
 	$(MAKE) -f Makefile.pce SGX=1 OUT=build/sgx all
+	python3 tools/pce/test_pause_audio.py --out build/sgx --sgx
 	python3 tools/pce/test_sgx_fast_math.py --out build/sgx
 	python3 tools/pce/test_campaign.py --out build/sgx --sgx
 	python3 tools/pce/test_sgx_frontend.py --out build/sgx
