@@ -43,3 +43,8 @@ PCE_X3 void vce_read_body(void) {
     if(pce_display_on)video_wait();else drain();
     pce_vce_copy_palette_to_ram((void*)vce_arg_ptr,vce_arg_index,vce_arg_count);
 }
+
+/* Called immediately after video_wait: no queue or additional frame wait. */
+PCE_X3 void vce_copy_now_body(void) {
+    pce_vce_copy_palette(vce_arg_index,vce_arg_ptr,vce_arg_count);
+}

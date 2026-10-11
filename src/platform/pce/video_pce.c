@@ -141,14 +141,11 @@ PCE_RENDER void video_wait(void) {
     audio_tick();   /* the PSG effects' envelopes keep running through the fades and waits that never reach the main loop */
 }
 extern uint8_t vce_arg_index,vce_arg_count;extern const void *vce_arg_ptr;extern uint16_t vce_arg_value;
-void vce_copy_body(void),vce_set_body(void),vce_read_body(void);
+void vce_copy_body(void),vce_set_body(void),vce_read_body(void),vce_copy_now_body(void);
 PCE_RENDER void vce_copy(uint8_t index,const void *source,uint8_t count) {vce_arg_index=index;vce_arg_ptr=source;vce_arg_count=count;overlay_call(0x75,vce_copy_body);}
 PCE_RENDER void vce_set(uint16_t index,uint16_t value) {vce_arg_index=index>>4;vce_arg_count=index&15;vce_arg_value=value;overlay_call(0x75,vce_set_body);}
 PCE_RENDER void vce_read(void *dest,uint8_t index,uint8_t count) {vce_arg_index=index;vce_arg_ptr=dest;vce_arg_count=count;overlay_call(0x75,vce_read_body);}
-#pragma push_macro("pce_vce_copy_palette")
-#undef pce_vce_copy_palette
-PCE_RENDER void vce_copy_now(uint8_t index,const void *source,uint8_t count) {pce_vce_copy_palette(index,source,count);}
-#pragma pop_macro("pce_vce_copy_palette")
+PCE_RENDER void vce_copy_now(uint8_t index,const void *source,uint8_t count) {vce_arg_index=index;vce_arg_ptr=source;vce_arg_count=count;overlay_call(0x75,vce_copy_now_body);}
 volatile uint8_t pce_display_on;   /* palette RAM is only written in the vertical blank while this is set (pce_config.h) */
 PCE_RENDER void video_display(bool enable) {
     pce_display_on=enable;

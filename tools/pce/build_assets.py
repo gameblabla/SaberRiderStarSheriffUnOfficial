@@ -609,19 +609,6 @@ def continuous_layer(ly, bank, width):
     strip = np.concatenate((full, full[:, ::-1]), axis=1)
     return np.tile(strip, (1, math.ceil(width / strip.shape[1]), 1))[:, :width]
 
-def flat_sky_rows(ly, bank):
-    """Stage 4's wavy sky as flat horizontal bands (the commonest colour of each scanline, 256 dots wide). The waves made
-    every sky character unique, which overran the VRAM tile cache while scrolling; and a layer moving at 0.03 of the camera
-    left black gaps wherever the sector shift outran it. A band is one character repeated across the whole level."""
-    full = levl.render_layer(ly, bank, 0.0, ly.w * bank.tw, 240, None)
-    rows = np.zeros((240, 256, 4), np.uint8)
-    for y in range(240):
-        px = full[y][full[y][:, 3] >= 128].reshape(-1, 4)
-        if len(px):
-            colours, counts = np.unique(px, axis=0, return_counts=True)
-            rows[y, :] = colours[counts.argmax()]
-    return rows
-
 def repeating_sky(image, stage):
     """Keep the source origin/horizon; trim only reviewed repeating panoramas."""
     a = np.asarray(image.convert('RGBA'))
@@ -665,11 +652,16 @@ def platform_background(stage, work, sgx=False):
     foreground_slow=Image.new('RGBA',(slow_width,240))
     continuous = {}
     after = False
-    flat_sky = None
+    fallback_sky = None
     sgx_sky = sgx_near = None
     for ly in level.layers:
         if ly.name == 'PlayerSprites': after = True
-        if stage == 4 and ly.name == 'SkyBG': flat_sky = flat_sky_rows(ly, banks[ly.cblock])
+        if stage == 4 and ly.name == 'SkyBG':
+            # Bake the actual sky artwork into the single-VDC plane. Repeat at
+            # its source extent so camera-sector shifts cannot leave gaps.
+            bank = banks[ly.cblock]
+            sky = levl.render_layer(ly, bank, levl.layer_offset(ly, 0), ly.w * bank.tw, 240, None)
+            fallback_sky = np.tile(sky, (1, math.ceil(width / sky.shape[1]), 1))[:, :width]
         if sgx and stage in (1, 3, 4, 5) and ly.name == 'SkyBG':
             sky_width = (ly.used_w if ly.extra == 1 else ly.w) * banks[ly.cblock].tw
             sgx_sky = levl.render_layer(ly, banks[ly.cblock], levl.layer_offset(ly, 0), sky_width, 240, None)
@@ -680,7 +672,8 @@ def platform_background(stage, work, sgx=False):
         if stage == 4 and ly.name == 'SkyBG': continue
         if sgx and stage==4 and ly.name=='FarMountains':
             sgx_near=Image.fromarray(levl.render_layer(ly,banks[ly.cblock],0,ly.w*banks[ly.cblock].tw,240,None))
-            continue
+            # The SGX rear plane owns these mountains, but the single-VDC
+            # fallback still needs their continuous strip baked into its sky.
         if ly.is_tilemap and not after and 0 < ly.parallax < 1 and ly.extra != 1:
             continuous[ly.name] = continuous_layer(ly, banks[ly.cblock], width)
     for x in range(0,width,256):
@@ -692,10 +685,9 @@ def platform_background(stage, work, sgx=False):
             if ly.name=='PlayerSprites':after_player=True
             if not ly.is_tilemap:continue
             if stage in (1,3) and ly.name=='SkyBG':continue
-            if sgx and stage==4 and ly.name=='FarMountains':continue
             if stage==4 and ly.name=='ForegroundStuf2' and not sgx:continue   # PCE uses the sprite fallback; SGX retains the plants as foreground
             bank=banks[ly.cblock]
-            if stage==4 and ly.name=='SkyBG': layer=flat_sky
+            if stage==4 and ly.name=='SkyBG': layer=fallback_sky[:,x:x+256]
             elif sgx and after_player and ly.parallax>1.0:continue
             elif after_player: layer=levl.render_layer(ly,bank,x,256,240,None)
             elif ly.name in continuous: layer=continuous[ly.name][:,x:x+256].copy()
@@ -710,7 +702,10 @@ def platform_background(stage, work, sgx=False):
             if after_player: front=np.where(layer[...,3:4]>=128,layer,front)
             else:
                 pixels=np.where(layer[...,3:4]>=128,layer,pixels)
-                if sgx_pixels is not None and ly.name != 'SkyBG':
+                # Compose the fallback independently of SGX plane ownership.
+                # Mountains belong in its single plane, beneath the forest;
+                # on SGX they are already part of the rear sky panorama.
+                if sgx_pixels is not None and ly.name != 'SkyBG' and not (stage==4 and ly.name=='FarMountains'):
                     sgx_pixels=np.where(layer[...,3:4]>=128,layer,sgx_pixels)
         out.paste(Image.fromarray(pixels),(x,0))
         prop_occlusion.paste(Image.fromarray(cover),(x,0))
@@ -884,6 +879,7 @@ def atlas(path, kind, max_width=None):
 
 def platform_dialog(archive, work):
     records=[]
+    indexed_graphics=None
     original=[]
     masks=[]
     for ch in range(32,128):
@@ -902,8 +898,14 @@ def platform_dialog(archive, work):
                 mapping.append(0xf400+lookup[tile])
         # The box's characters sit at $4000, below the font at $4200: at most 16 of them fit.
         assert len(tiles)<=16,'Platform dialogue box exceeds its reserved VRAM below the font'
+        # Runtime keeps these graphics live across page colour changes. Fail
+        # the build if new art would require overwriting displayed patterns.
+        graphics=(b''.join(tiles),tuple(mapping),
+                  b''.join(planar_tile(np.where(m,15,fill).astype(np.uint8)) for m in masks))
+        if indexed_graphics is None:indexed_graphics=graphics
+        assert graphics==indexed_graphics,'Dialogue colours must share indexed panel/font graphics'
         pal=archive.add(f'dialog{rid}_palette',palette.tobytes())
-        pat=archive.add(f'dialog{rid}_patterns',b''.join(tiles))
+        pat=archive.add(f'dialog{rid}_patterns',graphics[0])
         bat=archive.add(f'dialog{rid}_map',struct.pack('<168H',*mapping))
         font=archive.add(f'dialog{rid}_font',b''.join(planar_tile(np.where(m,15,fill).astype(np.uint8)) for m in masks))
         records.append(struct.pack('<4IH',pal,pat,bat,font,len(tiles)*32))
@@ -918,6 +920,7 @@ def race_dialog(archive, work):
     first six pages so the double-width font never overwrites road BAT cells.
     """
     records=[]
+    indexed_graphics=None
     for rid in presentation.BOX_TILESETS:
         box=presentation.dialog_box([cblock_frame(work/'srgb'/f'{rid:08X}.srgb',n) for n in range(9)])
         box=box.resize((448,48),Image.Resampling.NEAREST)
@@ -938,6 +941,9 @@ def race_dialog(archive, work):
             mask=np.repeat(np.asarray(im)[...,3]>=64,2,axis=1)
             glyph=np.where(mask,15,fill).astype(np.uint8)
             font.extend(planar_tile(glyph[:,x:x+8]) for x in (0,8))
+        graphics=(b''.join(tiles),tuple(mapping),b''.join(font))
+        if indexed_graphics is None:indexed_graphics=graphics
+        assert graphics==indexed_graphics,'Race dialogue colours must share indexed panel/font graphics'
         pal=archive.add(f'dialog{rid}_palette',palette.tobytes())
         pat=archive.add(f'dialog{rid}_patterns',b''.join(tiles))
         bat=archive.add(f'dialog{rid}_map',struct.pack('<336H',*mapping))

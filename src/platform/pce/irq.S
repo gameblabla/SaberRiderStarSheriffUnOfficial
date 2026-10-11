@@ -162,7 +162,24 @@ pce_vblank:
     bra .Lscroll_done
 .Lscroll_live:
     lda pce_scroll_hold
-    bne .Lscroll_done
+    beq .Lscroll_free
+    /* A draw that outlasts the frame leaves the held scroll in the registers,
+     * where the arena floor's last raster group left them. Put the displayed
+     * generation's scroll back, or every other frame starts on floor rows. */
+    lda pce_arena_raster
+    beq .Lscroll_done
+    st0 #7
+    lda pce_sat_scroll_x
+    sta 2
+    lda pce_sat_scroll_x+1
+    sta 3
+    st0 #8
+    lda pce_sat_scroll_y
+    sta 2
+    lda pce_sat_scroll_y+1
+    sta 3
+    bra .Lscroll_done
+.Lscroll_free:
     st0 #7
     lda pce_scroll_x
     sta 2

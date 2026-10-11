@@ -17,6 +17,11 @@ static uint32_t story_address;
 static uint8_t page_count,story_y;   /* story_y: BG row of the box's top */
 static char story_text[256];
 static uint8_t race_colour;
+/* The BG colour belongs to the SAT generation being prepared. Do not queue
+ * it while uploads can still cross several VBlanks with the old corners live. */
+extern uint8_t buffer[2048];
+/* Panel cells end at byte 1360; the fade snapshot uses bytes 0..1023. */
+#define story_palette (buffer+1888)
 /* Put wide box and glyphs in the race's unused VRAM. No sprite-cache pages
  * are needed for the box, and its 56-character width matches the dot clock. */
 /* Preserve only the sky cells covered by the box. Road patterns, every road
@@ -80,10 +85,12 @@ PCE_X2 static void race_box(void) {   /* bank $77 (the CD buffer's second: $6f a
     if(!race_kept)race_keep();
     uint32_t a=PCE_RACE_DIALOG_WIDE+(uint16_t)race_colour*18;
     arcade_read(2,a,record,16);arcade_read(2,a+16,&bytes,2);
-    arcade_read(2,record[0],buffer,32);pce_vce_copy_palette(14,buffer,1);
+    arcade_read(2,record[0],story_palette,32);
     pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-    arcade_vram(record[1],0x4000,bytes);
-    arcade_vram(record[3],PCE_FONT_WORD,6144);
+    if(!pce_campaign.page) {
+        arcade_vram(record[1],0x4000,bytes);
+        arcade_vram(record[3],PCE_FONT_WORD,6144);
+    }
     arcade_read(2,record[2],buffer,672);
     /* The four 32x16 sprite corners need the frozen sky underneath,
      * including on later pages after the panel has already been drawn. */
@@ -109,10 +116,14 @@ PCE_MISSION static void platform_box(void) {
     extern volatile uint16_t pce_scroll_x,pce_scroll_y;
     uint32_t a=pce_dialog_bg[pce_metrics.stage-1]+(uint16_t)(colour&3)*18;
     arcade_read(2,a,record,16);arcade_read(2,a+16,&bytes,2);
-    arcade_read(2,record[0],buffer,32);pce_vce_copy_palette(15,buffer,1);   /* (queued: the VBlank that brings the sprite corners writes it) */
+    arcade_read(2,record[0],story_palette,32);
     pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;
-    arcade_vram(record[1],0x4000,bytes);
-    arcade_vram(record[3],PCE_FONT_WORD,3072);
+    /* The baker guarantees identical indexed panel/font graphics for every
+     * colour. Later pages only replace cells and publish a new palette. */
+    if(!pce_campaign.page) {
+        arcade_vram(record[1],0x4000,bytes);
+        arcade_vram(record[3],PCE_FONT_WORD,3072);
+    }
     arcade_read(2,record[2],buffer+1024,336);   /* the cells go in right after that VBlank (video_cells_apply) */
     story_column=pce_scroll_x>>3;
 #ifdef PCE_SGX
@@ -238,10 +249,16 @@ STORY_CODE static void draw(void) {
 #endif
         }
     }
-    /* The panel's graphics, palette and cells are prepared before the SAT is queued; the cells are written right after the VBlank that brings the sprite corners. */
+    /* Prepare without touching the live BG colour. Publish it only after
+     * the VBlank that installs the complete replacement corner SAT. */
     if(platform){platform_colour=colour;overlay_call(0x6f,platform_box);}
     video_sat_end();
-    if(platform){video_wait();video_cells_apply(y,story_column);}
+    if(platform||pce_metrics.stage==2) {
+        video_wait();
+        if(vce_hold)pce_vce_copy_palette(platform?15:14,story_palette,1);
+        else vce_copy_now(platform?15:14,story_palette,1);
+        if(platform)video_cells_apply(y,story_column);
+    }
     char *line=story_text;uint8_t lines=0;
     for(char *c=line;;++c){if(*c=='\n'||!*c){++lines;if(!*c)break;}}
     /* One line sits mid-box; two lines get a blank row between them. */
