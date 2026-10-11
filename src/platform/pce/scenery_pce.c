@@ -130,7 +130,7 @@ PCE_SCENERY void space_hull_load(void) {
     pce_vce_set_color(255,0x1ff);   /* the ending dialogue still needs white BG glyphs */
     video_scroll((uint16_t)(-(pce_sgx_gameplay()?16:76)-space_hull_x),(uint16_t)-60);
     space_flashing=hull_gone=0;space_hull_ready=1;hull_lit=0;
-    if(!sgx){video_wait();video_display(true);}
+    if(!sgx){video_sat_begin();video_sat_end();video_wait();video_display(true);}   /* (the SAT on show is the fight's: retire it before the picture comes back) */
 }
 
 PCE_SCENERY void space_hull_draw(int16_t y,uint8_t flash,bool gone) {

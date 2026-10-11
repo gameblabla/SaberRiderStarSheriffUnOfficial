@@ -132,7 +132,11 @@ PCE_MISSION static void platform_box(void) {
 #endif
 }
 PCE_FLOW void story_graphics_restore(void) {   /* bank $6e: $6f is full */
-    if(pce_metrics.stage==2||(pce_metrics.stage==7&&!pce_sgx_gameplay()))return;
+#ifdef PCE_SGX
+    if(pce_metrics.stage==2)return;
+#else
+    if(pce_metrics.stage==2||pce_metrics.stage==7)return;
+#endif
     extern const PceScene *video_scene_ptr;
     uint8_t colors[32];
     uint32_t palette=video_scene_ptr->pal;
@@ -182,7 +186,7 @@ STORY_CODE static void draw(void) {
      * scenery so their rounded edges show the scenery, not a hole. */
     bool platform=pce_metrics.stage!=2&&pce_metrics.stage!=7;   /* the platform stages and Ramrod's arena: a scrolling background with the panel in BG characters and four sprite corners */
 #ifdef PCE_SGX
-    if(pce_sgx_gameplay()&&pce_metrics.stage==7)platform=true;
+    if(pce_metrics.stage==7)platform=true;   /* the fallback's cruiser panel is BG cells too: its sprite halves hold only the corners */
     if(pce_sgx_gameplay()&&pce_metrics.stage==7&&!pce_campaign.page) {
         /* Read the promoted zero-page scroll directly. A conditional load
            can become an indirect pointer to $00xx (I/O on HuC6280), rather
@@ -198,7 +202,7 @@ STORY_CODE static void draw(void) {
     video_sat_begin();
     if(pce_metrics.stage==2)overlay_call(0x77,race_dialog_cars);
 #ifdef PCE_SGX
-    if(platform&&!pce_sgx_gameplay())overlay_call(0x74,foreground_prepare);
+    if(platform&&pce_metrics.stage!=7&&!pce_sgx_gameplay())overlay_call(0x74,foreground_prepare);
 #else
     if(platform)foreground_prepare();
 #endif
@@ -343,6 +347,7 @@ STORY_CODE void story_step(void) {
         else {
             if(!pce_sgx_gameplay())video_restore();
 #ifdef PCE_SGX
+            if(!pce_sgx_gameplay()&&pce_metrics.stage==7)overlay_call(0x6e,story_graphics_restore);
             if(pce_sgx_gameplay()&&pce_metrics.stage==7) {
                 video_sat_begin();overlay_call(0x78,space_dialog_ship);
                 video_sat_end();video_wait();

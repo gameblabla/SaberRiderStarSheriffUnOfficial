@@ -191,11 +191,12 @@ __attribute__((noinline,section(".ram_bank113.text"))) void space_hull_sgx_draw_
     if(!space_hull_ready)return;
     /* The final-boss fall is the only SGX path that takes this anchor below
      * the playfield; hide the paired BAT once it can wrap back onto screen. */
-    if(pce_sgx_gameplay()&&space_hull_draw_y>=224)space_hull_draw_gone=1;
+    if(space_hull_draw_y>=224)space_hull_draw_gone=1;
     if(pce_sgx_gameplay())video_background(flight_clock>>3);
     video_scroll((uint16_t)(-(pce_sgx_gameplay()?32:76)-space_hull_x),(uint16_t)-space_hull_draw_y);
     /* Retire each bottom row when it leaves the playfield, before the
        256-pixel BAT wrap can bring that row back above the falling hull. */
+    if(!pce_sgx_gameplay()&&!space_hull_falling)hull_rows_visible=13;   /* the fallback's hull is 13 rows tall (space_hull_bat) */
     if(space_hull_falling&&!hull_gone&&space_hull_draw_y>96) {
         uint8_t rows=space_hull_draw_y>=224?0:(224-space_hull_draw_y+7)>>3;
         uint8_t saved=pce_vdc_index;
