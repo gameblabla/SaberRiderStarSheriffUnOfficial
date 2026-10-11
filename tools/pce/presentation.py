@@ -269,8 +269,11 @@ def add_art(root,work,stage,sprites,frame,sgx=False):
                 g=np.repeat(np.repeat(g,2,axis=0),2,axis=1)
                 mask[1:17,2+14*i:18+14*i]|=g
             ring=np.zeros_like(mask)
+            # Outline neighbours outside the name are transparent; rolling
+            # would wrap the last letter onto the first column.
+            padded=np.pad(mask,1)
             for dy in (-1,0,1):
-                for dx in (-1,0,1):ring|=np.roll(np.roll(mask,dy,0),dx,1)
+                for dx in (-1,0,1):ring|=padded[1+dy:19+dy,1+dx:w+1+dx]
             a=np.zeros((18,w,4),np.uint8);a[ring]=(0,0,0,255);a[mask]=(255,255,255,255)
             add(f'pwr{hero}_name',Image.fromarray(a))
     return dict(portraits=portraits,dialog=dialog,hud=hud,digits=digits,aim=aim,motion=motion,pose=pose,up_tip=up_tip,art_muzzle=art_muzzle,flash=flash,enemy=enemy,dark=dark,power=power,end=len(sprites))

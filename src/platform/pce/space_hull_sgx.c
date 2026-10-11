@@ -134,7 +134,7 @@ __attribute__((noinline,section(".ram_bank113.text"))) void space_hull_sgx_load_
     uint32_t patterns=record+HULL_TILES_OFFSET;
     uint16_t bytes=(uint16_t)(count*32);
     if(!arcade_vram_to(0,patterns,PCE_BG_WORD,bytes)||
-       !arcade_read(2,patterns+bytes+(uint32_t)(count-5)*32,buffer,32)) {
+       !arcade_read(2,patterns+bytes,buffer,32)) {
         ++pce_sgx_metrics.failures;
         return;
     }

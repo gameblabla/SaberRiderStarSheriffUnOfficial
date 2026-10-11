@@ -64,6 +64,12 @@ def verify(out):
         r.seed(e, 'hurt', 255, 1)
         r.until(e, lambda:r.state(e)['boss_kind']==5, step=1, limit=1500)
         e.run(12)
+        hull_record=scene['records']['sgx_boss_bg']
+        beam_palette_end=hull_record['offset']+hull_record['bytes']
+        beam_palette=blob[beam_palette_end-32:beam_palette_end]
+        actual_palette=bytes.fromhex(e.call('asread','pram',10*32,32)['hex'])
+        assert actual_palette==beam_palette, 'Final boss beam must use its baked palette'
+        report['beam_palette_matches_asset']=True
         planet = planet_entries(e)
         assert word(e, 'pce_sky_near')<260 and planet, 'Planet must survive cruiser arrival'
         report['arrival_planet_entries'] = len(planet)
