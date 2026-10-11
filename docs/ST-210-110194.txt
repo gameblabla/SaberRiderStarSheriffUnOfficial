@@ -1,0 +1,978 @@
+General Notice
+
+
+When using this document, keep the following in mind:
+                                                                            ntial
+1. This document is confidential. By accepting this document you acknowledge that you are bound
+   by the terms set forth in the non-disclosure and confidentiality agreement signed separately and /in
+   the possession of SEGA. If you have not signed such a non-disclosure agreement, please contact
+   SEGA immediately and return this document to SEGA.
+
+2. This document may include technical inaccuracies or typographical errors. Changes are periodi-
+   cally made to the information herein; these changes will be incorporated in new versions of the
+
+   program(s) described in this document at any time.
+                                                              de
+   document. SEGA may make improvements and/or changes in the product(s) and/or the
+
+
+3. No one is permitted to reproduce or duplicate, in any form, the whole or part of this document
+   without SEGA’S written permission. Request for copies of this document and for technical
+   information about SEGA products must be made to your authorized SEGA Technical Services
+   representative.
+
+                                                 nfi
+4. No license is granted by implication or otherwise under any patents, copyrights, trademarks, or
+   other intellectual property rights of SEGA Enterprises, Ltd., SEGA of America, Inc., or any third
+   party.
+
+
+
+
+   describe herein.              Co
+5. Software, circuitry, and other examples described herein are meant merely to indicate the character-
+   istics and performance of SEGA’s products. SEGA assumes no responsibility for any intellectual
+   property claims or other problems that may result from applications based on the examples
+
+
+6. It is possible that this document may contain reference to, or information about, SEGA products
+   (development hardware/software) or services that are not provided in countries other than Japan.
+   Such references/information must not be construed to mean that SEGA intends to provide such
+   SEGA products or services in countries other than Japan. Any reference of a SEGA licensed prod-
+
+
+
+
+                 GA
+   uct/program in this document is not intended to state or simply that you can use only SEGA’s
+   licensed products/programs. Any functionally equivalent hardware/software can be used instead.
+
+7. SEGA will not be held responsible for any damage to the user that may result from accidents or any
+   other reasons during operation of the user’s equipment, or programs according to this document.
+
+                           NOTE: A reader's comment/correction form is provided with this
+                           document. Please address comments to :
+
+
+
+
+ SE                        SEGA of America, Inc., Developer Technical Support (att. Evelyn Merritt)
+                           150 Shoreline Drive, Redwood City, CA 94065
+
+                           SEGA may use or distribute whatever information you supply in any way
+                           it believes appropriate without incurring any obligation to you.
+
+
+
+
+(6/27/95- 002)
+ TM
+
+
+
+
+                    ntial
+          de
+       nfi
+      Co
+ GA      SEGA SATURN
+      SCU Final Specifications:
+            Precautions
+
+SE                  (Version 1)
+
+              Doc. # ST-210-110194
+
+
+
+            © 1994-5 SEGA. All Rights Reserved.
+                      READER CORRECTION/COMMENT SHEET
+
+Keep us updated!
+
+
+                                                                    nti
+ If you should come across any incorrect or outdated information while reading through the attached
+document, or come up with any questions or comments, please let us know so that we can make the
+
+
+
+
+                                                                       al
+required changes in subsequent revisions. Simply fill out all information below and return this form to
+the Developer Technical Support Manager at the address below. Please make more copies of this form if
+more space is needed. Thank you.
+
+General Information:
+Your Name                                                               Phone
+
+Document number
+
+Document name
+
+Corrections:
+
+Chpt.   pg. #
+                        ST-210-110194
+
+
+                                                        de
+                     SEGA SATURN SCU Final Specifications: Precautions
+
+
+
+
+                   Correction
+                                                                        Date
+
+
+
+
+                                             nfi
+                                Co
+            GA
+Questions/comments:
+
+
+
+
+SE          Fax:
+                                  Where to send your corrections:
+
+                     (415) 802-1440
+                     Attn: Sr. Coordinator,
+                     Technical Publications Group
+                                                        Mail:   SEGA OF AMERICA
+                                                                Attn: Sr. Coordinator,
+                                                                Technical Publications Group
+                                                                130 Shoreline Dr.
+                                                                Redwood City, CA 94065
+                                          REFERENCES
+
+
+
+with the assistance of the technical literature listed below.
+                                                               nti
+In translating/creating this document, certain technical words and/or phrases were interpreted
+
+
+
+1.   KenKyusha New Japanese-English Dictionary
+     1974 Edition                                                 al
+2.   Nelson’s Japanese-English Character Dictionary
+     2nd revised version
+
+3.
+
+4.
+     Microsoft Computer Dictionary
+
+     Japanese-English Computer Terms Dictionary
+     Nichigai Associates
+     4th version
+                                                      de
+                                             nfi
+                               Co
+             GA
+SE
+0. Introduction
+
+This document contains the final specifications and items of note about the SEGA
+
+
+
+[Revision History]
+                                                    nti
+Saturn SCU. Since it consists of material which is not included in the previous
+manual, be sure to check the contents against this newest manual.
+
+
+
+   Sept. 20, 1994
+   Oct. 11, 1994
+                             Provisional version issued
+                                                       al
+                             2nd provisional version (added No. 35 and No. 36)
+   Oct. 16, 1994             1st version issued (revised No. 35 and No. 36)
+
+
+
+
+                                          de
+                                 nfi
+                     Co
+   GA
+SE
+SATURN SCU Final Specs: Precautions                                              1
+1. SCU Final Specifications List
+ No. 01   Write to the A-Bus by SCU-DMA is prohibited.
+ No. 02
+ No. 03
+ No. 04
+ No. 05
+ No. 06
+ No. 07
+          Read from the VDP2 area by SC-DMA is prohibited.
+          VDP1 register write access must be in word units (2 bytes).
+          Do not use SCU-DMA to WORK RAM-L (Caution).
+          Must use the cache through address to access the SCU register .
+          Reads and writes to unused areas (address 25FE00ACH) are prohibited.
+          Writes to interrupt status register (25FE00A4H) are prohibited.
+                                                                                ntial
+ No. 08                                                                     ← → B-Bus is
+          Access to A-Bus and B-Bus from the CPU during DMA operation of A-Bus
+          prohibited.
+ No. 09   Setting the A-Bus preread significant bit is prohibited.
+ No. 10   A-Bus interrupt acknowledge register address change (address 25FE00A8H).
+ No. 11
+ No. 12
+ No. 13
+ No. 14
+ No. 15
+                                                                     de
+          A-Bus set register write restriction (addresses 25FE00B0H and 25FE00B4H).
+          A-Bus ← → B-Bus SCU-DMA start standby when CPU writes to the A-Bus and B-Bus.
+          Delete the DMA status register (addresses 25FE0070H ~ 25FE007CH).
+          Delete the DMA forced quit register function (address 25FE0060
+                                                                       H).
+
+          Read of DMA transfer register transfer byte number is prohibited (write only).
+ No. 16
+ No. 17
+ No. 18
+ No. 19
+ No. 20
+                                                    nfi
+          Restrictions by the address accessing the DMA read address add value.
+          Value of the address add value bit when setting the DMA read address update bit.
+          Restrictions by the address accessing the DMA write address add value.
+          Value of the address add value bit when setting the DMA write address update bit.
+          2 channels can be used for simultaneous use of DMA.
+ No. 21
+ No. 22
+ No. 23
+ No. 24
+ No. 25
+ No. 26
+                                   Co
+          DMA activation method specification change.
+          Specification when DMA start trigger occurs during DMA execution.
+          Writing to the register of the corresponding level while activating DMA is prohibited.
+          DMA illegal interrupt does not occur during DMA execution in the indirect mode.
+          DMA indirect mode table specification change.
+          Clears the program end interrupt flag when starting DSP.
+ No. 27   Address add value restriction when transferring from the DSP DMA command B-Bus to the
+          DSP Data RAM.
+
+
+
+
+             GA
+ No. 28   When debugging with ICE, starting DMA operation is delayed if a BREAK is performed.
+ No. 29   Must be the BREQ enable condition when debugging in ICE.
+ No. 30   Caution when using the Timer 0 compare register (address 25FE0090
+                                                                          H).
+
+ No. 31   Caution when using the Timer 1 set data register (address 25FE0094
+                                                                           H).
+
+ No. 32   Caution during read access of A-Bus and B-Bus areas (2000000H ~ 5FFFFFFH).
+ No. 33   A-Bus refresh initial value when Power ON is reset (address 25FE00B8
+                                                                             H).
+
+ No. 34   Initial value of the SDRAM selection bit (address 25FE00C4
+                                                                   H).
+
+ No. 35   Start of DMA level 2 is prohibited during execution of DMA level 1.
+
+
+
+
+SE
+ No. 36   Caution when reading the DSP program control port (address 25FE0080
+                                                                           H).
+
+
+
+
+ 2
+2. SCU Final Specification Reference Items
+
+1. Items concerning the entire DMA .
+
+
+
+
+2. DMA indirect mode specific items.
+                                                            nti
+Item No. 01, 02, 04, 08, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29 and 3
+
+
+
+
+Item No. 24 and 25
+                                                               al
+3. Items relating to the DSP.
+
+Item No. 16, 20, 26, 27 and 36
+
+
+
+4. Items regarding external areas (A-Bus).
+                                               de
+Item No. 01, 08, 09, 10, 11, 12, 17, 18, 19 and 32
+
+
+
+
+                                    nfi
+5. Items regarding B-Bus areas (VDP1, VDP2, SCSP).
+
+Item No. 02, 03, 08, 12, 17, 18, 19 and 32
+
+
+
+
+Item No. 07, 30 and 31
+                      Co
+6. Items regarding interrupt.
+
+
+
+
+7. SCU register specification change items.
+
+Item No. 07, 09, 10, 11, 13, 14, 15, 23 and 24
+
+
+
+
+  GA
+8. Items relating to debugging.
+
+Item No. 28 and 29
+
+
+
+
+SE
+SATURN SCU Final Specs: Precautions                                                            3
+3. SCU Final Specification Contents
+No. 01      Write to the A-Bus by the SCU-DMA is prohibited.
+
+Write to the A-Bus by SCU-DMA cannot be used.
+
+
+
+No. 02      Read from the VDP2 area by SCU-DMA is prohibited.
+
+Read by SCU-DMA from the VDP2 area cannot be used.
+                                                                               ntial
+No. 03     VDP1 register write access must be in word units (2 bytes).
+
+
+
+
+No. 04
+                                                               de
+VDP1 register write access must be in word (2 byte) units. Access in long word (4 bytes) byte units is
+prohibited. VDP1 read access can be in byte and long word units.
+
+
+
+            Use of SCU-DMA to WORK RAM-L is not able (Caution).
+
+Work RAM-H (SDRAM: 1 Mbyte) is the only Work RAM that can be used with SCU-DMA. Work RAM-L
+(DRAM: 1 Mbyte) cannot be used.
+
+
+
+No. 05
+                                                  nfi
+            Access to the SCU register must use the cache through address.
+
+Register access to the SCU must be done by the cache-through address. This is because a register i
+which read is prohibited may be accessed if the cache address is used since the CPU runs in the
+
+
+
+
+                                   Co
+following way when the cache is full.
+     • When 0H address data is read by the cache address
+        4H address read→ 8H address read→ CH address read→ 0H address read→ cache register
+     • When 4H address data is read by the cache address
+        8H address read→ CH address read→ 0H address read→ 4H address read→ cache register
+     • When 8H address data is read by the cache address
+        CH address read→ 0H address read→ 4H address read→ 8H address read→ cache register
+     • When CH address data is read by the cache address
+        0H address read→ 4H address read→ 8H address read→ CH address read→ cache register
+
+
+
+
+No. 06
+
+               GA
+            Read and write to unused areas (address 25FE00AC
+                                                          H etc. ) is prohibited.
+
+
+Reading and writing to unused areas are prohibited. Reading and writing to address 25FE00AC
+especially prohibited.
+                                                                                        H is
+
+
+
+
+No. 07      Write to the interrupt status register (25FE00A4
+                                                           H) is prohibited.
+
+
+
+
+SE
+When writing to the interrupt status register, the bit used to create interrupt may not be active.
+Therefore, writing to the interrupt status register is prohibited.
+
+
+
+
+ 4
+No. 08                                                                        ← → B-Bus is prohibited.
+            Access to A-Bus and B-Bus from the CPU during DMA operation of A-Bus
+
+
+
+
+                                                               nti
+During the DMA operation of A-Bus to B-Bus and B-Bus to A-Bus, access from the CPU to the A-Bus
+and B-Bus is prohibited. Refresh is not generated for SDRAM while waiting and may hang up.
+
+
+
+No. 09
+
+
+                                                                  al
+            Setting the A-Bus preread significant bit is prohibited.
+
+The A-Bus preread function was deleted. The following register bits listed in the 2nd version manual
+(May 31, 1994) must be set to 0.
+  1. A-Bus set register [CS0, 1 space] (address: 25FE00B0
+  → [bit 31] and [bit 15] must be set to 0.
+                                                         H, register: ASR0)
+
+
+  2. A-Bus set register [CS2, reserved space] (address: 25FE00B4
+  → [bit 31] and [bit 15] must be set to 0.
+                                                                 H, register: ASR1)
+
+
+
+
+No. 10
+                                                  de
+            Address change of the A-Bus interrupt acknowledge register (address 25FE00A8
+
+The address of the A-Bus interrupt acknowledge register is changed to 25FE00A8
+change is reflected in the 2nd version manual (May 31, 1994).
+                                                                                      H).
+
+
+                                                                            H. The contents of
+
+
+
+
+No. 11
+                                     nfi
+            A-Bus set register write restriction (addresses 25FE00B0
+                                                                   H and 25FE00B4H).
+
+
+The A-Bus set register enables to write to the A-Bus only when not accessing. Write after completing
+read of the A-Bus (dummy).
+
+
+
+No. 12
+
+                      Co
+            A-Bus ← → B-Bus SCU-DMA start standby when the CPU writes to the A-Bus and B-Bus.
+
+The write process by the CPU to the A-Bus and B-Bus is higher in priority than the SCU-DMA start
+between the A-Bus and B-Bus. For example, while continuous write is performed by the CPU to VDP
+(B-Bus), SCU-DMA does not start until continuous write ends even if SCU-DMA initial activation for
+VDP2 (B-Bus) from the A-Bus. However, while starting SCU-DMA, CPU access to A-Bus and B-Bus is
+on standby.
+
+
+
+
+  GA
+No. 13      Delete the DMA status register (addresses 25FE0070
+                                                            H ~ 25FE007CH).
+
+
+The function that returns the address set value of DMA while stopped and the status of levels 0, 1, 2
+been deleted. Part of the specification change is reflected in the 2nd version manual (May 31, 1994)
+(The DMA read address, write address, and transfer byte number while stopped were deleted.)
+
+
+
+No. 14      Delete the DMA forced quit register function. (Address 25FE0060
+                                                                         H).
+
+
+
+
+SE
+DMA forced quit register functions was deleted. Writing to this register is prohibited.
+
+
+
+
+SATURN SCU Final Specs: Precautions                                                                 5
+No. 15     Read of DMA transfer register transfer byte is prohibited (write only).
+
+The value reading the number of transfer bytes number of the DMA transfer register is not guarantee
+
+25FE0028H : D1C, level 2, 25FE0048
+
+
+                                                                           nti
+This register cannot be read. This is a write-only register. (address, level 0, 25FE0008
+
+
+
+
+No. 16
+                                      H : D2C).
+
+
+
+
+                                                                              al
+           Restrictions by the address accessing the DMA read address add value.
+                                                                                     H : D0C, level 1,
+
+
+
+
+The value that can be set in the read address add value changes by the address that is to be access
+This applies to DMA commands of the DSP.
+    External area 4 (A-Bus I/O area) →        Able to set 0B and 1B .
+    Other                              →      Able to set 1B only.
+(Address: level 0, 25FE000CH: D0RA, level 1, 25FE002C  H: D1RA, level 2, 25FE004CH: D2RA)
+
+
+
+
+No. 17
+                                                              de
+           Value of the address add value bit when setting the DMA read address update bit.
+                                1 is 1, the read address add value 2
+When the read address update bit*
+*1 Read address update bit
+                                                                   bit*must be 1.
+
+   Address: level 0, 25FE0014H: D0RUP, level 1, 25FE0034H: D1RUP, level 2, 25FE0054H: D2RUP
+*2 Read address add value bit
+
+
+
+
+No. 18
+                                                 nfi
+   Address: level 0, 25FE000CH: D0RA, level 1, 25FE002C   H: D1RA, level 2, 25FE004C
+
+
+
+
+           Restrictions by the address accessing the DMA write address add value.
+                                                                                   H: D2RA
+
+
+
+
+Values that can be set in the write address add value change according to the address that is access
+This applies to DMA commands of the DSP.
+    WORK RAM-H
+    External area 1 ~ 3
+
+                                   Co
+    External area 4 (A-Bus I/O area)
+    VDP1, VDP2, SCSP
+                                              →
+                                              →
+                                              →
+                                              →
+(Address: level 0, 25FE000CH: D0WA, level 1, 25FE002C
+                                                      Able to set 010B
+                                                      Able to set 010B
+                                                      Able to set 000B and 010B .
+                                                      All settings are possible.
+                                                        H: D1WA, level 2, 25FE004C H: D2WA)
+
+
+
+
+No. 19     Value of the address add value bit when setting the DMA write address refresh bit.
+
+When the write address update bit1 *is 1, the write address add value bit2 *must be set by the bus space
+
+
+
+
+               GA
+to be accessed as shown below.
+    External area 1 ~ 4 (A-Bus)
+    VDP1, VDP2, and SCSP (B-Bus)
+    Work RAM-H ((C-Bus)
+*1 Write address update bit
+                                                →
+                                                →
+                                                →
+
+  Address: level 0, 25FE0014H: D0WUP, level 1, 25FE0034
+*2 Write address add value bit
+  Address: level 0, 25FE000CH: D0WA, level 1, 25FE002C
+                                                        Able to set 010B
+                                                        Able to set 001B
+                                                        Able to set 010B
+
+                                                             H: D1WUP, level 2, 25FE0054
+
+
+                                                            H: D1WA, level 2, 25FE004C
+                                                                                            H: D2WUP
+
+
+                                                                                          H: D2WA
+
+
+
+
+SE
+6
+No. 20      2 channels are available for the simultaneous use of DMA.
+
+Up to 2 channels can be used concurrently which guarantee the priority order of DMA . If 3 channels
+
+
+
+
+No. 21                                                          nti
+used concurrently, the priority order is ignored. (The DSP DMA command is also counted as 1 chann
+
+
+
+           DMA activation method specification changes.
+
+
+
+                                                                   al
+   The start method of DMA has been changed and a DMA enable bit has been provided separately.
+
+         Start Factor                             DMA Start Conditions
+             000           Enable bit = 1 AND V-BLANK-IN
+             001           Enable bit = 1 AND V-BLANK-OUT
+             010           Enable bit = 1 AND H-BLANK-IN
+             011
+             100
+             101
+             110
+             111
+                                                   de
+                           Enable bit = 1 AND TIMER 0
+                           Enable bit = 1 AND TIMER 1
+                           Enable bit = 1 AND SCSP Request
+                           Enable bit = 1 AND Sprite draw end
+                           Enable bit = 1 AND DMA Start Bit = 1
+   These changes are reflected in the 2nd version manual (May 31, 1994.)
+
+
+
+No. 22                                nfi
+            Specification when a DMA start trigger occurred during DMA execution.
+
+If a DMA start trigger occurs while DMA is being executed, and it holds the trigger, then execute
+activation after DMA ends. For example, when set so that DMA starts at H-Blank, operation becomes
+unstable if the set data size is larger than the size enabling transfer within 1 line (until the next H-blank
+
+only for 1 time.
+
+
+                        Co
+When such DMA start is executed in this way, please note the transfer data size. The trigger hold hol
+
+
+
+
+No. 23      Writing to the register of the corresponding level while starting DMA is prohibited.
+
+Rewriting the contents of DMA mode, address update, activation factor selection register*1 and DMA
+set register*2 is not allowed during DMA activation at this level. Hang up occurs if rewritten.
+*1 DMA mode, address update, start factor select register
+   Address: Level 0, 25FE0014H, level 1 25FE0034H, level 2 25FE0054H
+
+
+
+
+  GA
+*2 DMA set register
+   Address: Level 0, 25FE000CH, level 1 25FE002CH, level 2 25FE004CH
+
+
+
+No. 24      DMA illegal interrupt does not occur during DMA execution in the indirect mode.
+
+The DMA illegal interrupt status bit [bit 12] of the DMA status register (address 25FE00A4
+                                                                                       H) does not
+occur in the indirect mode while DMA is executing. When DMA is used in the indirect mode, do not re
+to the DMA illegal interrupt status bit.
+
+
+
+
+SE
+SATURN SCU Final Specs: Precautions                                                                   7
+No. 25     DMA indirect mode table specification change.
+
+
+
+
+                                                                         nti
+Tables of DMA indirect mode have been changed as shown below.
+[Points of Change]
+1. The 4 long word configuration has been changed to a 3 long word configuration.
+2. The write address and read address have been reversed.
+3. The table address (m value in the table below) must place the beginning address in 32, 64 128, 2
+
+   • Table size is 24 bytes or less →
+
+
+                                                                            al
+   512,1024, . . .byte boundaries according to table size (n X 12 bytes). An example is shown below
+
+   • Table size is 252 bytes or less →
+   • Table size is 1020 bytes or less→
+                                           place at the start address 32 byte boundary.
+                                           place at the start address 256 byte boundary.
+                                           place at the start address 1024 byte boundary.
+4. A 1 must be set to the 31st bit of the read address of the final address (n th).
+     Address is set in the write → m
+     address register             m+4
+                                           first transfer byte number
+                                           first write address
+                                  m+8
+
+
+
+
+Set 1 in the 31st bit of the nth read→
+                                                            de
+                                           first read address
+                                                           .
+                                                           .
+                                                           .
+                                            nth transfer byte number
+                                            nth write address
+                                            nth read address
+address
+
+
+
+
+No. 26
+                                                nfi
+                             (Address: level 0, 25FE0004H, level 1, 25FE0024H, level 2, 25FE0044H)
+
+
+
+           Clears the program end interrupt flag when starting DSP.
+
+Be sure the program end interrupt flag [bit 18 : E] of the DSP program control port (address 25FE008
+                                                                                                 H)
+
+
+program ends by the ENDI command.
+
+
+                                  Co
+is 0 when starting DSP. If the flag is 1, DSP program end interrupt does not occur even if the DSP
+
+
+
+
+No. 27     Address add value restriction when transferring from the DMA command B-Bus of the DSP
+           to the Data RAM of the DSP.
+
+The address add value must be 010
+                               B when transferring from the B-Bus to the Data RAM of DSP with th
+DSP DMA command (DMA and DMAH).
+
+
+
+No. 28
+
+               GA
+           When debugging in ICE, starting DMA operation is delayed if a BREAK is performed.
+
+SCU DMA must be executed by the CPU. If there is a break while debugging in ICE, the start of the
+SCU-DMA operation will be delayed. Operation of the SCU-DMA is normally performed when the ICE
+execution condition is the parallel mode (prompt is the # condition).
+
+
+
+
+SE
+ 8
+No. 29     Must be the BREQ enable condition when debugging in ICE.
+
+
+
+
+                                                                nti
+When SCU-DMA is used in ICE, the input condition of the EXECUTION_MODE (EM) command BREQ
+(bus right request) signal must be E (always enabled). Changing the E7000 system of ICE is
+unnecessary because BREQ is E by default.
+
+
+
+No. 30
+
+                                                                   al
+            Caution when using the Timer 0 compare register (address 25FE0090
+                                                                           H)
+
+
+It is possible to set up to 10 bits of data, but if data that does not exist, interrupt won't occur . Be sure
+set a value within a range that can be used. In case of an NTSC non-interface (1 screen 263 lines,
+effective screen 224 lines), for example, interrupt will occur as follows:
+   T0C9–0 = 1
+   T0C9–0 = 2
+                    → Occurs at the start of H-Blank-IN just before the first 1 line of the effective scree
+                    → Occurs at the start of H-Blank-IN just before the first 2 line of the effective scree
+   T0C9–0 = 224 → Occurs at the start of H-Blank-IN just before the last 1 line of the effective scree
+
+
+
+   T0C9–0 = 264 ~ 1023 →
+                        screen.
+                                                   de
+   T0C9–0 = 225 → Occurs at the start of H-Blank-IN just after the effective screen ends.
+   T0C9–0 = 263 → Occurs at the start of H-Blank-IN just 1 line before the beginning of the effective
+
+
+   T0C9–0 = 0
+                                  Interrupt does not occur.
+                    → Interrupt occurs with the same timing as V-Blank-OUT.
+
+
+
+No. 31
+
+                                      nfi
+            Caution when using the Timer 1 set data register (address 25FE0094
+                                                                           H)
+
+
+Loading the value of Timer 1 set data register to Timer 1 occurs "when Timer 1 is stopped and H-Blan
+occurs." If data larger than the count number of 1 line is set to the Timer 1 set data register, Timer 1
+interrupt no longer occurs for each line.
+[Count Number Range]
+    For 1 line 320 dots:     1 ~ 1AAH
+    For 352 dots
+    For 424 dots
+    For 426 dots
+
+                       Co    1 ~ 1C6H
+                             1 ~ D3H
+                             1 ~ D4H
+(Be aware that this becomes 512 when a count number of 0 is specified)
+
+
+
+No. 32      Caution during read access of A-Bus and B-Bus areas (2000000
+                                                                     H ~ 5FFFFFFH)
+
+
+The internal CPU operation and external operation are different for read access of the A-Bus and B-B
+areas (2000000H ~ 5FFFFFFH). Even for byte or word (2 bytes) read access from the SH2, the externa
+
+
+
+
+  GA
+is accessed by long word (4 bytes) units. When performing byte unit read of a continuous area in -the
+Bus and B-Bus areas, more process time than for byte unit write is required. Internal operations and
+external operations are the same for write access. (External access becomes byte access when
+accessed in byte units.)
+
+
+
+
+SE
+SATURN SCU Final Specs: Precautions                                                                   9
+No. 33     A-Bus refresh initial value when Power ON is reset (address 25FE00B8
+                                                                             H).
+
+
+The initial value of the A-Bus refresh output effective bit when resetting power on is changed to an
+
+
+
+
+No. 34                                                                   nti
+effective condition (ARFEN = 1). This bit should not be changed by the user.
+
+
+
+           Initial value of the SDRAM selection bit (address 25FE00C4
+                                                                   H).
+
+
+
+
+                                                                            al
+The SDRAM selection bit becomes 2 Mbits X 2 (RSEL = 0) by resetting the power on. Reset to RSEL
+1 and change to 4 Mbits X 2. This change in setting is done within the Boot ROM and requires no
+change by the user.
+
+
+
+No. 35    Start of DMA level 2 is prohibited during execution of DMA level 1.
+
+
+level 2 while DMA level 1 is activated.
+                                                             de
+A malfunction can occur when DMA level 2 is activated while starting DMA at level 1. Do not start DM
+
+
+
+
+No. 36     Caution when reading the DSP program control port (address 25FE0080
+                                                                           H).
+
+
+
+1. V-Flag (overflow flag) is cleared away.
+                                                 nfi
+Be aware that the following phenomenon occurs when reading the DSP program control port.
+
+   A check of the V-Flag cannot be done while executing DSP.
+2. The DSP end interrupt factor may not occur.
+   Because the DSP end interrupt may not occur when the program end interrupt flag is read while
+   DSP is being executed, please do not read this address for the program obtained by DSP end
+   interrupt.
+
+
+
+
+                                  Co
+               GA
+SE
+10
+
