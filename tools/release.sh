@@ -360,22 +360,23 @@ saber_rider.cue is the disc image: one Mode 1 data track (saber_rider.iso, the g
 57 CD-DA music tracks (music00.bin ... music17.bin, music_end.bin and their _m and _l banks). The cue sheet
 names every file, so keep them all beside it in the same folder.
 
-HARDWARE REQUIRED - this is the SuperGrafx enhanced edition, not the plain PC Engine one
+HARDWARE REQUIRED
 
-  1. A SuperGrafx console with a Super CD-ROM² system attached (RAU + Super CD-ROM² drive),
-     on a CD system BIOS v3.0 or newer.
-  2. The Arcade Card HuCard: Arcade Card PRO on that drive. It supplies the 2 MiB of
-     Arcade RAM the game keeps its graphics, maps and sample archives in.
+  1. A PC Engine / TurboGrafx-16 or SuperGrafx console with a Super CD-ROM² system,
+     running CD system BIOS v3.0 or newer.
+  2. An Arcade Card HuCard providing 2 MiB of Arcade RAM for the game's graphics, maps
+     and sample archives.
 
-Both are needed. A plain PC Engine / TurboGrafx-16 (even with Super CD-ROM² + Arcade Card) will NOT
-run it: the game needs the SuperGrafx second VDC and stops on its requirement screen without one.
-A standard Super CD-ROM² HuCard will NOT work either: with no Arcade RAM the game stops on a
-"SUPER CD V3 + ARCADE CARD REQUIRED" screen. The original CD-ROM² drive and the US TurboGrafx-CD
-will not boot it either - both run a v2.0 CD BIOS, and the disc refuses anything older than v3.0.
+This disc works on a standard one-VDC PC Engine / TurboGrafx-16 as well as on SuperGrafx.
+On standard PCE hardware it uses the one-VDC compatibility path. On SuperGrafx it detects
+the second VDC and enables the enhanced rendering path. Both configurations require the
+Super CD-ROM² v3.0-or-newer BIOS and Arcade Card RAM; the standard CD-ROM² HuCard alone
+does not provide enough RAM. The original CD-ROM² drive and US TurboGrafx-CD use a v2.0
+BIOS and are too old for this disc.
 
-The Analogue Duo, the FPGA PC Engine / TurboGrafx-16 clone, plays it as well: its CD-ROM² mode covers Arcade
-CD-ROM², so leave that option on Arcade (or let the Duo auto-detect) with SuperGrafx mode on, and restart
-the disc after changing it. It reads burnt CD-Rs, so a CD-R of this cue is all it needs.
+The Analogue Duo, the FPGA PC Engine / TurboGrafx-16 clone, can run the standard PCE
+compatibility path with its CD-ROM² mode set to Arcade (or auto-detect) and Arcade Card
+RAM enabled. It reads burnt CD-Rs, so a CD-R of this cue is all it needs.
 
 Emulators do not need the Arcade BIOS or a real Arcade Card. Any PC Engine emulator with SuperGrafx
 support will do as long as you load the Super CD-ROM System BIOS (Japan v3.0 or newer is what this build
