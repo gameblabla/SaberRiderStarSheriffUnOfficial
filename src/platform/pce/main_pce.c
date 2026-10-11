@@ -57,8 +57,8 @@ PCE_FLOW static bool change_stage(uint8_t n) {
         video_sat_end();
     }
     else {
-        if(!video_background(stage==6?385:0))return false;   /* (Ramrod's arena opens facing the planet)*/
         if(stage!=6&&stage!=7)overlay_call(0x69,play_start);
+        if(!video_background(stage==6?385:pce_metrics.camera_x))return false;   /* (Ramrod's arena opens facing the planet)*/
     }
     if(!pce_campaign.diagnostic) {
         if(stage==2){
@@ -72,14 +72,12 @@ PCE_FLOW static bool change_stage(uint8_t n) {
         if((stage==2||stage==6)&&!resume) {pce_campaign.story=0;overlay_call(0x71,story_start);}   /* (a restart in the pursuit or a later wave goes straight on) */
     }
     audio_music(stage==1?5:stage==2?(resume?14:10):stage==3?13:stage==4?15:stage==5?14:stage==6?16:12);
-#ifdef PCE_SGX
-    /* Replace both menu SATs and prepare the complete sky while blanked,
-       before the fade exposes the first platform frame. */
-    if(pce_sgx_gameplay()&&(stage==1||stage==3||stage==4||stage==5)) {
+    /* Prepare the walk-in camera and sprites while blanked, including both
+       SGX planes, before the fade exposes the first platform frame. */
+    if(stage==1||stage==3||stage==4||stage==5) {
         overlay_call(0x7b,play_draw);
         video_wait();
     }
-#endif
     ui_black();ui_fade_in();   /* every stage comes up from black (the common transition) */
     pce_metrics.ready=1;return true;
 }

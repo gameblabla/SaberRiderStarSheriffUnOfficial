@@ -26,6 +26,7 @@ static uint8_t race_kept;
 extern vdc_sprite_t sat[2][64];
 extern uint8_t sat_count,race_world_count;
 extern volatile uint8_t pce_race_dialog;
+void race_dialog_cars(void);
 /* Indexed absolute accesses to promoted zero-page arrays hit HuC6280 I/O.
  * Keep the VRAM readback buffer in the always-mapped work bank. */
 static uint16_t race_keep_words[8] PCE_WORK;
@@ -53,6 +54,9 @@ PCE_X2 static void race_keep(void) {
 }
 PCE_X2 static void race_unbox(void) {
     if(!race_kept)return;
+    /* Retire the portrait and alpha corners at VBlank before uncovering the
+     * sky. Reuse the frozen cars without waiting for the next road draw. */
+    video_sat_begin();race_dialog_cars();video_sat_end();video_wait();
     for(uint8_t row=0;row<6;++row){pce_vdc_index=2;*(volatile uint8_t*)0x20f7=2;arcade_vram(RACE_KEPT+(uint32_t)row*112,(uint16_t)(PCE_DIALOG_RACE_ROW+row)*128+6,112);}
     pce_race_dialog=0;race_kept=0;
 }
@@ -141,7 +145,7 @@ STORY_CODE static uint32_t pointer(uint32_t a) {
 }
 extern vdc_sprite_t sat[2][64];
 extern uint8_t cut_phase;
-void race_dialog_cars(void),space_dialog_ship(void);
+void space_dialog_ship(void);
 extern uint8_t sat_page,sat_count;
 extern volatile uint16_t pce_scroll_x,pce_scroll_y;
 /* Platform panels and opaque-backed glyphs are BG tiles. Their four rounded

@@ -14,13 +14,15 @@ from test_port import decode_sprite
 from test_sgx_reported_issues import read_space
 
 
-def verify(out, sgx):
+def verify(out, sgx, story=None):
+    if story is None:
+        return [verify(out, sgx, selected) for selected in (0, 1, 2)]
     out = out.resolve()
     c = Campaign(out, sgx=sgx)
     scene = json.loads((out/'manifest.json').read_text())['scenes'][1]
     blob = (out/'s2.bin').read_bytes()
     elf = out/'app.elf'
-    captures = out/'race-dialog-review'
+    captures = out/f'race-dialog-review-story-{story}'
     captures.mkdir(exist_ok=True)
     report = []
     with tempfile.TemporaryDirectory(dir=out) as base, Emulator(out/'saber_rider.cue', base, sgx=sgx) as e:
@@ -29,12 +31,24 @@ def verify(out, sgx):
         c.advance(e, 2)
         assert c.state(e)['state'] == 1, 'Opening race dialogue missing'
         kept = read_space(e, 'acram', 0x1e0000, 672)
+        if story:
+            # Seed the same event handoff used by the native finish (story 1)
+            # and pursuit/boss (story 2) paths, without driving the full race.
+            c.dialogs(e)
+            assert c.state(e)['state'] != 1
+            c.field(e, 'story', story)
+            c.field(e, 'event', 1)
+            c.until(e, lambda: c.state(e)['state'] == 1, limit=120)
+            assert c.state(e)['story'] == story, ('Wrong seeded race story', c.state(e))
+            kept = read_space(e, 'acram', 0x1e0000, 672)
         first_image = None
         first_mask = None
+        closing = None
+        page_count_address = symbol(elf, 'page_count')
         for _ in range(20):
             if c.state(e)['state'] != 1:
                 break
-            e.run(120)
+            e.run(240)  # longest packed pages type at most four 23-column lines
             page = c.state(e)['page']
             for row in (0, 1, 4, 5):
                 for col in (0, 52):
@@ -108,8 +122,77 @@ def verify(out, sgx):
                 first_mask[:24, :16] = False
                 assert first_mask.sum() > 0, 'Corner art has no transparent pixels'
             report.append(dict(page=page, colour=colour, entries=len(entries)))
-            c.press(e, 1, 15)
+            is_last = page + 1 == e.memory(page_count_address, 1)[0]
+            corner_ranges = []
+            if is_last:
+                # Capture pattern ownership while the final page is still
+                # drawn; the closing road frame may recycle these cache slots.
+                slots = e.memory(symbol(elf, 'sprite_slot_of'), scene['sprite_count'])
+                words = struct.unpack('<48H', e.memory(symbol(elf, 'sprite_words'), 96))
+                box = scene['presentation']['dialog']
+                for sprite in range(box, box+8):
+                    slot = slots[sprite]
+                    if slot < 48:
+                        count = struct.unpack_from('<H', blob, scene['sprite_table']+sprite*16+12)[0]
+                        corner_ranges.append((words[slot] >> 5, (words[slot]+count*64) >> 5))
+
+            def active_corners():
+                sat_now = list(struct.iter_unpack('<4H', read_space(e, 'sat0', 0, 512)))
+                return [(entry[0], entry[1], entry[2], entry[3]) for entry in sat_now
+                        if entry[0] and any(lo <= entry[2] < hi for lo, hi in corner_ranges)]
+
+            if is_last:
+                assert active_corners(), ('Final page did not publish its corner patterns', page)
+
+            if is_last:
+                # Let the typewriter settle without using Campaign.press: that
+                # helper advances many frames and could skip a one-frame stale
+                # SAT during the BAT restore handoff.
+                e.input(0)
+                e.run(600)
+                assert c.state(e)['state'] == 1 and c.state(e)['page'] == page
+                panel = b''.join(read_space(e, 'vram0', ((51+row)*128+6)*2, 112)
+                                 for row in range(6))
+                covered_offsets = [i for i in range(0, len(kept), 2)
+                                   if panel[i:i+2] != kept[i:i+2]]
+                assert covered_offsets, 'Final dialogue page did not cover any saved sky cells'
+                e.input(0)
+                e.run(2)
+                e.input(1)
+                close_frames = []
+                for step in range(90):
+                    e.run(1)
+                    restored = b''.join(read_space(e, 'vram0', ((51+row)*128+6)*2, 112)
+                                        for row in range(6))
+                    corners = active_corners()
+                    sat_now = list(struct.iter_unpack('<4H', read_space(e, 'sat0', 0, 512)))
+                    retained_entries = sum(bool(entry[0]) for entry in sat_now)
+                    # The clear is written in chunks. Any restored BAT cell
+                    # must already be free of the dialogue's corner sprites.
+                    restored_any = any(restored[i:i+2] == kept[i:i+2]
+                                       for i in covered_offsets)
+                    close_frames.append(dict(step=step, restored=restored == kept,
+                                             restored_any=restored_any,
+                                             corner_entries=len(corners),
+                                             retained_entries=retained_entries,
+                                             state=c.state(e)['state']))
+                    assert retained_entries > 0, ('Race close published an empty SAT', page, step)
+                    if restored_any:
+                        assert not corners, ('Race corners remain during partial/full sky restore',
+                                              page, step, corners)
+                    if restored == kept and step >= 2:
+                        break
+                e.input(0)
+                assert c.state(e)['state'] != 1, 'Final page input did not close dialogue'
+                assert close_frames and close_frames[-1]['restored'], ('Race sky did not finish restoring', close_frames)
+                closing = close_frames
+                break
+            c.press(e, 1, 1)
+            after = c.state(e)
+            assert after['page'] != page, ('Race page did not advance on the input edge', page, after)
+            e.input(0);e.run(2)
         assert c.state(e)['state'] != 1, 'Opening dialogue did not close'
+        assert closing is not None, 'Final page close handoff was not sampled'
         e.run(60)
         actual = b''.join(read_space(e, 'vram0', ((51+row)*128+6)*2, 112) for row in range(6))
         assert actual == kept, 'Race sky did not restore after dialogue'
@@ -129,13 +212,16 @@ def verify(out, sgx):
         visible = first_mask & solid
         assert visible.sum() >= 20, 'No solid sky pixels exercised through corners'
         assert np.array_equal(before[visible], after[visible]), 'Transparent corners do not show the sky'
-    (out/'race-dialog-corners-verification.json').write_text(json.dumps(report, indent=2)+'\n')
-    print('Race dialogue corners passed', report, flush=True)
+    (out/f'race-dialog-corners-story-{story}-verification.json').write_text(json.dumps(
+        {'pages': report, 'closing_frames': closing}, indent=2)+'\n')
+    print('Race dialogue corners passed', {'pages': report, 'closing_frames': closing}, flush=True)
 
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser()
     p.add_argument('--out', type=Path, default=Path('build/pce'))
     p.add_argument('--sgx', action='store_true')
+    p.add_argument('--story', type=int, choices=(0, 1, 2), default=None,
+                   help='Only run one story (default: opening, finish, and pursuit/boss)')
     args = p.parse_args()
-    verify(args.out, args.sgx)
+    verify(args.out, args.sgx, args.story)

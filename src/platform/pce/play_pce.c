@@ -190,6 +190,9 @@ PCE_CODE void play_init(uint8_t stage,uint8_t selected) {
     memset(column_tags,0xff,sizeof column_tags);
     walk_in=0;
     if(stage>=3&&stage<=5&&!pce_campaign.diagnostic){walk_in=1;player.x=safe_x=WALK_START_X;camera=WALK_CAMERA;}
+    /* Foreground preparation reads these before the first gameplay tick,
+     * while the initial frame is still hidden by the stage fade. */
+    pce_metrics.player_x=player.x;pce_metrics.player_y=player.y;pce_metrics.camera_x=camera;pce_metrics.hero=hero;
     encounter_init();
     pce_metrics.hp=campaign_hearts();
     overlay_call(0x70,combat_start);
